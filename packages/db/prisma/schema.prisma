@@ -757,6 +757,30 @@ model BusinessEvidence {
   @@map("business_evidence")
 }
 
+model ManagerAnalysis {
+  id                     String   @id @default(cuid())
+  runId                  String   @unique
+  weekStart              DateTime
+  weekEnd                DateTime
+  totalSends             Int      @default(0)
+  totalReplies           Int      @default(0)
+  totalPositive          Int      @default(0)
+  totalBounced           Int      @default(0)
+  overallReplyRate       Float    @default(0)
+  overallPositiveRate    Float    @default(0)
+  overallBounceRate      Float    @default(0)
+  icpBreakdownJson       Json
+  variantBreakdownJson   Json
+  scoreBandBreakdownJson Json
+  trendJson              Json
+  recommendationsJson    Json
+  recommendationCount    Int      @default(0)
+  createdAt              DateTime @default(now())
+
+  @@index([weekStart])
+  @@index([createdAt])
+}
+
 model JobRun {
   id          String       @id @default(uuid())
   jobName     String       @map("job_name")

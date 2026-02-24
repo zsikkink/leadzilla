@@ -60,6 +60,11 @@ import {
   handleFollowupCheckJob,
   type FollowupCheckJobPayload,
 } from './jobs/followup.check.job.js';
+import {
+  MANAGER_ANALYZE_JOB_NAME,
+  handleManagerAnalyzeJob,
+  type ManagerAnalyzeJobPayload,
+} from './jobs/manager.analyze.job.js';
 import { handleHeartbeatJob, type HeartbeatJobPayload } from './jobs/heartbeat.job.js';
 import {
   LABELS_GENERATE_JOB_NAME,
@@ -595,6 +600,13 @@ async function main(): Promise<void> {
         trengoBaseUrl: env.TRENGO_BASE_URL,
         trengoInternalConversationId: env.TRENGO_INTERNAL_CONVERSATION_ID,
       }),
+  );
+
+  await registerWorker<ManagerAnalyzeJobPayload>(
+    boss,
+    logger,
+    MANAGER_ANALYZE_JOB_NAME,
+    handleManagerAnalyzeJob,
   );
 
   const shutdown = async (signal: string): Promise<void> => {

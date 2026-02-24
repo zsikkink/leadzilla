@@ -28,6 +28,10 @@ import { MODEL_EVALUATE_JOB_NAME, MODEL_EVALUATE_RETRY_OPTIONS } from './jobs/mo
 import { MODEL_TRAIN_JOB_NAME, MODEL_TRAIN_RETRY_OPTIONS } from './jobs/model.train.job.js';
 import { REPLY_CLASSIFY_JOB_NAME, REPLY_CLASSIFY_RETRY_OPTIONS } from './jobs/reply.classify.job.js';
 import {
+  MANAGER_ANALYZE_JOB_NAME,
+  MANAGER_ANALYZE_RETRY_OPTIONS,
+} from './jobs/manager.analyze.job.js';
+import {
   SCORING_COMPUTE_JOB_NAME,
   SCORING_COMPUTE_RETRY_OPTIONS,
 } from './jobs/scoring.compute.job.js';
@@ -146,6 +150,10 @@ export const WORKER_QUEUE_DEFINITIONS: readonly WorkerQueueDefinition[] = [
   {
     name: NOTIFY_SALES_JOB_NAME,
     retryOptions: normalizeRetryOptions(NOTIFY_SALES_JOB_NAME, NOTIFY_SALES_RETRY_OPTIONS),
+  },
+  {
+    name: MANAGER_ANALYZE_JOB_NAME,
+    retryOptions: normalizeRetryOptions(MANAGER_ANALYZE_JOB_NAME, MANAGER_ANALYZE_RETRY_OPTIONS),
   },
 ] as const;
 

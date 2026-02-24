@@ -13,3 +13,4 @@ export * from './feedback.contract.js';
 export * from './webhook.contract.js';
 export * from './followup.contract.js';
 export * from './discovery-admin.contract.js';
+export * from './manager.contract.js';
