@@ -144,6 +144,23 @@ describe('TrengoAdapter integration', () => {
 
       expect(result.status).toBe('terminal_error');
     });
+
+    it('returns terminal_error when ticketId is not numeric', async () => {
+      const adapter = new TrengoAdapter({
+        apiKey: 'trengo-key',
+        channelId: 'ch-123',
+        fetchImpl: vi.fn() as unknown as typeof fetch,
+      });
+
+      const result = await adapter.sendMessage({
+        ticketId: '../admin',
+        bodyText: 'Hello',
+      });
+
+      expect(result.status).toBe('terminal_error');
+      if (result.status !== 'terminal_error') throw new Error('Expected terminal_error');
+      expect(result.failure.message).toContain('Invalid ticketId');
+    });
   });
 
   describe('error classification', () => {

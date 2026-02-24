@@ -122,6 +122,18 @@ export class TrengoAdapter {
       };
     }
 
+    if (!/^\d+$/.test(request.ticketId)) {
+      return {
+        status: 'terminal_error',
+        failure: {
+          classification: 'terminal',
+          statusCode: null,
+          message: `Invalid ticketId: expected numeric string, got "${request.ticketId}"`,
+          raw: null,
+        },
+      };
+    }
+
     return this.post(`/tickets/${request.ticketId}/messages`, {
       body: request.bodyText,
     });
