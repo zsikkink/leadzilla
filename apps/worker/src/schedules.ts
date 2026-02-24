@@ -23,6 +23,11 @@ import {
   type LabelsGenerateJobPayload,
   LABELS_GENERATE_RETRY_OPTIONS,
 } from './jobs/labels.generate.job.js';
+import {
+  MANAGER_ANALYZE_JOB_NAME,
+  type ManagerAnalyzeJobPayload,
+  MANAGER_ANALYZE_RETRY_OPTIONS,
+} from './jobs/manager.analyze.job.js';
 import { MODEL_TRAIN_JOB_NAME, type ModelTrainJobPayload, MODEL_TRAIN_RETRY_OPTIONS } from './jobs/model.train.job.js';
 import {
   SCORING_COMPUTE_JOB_NAME,
@@ -120,6 +125,20 @@ export async function registerWorkerSchedules(boss: Pick<PgBoss, 'schedule'>): P
     {
       singletonKey: 'schedule:analytics.rollup',
       ...ANALYTICS_ROLLUP_RETRY_OPTIONS,
+    },
+  );
+
+  // Weekly on Monday at 9am UTC
+  await boss.schedule(
+    MANAGER_ANALYZE_JOB_NAME,
+    '0 9 * * 1',
+    {
+      runId: 'scheduled:manager.analyze',
+      correlationId: 'scheduler:manager.analyze',
+    } satisfies ManagerAnalyzeJobPayload,
+    {
+      singletonKey: 'schedule:manager.analyze',
+      ...MANAGER_ANALYZE_RETRY_OPTIONS,
     },
   );
 
