@@ -175,7 +175,7 @@ async function main(): Promise<void> {
   const workerSchedulesEnabled =
     env.WORKER_ENABLE_SCHEDULES ?? env.APP_ENV !== 'local';
   const discoveryQueueWorkersEnabled =
-    env.DISCOVERY_QUEUE_WORKERS_ENABLED ?? env.APP_ENV !== 'local';
+    env.DISCOVERY_QUEUE_WORKERS_ENABLED ?? true;
 
   await boss.start();
   logger.info({}, 'Worker started');
