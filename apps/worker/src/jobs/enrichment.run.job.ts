@@ -4,12 +4,10 @@ import type {
 } from '@lead-flood/contracts';
 import { Prisma, prisma } from '@lead-flood/db';
 import type {
-  ClearbitAdapter,
   HunterAdapter,
   PdlEnrichmentAdapter,
   PublicWebLookupAdapter,
   NormalizedEnrichmentPayload,
-  ClearbitEnrichmentRequest,
   HunterEnrichmentRequest,
   PdlEnrichmentRequest,
   PublicWebLookupEnrichmentRequest,
@@ -58,12 +56,10 @@ export interface EnrichmentRunDependencies {
   boss: Pick<PgBoss, 'send'>;
   pdlAdapter: PdlEnrichmentAdapter;
   hunterAdapter: HunterAdapter;
-  clearbitAdapter: ClearbitAdapter;
   publicWebLookupAdapter: PublicWebLookupAdapter;
   enrichmentEnabled: boolean;
   pdlEnabled: boolean;
   hunterEnabled: boolean;
-  clearbitEnabled: boolean;
   otherFreeEnabled: boolean;
   defaultProvider: EnrichmentProvider;
 }
@@ -146,26 +142,6 @@ function toUnifiedFromHunter(
   };
 }
 
-function toUnifiedFromClearbit(
-  result: Awaited<ReturnType<ClearbitAdapter['enrichLead']>>,
-): UnifiedEnrichmentResult {
-  if (result.status === 'success') {
-    return {
-      status: 'success',
-      normalized: result.normalized,
-      raw: result.raw,
-    };
-  }
-
-  return {
-    status: result.status,
-    failure: {
-      statusCode: result.failure.statusCode,
-      message: result.failure.message,
-    },
-  };
-}
-
 function toUnifiedFromPublicLookup(
   result: Awaited<ReturnType<PublicWebLookupAdapter['enrichLead']>>,
 ): UnifiedEnrichmentResult {
@@ -229,25 +205,13 @@ async function executeEnrichmentProvider(
     }
 
     case 'CLEARBIT': {
-      if (!dependencies.clearbitEnabled) {
-        return {
-          status: 'terminal_error',
-          failure: {
-            statusCode: null,
-            message: 'CLEARBIT provider is disabled',
-          },
-        };
-      }
-
-      const request: ClearbitEnrichmentRequest = {
-        email: commonRequest.email,
-        correlationId: commonRequest.correlationId,
+      return {
+        status: 'terminal_error',
+        failure: {
+          statusCode: null,
+          message: 'CLEARBIT provider has been deprecated and removed',
+        },
       };
-      if (commonRequest.domain) {
-        request.domain = commonRequest.domain;
-      }
-
-      return toUnifiedFromClearbit(await dependencies.clearbitAdapter.enrichLead(request));
     }
 
     case 'OTHER_FREE': {

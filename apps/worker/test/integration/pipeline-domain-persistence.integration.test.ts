@@ -3,7 +3,6 @@ import { prisma } from '@lead-flood/db';
 import {
   ApolloDiscoveryAdapter,
   BraveSearchAdapter,
-  ClearbitAdapter,
   CompanySearchAdapter,
   GooglePlacesAdapter,
   HunterAdapter,
@@ -261,10 +260,6 @@ describe('pipeline domain persistence integration', () => {
             );
           }) as unknown as typeof fetch,
         }),
-        clearbitAdapter: new ClearbitAdapter({
-          apiKey: undefined,
-          fetchImpl: vi.fn() as unknown as typeof fetch,
-        }),
         publicWebLookupAdapter: new PublicWebLookupAdapter({
           enabled: false,
           fetchImpl: vi.fn() as unknown as typeof fetch,
@@ -272,7 +267,6 @@ describe('pipeline domain persistence integration', () => {
         enrichmentEnabled: true,
         pdlEnabled: false,
         hunterEnabled: true,
-        clearbitEnabled: false,
         otherFreeEnabled: false,
         defaultProvider: 'HUNTER',
       },

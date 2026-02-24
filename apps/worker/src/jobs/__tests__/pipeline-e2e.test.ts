@@ -367,19 +367,16 @@ describe('pipeline full lifecycle', () => {
     };
 
     const stubHunter = { enrichLead: vi.fn() } as unknown as EnrichmentRunDependencies['hunterAdapter'];
-    const stubClearbit = { enrichLead: vi.fn() } as unknown as EnrichmentRunDependencies['clearbitAdapter'];
     const stubPublicWeb = { enrichLead: vi.fn() } as unknown as EnrichmentRunDependencies['publicWebLookupAdapter'];
 
     const deps: EnrichmentRunDependencies = {
       boss: mockBoss,
       pdlAdapter: makePdlAdapter(),
       hunterAdapter: stubHunter,
-      clearbitAdapter: stubClearbit,
       publicWebLookupAdapter: stubPublicWeb,
       enrichmentEnabled: true,
       pdlEnabled: true,
       hunterEnabled: false,
-      clearbitEnabled: false,
       otherFreeEnabled: false,
       defaultProvider: 'PEOPLE_DATA_LABS',
     };

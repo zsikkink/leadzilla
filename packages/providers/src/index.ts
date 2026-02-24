@@ -3,7 +3,6 @@ export * from './discovery/braveSearch.adapter.js';
 export * from './discovery/companySearch.adapter.js';
 export * from './discovery/googlePlaces.adapter.js';
 export * from './discovery/linkedInScrape.adapter.js';
-export * from './enrichment/clearbit.adapter.js';
 export * from './enrichment/hunter.adapter.js';
 export * from './enrichment/hunterEnrichment.adapter.js';
 export * from './enrichment/normalized.types.js';

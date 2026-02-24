@@ -14,7 +14,6 @@ describe('loadWorkerEnv', () => {
       COMPANY_SEARCH_ENABLED: 'true',
       PDL_ENABLED: 'false',
       HUNTER_ENABLED: 'true',
-      CLEARBIT_ENABLED: 'false',
       OTHER_FREE_ENRICHMENT_ENABLED: 'true',
       DISCOVERY_ENABLED: 'false',
       SERPAPI_DISCOVERY_ENABLED: 'true',

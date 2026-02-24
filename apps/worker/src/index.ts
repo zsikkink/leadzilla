@@ -12,7 +12,6 @@ import {
   ApolloDiscoveryAdapter,
   BraveSearchAdapter,
   CompanySearchAdapter,
-  ClearbitAdapter,
   GooglePlacesAdapter,
   HunterEnrichmentAdapter,
   LinkedInScrapeAdapter,
@@ -234,12 +233,6 @@ async function main(): Promise<void> {
     apiKey: env.HUNTER_API_KEY,
     baseUrl: env.HUNTER_BASE_URL,
     minRequestIntervalMs: env.HUNTER_RATE_LIMIT_MS,
-  });
-
-  const clearbitAdapter = new ClearbitAdapter({
-    apiKey: env.CLEARBIT_API_KEY,
-    personBaseUrl: env.CLEARBIT_PERSON_BASE_URL,
-    companyBaseUrl: env.CLEARBIT_COMPANY_BASE_URL,
   });
 
   const publicWebLookupAdapter = new PublicWebLookupAdapter({
@@ -494,12 +487,10 @@ async function main(): Promise<void> {
         boss,
         pdlAdapter,
         hunterAdapter,
-        clearbitAdapter,
         publicWebLookupAdapter,
         enrichmentEnabled: env.ENRICHMENT_ENABLED,
         pdlEnabled: env.PDL_ENABLED,
         hunterEnabled: env.HUNTER_ENABLED,
-        clearbitEnabled: env.CLEARBIT_ENABLED,
         otherFreeEnabled: env.OTHER_FREE_ENRICHMENT_ENABLED,
         defaultProvider: env.ENRICHMENT_DEFAULT_PROVIDER,
       }),
