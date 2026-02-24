@@ -1,13 +1,21 @@
 import type {
   FunnelQuery,
   FunnelResponse,
+  IcpBreakdownItem,
+  ManagerAnalysisResponse,
+  ManagerRecommendation,
+  ManagerRecommendationsQuery,
+  ManagerRecommendationsResponse,
   ModelMetricsQuery,
   ModelMetricsResponse,
   RecomputeRollupRequest,
   RetrainStatusQuery,
   RetrainStatusResponse,
+  ScoreBandBreakdownItem,
   ScoreDistributionQuery,
   ScoreDistributionResponse,
+  TrendComparison,
+  VariantBreakdownItem,
 } from '@lead-flood/contracts';
 import { prisma } from '@lead-flood/db';
 
@@ -19,6 +27,7 @@ export interface AnalyticsRepository {
   getModelMetrics(query: ModelMetricsQuery): Promise<ModelMetricsResponse>;
   getRetrainStatus(query: RetrainStatusQuery): Promise<RetrainStatusResponse>;
   recomputeRollup(input: RecomputeRollupRequest): Promise<void>;
+  getManagerRecommendations(query: ManagerRecommendationsQuery): Promise<ManagerRecommendationsResponse>;
 }
 
 export class StubAnalyticsRepository implements AnalyticsRepository {
@@ -40,6 +49,10 @@ export class StubAnalyticsRepository implements AnalyticsRepository {
 
   async recomputeRollup(_input: RecomputeRollupRequest): Promise<void> {
     throw new AnalyticsNotImplementedError('TODO: recompute rollup trigger persistence');
+  }
+
+  async getManagerRecommendations(_query: ManagerRecommendationsQuery): Promise<ManagerRecommendationsResponse> {
+    throw new AnalyticsNotImplementedError('TODO: manager recommendations persistence');
   }
 }
 
@@ -371,6 +384,37 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
           : null,
       nextScheduledAt: null,
     };
+  }
+
+  override async getManagerRecommendations(query: ManagerRecommendationsQuery): Promise<ManagerRecommendationsResponse> {
+    const limit = query.limit ?? 10;
+
+    const analyses = await prisma.managerAnalysis.findMany({
+      orderBy: [{ createdAt: 'desc' }],
+      take: limit,
+    });
+
+    const items: ManagerAnalysisResponse[] = analyses.map((analysis) => ({
+      id: analysis.id,
+      runId: analysis.runId,
+      weekStart: analysis.weekStart.toISOString(),
+      weekEnd: analysis.weekEnd.toISOString(),
+      totalSends: analysis.totalSends,
+      totalReplies: analysis.totalReplies,
+      totalPositive: analysis.totalPositive,
+      totalBounced: analysis.totalBounced,
+      overallReplyRate: analysis.overallReplyRate,
+      overallPositiveRate: analysis.overallPositiveRate,
+      overallBounceRate: analysis.overallBounceRate,
+      icpBreakdown: (analysis.icpBreakdownJson as unknown as IcpBreakdownItem[]) ?? [],
+      variantBreakdown: (analysis.variantBreakdownJson as unknown as VariantBreakdownItem[]) ?? [],
+      scoreBandBreakdown: (analysis.scoreBandBreakdownJson as unknown as ScoreBandBreakdownItem[]) ?? [],
+      trend: analysis.trendJson as unknown as TrendComparison,
+      recommendations: (analysis.recommendationsJson as unknown as ManagerRecommendation[]) ?? [],
+      createdAt: analysis.createdAt.toISOString(),
+    }));
+
+    return { items };
   }
 
   override async recomputeRollup(input: RecomputeRollupRequest): Promise<void> {

@@ -3,6 +3,8 @@ import {
   ErrorResponseSchema,
   FunnelQuerySchema,
   FunnelResponseSchema,
+  ManagerRecommendationsQuerySchema,
+  ManagerRecommendationsResponseSchema,
   ModelMetricsQuerySchema,
   ModelMetricsResponseSchema,
   RecomputeRollupRequestSchema,
@@ -111,6 +113,23 @@ export function registerAnalyticsRoutes(
     try {
       const result = await service.getRetrainStatus(parsedQuery.data);
       return RetrainStatusResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.get('/v1/analytics/manager-recommendations', async (request, reply) => {
+    const parsedQuery = ManagerRecommendationsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid manager recommendations query');
+    }
+
+    try {
+      const result = await service.getManagerRecommendations(parsedQuery.data);
+      return ManagerRecommendationsResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;
