@@ -39,6 +39,21 @@ describe('ResendAdapter integration', () => {
     expect(body.html).toBe('<p>Hi Sara, I noticed Acme...</p>');
   });
 
+  it('sends Idempotency-Key header when idempotencyKey is provided', async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({ id: 'msg_idem' }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    const adapter = new ResendAdapter({ apiKey: 're_test', fetchImpl });
+    await adapter.sendEmail(SEND_REQUEST);
+
+    const headers = (fetchImpl.mock.calls[0]![1] as RequestInit).headers as Record<string, string>;
+    expect(headers['Idempotency-Key']).toBe('idem-123');
+  });
+
   it('omits html field when bodyHtml is null', async () => {
     const fetchImpl = vi.fn(async () => {
       return new Response(
