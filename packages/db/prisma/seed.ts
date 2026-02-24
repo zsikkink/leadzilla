@@ -1,19 +1,6 @@
 import { PrismaClient } from '@prisma/client';
-import { randomBytes, scryptSync } from 'node:crypto';
 
 const prisma = new PrismaClient();
-const demoUserPassword = process.env.DEMO_USER_PASSWORD ?? 'demo-password';
-
-function hashPassword(password: string): string {
-  const salt = randomBytes(16).toString('base64url');
-  const derived = scryptSync(password, salt, 64, {
-    N: 16384,
-    r: 8,
-    p: 1,
-  });
-
-  return ['scrypt', '16384', '8', '1', salt, derived.toString('base64url')].join('$');
-}
 
 // All MENA countries as default target
 const MENA_COUNTRIES = [
@@ -146,21 +133,8 @@ const PITCHED_FEATURES = [
 ];
 
 async function main(): Promise<void> {
-  const passwordHash = hashPassword(demoUserPassword);
-
-  // Create demo user
-  const demoUser = await prisma.user.upsert({
-    where: { email: 'demo@lead-flood.local' },
-    update: { firstName: 'Demo', lastName: 'User', isActive: true, passwordHash },
-    create: { email: 'demo@lead-flood.local', firstName: 'Demo', lastName: 'User', isActive: true, passwordHash },
-  });
-
-  // Also upsert the real user
-  await prisma.user.upsert({
-    where: { email: 'peem.pibuldham@gmail.com' },
-    update: {},
-    create: { email: 'peem.pibuldham@gmail.com', firstName: 'Peem', lastName: 'Pibuldham', isActive: true, passwordHash },
-  });
+  // Static seed user ID (auth is now handled by Supabase)
+  const seedUserId = 'seed-demo-user';
 
   // Delete existing ICPs and recreate from PDF
   console.log('Clearing old ICPs and creating 8 segments from PDF...');
@@ -183,7 +157,7 @@ async function main(): Promise<void> {
         featureList: JSON.parse(JSON.stringify(segment.featureList)),
         metadataJson: JSON.parse(JSON.stringify(segment.metadataJson)),
         isActive: true,
-        createdByUserId: demoUser.id,
+        createdByUserId: seedUserId,
       },
     });
     icpIds.push(icp.id);
@@ -229,7 +203,7 @@ async function main(): Promise<void> {
             promptVersion: 'v1.0',
             generatedByModel: 'gpt-4o-mini',
             approvalStatus,
-            ...(approvalStatus === 'APPROVED' ? { approvedByUserId: demoUser.id, approvedAt: new Date() } : {}),
+            ...(approvalStatus === 'APPROVED' ? { approvedByUserId: seedUserId, approvedAt: new Date() } : {}),
             followUpNumber: 0,
             pitchedFeature,
           },

@@ -10,8 +10,6 @@ const env: ApiEnv = {
   API_PORT: 5050,
   CORS_ORIGIN: 'http://localhost:3000',
   LOG_LEVEL: 'error',
-  JWT_ACCESS_SECRET: 'test-access-secret-test-access-secret',
-  JWT_REFRESH_SECRET: 'test-refresh-secret-test-refresh-secret',
   PG_BOSS_SCHEMA: 'pgboss',
   DATABASE_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood',
   DIRECT_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood',
@@ -26,7 +24,7 @@ describe('GET /ready', () => {
     const server = buildServer({
       env,
       logger: createLogger({ service: 'api-test', env: 'test', level: 'error' }),
-      accessTokenSecret: env.JWT_ACCESS_SECRET!,
+      verifyAccessToken: async () => ({ sub: 'user_1', email: null, firstName: null, lastName: null }),
       checkDatabaseHealth: async () => false,
       authenticateUser: async () => null,
       createLeadAndEnqueue: async () => ({ leadId: 'lead_1', jobId: 'job_1' }),
@@ -46,7 +44,7 @@ describe('GET /ready', () => {
     const server = buildServer({
       env,
       logger: createLogger({ service: 'api-test', env: 'test', level: 'error' }),
-      accessTokenSecret: env.JWT_ACCESS_SECRET!,
+      verifyAccessToken: async () => ({ sub: 'user_1', email: null, firstName: null, lastName: null }),
       checkDatabaseHealth: async () => true,
       authenticateUser: async () => null,
       createLeadAndEnqueue: async () => ({ leadId: 'lead_1', jobId: 'job_1' }),

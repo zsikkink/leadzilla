@@ -2,6 +2,7 @@ import type {
   ConversationResponse,
   CreateDiscoveryRunRequest,
   CreateDiscoveryRunResponse,
+  CreateIcpProfileRequest,
   CreateLeadRequest,
   CreateLeadResponse,
   DiscoveryRunStatusResponse,
@@ -132,6 +133,13 @@ export class ApiClient {
 
   getIcpRules(icpId: string): Promise<{ items: QualificationRuleResponse[] }> {
     return this.request(`/v1/icps/${icpId}/rules`);
+  }
+
+  createIcp(data: CreateIcpProfileRequest): Promise<IcpProfileResponse> {
+    return this.request('/v1/icps', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   }
 
   updateIcp(icpId: string, data: UpdateIcpProfileRequest): Promise<IcpProfileResponse> {

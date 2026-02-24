@@ -3,7 +3,6 @@ import { createLogger } from '@lead-flood/observability';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { ApiEnv } from '../../src/env.js';
-import { signJwt } from '../../src/auth/jwt.js';
 import { buildServer } from '../../src/server.js';
 import type { DiscoveryRunJobPayload } from '../../src/modules/discovery/discovery.service.js';
 
@@ -18,8 +17,6 @@ const env: ApiEnv = {
   API_PORT: 5050,
   CORS_ORIGIN: 'http://localhost:3000',
   LOG_LEVEL: 'error',
-  JWT_ACCESS_SECRET: 'test-access-secret-test-access-secret',
-  JWT_REFRESH_SECRET: 'test-refresh-secret-test-refresh-secret',
   PG_BOSS_SCHEMA: 'pgboss',
   DATABASE_URL: databaseUrl,
   DIRECT_URL: directUrl,
@@ -30,11 +27,7 @@ const env: ApiEnv = {
 };
 
 function authHeaders(): Record<string, string> {
-  const token = signJwt(
-    { sub: 'user_1', sid: 'sess_1', type: 'access', iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600 },
-    env.JWT_ACCESS_SECRET!,
-  );
-  return { authorization: `Bearer ${token}` };
+  return { authorization: 'Bearer test-token' };
 }
 
 describe('discovery run integration', () => {
@@ -84,7 +77,7 @@ describe('discovery run integration', () => {
     const server = buildServer({
       env,
       logger: createLogger({ service: 'api-test', env: 'test', level: 'error' }),
-      accessTokenSecret: env.JWT_ACCESS_SECRET!,
+      verifyAccessToken: async () => ({ sub: 'user_1', email: null, firstName: null, lastName: null }),
       checkDatabaseHealth: async () => true,
       authenticateUser: async () => null,
       createLeadAndEnqueue: async () => ({ leadId: 'lead_1', jobId: 'job_1' }),

@@ -201,34 +201,6 @@ enum JobRunStatus {
   CANCELED
 }
 
-model User {
-  id          String    @id @default(cuid())
-  email       String    @unique
-  firstName   String
-  lastName    String
-  passwordHash String?
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  sessions    Session[]
-  createdIcpProfiles IcpProfile[] @relation("IcpCreatedBy")
-  triggeredTrainingRuns TrainingRun[] @relation("TrainingRunTriggeredBy")
-
-  @@index([email])
-}
-
-model Session {
-  id           String   @id @default(cuid())
-  userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  refreshToken String   @unique
-  expiresAt    DateTime
-  createdAt    DateTime @default(now())
-
-  @@index([userId])
-  @@index([expiresAt])
-}
-
 model Lead {
   id             String        @id @default(cuid())
   firstName      String
@@ -307,7 +279,6 @@ model IcpProfile {
   featureList          Json?
   isActive             Boolean              @default(true)
   createdByUserId      String?
-  createdByUser        User?                @relation("IcpCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   qualificationRules   QualificationRule[]
   discoveryRecords     LeadDiscoveryRecord[]
   featureSnapshots     LeadFeatureSnapshot[]
@@ -425,7 +396,6 @@ model TrainingRun {
   status             TrainingRunStatus @default(QUEUED)
   trigger            TrainingTrigger
   triggeredByUserId  String?
-  triggeredByUser    User?             @relation("TrainingRunTriggeredBy", fields: [triggeredByUserId], references: [id], onDelete: SetNull)
   configJson         Json
   trainingWindowStart DateTime
   trainingWindowEnd  DateTime

@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   Brain,
   Building2,
-  Check,
   Clock,
   Cpu,
   Database,
@@ -24,11 +23,10 @@ import {
   Briefcase,
   AlertCircle,
   TrendingUp,
-  X,
 } from 'lucide-react';
 import type { GetLeadResponse, MessageSendResponse } from '@lead-flood/contracts';
 import { useParams, useRouter } from 'next/navigation';
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
 
 import { LeadStatusBadge } from '../../../../src/components/lead-status-badge.js';
 import { ScoreBandBadge } from '../../../../src/components/score-band-badge.js';
@@ -46,60 +44,6 @@ interface ScoreInfo {
   blendedScore?: number | undefined;
   scoreBand?: string | undefined;
   reasoning?: string[] | undefined;
-}
-
-// ── Editable field component ───────────────────────────────────
-interface EditableFieldProps {
-  label: string;
-  value: string;
-  onSave: (val: string) => void;
-}
-
-function EditableField({ label, value, onSave }: EditableFieldProps) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
-
-  const save = () => { onSave(draft); setEditing(false); };
-  const cancel = () => { setDraft(value); setEditing(false); };
-
-  if (editing) {
-    return (
-      <div>
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">{label}</p>
-        <div className="mt-1 flex items-center gap-1.5">
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            className="h-7 flex-1 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-            autoFocus
-            onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel(); }}
-          />
-          <button type="button" onClick={save} className="rounded-lg p-1 text-zbooni-green hover:bg-zbooni-green/10">
-            <Check className="h-3.5 w-3.5" />
-          </button>
-          <button type="button" onClick={cancel} className="rounded-lg p-1 text-muted-foreground hover:bg-accent/50">
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="group">
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">{label}</p>
-      <div className="mt-0.5 flex items-center gap-1.5">
-        <p className="text-sm font-medium">{value || <span className="text-muted-foreground/30 italic">—</span>}</p>
-        <button
-          type="button"
-          onClick={() => setEditing(true)}
-          className="rounded p-0.5 text-muted-foreground/30 opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
-        >
-          <Pencil className="h-3 w-3" />
-        </button>
-      </div>
-    </div>
-  );
 }
 
 function extractEnrichmentFields(data: unknown): EnrichmentField[] {
@@ -457,7 +401,10 @@ export default function LeadDetailPage() {
         </div>
 
         <div className="mt-5 grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
-          <EditableField label="Source" value={l.source.replace(/_/g, ' ')} onSave={() => {}} />
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Source</p>
+            <p className="mt-0.5 font-medium">{l.source.replace(/_/g, ' ')}</p>
+          </div>
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Created</p>
             <p className="mt-0.5 font-medium">{new Date(l.createdAt).toLocaleString()}</p>

@@ -1,10 +1,21 @@
 'use client';
 
 import { BarChart3, Brain, MessageSquare, TrendingUp, Users } from 'lucide-react';
-import { useCallback } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
+
+type DateRange = '7d' | '30d' | '90d' | 'all';
+
+const DATE_RANGE_LABELS: Record<DateRange, string> = {
+  '7d': '7 Days',
+  '30d': '30 Days',
+  '90d': '90 Days',
+  all: 'All Time',
+};
+
+const DATE_RANGE_OPTIONS: readonly DateRange[] = ['7d', '30d', '90d', 'all'] as const;
 
 function StatCard({ label, value, sub, accent }: { label: string; value: string; sub?: string | undefined; accent: string }) {
   return (
@@ -18,13 +29,26 @@ function StatCard({ label, value, sub, accent }: { label: string; value: string;
 
 export default function AnalyticsPage() {
   const { apiClient } = useAuth();
+  const [dateRange, setDateRange] = useState<DateRange>('all');
+
+  const dateFilter = useMemo(() => {
+    if (dateRange === 'all') return {};
+    const now = new Date();
+    const from = new Date();
+    if (dateRange === '7d') from.setDate(now.getDate() - 7);
+    if (dateRange === '30d') from.setDate(now.getDate() - 30);
+    if (dateRange === '90d') from.setDate(now.getDate() - 90);
+    return { from: from.toISOString(), to: now.toISOString() };
+  }, [dateRange]);
 
   const funnel = useApiQuery(
-    useCallback(() => apiClient.getFunnel(), [apiClient]),
+    useCallback(() => apiClient.getFunnel(dateFilter), [apiClient, dateFilter]),
+    [dateFilter],
   );
 
   const feedback = useApiQuery(
-    useCallback(() => apiClient.getFeedbackSummary(), [apiClient]),
+    useCallback(() => apiClient.getFeedbackSummary(dateFilter), [apiClient, dateFilter]),
+    [dateFilter],
   );
 
   const retrainStatus = useApiQuery(
@@ -32,11 +56,13 @@ export default function AnalyticsPage() {
   );
 
   const scoreDistribution = useApiQuery(
-    useCallback(() => apiClient.getScoreDistribution(), [apiClient]),
+    useCallback(() => apiClient.getScoreDistribution(dateFilter), [apiClient, dateFilter]),
+    [dateFilter],
   );
 
   const modelMetrics = useApiQuery(
-    useCallback(() => apiClient.getModelMetrics(), [apiClient]),
+    useCallback(() => apiClient.getModelMetrics(dateFilter), [apiClient, dateFilter]),
+    [dateFilter],
   );
 
   const totalMessaged = funnel.data?.messagesSentCount ?? 0;
@@ -52,11 +78,29 @@ export default function AnalyticsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-extrabold tracking-tight">Agent Analytics</h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          Live analytics from your current database state
-        </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-extrabold tracking-tight">Agent Analytics</h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            Live analytics from your current database state
+          </p>
+        </div>
+        <div className="flex gap-1.5">
+          {DATE_RANGE_OPTIONS.map((range) => (
+            <button
+              key={range}
+              type="button"
+              onClick={() => setDateRange(range)}
+              className={`rounded-full px-4 py-1.5 text-xs font-semibold transition-colors ${
+                dateRange === range
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted/20 text-muted-foreground hover:bg-muted/40'
+              }`}
+            >
+              {DATE_RANGE_LABELS[range]}
+            </button>
+          ))}
+        </div>
       </div>
 
       {funnel.error || feedback.error || retrainStatus.error || scoreDistribution.error || modelMetrics.error ? (

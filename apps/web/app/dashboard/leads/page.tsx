@@ -4,6 +4,7 @@ import type { LeadScoreBand, LeadStatus } from '@lead-flood/contracts';
 import { Check, Eye, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useState } from 'react';
+import { toast } from 'sonner';
 
 import { CustomSelect } from '../../../src/components/custom-select.js';
 import { LeadStatusBadge } from '../../../src/components/lead-status-badge.js';
@@ -37,6 +38,7 @@ export default function LeadsPage() {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<LeadStatus | undefined>(undefined);
   const [scoreBandFilter, setScoreBandFilter] = useState<LeadScoreBand | undefined>(undefined);
+  const [rejectedLeadIds, setRejectedLeadIds] = useState<Set<string>>(new Set());
   const pageSize = 20;
 
   const leads = useApiQuery(
@@ -53,6 +55,32 @@ export default function LeadsPage() {
     ),
     [page, statusFilter, scoreBandFilter],
   );
+
+  const displayedItems = leads.data?.items.filter((l) => !rejectedLeadIds.has(l.id)) ?? [];
+
+  const handleReject = (leadId: string, firstName: string, lastName: string) => {
+    const confirmed = window.confirm(`Reject lead "${firstName} ${lastName}"? They will be hidden from this list.`);
+    if (!confirmed) return;
+
+    setRejectedLeadIds((prev) => {
+      const next = new Set(prev);
+      next.add(leadId);
+      return next;
+    });
+
+    toast('Lead rejected', {
+      description: `${firstName} ${lastName} removed from list`,
+      action: {
+        label: 'Undo',
+        onClick: () =>
+          setRejectedLeadIds((prev) => {
+            const next = new Set(prev);
+            next.delete(leadId);
+            return next;
+          }),
+      },
+    });
+  };
 
   return (
     <div className="space-y-5">
@@ -103,7 +131,7 @@ export default function LeadsPage() {
             </tr>
           </thead>
           <tbody>
-            {leads.data?.items.map((lead) => (
+            {displayedItems.map((lead) => (
               <tr
                 key={lead.id}
                 className="border-b border-border/30 transition-colors last:border-0 hover:bg-accent/50"
@@ -157,6 +185,7 @@ export default function LeadsPage() {
                           type="button"
                           title="Reject lead"
                           className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-red-500/15 hover:text-red-400"
+                          onClick={() => handleReject(lead.id, lead.firstName ?? '', lead.lastName ?? '')}
                         >
                           <X className="h-3.5 w-3.5" />
                         </button>
@@ -176,7 +205,7 @@ export default function LeadsPage() {
                 </td>
               </tr>
             ) : null}
-            {!leads.isLoading && leads.data?.items.length === 0 ? (
+            {!leads.isLoading && displayedItems.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
                   No leads found.

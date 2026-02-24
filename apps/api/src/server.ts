@@ -25,7 +25,6 @@ import {
 } from '@lead-flood/contracts';
 
 import { buildAuthGuard, type VerifyAccessToken } from './auth/guard.js';
-import { verifyJwt } from './auth/jwt.js';
 import type { ApiEnv } from './env.js';
 import { registerAnalyticsRoutes } from './modules/analytics/analytics.routes.js';
 import type { AnalyticsRollupJobPayload } from './modules/analytics/analytics.service.js';
@@ -82,7 +81,6 @@ export interface BuildServerOptions {
   env: ApiEnv;
   logger: FastifyBaseLogger;
   verifyAccessToken?: VerifyAccessToken | undefined;
-  accessTokenSecret?: string | undefined;
   checkDatabaseHealth: () => Promise<boolean>;
   authenticateUser?: ((input: LoginRequest) => Promise<LoginResponse | null>) | undefined;
   createLeadAndEnqueue: (input: CreateLeadRequest) => Promise<{ leadId: string; jobId: string }>;
@@ -100,27 +98,6 @@ export interface BuildServerOptions {
   getLeadById: (leadId: string) => Promise<LeadRecord | null>;
   listLeads: (query: ListLeadsQuery) => Promise<ListLeadsResponse>;
   getJobById: (jobId: string) => Promise<JobRecord | null>;
-}
-
-function buildLegacyAccessTokenVerifier(accessTokenSecret: string): VerifyAccessToken {
-  return async (token) => {
-    const claims = verifyJwt(token, accessTokenSecret);
-    if (!claims || claims.type !== 'access') {
-      return null;
-    }
-
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    if (claims.exp <= nowSeconds) {
-      return null;
-    }
-
-    return {
-      sub: claims.sub,
-      email: null,
-      firstName: null,
-      lastName: null,
-    };
-  };
 }
 
 export function buildServer(options: BuildServerOptions): FastifyInstance {
@@ -184,13 +161,11 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
   }
 
   // Protected routes - JWT guard applied to all routes registered in this plugin
-  const verifyAccessToken =
-    options.verifyAccessToken ??
-    (options.accessTokenSecret ? buildLegacyAccessTokenVerifier(options.accessTokenSecret) : null);
-
-  if (!verifyAccessToken) {
+  if (!options.verifyAccessToken) {
     throw new Error('Missing verifyAccessToken configuration for protected API routes');
   }
+
+  const verifyAccessToken = options.verifyAccessToken;
 
   const authGuard = buildAuthGuard(verifyAccessToken);
 

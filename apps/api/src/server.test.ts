@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { type LoginRequest } from '@lead-flood/contracts';
 
 import { buildServer, type BuildServerOptions } from './server.js';
-import { signJwt } from './auth/jwt.js';
 import type { ApiEnv } from './env.js';
 
 const env: ApiEnv = {
@@ -13,8 +12,6 @@ const env: ApiEnv = {
   API_PORT: 5050,
   CORS_ORIGIN: 'http://localhost:3000',
   LOG_LEVEL: 'error',
-  JWT_ACCESS_SECRET: 'test-access-secret-test-access-secret',
-  JWT_REFRESH_SECRET: 'test-refresh-secret-test-refresh-secret',
   PG_BOSS_SCHEMA: 'pgboss',
   DATABASE_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood',
   DIRECT_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood',
@@ -27,7 +24,7 @@ const env: ApiEnv = {
 const makeDefaultOptions = (): BuildServerOptions => ({
   env,
   logger: createLogger({ service: 'api-test', env: 'test', level: 'error' }),
-  accessTokenSecret: env.JWT_ACCESS_SECRET!,
+  verifyAccessToken: async () => ({ sub: 'user_1', email: 'demo@lead-flood.local', firstName: 'Demo', lastName: 'User' }),
   checkDatabaseHealth: async () => true,
   authenticateUser: async ({ email }: LoginRequest) => ({
     tokenType: 'Bearer',
@@ -48,11 +45,7 @@ const makeDefaultOptions = (): BuildServerOptions => ({
 });
 
 function authHeaders(): Record<string, string> {
-  const token = signJwt(
-    { sub: 'user_1', sid: 'sess_1', type: 'access', iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600 },
-    env.JWT_ACCESS_SECRET!,
-  );
-  return { authorization: `Bearer ${token}` };
+  return { authorization: 'Bearer test-token' };
 }
 
 describe('buildServer', () => {

@@ -29,8 +29,6 @@ const ApiEnvSchema = z.object({
   API_PORT: z.coerce.number().int().positive().default(5050),
   CORS_ORIGIN: z.string().url().default('http://localhost:3000'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
-  JWT_ACCESS_SECRET: z.string().min(32).optional(),
-  JWT_REFRESH_SECRET: z.string().min(32).optional(),
   PG_BOSS_SCHEMA: z.string().min(1).default('pgboss'),
   DATABASE_URL: z.string().min(1),
   DIRECT_URL: z.string().min(1),

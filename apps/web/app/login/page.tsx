@@ -1,6 +1,7 @@
 'use client';
 
 import Image from 'next/image';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 
@@ -131,7 +132,16 @@ export default function LoginPage() {
           </form>
         </div>
 
-        <p className="mt-6 text-center text-xs text-muted-foreground/60">
+        <div className="mt-4 text-center">
+          <Link
+            href="/forgot-password"
+            className="text-sm text-muted-foreground/60 hover:text-foreground transition-colors"
+          >
+            Forgot password?
+          </Link>
+        </div>
+
+        <p className="mt-4 text-center text-xs text-muted-foreground/60">
           Powered by Lead Flood
         </p>
       </div>

@@ -5,7 +5,6 @@ import { createLogger } from '@lead-flood/observability';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ApiEnv } from '../../src/env.js';
-import { signJwt } from '../../src/auth/jwt.js';
 import { buildServer, LeadAlreadyExistsError, type BuildServerOptions } from '../../src/server.js';
 
 interface LeadEnrichJobPayload {
@@ -25,8 +24,6 @@ const env: ApiEnv = {
   API_PORT: 5050,
   CORS_ORIGIN: 'http://localhost:3000',
   LOG_LEVEL: 'error',
-  JWT_ACCESS_SECRET: 'test-access-secret-test-access-secret',
-  JWT_REFRESH_SECRET: 'test-refresh-secret-test-refresh-secret',
   PG_BOSS_SCHEMA: process.env.PG_BOSS_SCHEMA ?? 'pgboss',
   DATABASE_URL: databaseUrl,
   DIRECT_URL: directUrl,
@@ -103,11 +100,7 @@ async function processLeadEnrichJob(job: { data: LeadEnrichJobPayload }): Promis
 }
 
 function authHeaders(): Record<string, string> {
-  const token = signJwt(
-    { sub: 'user_1', sid: 'sess_1', type: 'access', iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600 },
-    env.JWT_ACCESS_SECRET!,
-  );
-  return { authorization: `Bearer ${token}` };
+  return { authorization: 'Bearer test-token' };
 }
 
 describe('lead pipeline e2e', () => {
@@ -132,7 +125,7 @@ describe('lead pipeline e2e', () => {
     const options: BuildServerOptions = {
       env,
       logger,
-      accessTokenSecret: env.JWT_ACCESS_SECRET!,
+      verifyAccessToken: async () => ({ sub: 'user_1', email: null, firstName: null, lastName: null }),
       checkDatabaseHealth: async () => {
         try {
           await prisma.$queryRaw`SELECT 1`;
