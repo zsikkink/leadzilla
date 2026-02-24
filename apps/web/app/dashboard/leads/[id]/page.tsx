@@ -6,6 +6,8 @@ import {
   Building2,
   Check,
   Clock,
+  Cpu,
+  Database,
   ExternalLink,
   Globe,
   Hash,
@@ -165,72 +167,162 @@ function extractRawDetails(data: unknown): Array<{ key: string; value: string }>
 }
 
 // ── Activity Timeline ──────────────────────────────────────────
+
+/** Status progression for determining which pipeline stages are reached. */
+const STATUS_ORDER = ['new', 'processing', 'enriched', 'failed', 'messaged', 'replied', 'cold'] as const;
+
+function statusReached(current: string, target: string): boolean {
+  // "failed" and "cold" are terminal — they don't imply later stages
+  if (current === 'failed' || current === 'cold') {
+    const ci = STATUS_ORDER.indexOf(current as (typeof STATUS_ORDER)[number]);
+    const ti = STATUS_ORDER.indexOf(target as (typeof STATUS_ORDER)[number]);
+    return ti >= 0 && ci >= 0 && ti <= ci;
+  }
+  const ci = STATUS_ORDER.indexOf(current as (typeof STATUS_ORDER)[number]);
+  const ti = STATUS_ORDER.indexOf(target as (typeof STATUS_ORDER)[number]);
+  if (ci < 0 || ti < 0) return false;
+  return ci >= ti;
+}
+
 interface TimelineEvent {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   detail: string;
   time: string;
   timestamp: number;
+  /** Tailwind classes for the icon node: text color + background. */
   color: string;
+  /** Optional score badge to render inline. */
+  scoreBadge?: { value: number; band: string } | undefined;
 }
 
 function buildTimeline(
   lead: GetLeadResponse,
   sends: MessageSendResponse[],
-  _scoreInfo: ScoreInfo | null,
+  scoreInfo: ScoreInfo | null,
 ): TimelineEvent[] {
   const events: TimelineEvent[] = [];
+  const createdTs = new Date(lead.createdAt).getTime();
 
-  const createdTimestamp = new Date(lead.createdAt).getTime();
+  // 1. Created — always present
   events.push({
     icon: Search,
     label: 'Lead Created',
-    detail: `Source: ${lead.source.replace(/_/g, ' ')}`,
+    detail: `Discovered via ${lead.source.replace(/_/g, ' ')}`,
     time: new Date(lead.createdAt).toLocaleString(),
-    timestamp: createdTimestamp,
-    color: 'text-blue-400 bg-blue-500/15',
+    timestamp: createdTs,
+    color: 'text-blue-400 bg-blue-500/15 ring-blue-500/25',
   });
 
-  if (lead.error) {
-    const errorAt = new Date(lead.updatedAt).getTime();
+  // 2. Enriched — when status is enriched or later
+  if (statusReached(lead.status, 'enriched')) {
+    // Enrichment happens shortly after creation; offset timestamp so it sorts after
+    const enrichedTs = createdTs + 1000;
     events.push({
-      icon: AlertCircle,
-      label: 'Lead Error',
-      detail: lead.error,
+      icon: Database,
+      label: 'Data Enriched',
+      detail: 'Contact and company data enriched from external sources',
       time: new Date(lead.updatedAt).toLocaleString(),
-      timestamp: errorAt,
-      color: 'text-red-400 bg-red-500/15',
+      timestamp: enrichedTs,
+      color: 'text-teal-400 bg-teal-500/15 ring-teal-500/25',
     });
   }
 
-  for (const send of sends) {
-    const sendTimestamp = new Date(send.sentAt ?? send.createdAt).getTime();
+  // 3. Features Computed — when status reached enriched (features are part of enrichment pipeline)
+  if (statusReached(lead.status, 'enriched') && lead.enrichmentData) {
+    const featuresTs = createdTs + 2000;
     events.push({
-      icon: Send,
-      label: `${send.channel} ${send.status === 'QUEUED' ? 'Queued' : 'Sent'}`,
-      detail: `Via ${send.provider}${send.status === 'FAILED' ? ' — FAILED' : ''}${send.followUpNumber && send.followUpNumber > 0 ? ` (follow-up #${send.followUpNumber})` : ''}`,
+      icon: Cpu,
+      label: 'Features Computed',
+      detail: 'Lead signals extracted and feature vectors calculated',
+      time: new Date(lead.updatedAt).toLocaleString(),
+      timestamp: featuresTs,
+      color: 'text-purple-400 bg-purple-500/15 ring-purple-500/25',
+    });
+  }
+
+  // 4. Scored — when scoreInfo exists
+  if (scoreInfo?.blendedScore !== undefined) {
+    const scoreVal = Math.round(scoreInfo.blendedScore * 100);
+    const scoredTs = createdTs + 3000;
+    const band = scoreInfo.scoreBand ?? 'LOW';
+    const bandColor =
+      band === 'HIGH'
+        ? 'text-zbooni-green bg-zbooni-green/15 ring-zbooni-green/25'
+        : band === 'MEDIUM'
+          ? 'text-yellow-400 bg-yellow-500/15 ring-yellow-500/25'
+          : 'text-orange-400 bg-orange-500/15 ring-orange-500/25';
+
+    events.push({
+      icon: TrendingUp,
+      label: 'Lead Scored',
+      detail: `Score band: ${band}`,
+      time: new Date(lead.updatedAt).toLocaleString(),
+      timestamp: scoredTs,
+      color: bandColor,
+      scoreBadge: { value: scoreVal, band },
+    });
+  }
+
+  // 5. Message Generated — inferred when sends exist (draft was generated before sending)
+  if (sends.length > 0) {
+    const firstSendTs = new Date(sends[sends.length - 1]?.sentAt ?? sends[sends.length - 1]?.createdAt ?? lead.updatedAt).getTime();
+    events.push({
+      icon: Pencil,
+      label: 'Message Drafted',
+      detail: 'AI-generated outreach message prepared for review',
+      time: new Date(firstSendTs - 1000).toLocaleString(),
+      timestamp: firstSendTs - 1000,
+      color: 'text-indigo-400 bg-indigo-500/15 ring-indigo-500/25',
+    });
+  }
+
+  // 6. Message Sent events — from sends
+  for (const send of sends) {
+    const sendTs = new Date(send.sentAt ?? send.createdAt).getTime();
+    const isFailed = send.status === 'FAILED' || send.status === 'BOUNCED';
+    const followUp = send.followUpNumber && send.followUpNumber > 0 ? ` (follow-up #${send.followUpNumber})` : '';
+    events.push({
+      icon: isFailed ? AlertCircle : Send,
+      label: isFailed
+        ? `${send.channel} Send Failed`
+        : `${send.channel} ${send.status === 'QUEUED' ? 'Queued' : 'Sent'}`,
+      detail: `Via ${send.provider}${followUp}${send.failureReason ? ` — ${send.failureReason}` : ''}`,
       time: new Date(send.sentAt ?? send.createdAt).toLocaleString(),
-      timestamp: sendTimestamp,
-      color:
-        send.status === 'FAILED' || send.status === 'BOUNCED'
-          ? 'text-red-400 bg-red-500/15'
-          : 'text-zbooni-green bg-zbooni-green/15',
+      timestamp: sendTs,
+      color: isFailed
+        ? 'text-red-400 bg-red-500/15 ring-red-500/25'
+        : 'text-zbooni-green bg-zbooni-green/15 ring-zbooni-green/25',
     });
 
+    // 7. Reply Received
     if (send.status === 'REPLIED' && send.repliedAt) {
-      const repliedTimestamp = new Date(send.repliedAt).getTime();
+      const repliedTs = new Date(send.repliedAt).getTime();
       events.push({
         icon: MessageSquare,
         label: 'Reply Received',
-        detail: 'View full conversation in Inbox',
+        detail: 'Prospect responded — view full conversation in Inbox',
         time: new Date(send.repliedAt).toLocaleString(),
-        timestamp: repliedTimestamp,
-        color: 'text-emerald-400 bg-emerald-500/15',
+        timestamp: repliedTs,
+        color: 'text-emerald-400 bg-emerald-500/15 ring-emerald-500/25',
       });
     }
   }
 
-  return events.sort((a, b) => b.timestamp - a.timestamp);
+  // 8. Error — if lead has error
+  if (lead.error) {
+    const errorTs = new Date(lead.updatedAt).getTime();
+    events.push({
+      icon: AlertCircle,
+      label: 'Pipeline Error',
+      detail: lead.error,
+      time: new Date(lead.updatedAt).toLocaleString(),
+      timestamp: errorTs,
+      color: 'text-red-400 bg-red-500/15 ring-red-500/25',
+    });
+  }
+
+  return events.sort((a, b) => a.timestamp - b.timestamp);
 }
 
 function ActivityTimeline({
@@ -245,26 +337,57 @@ function ActivityTimeline({
   const events = buildTimeline(lead, sends, scoreInfo);
 
   if (events.length === 0) {
-    return <p className="text-sm text-muted-foreground/60">No activity recorded yet.</p>;
+    return (
+      <div className="flex flex-col items-center gap-3 py-8 text-muted-foreground/40">
+        <Clock className="h-8 w-8" />
+        <p className="text-sm">No activity recorded yet.</p>
+      </div>
+    );
   }
 
   return (
-    <div className="relative ml-4">
-      <div className="absolute left-3 top-2 bottom-2 w-px bg-border/40" />
-      <div className="space-y-4">
+    <div className="relative ml-2">
+      {/* Vertical connecting line */}
+      <div className="absolute left-[17px] top-5 bottom-5 w-px bg-gradient-to-b from-border/60 via-border/30 to-transparent" />
+
+      <div className="space-y-1">
         {events.map((event, i) => {
           const Icon = event.icon;
           return (
-            <div key={`${event.label}:${event.timestamp}:${i}`} className="relative flex items-start gap-4 pl-2">
-              <div className={`relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${event.color}`}>
-                <Icon className="h-3.5 w-3.5" />
+            <div
+              key={`${event.label}:${event.timestamp}:${i}`}
+              className="timeline-entry relative flex items-start gap-4 py-2"
+              style={{ animationDelay: `${i * 80}ms` }}
+            >
+              {/* Node */}
+              <div
+                className={`relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ring-1 ${event.color}`}
+              >
+                <Icon className="h-4 w-4" />
               </div>
-              <div className="min-w-0 flex-1 pt-0.5">
-                <div className="flex items-center gap-2">
+
+              {/* Event card */}
+              <div className="min-w-0 flex-1 rounded-xl border border-border/30 bg-zbooni-dark/30 p-3 transition-colors hover:border-border/50 hover:bg-zbooni-dark/50">
+                <div className="flex items-center justify-between gap-2">
                   <p className="text-sm font-medium">{event.label}</p>
-                  <span className="text-[11px] text-muted-foreground/50">{event.time}</span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground/50">{event.time}</span>
                 </div>
-                <p className="text-xs text-muted-foreground/70">{event.detail}</p>
+                <div className="mt-1 flex items-center gap-2">
+                  <p className="text-xs text-muted-foreground/70">{event.detail}</p>
+                  {event.scoreBadge ? (
+                    <span
+                      className={`ml-auto inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-bold tabular-nums ${
+                        event.scoreBadge.band === 'HIGH'
+                          ? 'bg-zbooni-green/20 text-zbooni-green'
+                          : event.scoreBadge.band === 'MEDIUM'
+                            ? 'bg-yellow-500/20 text-yellow-400'
+                            : 'bg-orange-500/20 text-orange-400'
+                      }`}
+                    >
+                      {event.scoreBadge.value}%
+                    </span>
+                  ) : null}
+                </div>
               </div>
             </div>
           );

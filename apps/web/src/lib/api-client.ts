@@ -20,6 +20,8 @@ import type {
   ListMessageDraftsResponse,
   ListMessageSendsQuery,
   ListMessageSendsResponse,
+  ManagerRecommendationsQuery,
+  ManagerRecommendationsResponse,
   MessageDraftResponse,
   ModelMetricsResponse,
   QualificationRuleResponse,
@@ -197,6 +199,11 @@ export class ApiClient {
 
   getRetrainStatus(): Promise<RetrainStatusResponse> {
     return this.request('/v1/analytics/retrain-status');
+  }
+
+  getManagerRecommendations(query?: ManagerRecommendationsQuery): Promise<ManagerRecommendationsResponse> {
+    const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
+    return this.request(`/v1/analytics/manager-recommendations${qs}`);
   }
 
   // ── Feedback ──────────────────────────────────────

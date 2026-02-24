@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 
 import { AuthProvider } from '../src/lib/auth-context.js';
+import { Toaster } from '../src/components/ui/sonner.js';
 
 import './globals.css';
 
@@ -25,6 +26,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         style={{ fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif" }}
       >
         <AuthProvider>{children}</AuthProvider>
+        <Toaster theme="dark" position="bottom-right" richColors closeButton />
       </body>
     </html>
   );

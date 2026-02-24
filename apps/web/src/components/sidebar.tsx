@@ -4,10 +4,12 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
+  Activity,
   BarChart3,
   ClipboardList,
   Inbox,
   LayoutDashboard,
+  Lightbulb,
   ListChecks,
   MessageSquare,
   Rocket,
@@ -26,6 +28,8 @@ const DASHBOARD_NAV_ITEMS = [
   { href: '/dashboard/inbox', label: 'Inbox', icon: Inbox },
   { href: '/dashboard/icps', label: 'ICP Profiles', icon: Target },
   { href: '/dashboard/analytics', label: 'Analytics', icon: BarChart3 },
+  { href: '/dashboard/recommendations', label: 'Recommendations', icon: Lightbulb },
+  { href: '/dashboard/jobs', label: 'Jobs', icon: Activity },
 ] as const;
 
 const DISCOVERY_NAV_ITEMS = [
