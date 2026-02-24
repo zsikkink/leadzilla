@@ -331,6 +331,7 @@ async function main(): Promise<void> {
     apiKey: env.TRENGO_API_KEY,
     baseUrl: env.TRENGO_BASE_URL,
     channelId: env.TRENGO_CHANNEL_ID,
+    templateId: env.TRENGO_TEMPLATE_ID,
   });
 
   const whatsAppRateLimiter = new WhatsAppRateLimiter(prisma, {

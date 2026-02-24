@@ -4,10 +4,10 @@ import { TrengoAdapter } from './trengo.adapter.js';
 
 describe('TrengoAdapter integration', () => {
   describe('sendTemplateMessage', () => {
-    it('returns success with provider message id', async () => {
+    it('returns success with provider message id and ticket id', async () => {
       const fetchImpl = vi.fn(async () => {
         return new Response(
-          JSON.stringify({ id: 12345 }),
+          JSON.stringify({ id: 12345, ticket_id: 99 }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }) as unknown as typeof fetch;
@@ -15,18 +15,19 @@ describe('TrengoAdapter integration', () => {
       const adapter = new TrengoAdapter({
         apiKey: 'trengo-key',
         channelId: 'ch-123',
+        templateId: 'tmpl-456',
         fetchImpl,
       });
 
       const result = await adapter.sendTemplateMessage({
-        to: '+971501234567',
-        templateName: 'zbooni_intro',
-        params: { name: 'Sara' },
+        recipientPhoneNumber: '+971501234567',
+        params: ['Sara', 'Hello from Zbooni'],
       });
 
       expect(result.status).toBe('success');
       if (result.status !== 'success') throw new Error('Expected success');
       expect(result.providerMessageId).toBe('12345');
+      expect(result.ticketId).toBe('99');
 
       // Verify request structure
       expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -35,21 +36,22 @@ describe('TrengoAdapter integration', () => {
 
       const body = JSON.parse((options as RequestInit).body as string) as Record<string, unknown>;
       expect(body.channel_id).toBe('ch-123');
-      expect(body.to).toBe('+971501234567');
-      expect(body.template_name).toBe('zbooni_intro');
+      expect(body.recipient_phone_number).toBe('+971501234567');
+      expect(body.hsm_id).toBe('tmpl-456');
+      expect(body.params).toEqual(['Sara', 'Hello from Zbooni']);
     });
 
     it('returns terminal_error when API key is missing', async () => {
       const adapter = new TrengoAdapter({
         apiKey: undefined,
         channelId: 'ch-123',
+        templateId: 'tmpl-456',
         fetchImpl: vi.fn() as unknown as typeof fetch,
       });
 
       const result = await adapter.sendTemplateMessage({
-        to: '+971501234567',
-        templateName: 'zbooni_intro',
-        params: {},
+        recipientPhoneNumber: '+971501234567',
+        params: [],
       });
 
       expect(result.status).toBe('terminal_error');
@@ -61,23 +63,41 @@ describe('TrengoAdapter integration', () => {
       const adapter = new TrengoAdapter({
         apiKey: 'trengo-key',
         channelId: undefined,
+        templateId: 'tmpl-456',
         fetchImpl: vi.fn() as unknown as typeof fetch,
       });
 
       const result = await adapter.sendTemplateMessage({
-        to: '+971501234567',
-        templateName: 'zbooni_intro',
-        params: {},
+        recipientPhoneNumber: '+971501234567',
+        params: [],
       });
 
       expect(result.status).toBe('terminal_error');
       if (result.status !== 'terminal_error') throw new Error('Expected terminal_error');
       expect(result.failure.message).toContain('TRENGO_CHANNEL_ID');
     });
+
+    it('returns terminal_error when template ID is missing', async () => {
+      const adapter = new TrengoAdapter({
+        apiKey: 'trengo-key',
+        channelId: 'ch-123',
+        templateId: undefined,
+        fetchImpl: vi.fn() as unknown as typeof fetch,
+      });
+
+      const result = await adapter.sendTemplateMessage({
+        recipientPhoneNumber: '+971501234567',
+        params: [],
+      });
+
+      expect(result.status).toBe('terminal_error');
+      if (result.status !== 'terminal_error') throw new Error('Expected terminal_error');
+      expect(result.failure.message).toContain('TRENGO_TEMPLATE_ID');
+    });
   });
 
   describe('sendMessage', () => {
-    it('returns success for direct message', async () => {
+    it('returns success for direct message to ticket', async () => {
       const fetchImpl = vi.fn(async () => {
         return new Response(
           JSON.stringify({ id: 67890 }),
@@ -92,13 +112,17 @@ describe('TrengoAdapter integration', () => {
       });
 
       const result = await adapter.sendMessage({
-        to: '+971501234567',
+        ticketId: '99',
         bodyText: 'Follow-up message...',
       });
 
       expect(result.status).toBe('success');
       if (result.status !== 'success') throw new Error('Expected success');
       expect(result.providerMessageId).toBe('67890');
+
+      // Verify correct endpoint
+      const [url] = fetchImpl.mock.calls[0]!;
+      expect(url).toBe('https://app.trengo.com/api/v2/tickets/99/messages');
 
       const body = JSON.parse(
         (fetchImpl.mock.calls[0]![1] as RequestInit).body as string,
@@ -114,22 +138,7 @@ describe('TrengoAdapter integration', () => {
       });
 
       const result = await adapter.sendMessage({
-        to: '+971501234567',
-        bodyText: 'Hello',
-      });
-
-      expect(result.status).toBe('terminal_error');
-    });
-
-    it('returns terminal_error when channel ID is missing', async () => {
-      const adapter = new TrengoAdapter({
-        apiKey: 'trengo-key',
-        channelId: undefined,
-        fetchImpl: vi.fn() as unknown as typeof fetch,
-      });
-
-      const result = await adapter.sendMessage({
-        to: '+971501234567',
+        ticketId: '99',
         bodyText: 'Hello',
       });
 
@@ -146,13 +155,13 @@ describe('TrengoAdapter integration', () => {
       const adapter = new TrengoAdapter({
         apiKey: 'trengo-key',
         channelId: 'ch-123',
+        templateId: 'tmpl-456',
         fetchImpl,
       });
 
       const result = await adapter.sendTemplateMessage({
-        to: '+971501234567',
-        templateName: 'test',
-        params: {},
+        recipientPhoneNumber: '+971501234567',
+        params: [],
       });
 
       expect(result.status).toBe('retryable_error');
@@ -170,7 +179,7 @@ describe('TrengoAdapter integration', () => {
       });
 
       const result = await adapter.sendMessage({
-        to: '+971501234567',
+        ticketId: '99',
         bodyText: 'Test',
       });
 
@@ -185,13 +194,13 @@ describe('TrengoAdapter integration', () => {
       const adapter = new TrengoAdapter({
         apiKey: 'trengo-key',
         channelId: 'ch-123',
+        templateId: 'tmpl-456',
         fetchImpl,
       });
 
       const result = await adapter.sendTemplateMessage({
-        to: '+971501234567',
-        templateName: 'test',
-        params: {},
+        recipientPhoneNumber: '+971501234567',
+        params: [],
       });
 
       expect(result.status).toBe('terminal_error');
@@ -205,13 +214,13 @@ describe('TrengoAdapter integration', () => {
       const adapter = new TrengoAdapter({
         apiKey: 'trengo-key',
         channelId: 'ch-123',
+        templateId: 'tmpl-456',
         fetchImpl,
       });
 
       const result = await adapter.sendTemplateMessage({
-        to: '+971501234567',
-        templateName: 'test',
-        params: {},
+        recipientPhoneNumber: '+971501234567',
+        params: [],
       });
 
       expect(result.status).toBe('retryable_error');

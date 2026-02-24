@@ -228,6 +228,7 @@ function makeTrengoAdapter(): TrengoAdapter {
   return new TrengoAdapter({
     apiKey: 'test-trengo-key',
     channelId: 'test-channel-123',
+    templateId: 'test-template-456',
     fetchImpl: makeTrengoFetch(),
   });
 }

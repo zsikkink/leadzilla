@@ -186,14 +186,29 @@ export async function handleMessageSendJob(
         return;
       }
 
-      const result = await deps.trengoAdapter.sendMessage({
-        to: send.lead.phone,
-        bodyText: send.messageVariant.bodyText,
+      // Determine if this is a first-contact or follow-up by checking for existing ticketId
+      const previousSend = await prisma.messageSend.findFirst({
+        where: { leadId: send.leadId, channel: 'WHATSAPP', status: 'SENT', providerConversationId: { not: null } },
+        select: { providerConversationId: true },
+        orderBy: { sentAt: 'desc' },
       });
+
+      const existingTicketId = previousSend?.providerConversationId ?? null;
+
+      const result = existingTicketId
+        ? await deps.trengoAdapter.sendMessage({
+            ticketId: existingTicketId,
+            bodyText: send.messageVariant.bodyText,
+          })
+        : await deps.trengoAdapter.sendTemplateMessage({
+            recipientPhoneNumber: send.lead.phone,
+            params: [send.lead.firstName ?? '', send.messageVariant.bodyText],
+          });
 
       if (result.status === 'success') {
         const followUpNumber = job.data.followUpNumber ?? 0;
         const nextFollowUpAfter = followUpNumber < 3 ? computeNextFollowUpAfter() : null;
+        const ticketId = result.ticketId ?? existingTicketId;
 
         await prisma.$transaction([
           prisma.messageSend.update({
@@ -201,7 +216,7 @@ export async function handleMessageSendJob(
             data: {
               status: 'SENT',
               providerMessageId: result.providerMessageId,
-              providerConversationId: result.providerMessageId,
+              providerConversationId: ticketId,
               sentAt: new Date(),
               followUpNumber,
               nextFollowUpAfter,
