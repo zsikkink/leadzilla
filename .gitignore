@@ -29,6 +29,10 @@ pnpm-debug.log*
 .vscode/
 .idea/
 
+# Claude Code personal config (team CLAUDE.md files are committed)
+.claude/local.md
+.claude/settings.local.json
+
 # Supabase local/linked artifacts (keep supabase/migrations committed)
 .supabase/
 supabase/.temp/

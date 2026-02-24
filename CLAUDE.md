@@ -26,6 +26,36 @@ Quality: `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
 - **OpenAI**: Strip markdown fences even with structured output. Sanitize HTML: `JSON.stringify(html).slice(1,-1)`. Use `zodResponseFormat` with Zod schemas. GPT-4o-mini for extraction (cheap), GPT-4o for scoring (smart).
 - **Trengo**: Template message required for first WhatsApp contact. ~50/day limit. 24h session window after customer reply. Idempotency key per message.
 
+## Pipeline
+```
+API → OutboxEvent → pg-boss
+        ↓
+  discovery.run → enrichment.run → features.compute → scoring.compute
+        ↓                                                    ↓ (score >= 0.5)
+  [Apollo/Apify/     [PDL/Hunter/                    message.generate
+   LinkedIn/Google]   Apify/Apollo]                        ↓
+                                                     message.send → [Resend (email) / Trengo (WhatsApp)]
+                                                           ↓
+                                              followup.check (cron, 72h) → reply.classify → notify.sales
+                                                           ↓
+                                              labels.generate → model.train → model.evaluate
+```
+
+## Verify (run after every change)
+```bash
+pnpm typecheck       # 1. Types first — catches most issues
+pnpm lint            # 2. Style/import issues
+pnpm test            # 3. Unit + integration tests
+pnpm build           # 4. Full build — final gate
+```
+IMPORTANT: Fix all errors before committing. Do not skip steps.
+
+## Self-Improvement
+After any correction or mistake: update CLAUDE.md or module CLAUDE.md so the error doesn't recur. Ask "should I update CLAUDE.md?" after receiving corrections.
+
 ## References
 - **PRD.md** — Product requirements, feature blocks, pipeline logic
 - **ICP and Offerings.pdf** — Zbooni scoring criteria, segments A-H, business rules
+- **apps/api/CLAUDE.md** — API route, auth, outbox conventions
+- **apps/worker/CLAUDE.md** — Job structure, error classification, chaining
+- **packages/providers/CLAUDE.md** — Adapter pattern, return types, testing

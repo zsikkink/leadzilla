@@ -79,7 +79,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/contracts
       '@supabase/supabase-js':
-        specifier: ^2.57.4
+        specifier: ^2.97.0
         version: 2.97.0
       '@tailwindcss/postcss':
         specifier: ^4.1.18
