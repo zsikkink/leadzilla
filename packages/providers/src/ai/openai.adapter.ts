@@ -421,7 +421,7 @@ function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
 
   if (schema instanceof z.ZodNullable) {
     const inner = zodToJsonSchema(schema.unwrap() as z.ZodType);
-    return { ...inner, nullable: true };
+    return { anyOf: [inner, { type: 'null' }] };
   }
 
   return { type: 'string' };
