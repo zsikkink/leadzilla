@@ -1,0 +1,887 @@
+/**
+ * Full pipeline chain E2E integration test
+ *
+ * Tests the COMPLETE chain from discovery through message.send against a real
+ * PostgreSQL database with ALL external adapters mocked at the fetch level.
+ *
+ * Pipeline under test:
+ *   discovery.run (Apollo) → enrichment.run (PDL) → features.compute
+ *   → scoring.compute → message.generate (PENDING approval)
+ *   → manual approval → message.send (Resend for email, Trengo for WhatsApp)
+ */
+import { randomUUID } from 'node:crypto';
+
+import { type Prisma, prisma } from '@lead-flood/db';
+import {
+  ApolloDiscoveryAdapter,
+  BraveSearchAdapter,
+  CompanySearchAdapter,
+  GooglePlacesAdapter,
+  LinkedInScrapeAdapter,
+  PdlEnrichmentAdapter,
+  OpenAiAdapter,
+  ResendAdapter,
+  TrengoAdapter,
+} from '@lead-flood/providers';
+import type { Job } from 'pg-boss';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+import {
+  handleDiscoveryRunJob,
+  type DiscoveryRunJobPayload,
+  type DiscoveryRunDependencies,
+} from '../discovery.run.job.js';
+import {
+  handleEnrichmentRunJob,
+  type EnrichmentRunJobPayload,
+  type EnrichmentRunDependencies,
+} from '../enrichment.run.job.js';
+import {
+  handleFeaturesComputeJob,
+  type FeaturesComputeJobPayload,
+  type FeaturesComputeDependencies,
+} from '../features.compute.job.js';
+import {
+  handleScoringComputeJob,
+  type ScoringComputeJobPayload,
+  type ScoringComputeJobDependencies,
+} from '../scoring.compute.job.js';
+import {
+  handleMessageGenerateJob,
+  type MessageGenerateJobPayload,
+  type MessageGenerateJobDependencies,
+} from '../message.generate.job.js';
+import {
+  handleMessageSendJob,
+  type MessageSendJobPayload,
+  type MessageSendJobDependencies,
+} from '../message.send.job.js';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const TEST_PREFIX = `e2e-full-chain-${Date.now()}`;
+
+function makeJob<T>(data: T, name = 'test'): Job<T> {
+  return {
+    id: randomUUID(),
+    name,
+    data,
+    priority: 0,
+    state: 'active',
+    retrylimit: 0,
+    retrycount: 0,
+    retrydelay: 0,
+    retrybackoff: false,
+    startafter: new Date(),
+    startedon: new Date(),
+    singletonkey: null,
+    singletonon: null,
+    expirein: { hours: 1 },
+    createdon: new Date(),
+    completedon: null,
+    keepuntil: new Date(Date.now() + 86_400_000),
+    on_complete: false,
+    output: null,
+    deadletter: null,
+  } as unknown as Job<T>;
+}
+
+const noopLogger = {
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+};
+
+const bossSendSpy = vi.fn().mockResolvedValue(undefined);
+const mockBoss = { send: bossSendSpy };
+
+// ---------------------------------------------------------------------------
+// Mock fetch factories — realistic responses for each provider
+// ---------------------------------------------------------------------------
+
+const APOLLO_PERSON_ID = `apollo-${randomUUID()}`;
+const DISCOVERED_EMAIL = `${TEST_PREFIX}@zbooni-fullchain.test`;
+const DISCOVERED_FIRST_NAME = 'Khalid';
+const DISCOVERED_LAST_NAME = 'Al-Rashidi';
+
+function makeApolloFetch(): typeof fetch {
+  return vi.fn().mockImplementation(() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          people: [
+            {
+              id: APOLLO_PERSON_ID,
+              first_name: DISCOVERED_FIRST_NAME,
+              last_name: DISCOVERED_LAST_NAME,
+              email: DISCOVERED_EMAIL,
+              title: 'Head of Commerce',
+              // Must use ISO code matching ICP targetCountries for matchesIcpFilters
+              country: 'AE',
+              organization: {
+                name: 'FullChain Test Corp',
+                primary_domain: 'fullchain-test.com',
+                estimated_num_employees: 200,
+                industry: 'Financial Services',
+                website_url: 'https://fullchain-test.com',
+              },
+            },
+          ],
+          pagination: {
+            page: 1,
+            total_pages: 1,
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    ),
+  ) as unknown as typeof fetch;
+}
+
+function makePdlFetch(): typeof fetch {
+  return vi.fn().mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        work_email: DISCOVERED_EMAIL,
+        mobile_phone: '+971509876543',
+        location_country: 'united arab emirates',
+        location_locality: 'Dubai',
+        linkedin_url: 'https://linkedin.com/in/khalid-fullchain',
+        experience: [
+          {
+            company: 'FullChain Test Corp',
+            industry: 'Financial Services',
+            company_domain: 'fullchain-test.com',
+            company_size: 200,
+            company_website: 'https://fullchain-test.com',
+          },
+        ],
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ),
+  ) as unknown as typeof fetch;
+}
+
+function makeOpenAiScoringFetch(): typeof fetch {
+  return vi.fn().mockImplementation(() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          id: 'chatcmpl-scoring',
+          model: 'gpt-4o',
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: JSON.stringify({
+                  score: 0.85,
+                  reasoning: [
+                    'Strong industry match: Financial Services in UAE',
+                    'Company size (200) within target range',
+                  ],
+                }),
+              },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: { prompt_tokens: 200, completion_tokens: 80, total_tokens: 280 },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    ),
+  ) as unknown as typeof fetch;
+}
+
+function makeOpenAiGenerateFetch(): typeof fetch {
+  const emailBodyA =
+    'Thank you for your interest in our payment solutions. We help businesses like yours streamline transactions and boost conversion rates across the UAE market.';
+  const emailBodyB =
+    'We noticed your company could benefit from our commerce platform. Our clients typically see a significant improvement in checkout completion within weeks.';
+
+  return vi.fn().mockImplementation(() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          id: 'chatcmpl-generate',
+          model: 'gpt-4o',
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: JSON.stringify({
+                  variant_a: {
+                    subject: 'Partnership Opportunity — Zbooni',
+                    bodyText: emailBodyA,
+                    bodyHtml: `<p>${emailBodyA}</p>`,
+                    ctaText: 'Book a Demo',
+                  },
+                  variant_b: {
+                    subject: 'Boost Your Commerce — Zbooni',
+                    bodyText: emailBodyB,
+                    bodyHtml: `<p>${emailBodyB}</p>`,
+                    ctaText: null,
+                  },
+                }),
+              },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: { prompt_tokens: 150, completion_tokens: 60, total_tokens: 210 },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    ),
+  ) as unknown as typeof fetch;
+}
+
+function makeResendFetch(): typeof fetch {
+  return vi.fn().mockResolvedValue(
+    new Response(
+      JSON.stringify({ id: `resend-msg-${randomUUID()}` }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ),
+  ) as unknown as typeof fetch;
+}
+
+function makeTrengoFetch(): typeof fetch {
+  return vi.fn().mockResolvedValue(
+    new Response(
+      JSON.stringify({ id: 789012, message_id: `trengo-msg-${randomUUID()}` }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ),
+  ) as unknown as typeof fetch;
+}
+
+// ---------------------------------------------------------------------------
+// Adapter factories
+// ---------------------------------------------------------------------------
+
+function makeApolloAdapter(): ApolloDiscoveryAdapter {
+  return new ApolloDiscoveryAdapter({
+    apiKey: 'test-apollo-key',
+    baseUrl: 'https://api.apollo.test',
+    minRequestIntervalMs: 0,
+    fetchImpl: makeApolloFetch(),
+  });
+}
+
+function makeDisabledBraveSearch(): BraveSearchAdapter {
+  return new BraveSearchAdapter({
+    enabled: false,
+    apiKey: '',
+    baseUrl: 'https://brave.test',
+  });
+}
+
+function makeDisabledGooglePlaces(): GooglePlacesAdapter {
+  return new GooglePlacesAdapter({
+    enabled: false,
+    apiKey: '',
+    baseUrl: 'https://places.test',
+  });
+}
+
+function makeDisabledLinkedIn(): LinkedInScrapeAdapter {
+  return new LinkedInScrapeAdapter({
+    enabled: false,
+    scrapeEndpoint: 'https://linkedin.test',
+    apiKey: '',
+  });
+}
+
+function makeDisabledCompanySearch(): CompanySearchAdapter {
+  return new CompanySearchAdapter({
+    enabled: false,
+    baseUrl: 'https://companysearch.test',
+  });
+}
+
+function makePdlAdapter(): PdlEnrichmentAdapter {
+  return new PdlEnrichmentAdapter({
+    apiKey: 'test-pdl-key',
+    baseUrl: 'https://api.peopledatalabs.test/v5',
+    fetchImpl: makePdlFetch(),
+  });
+}
+
+function makeOpenAiScoringAdapter(): OpenAiAdapter {
+  return new OpenAiAdapter({
+    apiKey: 'test-openai-key',
+    fetchImpl: makeOpenAiScoringFetch(),
+  });
+}
+
+function makeOpenAiGenerateAdapter(): OpenAiAdapter {
+  return new OpenAiAdapter({
+    apiKey: 'test-openai-key',
+    fetchImpl: makeOpenAiGenerateFetch(),
+  });
+}
+
+function makeResendAdapter(): ResendAdapter {
+  return new ResendAdapter({
+    apiKey: 'test-resend-key',
+    fromEmail: 'noreply@leadflood.test',
+    fetchImpl: makeResendFetch(),
+  });
+}
+
+function makeTrengoAdapter(): TrengoAdapter {
+  return new TrengoAdapter({
+    apiKey: 'test-trengo-key',
+    channelId: 'test-channel-789',
+    templateId: 'test-template-012',
+    fetchImpl: makeTrengoFetch(),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Seed data IDs
+// ---------------------------------------------------------------------------
+
+const ICP_ID = randomUUID();
+const RUN_ID = `full-chain-${randomUUID()}`;
+const ICP_FEATURES = ['Payment Links', 'WhatsApp Commerce', 'Order Management', 'Custom Storefronts'];
+
+// Cross-stage state — populated during test execution
+let discoveredLeadId: string;
+
+// ---------------------------------------------------------------------------
+// Helper: extract boss.send payload for a specific queue
+// ---------------------------------------------------------------------------
+
+function extractBossPayload<T>(queueName: string): T {
+  const call = bossSendSpy.mock.calls.find(
+    (c: unknown[]) => c[0] === queueName,
+  );
+  if (!call) {
+    throw new Error(`No boss.send call found for queue '${queueName}'`);
+  }
+  return call[1] as T;
+}
+
+// ---------------------------------------------------------------------------
+// Test suite
+// ---------------------------------------------------------------------------
+
+describe('pipeline full chain: discovery → message.send', () => {
+  beforeAll(async () => {
+    // Seed IcpProfile — the only prerequisite for discovery.run
+    await prisma.icpProfile.create({
+      data: {
+        id: ICP_ID,
+        name: `${TEST_PREFIX} ICP`,
+        qualificationLogic: 'WEIGHTED',
+        targetIndustries: ['Financial Services', 'Technology'],
+        targetCountries: ['AE', 'SA'],
+        isActive: true,
+        featureList: JSON.parse(JSON.stringify(ICP_FEATURES)) as Prisma.InputJsonValue,
+      },
+    });
+  });
+
+  afterAll(async () => {
+    // Clean up in reverse dependency order — use leadId captured after discovery
+    if (discoveredLeadId) {
+      await prisma.messageSend.deleteMany({ where: { leadId: discoveredLeadId } });
+      await prisma.messageVariant.deleteMany({
+        where: { messageDraft: { leadId: discoveredLeadId } },
+      });
+      await prisma.messageDraft.deleteMany({ where: { leadId: discoveredLeadId } });
+      await prisma.leadScorePrediction.deleteMany({ where: { leadId: discoveredLeadId } });
+      await prisma.leadFeatureSnapshot.deleteMany({ where: { leadId: discoveredLeadId } });
+      await prisma.leadEnrichmentRecord.deleteMany({ where: { leadId: discoveredLeadId } });
+      await prisma.jobExecution.deleteMany({ where: { leadId: discoveredLeadId } });
+      await prisma.leadDiscoveryRecord.deleteMany({ where: { leadId: discoveredLeadId } });
+      await prisma.lead.deleteMany({ where: { id: discoveredLeadId } });
+    }
+    // Clean up job executions without leadId (the run-level ones)
+    await prisma.jobExecution.deleteMany({ where: { id: RUN_ID } });
+    // NOTE: Do NOT delete modelVersion 'deterministic-baseline-v1' here — it's
+    // shared across test files and CASCADE-deleting it removes LeadScorePrediction
+    // rows from other tests running in parallel.
+    await prisma.icpProfile.deleteMany({ where: { id: ICP_ID } });
+  });
+
+  // -----------------------------------------------------------------------
+  // Stage 1: Discovery — Apollo discovers a lead
+  // -----------------------------------------------------------------------
+  it('stage 1: discovery.run discovers a lead via Apollo and enqueues enrichment', async () => {
+    bossSendSpy.mockClear();
+
+    const payload: DiscoveryRunJobPayload = {
+      runId: RUN_ID,
+      icpProfileId: ICP_ID,
+      provider: 'APOLLO',
+      limit: 10,
+      correlationId: `corr-${RUN_ID}`,
+    };
+
+    const deps: DiscoveryRunDependencies = {
+      boss: mockBoss,
+      apolloAdapter: makeApolloAdapter(),
+      braveSearchAdapter: makeDisabledBraveSearch(),
+      googlePlacesAdapter: makeDisabledGooglePlaces(),
+      linkedInScrapeAdapter: makeDisabledLinkedIn(),
+      companySearchAdapter: makeDisabledCompanySearch(),
+      discoveryEnabled: true,
+      apolloEnabled: true,
+      braveSearchEnabled: false,
+      googlePlacesEnabled: false,
+      linkedInScrapeEnabled: false,
+      companySearchEnabled: false,
+      defaultProvider: 'APOLLO',
+      defaultEnrichmentProvider: 'PEOPLE_DATA_LABS',
+    };
+
+    await handleDiscoveryRunJob(noopLogger, makeJob(payload, 'discovery.run'), deps);
+
+    // Verify lead was created
+    const lead = await prisma.lead.findUnique({ where: { email: DISCOVERED_EMAIL } });
+    expect(lead).toBeTruthy();
+    expect(lead!.firstName).toBe(DISCOVERED_FIRST_NAME);
+    expect(lead!.lastName).toBe(DISCOVERED_LAST_NAME);
+    expect(lead!.status).toBe('new');
+    expect(lead!.source).toBe('apollo');
+    discoveredLeadId = lead!.id;
+
+    // Verify discovery record
+    const discoveryRecords = await prisma.leadDiscoveryRecord.findMany({
+      where: { leadId: discoveredLeadId },
+    });
+    expect(discoveryRecords.length).toBeGreaterThanOrEqual(1);
+    const record = discoveryRecords[0]!;
+    expect(record.provider).toBe('APOLLO');
+    expect(record.status).toBe('DISCOVERED');
+    expect(record.icpProfileId).toBe(ICP_ID);
+    expect(record.providerRecordId).toBe(APOLLO_PERSON_ID);
+
+    // Verify enrichment was enqueued via boss.send
+    const enrichmentPayload = extractBossPayload<EnrichmentRunJobPayload>('enrichment.run');
+    expect(enrichmentPayload.leadId).toBe(discoveredLeadId);
+    expect(enrichmentPayload.provider).toBe('PEOPLE_DATA_LABS');
+    expect(enrichmentPayload.icpProfileId).toBe(ICP_ID);
+
+    // Verify JobExecution records were created
+    const jobExecutions = await prisma.jobExecution.findMany({
+      where: { leadId: discoveredLeadId },
+    });
+    const discoveryExec = jobExecutions.find((je) => je.type === 'lead.discovery');
+    const enrichmentExec = jobExecutions.find((je) => je.type === 'enrichment.run');
+    expect(discoveryExec).toBeTruthy();
+    expect(discoveryExec!.status).toBe('completed');
+    expect(enrichmentExec).toBeTruthy();
+    expect(enrichmentExec!.status).toBe('queued');
+  });
+
+  // -----------------------------------------------------------------------
+  // Stage 2: Enrichment — PDL enriches the lead
+  // -----------------------------------------------------------------------
+  it('stage 2: enrichment.run enriches the lead via PDL and enqueues features', async () => {
+    // Build enrichment payload from known data (avoids spy extraction timing issues)
+    const enrichmentPayload: EnrichmentRunJobPayload = {
+      runId: RUN_ID,
+      leadId: discoveredLeadId,
+      provider: 'PEOPLE_DATA_LABS',
+      icpProfileId: ICP_ID,
+      correlationId: `corr-${RUN_ID}`,
+    };
+
+    const stubHunter = { enrichLead: vi.fn() } as unknown as EnrichmentRunDependencies['hunterAdapter'];
+    const stubPublicWeb = { enrichLead: vi.fn() } as unknown as EnrichmentRunDependencies['publicWebLookupAdapter'];
+
+    const deps: EnrichmentRunDependencies = {
+      boss: mockBoss,
+      pdlAdapter: makePdlAdapter(),
+      hunterAdapter: stubHunter,
+      publicWebLookupAdapter: stubPublicWeb,
+      enrichmentEnabled: true,
+      pdlEnabled: true,
+      hunterEnabled: false,
+      otherFreeEnabled: false,
+      defaultProvider: 'PEOPLE_DATA_LABS',
+    };
+
+    bossSendSpy.mockClear();
+    await handleEnrichmentRunJob(noopLogger, makeJob(enrichmentPayload, 'enrichment.run'), deps);
+
+    // Verify lead was enriched
+    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: discoveredLeadId } });
+    expect(lead.status).toBe('enriched');
+    expect(lead.phone).toBe('+971509876543');
+
+    // Verify enrichment record
+    const enrichmentRecords = await prisma.leadEnrichmentRecord.findMany({
+      where: { leadId: discoveredLeadId },
+    });
+    const completed = enrichmentRecords.find((r) => r.status === 'COMPLETED');
+    expect(completed).toBeTruthy();
+    expect(completed!.provider).toBe('PEOPLE_DATA_LABS');
+
+    // Verify features.compute was enqueued
+    const featuresPayload = extractBossPayload<FeaturesComputeJobPayload>('features.compute');
+    expect(featuresPayload.leadId).toBe(discoveredLeadId);
+    expect(featuresPayload.icpProfileId).toBe(ICP_ID);
+  });
+
+  // -----------------------------------------------------------------------
+  // Stage 3: Feature extraction
+  // -----------------------------------------------------------------------
+  it('stage 3: features.compute extracts feature vector and enqueues scoring', async () => {
+    // Build features payload from enrichment's boss.send output
+    const featuresPayload = extractBossPayload<FeaturesComputeJobPayload>('features.compute');
+
+    const deps: FeaturesComputeDependencies = {
+      boss: mockBoss,
+      // enqueueScoring defaults to true — will chain to scoring.compute
+    };
+
+    bossSendSpy.mockClear();
+    await handleFeaturesComputeJob(noopLogger, makeJob(featuresPayload, 'features.compute'), deps);
+
+    // Verify feature snapshot was created
+    const snapshot = await prisma.leadFeatureSnapshot.findFirst({
+      where: { leadId: discoveredLeadId, icpProfileId: ICP_ID },
+    });
+    expect(snapshot).toBeTruthy();
+    expect(snapshot!.featuresJson).toBeTruthy();
+
+    const features = snapshot!.featuresJson as Record<string, unknown>;
+    expect(features.has_email).toBe(true);
+    expect(features.has_company_name).toBe(true);
+
+    // Verify scoring.compute was enqueued
+    const scoringPayload = extractBossPayload<ScoringComputeJobPayload>('scoring.compute');
+    expect(scoringPayload.leadIds).toEqual([discoveredLeadId]);
+    expect(scoringPayload.icpProfileId).toBe(ICP_ID);
+  });
+
+  // -----------------------------------------------------------------------
+  // Stage 4: Scoring — produces predictions with blendedScore >= 0.5
+  // -----------------------------------------------------------------------
+  it('stage 4: scoring.compute produces a prediction with blendedScore >= 0.5', async () => {
+    // Extract scoring payload from features stage's boss.send
+    const scoringPayload = extractBossPayload<ScoringComputeJobPayload>('scoring.compute');
+
+    const enqueueMessageGenerate = vi.fn().mockResolvedValue(undefined);
+
+    const deps: ScoringComputeJobDependencies = {
+      openAiAdapter: makeOpenAiScoringAdapter(),
+      deterministicWeight: 0.6,
+      aiWeight: 0.4,
+      enqueueMessageGenerate,
+    };
+
+    bossSendSpy.mockClear();
+    await handleScoringComputeJob(noopLogger, makeJob(scoringPayload, 'scoring.compute'), deps);
+
+    // Verify score prediction was created
+    const prediction = await prisma.leadScorePrediction.findFirst({
+      where: { leadId: discoveredLeadId, icpProfileId: ICP_ID },
+    });
+    expect(prediction).toBeTruthy();
+    expect(prediction!.blendedScore).toBeGreaterThanOrEqual(0.5);
+    expect(['MEDIUM', 'HIGH']).toContain(prediction!.scoreBand);
+
+    // Verify message generation was enqueued (blendedScore >= 0.5)
+    expect(enqueueMessageGenerate).toHaveBeenCalledTimes(1);
+    const msgGenCall = enqueueMessageGenerate.mock.calls[0]![0] as Record<string, unknown>;
+    expect(msgGenCall.leadId).toBe(discoveredLeadId);
+    expect(msgGenCall.icpProfileId).toBe(ICP_ID);
+    expect(msgGenCall.scorePredictionId).toBe(prediction!.id);
+  });
+
+  // -----------------------------------------------------------------------
+  // Stage 5: Message generation — creates PENDING drafts (no autoApprove)
+  // -----------------------------------------------------------------------
+  it('stage 5: message.generate creates drafts with PENDING approval', async () => {
+    bossSendSpy.mockClear();
+
+    const prediction = await prisma.leadScorePrediction.findFirst({
+      where: { leadId: discoveredLeadId, icpProfileId: ICP_ID },
+    });
+
+    const payload: MessageGenerateJobPayload = {
+      runId: `msggen-${RUN_ID}`,
+      leadId: discoveredLeadId,
+      icpProfileId: ICP_ID,
+      scorePredictionId: prediction?.id,
+      knowledgeEntryIds: [],
+      promptVersion: 'v1',
+      channel: 'EMAIL',
+      correlationId: `corr-${RUN_ID}`,
+      autoApprove: false, // PENDING approval — tests manual approval flow
+    };
+
+    const deps: MessageGenerateJobDependencies = {
+      openAiAdapter: makeOpenAiGenerateAdapter(),
+      boss: mockBoss,
+    };
+
+    await handleMessageGenerateJob(noopLogger, makeJob(payload, 'message.generate'), deps);
+
+    // Verify draft was created with PENDING status
+    const draft = await prisma.messageDraft.findFirst({
+      where: { leadId: discoveredLeadId, icpProfileId: ICP_ID },
+      include: { variants: true },
+    });
+    expect(draft).toBeTruthy();
+    expect(draft!.approvalStatus).toBe('PENDING');
+    expect(draft!.variants.length).toBe(2);
+    expect(draft!.followUpNumber).toBe(0);
+    expect(draft!.pitchedFeature).toBe(ICP_FEATURES[0]); // 'Payment Links'
+
+    // Verify variants exist with realistic content
+    const variantA = draft!.variants.find((v) => v.variantKey === 'variant_a');
+    const variantB = draft!.variants.find((v) => v.variantKey === 'variant_b');
+    expect(variantA).toBeTruthy();
+    expect(variantB).toBeTruthy();
+    expect(variantA!.channel).toBe('EMAIL');
+    expect(variantB!.channel).toBe('EMAIL');
+    expect(variantA!.bodyText).toBeTruthy();
+    expect(variantB!.bodyText).toBeTruthy();
+
+    // No MessageSend should be created (autoApprove=false)
+    const sends = await prisma.messageSend.findMany({
+      where: { leadId: discoveredLeadId },
+    });
+    expect(sends.length).toBe(0);
+
+    // No message.send should have been enqueued
+    const sendCall = bossSendSpy.mock.calls.find(
+      (c: unknown[]) => c[0] === 'message.send',
+    );
+    expect(sendCall).toBeUndefined();
+  });
+
+  // -----------------------------------------------------------------------
+  // Stage 6: Manual approval + email send via Resend
+  // -----------------------------------------------------------------------
+  it('stage 6: after manual approval, message.send delivers email via Resend', async () => {
+    bossSendSpy.mockClear();
+
+    // Simulate manual approval: select variant_a and create MessageSend
+    const draft = await prisma.messageDraft.findFirst({
+      where: { leadId: discoveredLeadId, icpProfileId: ICP_ID },
+      include: { variants: true },
+    });
+    expect(draft).toBeTruthy();
+
+    const selectedVariant = draft!.variants.find((v) => v.variantKey === 'variant_a')!;
+
+    // Mark variant as selected and draft as approved
+    await prisma.messageVariant.update({
+      where: { id: selectedVariant.id },
+      data: { isSelected: true },
+    });
+    await prisma.messageDraft.update({
+      where: { id: draft!.id },
+      data: { approvalStatus: 'APPROVED' },
+    });
+
+    // Create MessageSend (what the API approval endpoint would do)
+    const idempotencyKey = `manual-approve:${discoveredLeadId}:${draft!.id}:${selectedVariant.id}`;
+    const messageSend = await prisma.messageSend.create({
+      data: {
+        leadId: discoveredLeadId,
+        messageDraftId: draft!.id,
+        messageVariantId: selectedVariant.id,
+        channel: 'EMAIL',
+        provider: 'RESEND',
+        status: 'QUEUED',
+        idempotencyKey,
+        followUpNumber: 0,
+      },
+    });
+
+    // Now send via the worker job
+    const payload: MessageSendJobPayload = {
+      runId: `msgsend-email-${RUN_ID}`,
+      sendId: messageSend.id,
+      messageDraftId: draft!.id,
+      messageVariantId: selectedVariant.id,
+      idempotencyKey,
+      channel: 'EMAIL',
+      followUpNumber: 0,
+      correlationId: `corr-${RUN_ID}`,
+    };
+
+    const deps: MessageSendJobDependencies = {
+      resendAdapter: makeResendAdapter(),
+      trengoAdapter: makeTrengoAdapter(),
+    };
+
+    await handleMessageSendJob(noopLogger, makeJob(payload, 'message.send'), deps);
+
+    // Verify send was marked SENT
+    const updatedSend = await prisma.messageSend.findUniqueOrThrow({
+      where: { id: messageSend.id },
+    });
+    expect(updatedSend.status).toBe('SENT');
+    expect(updatedSend.providerMessageId).toBeTruthy();
+    expect(updatedSend.sentAt).toBeTruthy();
+    expect(updatedSend.followUpNumber).toBe(0);
+    // nextFollowUpAfter is set (~72h from now) since followUpNumber < 3
+    expect(updatedSend.nextFollowUpAfter).toBeTruthy();
+
+    // Lead status should be 'messaged'
+    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: discoveredLeadId } });
+    expect(lead.status).toBe('messaged');
+  });
+
+  // -----------------------------------------------------------------------
+  // Stage 7: WhatsApp send via Trengo (auto-approved follow-up)
+  // -----------------------------------------------------------------------
+  it('stage 7: message.generate (WhatsApp) + message.send delivers via Trengo', async () => {
+    bossSendSpy.mockClear();
+
+    // Generate a WhatsApp follow-up message (auto-approved)
+    const prediction = await prisma.leadScorePrediction.findFirst({
+      where: { leadId: discoveredLeadId, icpProfileId: ICP_ID },
+    });
+
+    const emailSend = await prisma.messageSend.findFirst({
+      where: { leadId: discoveredLeadId, followUpNumber: 0, status: 'SENT' },
+    });
+    expect(emailSend).toBeTruthy();
+
+    const genPayload: MessageGenerateJobPayload = {
+      runId: `followup:${emailSend!.id}:1`,
+      leadId: discoveredLeadId,
+      icpProfileId: ICP_ID,
+      scorePredictionId: prediction?.id,
+      followUpNumber: 1,
+      parentMessageSendId: emailSend!.id,
+      previouslyPitchedFeatures: [ICP_FEATURES[0]!],
+      autoApprove: true, // Auto-approved for this stage
+      channel: 'WHATSAPP',
+      knowledgeEntryIds: [],
+      promptVersion: 'v1-followup',
+      correlationId: `corr-${RUN_ID}`,
+    };
+
+    const genDeps: MessageGenerateJobDependencies = {
+      openAiAdapter: makeOpenAiGenerateAdapter(),
+      boss: mockBoss,
+    };
+
+    await handleMessageGenerateJob(noopLogger, makeJob(genPayload, 'message.generate'), genDeps);
+
+    // Verify WhatsApp draft was created and auto-approved
+    const waDraft = await prisma.messageDraft.findFirst({
+      where: { leadId: discoveredLeadId, followUpNumber: 1 },
+      include: { variants: true },
+    });
+    expect(waDraft).toBeTruthy();
+    expect(waDraft!.approvalStatus).toBe('AUTO_APPROVED');
+    expect(waDraft!.variants[0]!.channel).toBe('WHATSAPP');
+
+    // Auto-approve should have created a QUEUED MessageSend
+    const waSend = await prisma.messageSend.findFirst({
+      where: { leadId: discoveredLeadId, followUpNumber: 1, status: 'QUEUED' },
+    });
+    expect(waSend).toBeTruthy();
+    expect(waSend!.channel).toBe('WHATSAPP');
+
+    // Send via Trengo
+    bossSendSpy.mockClear();
+    const sendPayload: MessageSendJobPayload = {
+      runId: `msgsend-wa-${RUN_ID}`,
+      sendId: waSend!.id,
+      messageDraftId: waSend!.messageDraftId,
+      messageVariantId: waSend!.messageVariantId,
+      idempotencyKey: waSend!.idempotencyKey,
+      channel: 'WHATSAPP',
+      followUpNumber: 1,
+      correlationId: `corr-${RUN_ID}`,
+    };
+
+    const sendDeps: MessageSendJobDependencies = {
+      resendAdapter: makeResendAdapter(),
+      trengoAdapter: makeTrengoAdapter(),
+    };
+
+    await handleMessageSendJob(noopLogger, makeJob(sendPayload, 'message.send'), sendDeps);
+
+    // Verify WhatsApp send was marked SENT
+    const updatedWaSend = await prisma.messageSend.findUniqueOrThrow({
+      where: { id: waSend!.id },
+    });
+    expect(updatedWaSend.status).toBe('SENT');
+    expect(updatedWaSend.providerMessageId).toBeTruthy();
+    expect(updatedWaSend.providerConversationId).toBeTruthy();
+    expect(updatedWaSend.followUpNumber).toBe(1);
+  });
+
+  // -----------------------------------------------------------------------
+  // Final: complete chain verification
+  // -----------------------------------------------------------------------
+  it('final: all pipeline artifacts exist across the full chain', async () => {
+    // Lead should be in 'messaged' state
+    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: discoveredLeadId } });
+    expect(lead.status).toBe('messaged');
+    expect(lead.email).toBe(DISCOVERED_EMAIL);
+    expect(lead.phone).toBe('+971509876543');
+
+    // Discovery record — created by discovery.run
+    const discovery = await prisma.leadDiscoveryRecord.findMany({
+      where: { leadId: discoveredLeadId },
+    });
+    expect(discovery.length).toBeGreaterThanOrEqual(1);
+    expect(discovery[0]!.provider).toBe('APOLLO');
+
+    // Enrichment record — created by enrichment.run
+    const enrichment = await prisma.leadEnrichmentRecord.findMany({
+      where: { leadId: discoveredLeadId, status: 'COMPLETED' },
+    });
+    expect(enrichment.length).toBeGreaterThanOrEqual(1);
+    expect(enrichment[0]!.provider).toBe('PEOPLE_DATA_LABS');
+
+    // Feature snapshot — created by features.compute
+    const features = await prisma.leadFeatureSnapshot.findMany({
+      where: { leadId: discoveredLeadId, icpProfileId: ICP_ID },
+    });
+    expect(features.length).toBeGreaterThanOrEqual(1);
+    const featuresJson = features[0]!.featuresJson as Record<string, unknown>;
+    expect(featuresJson.has_email).toBe(true);
+
+    // Score prediction — created by scoring.compute
+    const scores = await prisma.leadScorePrediction.findMany({
+      where: { leadId: discoveredLeadId, icpProfileId: ICP_ID },
+    });
+    expect(scores.length).toBeGreaterThanOrEqual(1);
+    expect(scores[0]!.blendedScore).toBeGreaterThanOrEqual(0.5);
+
+    // Message drafts: initial email (APPROVED) + follow-up WhatsApp (AUTO_APPROVED)
+    const drafts = await prisma.messageDraft.findMany({
+      where: { leadId: discoveredLeadId },
+      orderBy: { followUpNumber: 'asc' },
+    });
+    expect(drafts.length).toBe(2);
+    expect(drafts[0]!.followUpNumber).toBe(0);
+    expect(drafts[0]!.approvalStatus).toBe('APPROVED');
+    expect(drafts[1]!.followUpNumber).toBe(1);
+    expect(drafts[1]!.approvalStatus).toBe('AUTO_APPROVED');
+
+    // Feature rotation: initial=Payment Links, follow-up=Order Management
+    expect(drafts[0]!.pitchedFeature).toBe('Payment Links');
+    // Follow-up: available = ['WhatsApp Commerce', 'Order Management', 'Custom Storefronts']
+    // followUpNumber=1, 1 % 3 = 1 → 'Order Management'
+    expect(drafts[1]!.pitchedFeature).toBe('Order Management');
+
+    // Message sends: 1 email + 1 WhatsApp, both SENT
+    const sends = await prisma.messageSend.findMany({
+      where: { leadId: discoveredLeadId, status: 'SENT' },
+      orderBy: { followUpNumber: 'asc' },
+    });
+    expect(sends.length).toBe(2);
+    expect(sends[0]!.channel).toBe('EMAIL');
+    expect(sends[0]!.followUpNumber).toBe(0);
+    expect(sends[1]!.channel).toBe('WHATSAPP');
+    expect(sends[1]!.followUpNumber).toBe(1);
+  });
+});
