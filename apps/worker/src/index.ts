@@ -527,6 +527,11 @@ async function main(): Promise<void> {
         openAiAdapter,
         deterministicWeight: env.SCORING_DETERMINISTIC_WEIGHT,
         aiWeight: env.SCORING_AI_WEIGHT,
+        enqueueMessageGenerate: async (payload) => {
+          await boss.send(MESSAGE_GENERATE_JOB_NAME, payload, {
+            singletonKey: `message.generate:${payload.leadId}:${payload.icpProfileId}`,
+          });
+        },
       }),
   );
   await registerWorker<ModelTrainJobPayload>(

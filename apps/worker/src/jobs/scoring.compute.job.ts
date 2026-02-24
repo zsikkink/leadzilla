@@ -40,6 +40,13 @@ export interface ScoringComputeJobDependencies {
   openAiAdapter?: OpenAiAdapter;
   deterministicWeight?: number;
   aiWeight?: number;
+  enqueueMessageGenerate?: ((payload: {
+    leadId: string;
+    icpProfileId: string;
+    scorePredictionId: string;
+    runId: string;
+    correlationId?: string | undefined;
+  }) => Promise<void>) | undefined;
 }
 
 const BASELINE_TRAINING_RUN_TRIGGER = 'MANUAL';
@@ -416,7 +423,7 @@ export async function handleScoringComputeJob(
           : deterministicScore;
         const scoreBand = toScoreBand(blendedScore);
 
-        await prisma.leadScorePrediction.upsert({
+        const prediction = await prisma.leadScorePrediction.upsert({
           where: {
             leadId_icpProfileId_featureSnapshotId_modelVersionId: {
               leadId: targetLeadId,
@@ -460,6 +467,27 @@ export async function handleScoringComputeJob(
         });
 
         persistedPredictions += 1;
+
+        if (deps?.enqueueMessageGenerate && blendedScore >= 0.5) {
+          try {
+            await deps.enqueueMessageGenerate({
+              leadId: targetLeadId,
+              icpProfileId: targetIcpId,
+              scorePredictionId: prediction.id,
+              runId,
+              correlationId: effectiveCorrelationId,
+            });
+            logger.info(
+              { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, blendedScore },
+              'Enqueued message.generate for qualifying lead',
+            );
+          } catch (enqueueError: unknown) {
+            logger.error(
+              { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, error: enqueueError },
+              'Failed to enqueue message.generate',
+            );
+          }
+        }
       }
     }
 
