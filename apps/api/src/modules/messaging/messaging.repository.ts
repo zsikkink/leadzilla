@@ -360,7 +360,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
         messageDraftId: input.messageDraftId,
         messageVariantId: input.messageVariantId,
         channel: variant.channel,
-        provider: 'RESEND',
+        provider: variant.channel === 'EMAIL' ? 'RESEND' : 'TRENGO',
         status: 'QUEUED',
         idempotencyKey: input.idempotencyKey,
         scheduledAt: input.scheduledAt !== undefined ? new Date(input.scheduledAt) : null,
