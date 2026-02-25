@@ -243,7 +243,7 @@ export default function JobsPage() {
             </select>
           </label>
           <span className="muted">Current: {liveRefreshLabel}</span>
-          <button type="button" onClick={() => void loadData()} disabled={loading}>
+          <button type="button" className="btn-primary" onClick={() => void loadData()} disabled={loading}>
             Refresh now
           </button>
         </div>
@@ -299,7 +299,7 @@ export default function JobsPage() {
             <input value={seedLanguages} onChange={(event) => setSeedLanguages(event.target.value)} />
           </label>
         </div>
-        <button style={{ marginTop: 10 }} onClick={() => void runSeed()}>
+        <button className="btn-primary" style={{ marginTop: 10 }} onClick={() => void runSeed()}>
           Request Seed
         </button>
 
@@ -333,7 +333,7 @@ export default function JobsPage() {
             />
           </label>
         </div>
-        <button style={{ marginTop: 10 }} onClick={() => void runDiscovery()}>
+        <button className="btn-primary" style={{ marginTop: 10 }} onClick={() => void runDiscovery()}>
           Request Run
         </button>
 

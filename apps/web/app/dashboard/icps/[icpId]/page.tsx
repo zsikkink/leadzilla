@@ -517,35 +517,33 @@ export default function IcpDetailPage() {
         </div>
       </div>
 
-      {/* Features to Pitch — from featureList stored in ICP */}
-      {profile.metadataJson ? (
-        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-            <Lightbulb className="h-4 w-4 text-yellow-400" />
-            Features to Pitch
-          </h2>
-          {/* Features come from the ICP's metadataJson or we can read featureList if it was serialized */}
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {(() => {
-              // featureList is not in the contract response, but metadataJson might contain features from seed
-              // For now, show angle items as pitch-able features
-              const features = meta.angle ?? [];
-              if (features.length === 0) return <p className="text-sm text-muted-foreground/60">No features configured.</p>;
-              return features.map((feature) => (
+      {/* Features to Pitch — from featureList stored on ICP profile */}
+      {(() => {
+        const features = profile.featureList ?? [];
+        if (features.length === 0) return null;
+        return (
+          <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+            <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
+              <Lightbulb className="h-4 w-4 text-yellow-400" />
+              Features to Pitch
+              <span className="ml-auto text-xs font-normal text-muted-foreground">{features.length} features</span>
+            </h2>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {features.map((feature) => (
                 <div
                   key={feature}
-                  className="flex items-center gap-3 rounded-xl border border-border/30 bg-zbooni-dark/40 p-3"
+                  className="flex items-center gap-3 rounded-xl border border-border/30 bg-slate-800 p-3"
                 >
                   <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-yellow-400/10">
                     <Zap className="h-3.5 w-3.5 text-yellow-400" />
                   </div>
                   <p className="text-sm font-medium">{feature}</p>
                 </div>
-              ));
-            })()}
+              ))}
+            </div>
           </div>
-        </div>
-      ) : null}
+        );
+      })()}
 
       {/* Danger Zone — Delete ICP */}
       <div className="rounded-2xl border border-red-500/30 bg-red-500/5 p-6">

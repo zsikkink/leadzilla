@@ -387,6 +387,7 @@ function mapIcpProfileToResponse(
     maxCompanySize: number | null;
     requiredTechnologies: string[];
     excludedDomains: string[];
+    featureList: unknown;
     isActive: boolean;
     createdByUserId: string | null;
     createdAt: Date;
@@ -424,6 +425,7 @@ function mapIcpProfileToResponse(
     maxCompanySize: icp.maxCompanySize,
     requiredTechnologies: icp.requiredTechnologies,
     excludedDomains: icp.excludedDomains,
+    featureList: Array.isArray(icp.featureList) ? (icp.featureList as string[]) : null,
     isActive: icp.isActive,
     createdByUserId: icp.createdByUserId,
     createdAt: icp.createdAt.toISOString(),

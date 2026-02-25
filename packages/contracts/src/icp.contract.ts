@@ -171,6 +171,7 @@ export const IcpProfileResponseSchema = z
     maxCompanySize: z.number().int().nullable(),
     requiredTechnologies: z.array(z.string()),
     excludedDomains: z.array(z.string()),
+    featureList: z.array(z.string()).nullable(),
     isActive: z.boolean(),
     createdByUserId: z.string().nullable(),
     createdAt: z.string().datetime(),

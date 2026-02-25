@@ -644,6 +644,7 @@ export default function ICPRulesPage() {
               <div className="mt-3 flex gap-2">
                 <button
                   type="button"
+                  className="btn-primary"
                   onClick={() => setShowSimulation(true)}
                 >
                   Simulate Score
