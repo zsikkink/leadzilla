@@ -73,6 +73,7 @@ import {
 } from './jobs/labels.generate.job.js';
 import {
   MESSAGE_GENERATE_JOB_NAME,
+  MESSAGE_GENERATE_RETRY_OPTIONS,
   handleMessageGenerateJob,
   type MessageGenerateJobPayload,
 } from './jobs/message.generate.job.js';
@@ -98,6 +99,11 @@ import {
   NOTIFY_SALES_RETRY_OPTIONS,
 } from './jobs/notify.sales.job.js';
 import {
+  PIPELINE_HEALTH_JOB_NAME,
+  handlePipelineHealthJob,
+  type PipelineHealthJobPayload,
+} from './jobs/pipeline.health.job.js';
+import {
   REPLY_CLASSIFY_JOB_NAME,
   handleReplyClassifyJob,
   type ReplyClassifyJobPayload,
@@ -108,6 +114,11 @@ import {
   type ScoringComputeJobPayload,
 } from './jobs/scoring.compute.job.js';
 import {
+  SCORING_BATCH_JOB_NAME,
+  handleScoringBatchJob,
+  type ScoringBatchJobPayload,
+} from './jobs/scoring.batch.job.js';
+import {
   DLQ_JOB_NAME,
   handleDlqProcessJob,
   type DlqProcessJobPayload,
@@ -116,6 +127,8 @@ import { buildDefaultWorkerId, startJobRequestDispatcher } from './job-requests/
 import { EmailRateLimiter } from './messaging/email-rate-limiter.js';
 import { WhatsAppRateLimiter } from './messaging/rate-limiter.js';
 import { dispatchPendingOutboxEvents } from './outbox-dispatcher.js';
+import { ProviderBudgetTracker } from './utils/provider-budget.js';
+import { EnrichmentProviderRotator } from './utils/provider-rotation.js';
 import { ensureWorkerQueues, HEARTBEAT_QUEUE_NAME } from './queues.js';
 import { registerWorkerSchedules } from './schedules.js';
 
@@ -346,6 +359,9 @@ async function main(): Promise<void> {
     dailySendLimit: env.EMAIL_DAILY_SEND_LIMIT,
   });
 
+  const providerBudgetTracker = new ProviderBudgetTracker();
+  const enrichmentProviderRotator = new EnrichmentProviderRotator();
+
   let outboxDispatchRunning = false;
   const runOutboxDispatch = async (): Promise<void> => {
     if (outboxDispatchRunning) {
@@ -389,6 +405,7 @@ async function main(): Promise<void> {
         defaultProvider: 'BRAVE_SEARCH',
         providerOrder: discoveryProviderOrder,
         defaultEnrichmentProvider: env.ENRICHMENT_DEFAULT_PROVIDER,
+        budgetTracker: providerBudgetTracker,
       }),
     );
   } else {
@@ -508,6 +525,8 @@ async function main(): Promise<void> {
         hunterEnabled: env.HUNTER_ENABLED,
         otherFreeEnabled: env.OTHER_FREE_ENRICHMENT_ENABLED,
         defaultProvider: env.ENRICHMENT_DEFAULT_PROVIDER,
+        providerRotator: enrichmentProviderRotator,
+        budgetTracker: providerBudgetTracker,
       }),
   );
   await registerWorker<FeaturesComputeJobPayload>(
@@ -538,6 +557,33 @@ async function main(): Promise<void> {
           await boss.send(MESSAGE_GENERATE_JOB_NAME, payload, {
             singletonKey: `message.generate:${payload.leadId}:${payload.icpProfileId}`,
           });
+        },
+      }),
+  );
+  await registerWorker<ScoringBatchJobPayload>(
+    boss,
+    logger,
+    SCORING_BATCH_JOB_NAME,
+    (jobLogger, job) =>
+      handleScoringBatchJob(jobLogger, job, {
+        enqueueMessageGenerate: async (payload) => {
+          await boss.send(
+            MESSAGE_GENERATE_JOB_NAME,
+            {
+              runId: job.data.runId,
+              leadId: payload.leadId,
+              icpProfileId: payload.icpProfileId,
+              scorePredictionId: payload.scorePredictionId,
+              knowledgeEntryIds: [],
+              channel: 'WHATSAPP',
+              promptVersion: 'v1',
+              correlationId: job.data.correlationId ?? job.id,
+            } satisfies MessageGenerateJobPayload,
+            {
+              singletonKey: `message.generate:${payload.leadId}:${payload.scorePredictionId}`,
+              ...MESSAGE_GENERATE_RETRY_OPTIONS,
+            },
+          );
         },
       }),
   );
@@ -624,6 +670,13 @@ async function main(): Promise<void> {
     logger,
     MANAGER_ANALYZE_JOB_NAME,
     handleManagerAnalyzeJob,
+  );
+
+  await registerWorker<PipelineHealthJobPayload>(
+    boss,
+    logger,
+    PIPELINE_HEALTH_JOB_NAME,
+    handlePipelineHealthJob,
   );
 
   const shutdown = async (signal: string): Promise<void> => {

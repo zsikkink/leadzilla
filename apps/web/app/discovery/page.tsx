@@ -1,356 +1,789 @@
 'use client';
 
-import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
-import type { AdminListLeadsQuery, AdminListLeadsResponse } from '@lead-flood/contracts';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  DollarSign,
+  FileText,
+  Gauge,
+  Hash,
+  Inbox,
+  Mail,
+  MessageSquare,
+  RotateCcw,
+  Save,
+  Settings,
+  Shield,
+  Sliders,
+  Target,
+  Timer,
+  Zap,
+} from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { toast } from 'sonner';
 
-import { fetchAdminLeads, queryFromLeadFilters } from '../../src/lib/discovery-admin';
+import { cn } from '../../src/lib/utils.js';
 
-const DEFAULT_QUERY: AdminListLeadsQuery = {
-  page: 1,
-  pageSize: 20,
-  sortBy: 'score_desc',
+// ── Setting types ──────────────────────────────────────────────────────
+interface SliderSetting {
+  type: 'slider';
+  key: string;
+  label: string;
+  description: string;
+  spectrum: string;
+  icon: React.ComponentType<{ className?: string | undefined }>;
+  iconColor: string;
+  min: number;
+  max: number;
+  step: number;
+  defaultValue: number;
+  format?: ((v: number) => string) | undefined;
+}
+
+interface NumberSetting {
+  type: 'number';
+  key: string;
+  label: string;
+  description: string;
+  spectrum: string;
+  icon: React.ComponentType<{ className?: string | undefined }>;
+  iconColor: string;
+  min: number;
+  max: number;
+  step: number;
+  defaultValue: number;
+  unit?: string | undefined;
+  prefix?: string | undefined;
+}
+
+interface TierBandSetting {
+  type: 'tier-bands';
+  key: string;
+  label: string;
+  description: string;
+  spectrum: string;
+  icon: React.ComponentType<{ className?: string | undefined }>;
+  iconColor: string;
+  defaultValue: { low: number; med: number; high: number };
+}
+
+type PipelineSetting = SliderSetting | NumberSetting | TierBandSetting;
+
+// ── Settings definitions ───────────────────────────────────────────────
+const PIPELINE_SETTINGS: PipelineSetting[] = [
+  {
+    type: 'slider',
+    key: 'deterministicAiBlend',
+    label: 'Deterministic / AI Blend',
+    description:
+      'How much to trust rules vs ML model. Shift toward AI as model matures with more labeled data.',
+    spectrum: '0 = pure rules, 100 = pure ML',
+    icon: Sliders,
+    iconColor: 'text-zbooni-teal',
+    min: 0,
+    max: 100,
+    step: 5,
+    defaultValue: 60,
+    format: (v: number) => `${v}% rules / ${100 - v}% AI`,
+  },
+  {
+    type: 'slider',
+    key: 'scoreQualificationThreshold',
+    label: 'Score Qualification Threshold',
+    description:
+      'Minimum score to trigger outreach. Higher = fewer but higher-quality leads. Lower = more volume.',
+    spectrum: '0 = message everyone, 1.0 = ultra-selective',
+    icon: Target,
+    iconColor: 'text-zbooni-green',
+    min: 0,
+    max: 1,
+    step: 0.05,
+    defaultValue: 0.5,
+    format: (v: number) => v.toFixed(2),
+  },
+  {
+    type: 'slider',
+    key: 'enrichmentThreshold',
+    label: 'Enrichment Threshold',
+    description:
+      'Minimum pre-score to justify enrichment cost ($0.02/lead). Below this, email only.',
+    spectrum: '0 = enrich all, 1.0 = only enrich top-scoring',
+    icon: DollarSign,
+    iconColor: 'text-yellow-400',
+    min: 0,
+    max: 1,
+    step: 0.05,
+    defaultValue: 0.3,
+    format: (v: number) => v.toFixed(2),
+  },
+  {
+    type: 'tier-bands',
+    key: 'scoreTierBands',
+    label: 'Score Tier Bands',
+    description:
+      'Visual classification only. Defines LOW / MED / HIGH thresholds for the dashboard.',
+    spectrum: 'LOW < threshold, threshold <= MED < upper, HIGH >= upper',
+    icon: Gauge,
+    iconColor: 'text-purple-400',
+    defaultValue: { low: 0.34, med: 0.67, high: 0.67 },
+  },
+  {
+    type: 'number',
+    key: 'followUpMaxCount',
+    label: 'Follow-up Max Count',
+    description: 'Total follow-ups per lead before stopping outreach.',
+    spectrum: '1 = single attempt, 10 = aggressive persistence',
+    icon: RotateCcw,
+    iconColor: 'text-blue-400',
+    min: 0,
+    max: 10,
+    step: 1,
+    defaultValue: 3,
+    unit: 'follow-ups',
+  },
+  {
+    type: 'number',
+    key: 'followUpIntervalHours',
+    label: 'Follow-up Interval',
+    description: 'Hours between follow-up attempts.',
+    spectrum: '12h = aggressive, 168h (7d) = patient',
+    icon: Timer,
+    iconColor: 'text-zbooni-teal',
+    min: 12,
+    max: 168,
+    step: 12,
+    defaultValue: 72,
+    unit: 'hours',
+  },
+  {
+    type: 'number',
+    key: 'coldLeadTimeoutDays',
+    label: 'Cold Lead Timeout',
+    description: 'Days with no reply before applying a negative label.',
+    spectrum: '7d = quick disqualification, 90d = very patient',
+    icon: Clock,
+    iconColor: 'text-orange-400',
+    min: 7,
+    max: 90,
+    step: 1,
+    defaultValue: 14,
+    unit: 'days',
+  },
+  {
+    type: 'number',
+    key: 'whatsappDailyLimit',
+    label: 'WhatsApp Daily Limit',
+    description: 'Match your Trengo tier limit. Exceeding causes throttling.',
+    spectrum: '1 = trickle, 200 = max throughput',
+    icon: MessageSquare,
+    iconColor: 'text-zbooni-green',
+    min: 1,
+    max: 200,
+    step: 5,
+    defaultValue: 50,
+    unit: 'messages/day',
+  },
+  {
+    type: 'number',
+    key: 'emailDailyLimit',
+    label: 'Email Daily Limit',
+    description: 'Warm-up schedule. Start low, increase weekly to avoid spam flags.',
+    spectrum: '1 = minimum warm-up, 500 = full capacity',
+    icon: Mail,
+    iconColor: 'text-blue-300',
+    min: 1,
+    max: 500,
+    step: 5,
+    defaultValue: 10,
+    unit: 'emails/day',
+  },
+  {
+    type: 'slider',
+    key: 'modelActivationAuc',
+    label: 'Model Activation AUC',
+    description:
+      'Minimum model accuracy (AUC) before auto-activating the ML model for scoring.',
+    spectrum: '0.5 = random (useless), 1.0 = perfect classifier',
+    icon: Zap,
+    iconColor: 'text-yellow-400',
+    min: 0.5,
+    max: 1.0,
+    step: 0.01,
+    defaultValue: 0.6,
+    format: (v: number) => v.toFixed(2),
+  },
+  {
+    type: 'number',
+    key: 'providerBudgetCeiling',
+    label: 'Provider Budget Ceiling',
+    description: 'Maximum spend per provider per day. Prevents runaway API costs.',
+    spectrum: '$5 = lean testing, $200+ = scaled acquisition',
+    icon: Shield,
+    iconColor: 'text-red-400',
+    min: 1,
+    max: 500,
+    step: 5,
+    defaultValue: 50,
+    prefix: '$',
+    unit: '/day',
+  },
+];
+
+// ── Placeholder data ───────────────────────────────────────────────────
+const PLACEHOLDER_STATUS_DISTRIBUTION = {
+  discovered: 823,
+  enriched: 614,
+  scored: 587,
+  messaged: 342,
 };
 
-export default function DiscoveryLeadsPage() {
-  const [query, setQuery] = useState<AdminListLeadsQuery>(DEFAULT_QUERY);
-  const [countriesInput, setCountriesInput] = useState('AE,SA,JO,EG');
-  const [industriesInput, setIndustriesInput] = useState('');
-  const [data, setData] = useState<AdminListLeadsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+const PLACEHOLDER_PROVIDER_SUMMARY = [
+  { name: 'Apollo', successRate: 0.84 },
+  { name: 'Hunter', successRate: 0.91 },
+  { name: 'PDL', successRate: 0.78 },
+  { name: 'Apify', successRate: 0.67 },
+];
 
-  const loadLeads = useCallback(
-    async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const result = await fetchAdminLeads(queryFromLeadFilters(query));
-        setData(result);
-      } catch (loadError: unknown) {
-        setError(loadError instanceof Error ? loadError.message : 'Failed to load leads');
-      } finally {
-        setLoading(false);
-      }
-    },
-    [query],
+const PLACEHOLDER_OUTBOX_EVENTS = [
+  { id: '1', type: 'discovery.run', status: 'completed', createdAt: '2026-02-24T09:12:34Z' },
+  { id: '2', type: 'enrichment.run', status: 'completed', createdAt: '2026-02-24T09:13:01Z' },
+  { id: '3', type: 'scoring.compute', status: 'completed', createdAt: '2026-02-24T09:14:22Z' },
+  { id: '4', type: 'message.generate', status: 'pending', createdAt: '2026-02-24T09:15:05Z' },
+  { id: '5', type: 'message.send', status: 'failed', createdAt: '2026-02-24T09:15:48Z' },
+  { id: '6', type: 'followup.check', status: 'completed', createdAt: '2026-02-24T09:16:30Z' },
+];
+
+// ── Sub-components ─────────────────────────────────────────────────────
+
+function StatusCard({
+  icon: Icon,
+  iconColor,
+  bgColor,
+  label,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string | undefined }>;
+  iconColor: string;
+  bgColor: string;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
+      <div className="mb-3 flex items-center gap-2">
+        <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${bgColor}`}>
+          <Icon className={`h-4 w-4 ${iconColor}`} />
+        </div>
+        <p className="text-sm font-bold tracking-tight">{label}</p>
+      </div>
+      {children}
+    </div>
   );
+}
 
-  useEffect(() => {
-    void loadLeads();
-  }, [loadLeads]);
+function OutboxStatusBadge({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    completed: 'bg-zbooni-green/15 text-zbooni-green',
+    pending: 'bg-yellow-500/15 text-yellow-400',
+    failed: 'bg-red-500/15 text-red-400',
+  };
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider',
+        styles[status] ?? 'bg-muted/20 text-muted-foreground',
+      )}
+    >
+      {status}
+    </span>
+  );
+}
 
-  const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
+function SettingSlider({
+  setting,
+  value,
+  onChange,
+}: {
+  setting: SliderSetting;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  const Icon = setting.icon;
+  const pct = ((value - setting.min) / (setting.max - setting.min)) * 100;
+  const displayValue = setting.format ? setting.format(value) : String(value);
 
   return (
-    <section className="card">
-      <h2>Leads</h2>
-      <p className="muted">
-        Browse discovered businesses, score them, and inspect evidence provenance.
-      </p>
-      {/* Live updates control disabled for now. */}
-
-      <div className="toolbar" style={{ marginTop: 10 }}>
-        <button
-          type="button"
-          onClick={() => void loadLeads()}
-          disabled={loading}
-        >
-          Refresh
-        </button>
-      </div>
-
-      <div className="filters" style={{ marginTop: 12 }}>
-        <label>
-          Sort
-          <select
-            value={query.sortBy}
-            onChange={(event) =>
-              setQuery((prev) => ({
-                ...prev,
-                page: 1,
-                sortBy: event.target.value as AdminListLeadsQuery['sortBy'],
-              }))
-            }
-          >
-            <option value="score_desc">Score (desc)</option>
-            <option value="recent">Most recent</option>
-            <option value="review_count">Review count</option>
-          </select>
-        </label>
-        <label>
-          Countries (CSV)
-          <input
-            value={countriesInput}
-            onChange={(event) => setCountriesInput(event.target.value)}
-            onBlur={() =>
-              setQuery((prev) => ({
-                ...prev,
-                page: 1,
-                countries: countriesInput
-                  .split(',')
-                  .map((value) => value.trim())
-                  .filter(Boolean),
-              }))
-            }
-          />
-        </label>
-        <label>
-          City
-          <input
-            value={query.city ?? ''}
-            onChange={(event) =>
-              setQuery((prev) => ({
-                ...prev,
-                page: 1,
-                city: event.target.value || undefined,
-              }))
-            }
-          />
-        </label>
-        <label>
-          Industry / Category (CSV)
-          <input
-            value={industriesInput}
-            onChange={(event) => setIndustriesInput(event.target.value)}
-            onBlur={() =>
-              setQuery((prev) => ({
-                ...prev,
-                page: 1,
-                industries: industriesInput
-                  .split(',')
-                  .map((value) => value.trim())
-                  .filter(Boolean),
-              }))
-            }
-          />
-        </label>
-        <label>
-          Min Score
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.01}
-            value={query.scoreMin ?? ''}
-            onChange={(event) =>
-              setQuery((prev) => ({
-                ...prev,
-                page: 1,
-                scoreMin: event.target.value ? Number(event.target.value) : undefined,
-              }))
-            }
-          />
-        </label>
-        <label>
-          Max Score
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.01}
-            value={query.scoreMax ?? ''}
-            onChange={(event) =>
-              setQuery((prev) => ({
-                ...prev,
-                page: 1,
-                scoreMax: event.target.value ? Number(event.target.value) : undefined,
-              }))
-            }
-          />
-        </label>
-        <label>
-          Min Reviews
-          <input
-            type="number"
-            min={0}
-            value={query.minReviewCount ?? ''}
-            onChange={(event) =>
-              setQuery((prev) => ({
-                ...prev,
-                page: 1,
-                minReviewCount: event.target.value ? Number(event.target.value) : undefined,
-              }))
-            }
-          />
-        </label>
-        <label>
-          Min Followers
-          <input
-            type="number"
-            min={0}
-            value={query.minFollowerCount ?? ''}
-            onChange={(event) =>
-              setQuery((prev) => ({
-                ...prev,
-                page: 1,
-                minFollowerCount: event.target.value ? Number(event.target.value) : undefined,
-              }))
-            }
-          />
-        </label>
-      </div>
-
-      <div className="checkbox-row" style={{ marginTop: 10 }}>
-        <label>
-          <input
-            type="checkbox"
-            checked={query.hasWhatsapp ?? false}
-            onChange={(event) =>
-              setQuery((prev) => ({
-                ...prev,
-                page: 1,
-                hasWhatsapp: event.target.checked ? true : undefined,
-              }))
-            }
-          />
-          Has WhatsApp
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={query.hasInstagram ?? false}
-            onChange={(event) =>
-              setQuery((prev) => ({
-                ...prev,
-                page: 1,
-                hasInstagram: event.target.checked ? true : undefined,
-              }))
-            }
-          />
-          Has Instagram
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={query.acceptsOnlinePayments ?? false}
-            onChange={(event) =>
-              setQuery((prev) => ({
-                ...prev,
-                page: 1,
-                acceptsOnlinePayments: event.target.checked ? true : undefined,
-              }))
-            }
-          />
-          Accepts Online Payments
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={query.recentlyActive ?? false}
-            onChange={(event) =>
-              setQuery((prev) => ({
-                ...prev,
-                page: 1,
-                recentlyActive: event.target.checked ? true : undefined,
-              }))
-            }
-          />
-          Recently Active
-        </label>
-      </div>
-
-      {error ? (
-        <p style={{ color: '#b91c1c', marginTop: 10 }}>
-          <strong>Error:</strong> {error}
+    <div className="group rounded-xl border border-border/30 bg-zbooni-dark/40 p-4 transition-colors hover:border-border/50">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.04]`}>
+            <Icon className={`h-4 w-4 ${setting.iconColor}`} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-bold tracking-tight">{setting.label}</p>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground/50">
+              {setting.description}
+            </p>
+          </div>
+        </div>
+        <p className="shrink-0 rounded-lg bg-white/[0.04] px-3 py-1.5 font-mono text-sm font-bold tabular-nums tracking-tight">
+          {displayValue}
         </p>
-      ) : null}
+      </div>
 
-      <div className="table-wrap" style={{ marginTop: 12 }}>
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Country / City</th>
-              <th>Industry</th>
-              <th>Score</th>
-              <th>Signals</th>
-              <th>Reviews / Followers</th>
-              <th>Updated</th>
-            </tr>
-          </thead>
-          <tbody>
-            {!data && loading ? (
-              <tr>
-                <td colSpan={7}>Loading leads...</td>
-              </tr>
-            ) : data && data.items.length > 0 ? (
-              data.items.map((lead) => (
-                <tr key={lead.id}>
-                  <td>
-                    <Link className="row-link" href={`/discovery/leads/${lead.id}`}>
-                      {lead.name}
-                    </Link>
-                    <div className="mono">{lead.id}</div>
-                  </td>
-                  <td>
-                    {lead.countryCode}
-                    <br />
-                    <span className="muted">{lead.city ?? '-'}</span>
-                  </td>
-                  <td>{lead.category ?? '-'}</td>
-                  <td>
-                    {lead.score.toFixed(3)}
-                    <div className={`tier ${lead.scoreTier.toLowerCase()}`}>{lead.scoreTier}</div>
-                  </td>
-                  <td>
-                    {lead.hasWhatsapp ? 'WhatsApp ' : ''}
-                    {lead.hasInstagram ? 'Instagram ' : ''}
-                    {lead.acceptsOnlinePayments ? 'Payments ' : ''}
-                    {lead.recentActivity ? 'Recent' : ''}
-                    {!lead.hasWhatsapp &&
-                    !lead.hasInstagram &&
-                    !lead.acceptsOnlinePayments &&
-                    !lead.recentActivity
-                      ? '-'
-                      : null}
-                  </td>
-                  <td>
-                    {lead.reviewCount ?? '-'} / {lead.followerCount ?? '-'}
-                  </td>
-                  <td>{new Date(lead.updatedAt).toLocaleString()}</td>
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td colSpan={7}>No leads found.</td>
-              </tr>
+      <div className="mt-3 pl-11">
+        <div className="relative">
+          <input
+            type="range"
+            min={setting.min}
+            max={setting.max}
+            step={setting.step}
+            value={value}
+            onChange={(e) => onChange(Number(e.target.value))}
+            className="slider-input w-full cursor-pointer appearance-none bg-transparent focus:outline-none"
+            aria-label={setting.label}
+            style={
+              {
+                '--slider-pct': `${pct}%`,
+              } as React.CSSProperties
+            }
+          />
+        </div>
+        <div className="mt-1 flex items-center justify-between">
+          <span className="text-[10px] font-medium text-muted-foreground/30">{setting.min}</span>
+          <span className="text-[10px] text-muted-foreground/30">{setting.spectrum}</span>
+          <span className="text-[10px] font-medium text-muted-foreground/30">{setting.max}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingNumber({
+  setting,
+  value,
+  onChange,
+}: {
+  setting: NumberSetting;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  const Icon = setting.icon;
+
+  return (
+    <div className="group rounded-xl border border-border/30 bg-zbooni-dark/40 p-4 transition-colors hover:border-border/50">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.04]">
+            <Icon className={`h-4 w-4 ${setting.iconColor}`} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-bold tracking-tight">{setting.label}</p>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground/50">
+              {setting.description}
+            </p>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5 rounded-lg bg-white/[0.04] px-2 py-1">
+          {setting.prefix ? (
+            <span className="text-xs font-semibold text-muted-foreground/50">
+              {setting.prefix}
+            </span>
+          ) : null}
+          <input
+            type="number"
+            min={setting.min}
+            max={setting.max}
+            step={setting.step}
+            value={value}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              if (!Number.isNaN(n) && n >= setting.min && n <= setting.max) {
+                onChange(n);
+              }
+            }}
+            className="w-16 bg-transparent text-right font-mono text-sm font-bold tabular-nums tracking-tight text-foreground focus:outline-none"
+            aria-label={setting.label}
+          />
+          {setting.unit ? (
+            <span className="text-[10px] font-medium text-muted-foreground/40">
+              {setting.unit}
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <div className="mt-2 pl-11">
+        <span className="text-[10px] text-muted-foreground/30">{setting.spectrum}</span>
+      </div>
+    </div>
+  );
+}
+
+function SettingTierBands({
+  setting,
+  value,
+  onChange,
+}: {
+  setting: TierBandSetting;
+  value: { low: number; med: number; high: number };
+  onChange: (v: { low: number; med: number; high: number }) => void;
+}) {
+  const Icon = setting.icon;
+
+  return (
+    <div className="group rounded-xl border border-border/30 bg-zbooni-dark/40 p-4 transition-colors hover:border-border/50">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.04]">
+          <Icon className={`h-4 w-4 ${setting.iconColor}`} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold tracking-tight">{setting.label}</p>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground/50">
+            {setting.description}
+          </p>
+          <div className="mt-3 flex items-center gap-3">
+            <div className="flex items-center gap-1.5">
+              <span className="rounded-md bg-red-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-red-400">
+                LOW
+              </span>
+              <span className="text-[10px] text-muted-foreground/40">&lt;</span>
+              <input
+                type="number"
+                min={0}
+                max={1}
+                step={0.01}
+                value={value.low}
+                onChange={(e) =>
+                  onChange({ ...value, low: Number(e.target.value) })
+                }
+                className="w-14 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
+                aria-label="Low tier upper bound"
+              />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="rounded-md bg-yellow-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-yellow-400">
+                MED
+              </span>
+              <span className="text-[10px] text-muted-foreground/40">&lt;</span>
+              <input
+                type="number"
+                min={0}
+                max={1}
+                step={0.01}
+                value={value.med}
+                onChange={(e) =>
+                  onChange({ ...value, med: Number(e.target.value) })
+                }
+                className="w-14 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
+                aria-label="Medium tier upper bound"
+              />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="rounded-md bg-zbooni-green/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zbooni-green">
+                HIGH
+              </span>
+              <span className="text-[10px] text-muted-foreground/40">&ge;</span>
+              <input
+                type="number"
+                min={0}
+                max={1}
+                step={0.01}
+                value={value.high}
+                onChange={(e) =>
+                  onChange({ ...value, high: Number(e.target.value) })
+                }
+                className="w-14 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
+                aria-label="High tier lower bound"
+              />
+            </div>
+          </div>
+          <p className="mt-2 text-[10px] text-muted-foreground/30">{setting.spectrum}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Settings state type ────────────────────────────────────────────────
+interface SettingsState {
+  deterministicAiBlend: number;
+  scoreQualificationThreshold: number;
+  enrichmentThreshold: number;
+  scoreTierBands: { low: number; med: number; high: number };
+  followUpMaxCount: number;
+  followUpIntervalHours: number;
+  coldLeadTimeoutDays: number;
+  whatsappDailyLimit: number;
+  emailDailyLimit: number;
+  modelActivationAuc: number;
+  providerBudgetCeiling: number;
+}
+
+function getDefaultSettings(): SettingsState {
+  return {
+    deterministicAiBlend: 60,
+    scoreQualificationThreshold: 0.5,
+    enrichmentThreshold: 0.3,
+    scoreTierBands: { low: 0.34, med: 0.67, high: 0.67 },
+    followUpMaxCount: 3,
+    followUpIntervalHours: 72,
+    coldLeadTimeoutDays: 14,
+    whatsappDailyLimit: 50,
+    emailDailyLimit: 10,
+    modelActivationAuc: 0.6,
+    providerBudgetCeiling: 50,
+  };
+}
+
+// ── Main page ──────────────────────────────────────────────────────────
+
+export default function ControlsSettingsPage() {
+  const [settings, setSettings] = useState<SettingsState>(getDefaultSettings);
+  const [hasChanges, setHasChanges] = useState(false);
+
+  const updateSetting = useCallback(
+    <K extends keyof SettingsState>(key: K, value: SettingsState[K]) => {
+      setSettings((prev) => ({ ...prev, [key]: value }));
+      setHasChanges(true);
+    },
+    [],
+  );
+
+  const handleSave = useCallback(() => {
+    toast.success('Settings saved locally — API persistence coming soon');
+    setHasChanges(false);
+  }, []);
+
+  const handleReset = useCallback(() => {
+    setSettings(getDefaultSettings());
+    setHasChanges(false);
+    toast.info('Settings reset to defaults');
+  }, []);
+
+  return (
+    <div className="space-y-6">
+      {/* ── Page header ─────────────────────────────────────────────── */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-extrabold tracking-tight">Controls & Settings</h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            Pipeline configuration, system health, and outbox monitor
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleReset}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3.5 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reset Defaults
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={!hasChanges}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold transition-all',
+              hasChanges
+                ? 'bg-zbooni-teal/20 text-zbooni-teal hover:bg-zbooni-teal/30'
+                : 'bg-muted/10 text-muted-foreground/40 cursor-not-allowed',
             )}
-          </tbody>
-        </table>
+          >
+            <Save className="h-3.5 w-3.5" />
+            Save Settings
+          </button>
+        </div>
       </div>
 
-      <div className="pagination" style={{ marginTop: 10 }}>
-        <span className="muted">
-          Page {query.page} of {totalPages} ({data?.total ?? 0} total)
-        </span>
-        <button
-          type="button"
-          className="secondary"
-          disabled={(query.page ?? 1) <= 1}
-          onClick={() =>
-            setQuery((prev) => ({
-              ...prev,
-              page: Math.max(1, (prev.page ?? 1) - 1),
-            }))
-          }
+      {/* ── System Status Cards (4-col grid) ────────────────────────── */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {/* Lead Status Distribution */}
+        <StatusCard
+          icon={Hash}
+          iconColor="text-zbooni-teal"
+          bgColor="bg-zbooni-teal/10"
+          label="Lead Distribution"
         >
-          Previous
-        </button>
-        <button
-          type="button"
-          className="secondary"
-          disabled={(query.page ?? 1) >= totalPages}
-          onClick={() =>
-            setQuery((prev) => ({
-              ...prev,
-              page: (prev.page ?? 1) + 1,
-            }))
-          }
+          <div className="space-y-2">
+            {Object.entries(PLACEHOLDER_STATUS_DISTRIBUTION).map(([status, count]) => (
+              <div key={status} className="flex items-center justify-between">
+                <span className="text-[11px] font-medium capitalize text-muted-foreground/60">
+                  {status}
+                </span>
+                <span className="font-mono text-xs font-bold tabular-nums">{count}</span>
+              </div>
+            ))}
+          </div>
+        </StatusCard>
+
+        {/* Enrichment Provider Summary */}
+        <StatusCard
+          icon={Zap}
+          iconColor="text-zbooni-green"
+          bgColor="bg-zbooni-green/10"
+          label="Provider Health"
         >
-          Next
-        </button>
+          <div className="space-y-2">
+            {PLACEHOLDER_PROVIDER_SUMMARY.map((provider) => (
+              <div key={provider.name} className="flex items-center justify-between">
+                <span className="text-[11px] font-medium text-muted-foreground/60">
+                  {provider.name}
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <div className="h-1 w-10 overflow-hidden rounded-full bg-zbooni-dark/60">
+                    <div
+                      className="h-full rounded-full bg-zbooni-green/70"
+                      style={{ width: `${Math.round(provider.successRate * 100)}%` }}
+                    />
+                  </div>
+                  <span className="font-mono text-[10px] font-bold tabular-nums text-zbooni-green">
+                    {Math.round(provider.successRate * 100)}%
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </StatusCard>
+
+        {/* DLQ Depth */}
+        <StatusCard
+          icon={AlertTriangle}
+          iconColor="text-yellow-400"
+          bgColor="bg-yellow-500/10"
+          label="DLQ Depth"
+        >
+          <div className="flex flex-col items-center py-2">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-zbooni-green" />
+              <span className="text-2xl font-extrabold tracking-tight text-zbooni-green">0</span>
+            </div>
+            <p className="mt-1 text-[10px] font-medium text-muted-foreground/40">
+              All queues healthy
+            </p>
+          </div>
+        </StatusCard>
+
+        {/* Pending Approvals */}
+        <StatusCard
+          icon={Inbox}
+          iconColor="text-purple-400"
+          bgColor="bg-purple-500/10"
+          label="Pending Approvals"
+        >
+          <div className="flex flex-col items-center py-2">
+            <span className="text-2xl font-extrabold tracking-tight text-yellow-400">7</span>
+            <p className="mt-1 text-[10px] font-medium text-muted-foreground/40">
+              Message drafts awaiting review
+            </p>
+          </div>
+        </StatusCard>
       </div>
-    </section>
+
+      {/* ── Pipeline Settings ───────────────────────────────────────── */}
+      <div className="relative">
+        <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-zbooni-teal/[0.02] via-transparent to-zbooni-green/[0.02]" />
+        <div className="relative space-y-4 rounded-3xl border border-border/30 p-6">
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-teal/10">
+              <Settings className="h-4 w-4 text-zbooni-teal" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold tracking-tight">Pipeline Settings</h2>
+              <p className="text-[11px] text-muted-foreground/50">
+                Tune scoring, messaging, and automation parameters
+              </p>
+            </div>
+            {hasChanges ? (
+              <span className="ml-auto rounded-full bg-yellow-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-yellow-400">
+                Unsaved
+              </span>
+            ) : null}
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-2">
+            {PIPELINE_SETTINGS.map((setting) => {
+              if (setting.type === 'slider') {
+                return (
+                  <SettingSlider
+                    key={setting.key}
+                    setting={setting}
+                    value={settings[setting.key as keyof SettingsState] as number}
+                    onChange={(v) => updateSetting(setting.key as keyof SettingsState, v as never)}
+                  />
+                );
+              }
+              if (setting.type === 'number') {
+                return (
+                  <SettingNumber
+                    key={setting.key}
+                    setting={setting}
+                    value={settings[setting.key as keyof SettingsState] as number}
+                    onChange={(v) => updateSetting(setting.key as keyof SettingsState, v as never)}
+                  />
+                );
+              }
+              if (setting.type === 'tier-bands') {
+                return (
+                  <SettingTierBands
+                    key={setting.key}
+                    setting={setting}
+                    value={settings.scoreTierBands}
+                    onChange={(v) => updateSetting('scoreTierBands', v)}
+                  />
+                );
+              }
+              return null;
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Outbox Monitor ──────────────────────────────────────────── */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-teal/10">
+            <FileText className="h-4 w-4 text-zbooni-teal" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold tracking-tight">Outbox Monitor</h2>
+            <p className="text-[11px] text-muted-foreground/50">
+              Recent pipeline events and their processing status
+            </p>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border/50 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
+                <th className="py-2.5 pr-4">Event Type</th>
+                <th className="py-2.5 pr-4">Status</th>
+                <th className="py-2.5">Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {PLACEHOLDER_OUTBOX_EVENTS.map((event) => (
+                <tr
+                  key={event.id}
+                  className="border-b border-border/20 last:border-0"
+                >
+                  <td className="py-3 pr-4">
+                    <span className="font-mono text-xs font-semibold">{event.type}</span>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <OutboxStatusBadge status={event.status} />
+                  </td>
+                  <td className="py-3 text-xs tabular-nums text-muted-foreground/60">
+                    {new Date(event.createdAt).toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   );
 }

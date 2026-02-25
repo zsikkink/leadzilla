@@ -35,6 +35,14 @@ import {
   SCORING_COMPUTE_JOB_NAME,
   SCORING_COMPUTE_RETRY_OPTIONS,
 } from './jobs/scoring.compute.job.js';
+import {
+  SCORING_BATCH_JOB_NAME,
+  SCORING_BATCH_RETRY_OPTIONS,
+} from './jobs/scoring.batch.job.js';
+import {
+  PIPELINE_HEALTH_JOB_NAME,
+  PIPELINE_HEALTH_RETRY_OPTIONS,
+} from './jobs/pipeline.health.job.js';
 import { DLQ_JOB_NAME, DLQ_PROCESS_RETRY_OPTIONS } from './jobs/dlq.process.job.js';
 
 export const HEARTBEAT_QUEUE_NAME = 'system.heartbeat';
@@ -121,6 +129,10 @@ export const WORKER_QUEUE_DEFINITIONS: readonly WorkerQueueDefinition[] = [
     retryOptions: normalizeRetryOptions(SCORING_COMPUTE_JOB_NAME, SCORING_COMPUTE_RETRY_OPTIONS),
   },
   {
+    name: SCORING_BATCH_JOB_NAME,
+    retryOptions: normalizeRetryOptions(SCORING_BATCH_JOB_NAME, SCORING_BATCH_RETRY_OPTIONS),
+  },
+  {
     name: MODEL_TRAIN_JOB_NAME,
     retryOptions: normalizeRetryOptions(MODEL_TRAIN_JOB_NAME, MODEL_TRAIN_RETRY_OPTIONS),
   },
@@ -159,6 +171,10 @@ export const WORKER_QUEUE_DEFINITIONS: readonly WorkerQueueDefinition[] = [
   {
     name: DLQ_JOB_NAME,
     retryOptions: normalizeRetryOptions(DLQ_JOB_NAME, DLQ_PROCESS_RETRY_OPTIONS),
+  },
+  {
+    name: PIPELINE_HEALTH_JOB_NAME,
+    retryOptions: normalizeRetryOptions(PIPELINE_HEALTH_JOB_NAME, PIPELINE_HEALTH_RETRY_OPTIONS),
   },
 ] as const;
 

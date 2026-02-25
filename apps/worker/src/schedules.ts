@@ -39,6 +39,16 @@ import {
   type DlqProcessJobPayload,
   DLQ_PROCESS_RETRY_OPTIONS,
 } from './jobs/dlq.process.job.js';
+import {
+  SCORING_BATCH_JOB_NAME,
+  type ScoringBatchJobPayload,
+  SCORING_BATCH_RETRY_OPTIONS,
+} from './jobs/scoring.batch.job.js';
+import {
+  PIPELINE_HEALTH_JOB_NAME,
+  type PipelineHealthJobPayload,
+  PIPELINE_HEALTH_RETRY_OPTIONS,
+} from './jobs/pipeline.health.job.js';
 import { HEARTBEAT_QUEUE_NAME, HEARTBEAT_RETRY_OPTIONS } from './queues.js';
 
 const ONE_DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -169,6 +179,31 @@ export async function registerWorkerSchedules(boss: Pick<PgBoss, 'schedule'>): P
     {
       singletonKey: 'schedule:dlq.process',
       ...DLQ_PROCESS_RETRY_OPTIONS,
+    },
+  );
+
+  await boss.schedule(
+    SCORING_BATCH_JOB_NAME,
+    '0 * * * *',
+    {
+      runId: 'scheduled:scoring.batch',
+      correlationId: 'scheduler:scoring.batch',
+    } satisfies ScoringBatchJobPayload,
+    {
+      singletonKey: 'schedule:scoring.batch',
+      ...SCORING_BATCH_RETRY_OPTIONS,
+    },
+  );
+
+  await boss.schedule(
+    PIPELINE_HEALTH_JOB_NAME,
+    '*/15 * * * *',
+    {
+      correlationId: 'scheduler:pipeline.health',
+    } satisfies PipelineHealthJobPayload,
+    {
+      singletonKey: 'schedule:pipeline.health',
+      ...PIPELINE_HEALTH_RETRY_OPTIONS,
     },
   );
 }

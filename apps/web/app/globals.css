@@ -141,6 +141,72 @@
   animation: timeline-in 0.4s cubic-bezier(0, 0, 0.2, 1) both;
 }
 
+/* ── Custom range slider (Controls & Settings) ───────────────── */
+.slider-input::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    #3CC8E0 0%,
+    #3CC8E0 var(--slider-pct, 50%),
+    hsl(240 8% 18%) var(--slider-pct, 50%),
+    hsl(240 8% 18%) 100%
+  );
+}
+
+.slider-input::-moz-range-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: hsl(240 8% 18%);
+}
+
+.slider-input::-moz-range-progress {
+  height: 6px;
+  border-radius: 9999px;
+  background: #3CC8E0;
+}
+
+.slider-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: #3CC8E0;
+  border: 2px solid #1C1C2E;
+  margin-top: -6px;
+  cursor: pointer;
+  box-shadow: 0 0 0 3px rgba(60, 200, 224, 0.15);
+  transition: box-shadow 0.15s ease-out;
+}
+
+.slider-input::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 0 5px rgba(60, 200, 224, 0.25);
+}
+
+.slider-input::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: #3CC8E0;
+  border: 2px solid #1C1C2E;
+  cursor: pointer;
+  box-shadow: 0 0 0 3px rgba(60, 200, 224, 0.15);
+  transition: box-shadow 0.15s ease-out;
+}
+
+.slider-input::-moz-range-thumb:hover {
+  box-shadow: 0 0 0 5px rgba(60, 200, 224, 0.25);
+}
+
+.slider-input:focus::-webkit-slider-thumb {
+  box-shadow: 0 0 0 5px rgba(60, 200, 224, 0.3);
+}
+
+.slider-input:focus::-moz-range-thumb {
+  box-shadow: 0 0 0 5px rgba(60, 200, 224, 0.3);
+}
+
 /* ── Accessibility: reduced motion ─────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *,

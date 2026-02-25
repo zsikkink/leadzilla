@@ -3,6 +3,9 @@ import type {
   EnrichmentProvider,
 } from '@lead-flood/contracts';
 import { Prisma, prisma } from '@lead-flood/db';
+import type { ProviderBudgetTracker } from '../utils/provider-budget.js';
+import { getProviderCostCents } from '../utils/provider-budget.js';
+import type { EnrichmentProviderRotator } from '../utils/provider-rotation.js';
 import type {
   HunterAdapter,
   PdlEnrichmentAdapter,
@@ -62,6 +65,8 @@ export interface EnrichmentRunDependencies {
   hunterEnabled: boolean;
   otherFreeEnabled: boolean;
   defaultProvider: EnrichmentProvider;
+  providerRotator?: EnrichmentProviderRotator | undefined;
+  budgetTracker?: ProviderBudgetTracker | undefined;
 }
 
 function domainFromEmail(email: string): string | undefined {
@@ -298,6 +303,97 @@ async function markEnrichmentJobCompleted(jobExecutionId: string, result: unknow
   });
 }
 
+interface RotationResult {
+  provider: EnrichmentProvider;
+  result: UnifiedEnrichmentResult;
+}
+
+/**
+ * Execute enrichment with provider rotation.
+ *
+ * When a `providerRotator` is configured in dependencies, terminal errors
+ * trigger automatic fallback to the next provider in priority order:
+ *   PEOPLE_DATA_LABS → HUNTER → OTHER_FREE
+ *
+ * Without a rotator, behavior is identical to the original single-provider call.
+ */
+async function executeWithRotation(
+  initialProvider: EnrichmentProvider,
+  leadEmail: string,
+  correlationId: string,
+  dependencies: EnrichmentRunDependencies,
+  logger: EnrichmentRunLogger,
+  jobId: string,
+  runId: string,
+  leadId: string,
+): Promise<RotationResult> {
+  const rotator = dependencies.providerRotator;
+
+  // Without a rotator, use the original single-provider path
+  if (!rotator) {
+    const result = await executeEnrichmentProvider(
+      initialProvider,
+      leadEmail,
+      correlationId,
+      dependencies,
+    );
+    return { provider: initialProvider, result };
+  }
+
+  const failedProviders: string[] = [];
+  let currentProvider: EnrichmentProvider | null = initialProvider;
+
+  while (currentProvider) {
+    const result = await executeEnrichmentProvider(
+      currentProvider,
+      leadEmail,
+      correlationId,
+      dependencies,
+    );
+
+    if (result.status === 'success') {
+      rotator.recordSuccess(currentProvider);
+      return { provider: currentProvider, result };
+    }
+
+    if (result.status === 'terminal_error') {
+      rotator.recordFailure(currentProvider);
+      failedProviders.push(currentProvider);
+
+      logger.warn(
+        {
+          jobId,
+          runId,
+          leadId,
+          provider: currentProvider,
+          statusCode: result.failure.statusCode,
+          failedProviders,
+        },
+        `Provider ${currentProvider} returned terminal_error, attempting rotation`,
+      );
+
+      currentProvider = rotator.getNextProvider(leadId, failedProviders);
+      continue;
+    }
+
+    // retryable_error — let pg-boss handle retries for this provider
+    rotator.recordFailure(currentProvider);
+    return { provider: currentProvider, result };
+  }
+
+  // All providers exhausted
+  return {
+    provider: initialProvider,
+    result: {
+      status: 'terminal_error',
+      failure: {
+        statusCode: null,
+        message: `All enrichment providers exhausted. Failed: ${failedProviders.join(', ')}`,
+      },
+    },
+  };
+}
+
 export async function handleEnrichmentRunJob(
   logger: EnrichmentRunLogger,
   job: Job<EnrichmentRunJobPayload>,
@@ -355,56 +451,80 @@ export async function handleEnrichmentRunJob(
   }
 
   try {
-    const enrichmentResult = await executeEnrichmentProvider(
+    const enrichmentResult = await executeWithRotation(
       selectedProvider,
       lead.email,
       effectiveCorrelationId,
       dependencies,
+      logger,
+      job.id,
+      runId,
+      leadId,
     );
+
+    const effectiveProvider = enrichmentResult.provider;
+    const result = enrichmentResult.result;
+
+    // Record provider spend for budget tracking
+    const providerCostCents = getProviderCostCents(effectiveProvider);
+    if (dependencies.budgetTracker && providerCostCents > 0) {
+      await dependencies.budgetTracker.recordSpend(effectiveProvider, providerCostCents, job.id);
+      logger.info(
+        {
+          jobId: job.id,
+          runId,
+          provider: effectiveProvider,
+          costCents: providerCostCents,
+          dailySpend: dependencies.budgetTracker.getDailySpend(effectiveProvider),
+          dailyBudget: dependencies.budgetTracker.getDailyBudget(),
+        },
+        'Recorded provider spend for enrichment call',
+      );
+    }
 
     const currentMaxAttempt = await prisma.leadEnrichmentRecord.aggregate({
       where: {
         leadId,
-        provider: selectedProvider,
+        provider: effectiveProvider,
       },
       _max: {
         attempt: true,
       },
     });
     const attempt = (currentMaxAttempt._max.attempt ?? 0) + 1;
-    const requestKey = `${runId}:${leadId}:${selectedProvider}:${job.id}`;
+    const requestKey = `${runId}:${leadId}:${effectiveProvider}:${job.id}`;
 
     const enrichmentRecord = await prisma.leadEnrichmentRecord.upsert({
       where: { requestKey },
       create: {
         leadId,
-        provider: selectedProvider,
-        status: enrichmentResult.status === 'success' ? 'COMPLETED' : 'FAILED',
+        provider: effectiveProvider,
+        status: result.status === 'success' ? 'COMPLETED' : 'FAILED',
         attempt,
-        providerRecordId: deriveProviderRecordId(enrichmentResult, lead.email),
+        providerRecordId: deriveProviderRecordId(result, lead.email),
         normalizedPayload:
-          enrichmentResult.status === 'success'
-            ? toInputJson(enrichmentResult.normalized)
+          result.status === 'success'
+            ? toInputJson(result.normalized)
             : Prisma.JsonNull,
-        rawPayload: toInputJson(enrichmentResult),
-        errorCode: enrichmentResult.status === 'success' ? null : 'ENRICHMENT_FAILED',
+        rawPayload: toInputJson(result),
+        errorCode: result.status === 'success' ? null : 'ENRICHMENT_FAILED',
         errorMessage:
-          enrichmentResult.status === 'success' ? null : enrichmentResult.failure.message,
-        enrichedAt: enrichmentResult.status === 'success' ? new Date() : null,
+          result.status === 'success' ? null : result.failure.message,
+        enrichedAt: result.status === 'success' ? new Date() : null,
         requestKey,
       },
       update: {
-        status: enrichmentResult.status === 'success' ? 'COMPLETED' : 'FAILED',
-        providerRecordId: deriveProviderRecordId(enrichmentResult, lead.email),
+        status: result.status === 'success' ? 'COMPLETED' : 'FAILED',
+        providerRecordId: deriveProviderRecordId(result, lead.email),
         normalizedPayload:
-          enrichmentResult.status === 'success'
-            ? toInputJson(enrichmentResult.normalized)
+          result.status === 'success'
+            ? toInputJson(result.normalized)
             : Prisma.JsonNull,
-        rawPayload: toInputJson(enrichmentResult),
-        errorCode: enrichmentResult.status === 'success' ? null : 'ENRICHMENT_FAILED',
+        rawPayload: toInputJson(result),
+        errorCode: result.status === 'success' ? null : 'ENRICHMENT_FAILED',
         errorMessage:
-          enrichmentResult.status === 'success' ? null : enrichmentResult.failure.message,
-        enrichedAt: enrichmentResult.status === 'success' ? new Date() : null,
+          result.status === 'success' ? null : result.failure.message,
+        enrichedAt: result.status === 'success' ? new Date() : null,
       },
     });
 
@@ -412,39 +532,39 @@ export async function handleEnrichmentRunJob(
     await prisma.jobExecution.create({
       data: {
         type: ENRICHMENT_RECORD_JOB_TYPE,
-        status: enrichmentResult.status === 'success' ? 'completed' : 'failed',
+        status: result.status === 'success' ? 'completed' : 'failed',
         attempts: 1,
         payload: {
           runId,
           correlationId: effectiveCorrelationId,
-          provider: selectedProvider,
+          provider: effectiveProvider,
           leadId,
         },
-        result: toInputJson(enrichmentResult),
+        result: toInputJson(result),
         error:
-          enrichmentResult.status === 'success'
+          result.status === 'success'
             ? null
-            : enrichmentResult.failure.message,
+            : result.failure.message,
         leadId,
         startedAt: new Date(),
         finishedAt: new Date(),
       },
     });
 
-    if (enrichmentResult.status === 'success') {
-      const phoneFromEnrichment = enrichmentResult.normalized.phone ?? undefined;
+    if (result.status === 'success') {
+      const phoneFromEnrichment = result.normalized.phone ?? undefined;
       await prisma.lead.update({
         where: { id: leadId },
         data: {
           status: 'enriched',
-          enrichmentData: toInputJson(enrichmentResult.normalized),
+          enrichmentData: toInputJson(result.normalized),
           error: null,
           ...(phoneFromEnrichment ? { phone: phoneFromEnrichment } : {}),
         },
       });
 
       if (jobExecutionId) {
-        await markEnrichmentJobCompleted(jobExecutionId, enrichmentResult.normalized);
+        await markEnrichmentJobCompleted(jobExecutionId, result.normalized);
       }
 
       const featuresPayload: FeaturesComputeJobPayload = {
@@ -480,6 +600,7 @@ export async function handleEnrichmentRunJob(
           leadId,
           enrichmentRecordId: enrichmentRecord.id,
           featuresJobExecutionId: featuresJobExecution.id,
+          provider: effectiveProvider,
         },
         'Completed enrichment.run job',
       );
@@ -489,26 +610,26 @@ export async function handleEnrichmentRunJob(
     await prisma.lead.update({
       where: { id: leadId },
       data: {
-        status: enrichmentResult.status === 'terminal_error' ? 'failed' : 'processing',
-        error: enrichmentResult.failure.message,
+        status: result.status === 'terminal_error' ? 'failed' : 'processing',
+        error: result.failure.message,
       },
     });
 
     if (jobExecutionId) {
-      await markEnrichmentJobFailed(jobExecutionId, enrichmentResult.failure.message);
+      await markEnrichmentJobFailed(jobExecutionId, result.failure.message);
     }
 
-    if (enrichmentResult.status === 'retryable_error') {
-      const error = new Error(enrichmentResult.failure.message);
+    if (result.status === 'retryable_error') {
+      const error = new Error(result.failure.message);
       logger.warn(
         {
           jobId: job.id,
           queue: job.name,
           runId,
           correlationId: effectiveCorrelationId,
-          provider: selectedProvider,
+          provider: effectiveProvider,
           leadId,
-          statusCode: enrichmentResult.failure.statusCode,
+          statusCode: result.failure.statusCode,
         },
         'Retryable enrichment failure detected',
       );
@@ -521,11 +642,11 @@ export async function handleEnrichmentRunJob(
         queue: job.name,
         runId,
         correlationId: effectiveCorrelationId,
-        provider: selectedProvider,
+        provider: effectiveProvider,
         leadId,
-        statusCode: enrichmentResult.failure.statusCode,
+        statusCode: result.failure.statusCode,
       },
-      'Terminal enrichment failure detected',
+      'Terminal enrichment failure detected — all providers exhausted',
     );
   } catch (error: unknown) {
     if (jobExecutionId) {

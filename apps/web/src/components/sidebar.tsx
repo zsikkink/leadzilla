@@ -6,17 +6,18 @@ import { usePathname } from 'next/navigation';
 import {
   Activity,
   BarChart3,
+  Brain,
   ChevronsLeft,
   ChevronsRight,
-  ClipboardList,
   Inbox,
   LayoutDashboard,
   Lightbulb,
-  ListChecks,
   MessageSquare,
   Rocket,
   Search,
+  Settings,
   Target,
+  TerminalSquare,
   Users,
 } from 'lucide-react';
 
@@ -34,10 +35,12 @@ const DASHBOARD_NAV_ITEMS = [
   { href: '/dashboard/jobs', label: 'Jobs', icon: Activity },
 ] as const;
 
-const DISCOVERY_NAV_ITEMS = [
-  { href: '/discovery', label: 'Discovery Leads', icon: Search },
-  { href: '/discovery/search-tasks', label: 'Search Tasks', icon: ListChecks },
-  { href: '/discovery/jobs', label: 'Jobs', icon: ClipboardList },
+const DEV_CONSOLE_NAV_ITEMS = [
+  { href: '/discovery', label: 'Controls & Settings', icon: Settings },
+  { href: '/discovery/lifecycle', label: 'Lead Lifecycle', icon: Search },
+  { href: '/discovery/model', label: 'Model Inspector', icon: Brain },
+  { href: '/discovery/feedback', label: 'Feedback & Replies', icon: MessageSquare },
+  { href: '/discovery/rules', label: 'ICP & Rules', icon: TerminalSquare },
 ] as const;
 
 interface SidebarProps {
@@ -184,10 +187,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             collapsed ? 'max-h-0 opacity-0 overflow-hidden mb-0 mt-1' : 'max-h-8 opacity-100 px-3',
           )}
         >
-          Discovery Console
+          Dev Console
         </p>
 
-        {DISCOVERY_NAV_ITEMS.map(({ href, label, icon: Icon }) => {
+        {DEV_CONSOLE_NAV_ITEMS.map(({ href, label, icon: Icon }) => {
           const isActive =
             href === '/discovery'
               ? pathname === '/discovery'

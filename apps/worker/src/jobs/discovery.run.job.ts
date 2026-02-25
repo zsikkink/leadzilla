@@ -26,6 +26,9 @@ import type {
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
+import type { ProviderBudgetTracker } from '../utils/provider-budget.js';
+import { getProviderCostCents } from '../utils/provider-budget.js';
+
 import {
   ENRICHMENT_RUN_JOB_NAME,
   ENRICHMENT_RUN_RETRY_OPTIONS,
@@ -89,6 +92,7 @@ export interface DiscoveryRunDependencies {
   providerOrder?: DiscoveryProvider[];
   defaultEnrichmentProvider: EnrichmentProvider;
   defaultLimit?: number;
+  budgetTracker?: ProviderBudgetTracker | undefined;
 }
 
 interface DiscoveryLeadProvenance {
@@ -1253,6 +1257,27 @@ export async function handleDiscoveryRunJob(
     }> = [];
 
     for (const provider of providersToRun) {
+      // Budget ceiling check — skip provider if daily budget is exhausted
+      const estimatedCostCents = getProviderCostCents(provider) * requestedLimit;
+      if (dependencies.budgetTracker && estimatedCostCents > 0) {
+        const budgetCheck = await dependencies.budgetTracker.canSpend(provider, estimatedCostCents);
+        if (!budgetCheck.allowed) {
+          logger.warn(
+            {
+              jobId: job.id,
+              runId,
+              correlationId: effectiveCorrelationId,
+              provider,
+              estimatedCostCents,
+              remainingCents: budgetCheck.remainingCents,
+              reason: budgetCheck.reason,
+            },
+            'Skipping discovery provider — daily budget ceiling reached',
+          );
+          continue;
+        }
+      }
+
       try {
         const result = await executeDiscoveryProvider(
           discoveryPayload,
@@ -1264,6 +1289,24 @@ export async function handleDiscoveryRunJob(
           job.id,
         );
         providerResults.push(result);
+
+        // Record actual spend after successful discovery
+        const actualCostCents = getProviderCostCents(provider) * result.leads.length;
+        if (dependencies.budgetTracker && actualCostCents > 0) {
+          await dependencies.budgetTracker.recordSpend(provider, actualCostCents, job.id);
+          logger.info(
+            {
+              jobId: job.id,
+              runId,
+              provider,
+              leadsDiscovered: result.leads.length,
+              costCents: actualCostCents,
+              dailySpend: dependencies.budgetTracker.getDailySpend(provider),
+              dailyBudget: dependencies.budgetTracker.getDailyBudget(),
+            },
+            'Recorded provider spend for discovery call',
+          );
+        }
       } catch (providerError: unknown) {
         const serializedProviderError = serializeErrorForLog(providerError);
         providerErrors.push({

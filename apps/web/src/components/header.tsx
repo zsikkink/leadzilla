@@ -16,9 +16,11 @@ const MOBILE_NAV = [
   { href: '/dashboard/inbox', label: 'Inbox' },
   { href: '/dashboard/icps', label: 'ICP Profiles' },
   { href: '/dashboard/analytics', label: 'Analytics' },
-  { href: '/discovery', label: 'Discovery Leads' },
-  { href: '/discovery/search-tasks', label: 'Search Tasks' },
-  { href: '/discovery/jobs', label: 'Jobs' },
+  { href: '/discovery', label: 'Controls & Settings' },
+  { href: '/discovery/lifecycle', label: 'Lead Lifecycle' },
+  { href: '/discovery/model', label: 'Model Inspector' },
+  { href: '/discovery/feedback', label: 'Feedback & Replies' },
+  { href: '/discovery/rules', label: 'ICP & Rules' },
 ] as const;
 
 function getPageTitle(pathname: string): string {
@@ -32,13 +34,12 @@ function getPageTitle(pathname: string): string {
   if (pathname === '/dashboard/icps') return 'ICP Profiles';
   if (pathname === '/dashboard/analytics') return 'Analytics';
 
-  if (pathname === '/discovery') return 'Discovery Leads';
-  if (pathname.startsWith('/discovery/leads/')) return 'Discovery Lead';
-  if (pathname === '/discovery/jobs') return 'Discovery Jobs';
-  if (pathname.startsWith('/discovery/jobs/')) return 'Job Run Detail';
-  if (pathname === '/discovery/search-tasks') return 'Search Tasks';
-  if (pathname.startsWith('/discovery/search-tasks/')) return 'Search Task Detail';
-  if (pathname === '/discovery/lead-form') return 'Lead Intake';
+  if (pathname === '/discovery') return 'Controls & Settings';
+  if (pathname === '/discovery/lifecycle') return 'Lead Lifecycle Inspector';
+  if (pathname.startsWith('/discovery/lifecycle/')) return 'Lead Lifecycle Inspector';
+  if (pathname === '/discovery/model') return 'Model Inspector';
+  if (pathname === '/discovery/feedback') return 'Feedback & Replies';
+  if (pathname === '/discovery/rules') return 'ICP & Rules Viewer';
 
   return 'Dashboard';
 }

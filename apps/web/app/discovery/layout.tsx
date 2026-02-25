@@ -9,10 +9,12 @@ import { cn } from '../../src/lib/utils.js';
 
 import './discovery.css';
 
-const DISCOVERY_NAV = [
-  { href: '/discovery', label: 'Leads' },
-  { href: '/discovery/search-tasks', label: 'Search Tasks' },
-  { href: '/discovery/jobs', label: 'Jobs' },
+const DEV_CONSOLE_NAV = [
+  { href: '/discovery', label: 'Controls & Settings' },
+  { href: '/discovery/lifecycle', label: 'Lead Lifecycle' },
+  { href: '/discovery/model', label: 'Model Inspector' },
+  { href: '/discovery/feedback', label: 'Feedback & Replies' },
+  { href: '/discovery/rules', label: 'ICP & Rules' },
 ] as const;
 
 export default function DiscoveryLayout({ children }: { children: ReactNode }) {
@@ -25,13 +27,13 @@ export default function DiscoveryLayout({ children }: { children: ReactNode }) {
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zbooni-teal/80">Lead Flood</p>
-              <h1 className="text-2xl font-extrabold tracking-tight">Discovery Console</h1>
+              <h1 className="text-2xl font-extrabold tracking-tight">Dev Console</h1>
               <p className="mt-1 text-sm text-muted-foreground">
-                Real Supabase-backed discovery leads, tasks, and job requests.
+                Pipeline controls, model inspection, and system diagnostics.
               </p>
             </div>
             <nav className="flex flex-wrap gap-2">
-              {DISCOVERY_NAV.map((item) => {
+              {DEV_CONSOLE_NAV.map((item) => {
                 const isActive =
                   item.href === '/discovery'
                     ? pathname === item.href
