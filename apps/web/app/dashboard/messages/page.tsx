@@ -137,7 +137,10 @@ export default function MessagesPage() {
 
   const pendingDrafts: MessageDraftResponse[] =
     sortedItems.filter((d) => d.approvalStatus === 'PENDING');
-  const pendingCount = pendingDrafts.length;
+  // Use total from API when filtering by PENDING, otherwise count current page items
+  const pendingCount = statusFilter === 'PENDING'
+    ? (drafts.data?.total ?? pendingDrafts.length)
+    : pendingDrafts.length;
 
   // Visible items (filter out optimistically hidden ones), already sorted newest first
   const visibleItems: MessageDraftResponse[] =

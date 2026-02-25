@@ -418,7 +418,7 @@ export async function handleScoringComputeJob(
 
         const dWeight = deps?.deterministicWeight ?? DEFAULT_DETERMINISTIC_WEIGHT;
         const aWeight = deps?.aiWeight ?? DEFAULT_AI_WEIGHT;
-        const blendedScore = logisticScore > 0
+        const blendedScore = usedTrainedModel || logisticScore > 0
           ? dWeight * deterministicScore + aWeight * logisticScore
           : deterministicScore;
         const scoreBand = toScoreBand(blendedScore);

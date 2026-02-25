@@ -108,10 +108,6 @@ function sanitizeFieldKey(fieldKey: string): string {
     .toUpperCase();
 }
 
-function isCountryHardFilterField(fieldKey: string): boolean {
-  return fieldKey.trim().toLowerCase() === 'country';
-}
-
 export function evaluateRuleMatch(rule: DeterministicRule, featureValue: unknown): boolean {
   const ruleValue = rule.valueJson;
 
@@ -220,7 +216,7 @@ export function evaluateDeterministicScore(
     const featureValue = getFeatureValue(features, rule.fieldKey);
     const matched = evaluateRuleMatch(rule, featureValue);
     const effectiveRuleType: DeterministicRule['ruleType'] =
-      (rule.ruleType === 'HARD_FILTER' || rule.isRequired === true) && isCountryHardFilterField(rule.fieldKey)
+      rule.ruleType === 'HARD_FILTER' || rule.isRequired === true
         ? 'HARD_FILTER'
         : 'WEIGHTED';
     const weightApplied =

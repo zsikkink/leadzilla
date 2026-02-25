@@ -406,7 +406,7 @@ export async function handleScoringBatchJob(
 
         // Blend scores
         const blendedScore =
-          logisticScore > 0
+          usedTrainedModel || logisticScore > 0
             ? DEFAULT_DETERMINISTIC_WEIGHT * deterministicScore +
               DEFAULT_AI_WEIGHT * logisticScore
             : deterministicScore;

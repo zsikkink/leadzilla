@@ -193,8 +193,10 @@ export default function IcpsPage() {
               ))}
             </div>
             <div className="mt-3 flex items-center gap-1.5 border-t border-border/30 pt-3">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Cost per Lead</span>
-              <span className="ml-auto text-sm font-bold text-muted-foreground">$0.00</span>
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Rules</span>
+              <span className="ml-auto text-sm font-bold text-muted-foreground">
+                {icp.qualificationRules?.length ?? 0}
+              </span>
             </div>
           </Link>
         ))}

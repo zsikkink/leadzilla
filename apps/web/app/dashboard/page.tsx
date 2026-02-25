@@ -87,8 +87,8 @@ export default function DashboardPage() {
   const newLeadsToday = funnel.data?.discoveredCount ?? 0;
   const sentToday = funnel.data?.messagesSentCount ?? 0;
 
-  // Cost per lead from analytics API (cents → dollars)
-  const costPerLead = funnel.data?.costPerLead != null ? funnel.data.costPerLead / 100 : 0;
+  // Cost per lead from analytics API (already in dollars)
+  const costPerLead = funnel.data?.costPerLead ?? 0;
 
   return (
     <div className="space-y-6">
@@ -122,7 +122,7 @@ export default function DashboardPage() {
         <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
           <div className="mb-3 flex items-center gap-2">
             <Calendar className="h-4 w-4 text-zbooni-teal" />
-            <h2 className="text-sm font-bold tracking-tight">Today&apos;s Snapshot</h2>
+            <h2 className="text-sm font-bold tracking-tight">Current Snapshot</h2>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <TodayCard
