@@ -216,8 +216,6 @@ const TRAINED_MODEL_FEATURE_KEYS = [
   'discovery_attempt_count',
   'enrichment_attempt_count',
   'days_since_discovery',
-  'rule_match_count',
-  'hard_filter_passed',
 ] as const;
 
 function extractFeatureVectorForModel(featuresJson: Record<string, unknown>): number[] {

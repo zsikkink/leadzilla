@@ -75,8 +75,6 @@ const NUMERIC_FEATURE_KEYS = [
   'discovery_attempt_count',
   'enrichment_attempt_count',
   'days_since_discovery',
-  'rule_match_count',
-  'hard_filter_passed',
 ] as const;
 
 export const FEATURE_KEYS_FOR_TRAINING = NUMERIC_FEATURE_KEYS;
