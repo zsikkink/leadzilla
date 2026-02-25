@@ -19,6 +19,9 @@ Quality: `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
 - **`workspace:*` for internal deps** — forgetting silently pulls from npm
 - Outbox pattern: API → OutboxEvent → Dispatcher → pg-boss → Worker
 - Error classification: RetryableError (pg-boss retries) vs PermanentError (mark failed, stop) vs unknown (retry)
+- **Agent teams skip hard work**: Parallel agent teams cherry-pick easy greenfield tasks and skip integration/wiring. For UI plans: (1) one objective per task — never compound bullets, (2) verify agent output against the full plan item-by-item, (3) visual QA is mandatory — typecheck/build passing does NOT mean UI is correct or complete
+- **Discovery button is the core product**: The "Start Discovery" flow requires UI → API POST /v1/discovery/runs → pg-boss discovery.seed job. Verify it works end-to-end after any discovery-related changes
+- **Dual DB**: API uses Supabase Postgres at `:54322` (apps/api/.env.local), Prisma CLI uses Docker at `:5434` (packages/db/.env). New migrations must be applied to BOTH databases
 
 ## Battle-Tested API Gotchas (from Zbooni n8n project)
 - **Apollo**: Requires `User-Agent` header (Cloudflare 1010 without it). 403 returns HTML not JSON — check Content-Type. Empty `people: []` is valid, not error. Phone reveals cost credits — only for primary contact.
@@ -36,9 +39,9 @@ API → OutboxEvent → pg-boss
    LinkedIn/Google]   Apify/Apollo]                        ↓
                                                      message.send → [Resend (email) / Trengo (WhatsApp)]
                                                            ↓
-                                              followup.check (cron, 72h) → reply.classify → notify.sales
-                                                           ↓
-                                              labels.generate → model.train → model.evaluate
+                                              followup.check (cron, 72h)
+                                              reply.classify → notify.sales  (triggered by Trengo webhook)
+                                              labels.generate (hourly cron) → model.train (≥50 new labels) → model.evaluate
 ```
 
 ## Verify (run after every change)

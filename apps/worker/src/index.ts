@@ -565,6 +565,7 @@ async function main(): Promise<void> {
         enqueueMessageGenerate: async (payload) => {
           await boss.send(MESSAGE_GENERATE_JOB_NAME, payload, {
             singletonKey: `message.generate:${payload.leadId}:${payload.icpProfileId}`,
+            ...MESSAGE_GENERATE_RETRY_OPTIONS,
           });
         },
       }),
