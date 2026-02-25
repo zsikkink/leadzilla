@@ -43,7 +43,14 @@ import {
   PIPELINE_HEALTH_JOB_NAME,
   PIPELINE_HEALTH_RETRY_OPTIONS,
 } from './jobs/pipeline.health.job.js';
-import { DLQ_JOB_NAME, DLQ_PROCESS_RETRY_OPTIONS } from './jobs/dlq.process.job.js';
+// DLQ constants inlined to break circular dependency (dlq.process.job.ts imports WORKER_QUEUE_DEFINITIONS from here)
+const DLQ_JOB_NAME = 'dlq.process';
+const DLQ_PROCESS_RETRY_OPTIONS: Pick<SendOptions, 'retryLimit' | 'retryDelay' | 'retryBackoff' | 'deadLetter'> = {
+  retryLimit: 2,
+  retryDelay: 60,
+  retryBackoff: true,
+  deadLetter: 'dlq.process.dead_letter',
+};
 
 export const HEARTBEAT_QUEUE_NAME = 'system.heartbeat';
 
