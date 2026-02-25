@@ -10,6 +10,12 @@ import { ApiError } from '../../../src/lib/api-client.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 
+const MENA_COUNTRIES = [
+  'UAE', 'KSA', 'Egypt', 'Jordan', 'Bahrain', 'Kuwait', 'Oman', 'Qatar',
+  'Lebanon', 'Iraq', 'Morocco', 'Tunisia', 'Algeria', 'Libya', 'Yemen',
+  'Syria', 'Palestine', 'Sudan',
+];
+
 export default function IcpsPage() {
   const { apiClient } = useAuth();
 
@@ -48,6 +54,14 @@ export default function IcpsPage() {
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
   }, [showModal]);
+
+  // MENA auto-fill: watch for "MENA" keyword in target countries
+  useEffect(() => {
+    const trimmed = targetCountries.trim();
+    if (trimmed.toUpperCase() === 'MENA') {
+      setTargetCountries(MENA_COUNTRIES.join(', '));
+    }
+  }, [targetCountries]);
 
   const resetForm = () => {
     setName('');
@@ -178,6 +192,10 @@ export default function IcpsPage() {
                 </span>
               ))}
             </div>
+            <div className="mt-3 flex items-center gap-1.5 border-t border-border/30 pt-3">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Cost per Lead</span>
+              <span className="ml-auto text-sm font-bold text-muted-foreground">$0.00</span>
+            </div>
           </Link>
         ))}
       </div>
@@ -283,9 +301,9 @@ export default function IcpsPage() {
                   value={targetCountries}
                   onChange={(e) => setTargetCountries(e.target.value)}
                   className="flex h-11 w-full rounded-xl border border-input bg-background px-4 text-sm transition-colors placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  placeholder="UAE, Saudi Arabia, Qatar"
+                  placeholder="Type MENA to auto-fill all MENA countries"
                 />
-                <p className="text-xs text-muted-foreground/60">Comma-separated list</p>
+                <p className="text-xs text-muted-foreground/60">Comma-separated list. Type &quot;MENA&quot; to auto-fill all 18 MENA countries.</p>
               </div>
 
               {/* Active Toggle */}

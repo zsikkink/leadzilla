@@ -149,6 +149,12 @@ export class ApiClient {
     });
   }
 
+  deleteIcp(icpId: string): Promise<void> {
+    return this.request(`/v1/icps/${icpId}`, {
+      method: 'DELETE',
+    });
+  }
+
   // ── Messaging ─────────────────────────────────────
   listDrafts(query?: ListMessageDraftsQuery): Promise<ListMessageDraftsResponse> {
     const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';

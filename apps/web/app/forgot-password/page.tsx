@@ -179,9 +179,6 @@ export default function ForgotPasswordPage() {
           )}
         </div>
 
-        <p className="mt-6 text-center text-xs text-muted-foreground/60">
-          Powered by Lead Flood
-        </p>
       </div>
     </div>
   );

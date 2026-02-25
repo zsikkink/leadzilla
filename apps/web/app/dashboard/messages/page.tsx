@@ -1,8 +1,8 @@
 'use client';
 
-import type { MessageApprovalStatus, MessageDraftResponse } from '@lead-flood/contracts';
+import type { GetLeadResponse, MessageApprovalStatus, MessageDraftResponse } from '@lead-flood/contracts';
 import { Check, CheckCheck, Minus, Square, X } from 'lucide-react';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { CustomSelect } from '../../../src/components/custom-select.js';
@@ -82,13 +82,66 @@ export default function MessagesPage() {
     [page, statusFilter],
   );
 
+  // Sort items newest first by createdAt
+  const sortedItems: MessageDraftResponse[] = useMemo(() => {
+    if (!drafts.data?.items) return [];
+    return [...drafts.data.items].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+  }, [drafts.data?.items]);
+
+  // Fetch lead details for display names
+  const [leadDataMap, setLeadDataMap] = useState<Record<string, { name: string; company: string }>>({});
+
+  const leadIds = useMemo(() => {
+    if (!sortedItems.length) return [];
+    const ids = new Set<string>();
+    for (const draft of sortedItems) {
+      ids.add(draft.leadId);
+    }
+    return Array.from(ids);
+  }, [sortedItems]);
+
+  useEffect(() => {
+    if (leadIds.length === 0) return;
+
+    let cancelled = false;
+
+    void Promise.allSettled(
+      leadIds.map((id) => apiClient.getLead(id)),
+    ).then((results) => {
+      if (cancelled) return;
+
+      const dataMap: Record<string, { name: string; company: string }> = {};
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        const leadId = leadIds[i];
+        if (!result || !leadId) continue;
+
+        if (result.status === 'fulfilled') {
+          const lead: GetLeadResponse = result.value;
+          const fullName = `${lead.firstName} ${lead.lastName}`.trim();
+          const enrichment = lead.enrichmentData as Record<string, unknown> | null | undefined;
+          const companyName = (enrichment?.companyName as string) ?? '';
+          dataMap[leadId] = { name: fullName || leadId.slice(0, 8), company: companyName };
+        }
+      }
+
+      setLeadDataMap(dataMap);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [leadIds, apiClient]);
+
   const pendingDrafts: MessageDraftResponse[] =
-    drafts.data?.items.filter((d) => d.approvalStatus === 'PENDING') ?? [];
+    sortedItems.filter((d) => d.approvalStatus === 'PENDING');
   const pendingCount = pendingDrafts.length;
 
-  // Visible items (filter out optimistically hidden ones)
+  // Visible items (filter out optimistically hidden ones), already sorted newest first
   const visibleItems: MessageDraftResponse[] =
-    drafts.data?.items.filter((d) => !hiddenIds.has(d.id)) ?? [];
+    sortedItems.filter((d) => !hiddenIds.has(d.id));
 
   // Selection helpers
   const pendingIds = new Set(pendingDrafts.map((d) => d.id));
@@ -340,7 +393,12 @@ export default function MessagesPage() {
                 </div>
               ) : null}
               <div className={cn('min-w-0 flex-1', isSelected && 'rounded-2xl ring-1 ring-zbooni-green/30')}>
-                <MessageDraftCard draft={draft} onAction={drafts.refetch} />
+                <MessageDraftCard
+                  draft={draft}
+                  leadName={leadDataMap[draft.leadId]?.name}
+                  companyName={leadDataMap[draft.leadId]?.company}
+                  onAction={drafts.refetch}
+                />
               </div>
             </div>
           );

@@ -12,17 +12,32 @@ import {
   ArrowDown,
   ArrowRight,
   ArrowUp,
+  Check,
   ChevronDown,
   ChevronUp,
   Lightbulb,
   Minus,
+  Pencil,
   Sparkles,
   TrendingUp,
   Users,
+  X,
   Zap,
 } from 'lucide-react';
 import { useCallback, useState } from 'react';
 
+import { Button } from '../../../src/components/ui/button.js';
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../../../src/components/ui/dialog.js';
+import { Input } from '../../../src/components/ui/input.js';
+import { Label } from '../../../src/components/ui/label.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 
@@ -32,6 +47,8 @@ const RECOMMENDATION_STYLES: Record<string, { bg: string; text: string; label: s
   ADJUST_THRESHOLD: { bg: 'bg-yellow-500/15', text: 'text-yellow-400', label: 'Adjust Threshold' },
   ADJUST_WEIGHT: { bg: 'bg-blue-500/15', text: 'text-blue-400', label: 'Adjust Weight' },
   INCREASE_VOLUME: { bg: 'bg-zbooni-green/15', text: 'text-zbooni-green', label: 'Increase Volume' },
+  DISABLE_FEATURE: { bg: 'bg-orange-500/15', text: 'text-orange-400', label: 'Disable Feature' },
+  SWITCH_SOURCE: { bg: 'bg-purple-500/15', text: 'text-purple-400', label: 'Switch Source' },
 };
 
 const SCORE_BAND_STYLES: Record<string, { bg: string; text: string }> = {
@@ -39,6 +56,47 @@ const SCORE_BAND_STYLES: Record<string, { bg: string; text: string }> = {
   MEDIUM: { bg: 'bg-yellow-500/15', text: 'text-yellow-400' },
   LOW: { bg: 'bg-red-500/15', text: 'text-red-400' },
 };
+
+type RecommendationStatus = 'pending' | 'approved' | 'rejected' | 'editing';
+
+// ── Placeholder recommendations ─────────────────────────────
+const PLACEHOLDER_RECOMMENDATIONS: Array<
+  ManagerRecommendation & { id: string; reasoning: string }
+> = [
+  {
+    id: 'placeholder-1',
+    type: 'INCREASE_VOLUME',
+    icpProfileId: 'icp-saas-b2b',
+    field: 'email_warmup_limit',
+    currentValue: 10,
+    recommendedValue: 20,
+    confidence: 0.89,
+    reasoning:
+      'Email warm-up has been running for 2 weeks with zero bounces and a consistent 94% inbox placement rate. Increasing the daily limit from 10 to 20 will double outreach capacity while maintaining deliverability.',
+  },
+  {
+    id: 'placeholder-2',
+    type: 'ADJUST_WEIGHT' as const,
+    icpProfileId: 'icp-luxury',
+    field: 'review_count',
+    currentValue: 0.15,
+    recommendedValue: 0.02,
+    confidence: 0.76,
+    reasoning:
+      'The "review_count" feature has a signal-to-noise ratio of 0.12 for the Luxury segment, significantly below the 0.40 threshold. Reducing its weight from 0.15 to 0.02 will improve precision by an estimated 4.2% without impacting recall.',
+  },
+  {
+    id: 'placeholder-3',
+    type: 'ADJUST_THRESHOLD' as const,
+    icpProfileId: 'icp-hospitality',
+    field: 'primary_source',
+    currentValue: null,
+    recommendedValue: null,
+    confidence: 0.82,
+    reasoning:
+      'Apollo achieves a 42% higher enrichment rate for Hospitality ICP compared to the current primary source (Hunter). Switching would increase pipeline throughput by approximately 65 qualified leads per week based on current discovery volume.',
+  },
+];
 
 // ── Helpers ─────────────────────────────────────────────────
 function formatWeekRange(weekStart: string, weekEnd: string): string {
@@ -59,7 +117,7 @@ function formatDelta(delta: number): string {
   return `${sign}${(delta * 100).toFixed(1)}pp`;
 }
 
-// ── Trend indicator (higher is better by default, invert for bounce) ──
+// ── Trend indicator ─────────────────────────────────────────
 function TrendDelta({
   delta,
   label,
@@ -127,7 +185,7 @@ function ConfidenceBar({ confidence }: { confidence: number }) {
   );
 }
 
-// ── Stat pill (compact metric) ──────────────────────────────
+// ── Stat pill ───────────────────────────────────────────────
 function StatPill({ label, value, accent }: { label: string; value: string; accent: string }) {
   return (
     <div className="rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3">
@@ -179,47 +237,306 @@ function CollapsibleHeader({
   );
 }
 
-// ── Single recommendation card ──────────────────────────────
-function RecommendationCard({ rec }: { rec: ManagerRecommendation }) {
+// ── Status badge ────────────────────────────────────────────
+function StatusBadge({ status }: { status: RecommendationStatus }) {
+  const styles: Record<RecommendationStatus, { bg: string; text: string; label: string }> = {
+    pending: { bg: 'bg-yellow-500/10', text: 'text-yellow-400', label: 'Pending Review' },
+    approved: { bg: 'bg-zbooni-green/10', text: 'text-zbooni-green', label: 'Approved' },
+    rejected: { bg: 'bg-red-500/10', text: 'text-red-400', label: 'Rejected' },
+    editing: { bg: 'bg-blue-500/10', text: 'text-blue-400', label: 'Editing' },
+  };
+  const s = styles[status];
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${s.bg} ${s.text}`}>
+      {status === 'approved' ? <Check className="h-2.5 w-2.5" /> : null}
+      {status === 'rejected' ? <X className="h-2.5 w-2.5" /> : null}
+      {s.label}
+    </span>
+  );
+}
+
+// ── Reject dialog ───────────────────────────────────────────
+function RejectDialog({
+  open,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState('');
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-card">
+        <DialogHeader>
+          <DialogTitle>Reject Recommendation</DialogTitle>
+          <DialogDescription>
+            Optionally provide a reason for rejecting this recommendation. This helps the AI agent learn from your feedback.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <Label htmlFor="reject-reason">Reason (optional)</Label>
+          <Input
+            id="reject-reason"
+            placeholder="e.g., Not applicable for current strategy..."
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="ghost" size="sm">Cancel</Button>
+          </DialogClose>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={() => {
+              onConfirm(reason);
+              setReason('');
+              onOpenChange(false);
+            }}
+          >
+            <X className="h-3.5 w-3.5" />
+            Reject
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Edit dialog ─────────────────────────────────────────────
+function EditDialog({
+  open,
+  onOpenChange,
+  recommendation,
+  onSave,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  recommendation: ManagerRecommendation;
+  onSave: (newValue: number | null) => void;
+}) {
+  const [editedValue, setEditedValue] = useState(
+    recommendation.recommendedValue !== null ? String(recommendation.recommendedValue) : '',
+  );
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-card">
+        <DialogHeader>
+          <DialogTitle>Edit Recommendation</DialogTitle>
+          <DialogDescription>
+            Modify the recommended value before applying. The original suggestion is preserved for comparison.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          {recommendation.field ? (
+            <div className="rounded-lg bg-white/[0.03] px-3 py-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/50">Field</p>
+              <p className="mt-0.5 font-mono text-sm font-medium">{recommendation.field}</p>
+            </div>
+          ) : null}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-muted-foreground/60">Current Value</Label>
+              <div className="rounded-lg border border-border/30 bg-zbooni-dark/40 px-3 py-2">
+                <span className="font-mono text-sm font-semibold text-red-400/80">
+                  {recommendation.currentValue !== null ? recommendation.currentValue : 'N/A'}
+                </span>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="new-value" className="text-[11px] text-muted-foreground/60">New Value</Label>
+              <Input
+                id="new-value"
+                type="text"
+                value={editedValue}
+                onChange={(e) => setEditedValue(e.target.value)}
+                placeholder="Enter value..."
+                className="font-mono"
+              />
+            </div>
+          </div>
+          <div className="rounded-lg bg-white/[0.03] px-3 py-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/50">Original Suggestion</p>
+            <p className="mt-0.5 font-mono text-sm text-muted-foreground/60">
+              {recommendation.recommendedValue !== null ? recommendation.recommendedValue : 'N/A'}
+            </p>
+          </div>
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="ghost" size="sm">Cancel</Button>
+          </DialogClose>
+          <Button
+            size="sm"
+            onClick={() => {
+              const parsed = editedValue !== '' ? parseFloat(editedValue) : null;
+              onSave(parsed !== null && !isNaN(parsed) ? parsed : null);
+              onOpenChange(false);
+            }}
+          >
+            <Check className="h-3.5 w-3.5" />
+            Save & Apply
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Single recommendation card with action buttons ──────────
+function RecommendationCard({
+  rec,
+  isPlaceholder,
+}: {
+  rec: ManagerRecommendation & { id?: string | undefined };
+  isPlaceholder?: boolean | undefined;
+}) {
+  const [status, setStatus] = useState<RecommendationStatus>('pending');
+  const [showRejectDialog, setShowRejectDialog] = useState(false);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState<string | null>(null);
+
   const style = RECOMMENDATION_STYLES[rec.type] ?? {
     bg: 'bg-muted/15',
     text: 'text-muted-foreground',
     label: rec.type,
   };
 
+  const isResolved = status === 'approved' || status === 'rejected';
+
   return (
-    <div className="rounded-xl border border-border/30 bg-zbooni-dark/30 p-4">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span
-            className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${style.bg} ${style.text}`}
-          >
-            {style.label}
-          </span>
-          {rec.field ? (
-            <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground/70">
-              {rec.field}
+    <>
+      <div
+        className={`rounded-xl border p-4 transition-all duration-300 ${
+          status === 'approved'
+            ? 'border-zbooni-green/20 bg-zbooni-green/[0.03]'
+            : status === 'rejected'
+              ? 'border-red-400/10 bg-red-400/[0.02] opacity-60'
+              : 'border-border/30 bg-zbooni-dark/30'
+        }`}
+      >
+        {/* Top row: type badge + confidence + status */}
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span
+              className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${style.bg} ${style.text}`}
+            >
+              {style.label}
             </span>
-          ) : null}
+            {rec.field ? (
+              <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground/70">
+                {rec.field}
+              </span>
+            ) : null}
+            {isPlaceholder ? (
+              <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground/40">
+                Example
+              </span>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-3">
+            <StatusBadge status={status} />
+            <ConfidenceBar confidence={rec.confidence} />
+          </div>
         </div>
-        <ConfidenceBar confidence={rec.confidence} />
+
+        {/* Reasoning text */}
+        <p className="mt-3 text-sm leading-relaxed text-muted-foreground/80">{rec.reasoning}</p>
+
+        {/* Suggested change */}
+        {rec.currentValue !== null && rec.recommendedValue !== null ? (
+          <div className="mt-3 flex items-center gap-2 rounded-lg bg-white/[0.03] px-3 py-2">
+            <span className="text-xs text-muted-foreground/50">Suggested change:</span>
+            <span className="font-mono text-sm font-semibold text-red-400/80">
+              {rec.currentValue}
+            </span>
+            <ArrowRight className="h-3 w-3 text-muted-foreground/40" />
+            <span className="font-mono text-sm font-semibold text-zbooni-green">
+              {rec.recommendedValue}
+            </span>
+          </div>
+        ) : null}
+
+        {/* Rejection reason (shown after rejection) */}
+        {status === 'rejected' && rejectionReason ? (
+          <div className="mt-3 rounded-lg bg-red-400/[0.05] px-3 py-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-red-400/60">Rejection Reason</p>
+            <p className="mt-0.5 text-xs text-muted-foreground/60">{rejectionReason}</p>
+          </div>
+        ) : null}
+
+        {/* Action buttons */}
+        <div className="mt-4 flex items-center justify-end gap-2 border-t border-border/20 pt-3">
+          {!isResolved ? (
+            <>
+              <Button
+                variant="ghost"
+                size="xs"
+                className="text-red-400/70 hover:bg-red-400/10 hover:text-red-400"
+                onClick={() => setShowRejectDialog(true)}
+              >
+                <X className="h-3 w-3" />
+                Reject
+              </Button>
+              <Button
+                variant="ghost"
+                size="xs"
+                className="text-blue-400/70 hover:bg-blue-400/10 hover:text-blue-400"
+                onClick={() => setShowEditDialog(true)}
+              >
+                <Pencil className="h-3 w-3" />
+                Edit
+              </Button>
+              <Button
+                size="xs"
+                className="bg-zbooni-green/15 text-zbooni-green hover:bg-zbooni-green/25"
+                onClick={() => setStatus('approved')}
+              >
+                <Check className="h-3 w-3" />
+                Approve
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="ghost"
+              size="xs"
+              className="text-muted-foreground/40 hover:text-muted-foreground/70"
+              onClick={() => {
+                setStatus('pending');
+                setRejectionReason(null);
+              }}
+            >
+              Undo
+            </Button>
+          )}
+        </div>
       </div>
 
-      <p className="mt-3 text-sm leading-relaxed text-muted-foreground/80">{rec.reasoning}</p>
+      <RejectDialog
+        open={showRejectDialog}
+        onOpenChange={setShowRejectDialog}
+        onConfirm={(reason) => {
+          setStatus('rejected');
+          setRejectionReason(reason || null);
+        }}
+      />
 
-      {rec.currentValue !== null && rec.recommendedValue !== null ? (
-        <div className="mt-3 flex items-center gap-2 rounded-lg bg-white/[0.03] px-3 py-2">
-          <span className="text-xs text-muted-foreground/50">Suggested change:</span>
-          <span className="font-mono text-sm font-semibold text-red-400/80">
-            {rec.currentValue}
-          </span>
-          <ArrowRight className="h-3 w-3 text-muted-foreground/40" />
-          <span className="font-mono text-sm font-semibold text-zbooni-green">
-            {rec.recommendedValue}
-          </span>
-        </div>
+      {showEditDialog ? (
+        <EditDialog
+          open={showEditDialog}
+          onOpenChange={setShowEditDialog}
+          recommendation={rec}
+          onSave={() => {
+            setStatus('approved');
+          }}
+        />
       ) : null}
-    </div>
+    </>
   );
 }
 
@@ -430,7 +747,7 @@ function AnalysisCard({ analysis }: { analysis: ManagerAnalysisResponse }) {
           />
         </div>
 
-        {/* Recommendations */}
+        {/* Recommendations with action buttons */}
         {analysis.recommendations.length > 0 ? (
           <div className="mt-6">
             <div className="mb-3 flex items-center gap-2">
@@ -511,6 +828,9 @@ export default function ManagerRecommendationsPage() {
     useCallback(() => apiClient.getManagerRecommendations(), [apiClient]),
   );
 
+  const hasData = data && data.items.length > 0;
+  const isEmpty = !isLoading && data && data.items.length === 0;
+
   return (
     <div className="space-y-6">
       {/* Page header */}
@@ -532,7 +852,6 @@ export default function ManagerRecommendationsPage() {
       {/* Loading state */}
       {isLoading && !data ? (
         <div className="space-y-4">
-          {/* Skeleton cards */}
           {[1, 2].map((i) => (
             <div
               key={i}
@@ -564,22 +883,58 @@ export default function ManagerRecommendationsPage() {
         </div>
       ) : null}
 
-      {/* Empty state */}
-      {!isLoading && data && data.items.length === 0 ? (
-        <div className="rounded-2xl border border-border/50 bg-card p-12 text-center shadow-sm">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-zbooni-teal/10">
-            <Sparkles className="h-7 w-7 text-zbooni-teal/60" />
+      {/* Empty state with placeholder recommendations */}
+      {isEmpty ? (
+        <div className="space-y-6">
+          {/* Illustration + explanation */}
+          <div className="rounded-2xl border border-border/50 bg-card p-12 text-center shadow-sm">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-zbooni-teal/10">
+              <Sparkles className="h-7 w-7 text-zbooni-teal/60" />
+            </div>
+            <h3 className="mt-4 text-base font-bold tracking-tight">No analyses yet</h3>
+            <p className="mx-auto mt-1.5 max-w-sm text-sm leading-relaxed text-muted-foreground/60">
+              The manager agent runs weekly to analyze outreach performance and generate
+              recommendations. Check back after your first week of messaging activity.
+            </p>
           </div>
-          <h3 className="mt-4 text-base font-bold tracking-tight">No analyses yet</h3>
-          <p className="mx-auto mt-1.5 max-w-sm text-sm leading-relaxed text-muted-foreground/60">
-            The manager agent runs weekly to analyze outreach performance and generate
-            recommendations. Check back after your first week of messaging activity.
-          </p>
+
+          {/* Placeholder recommendation cards */}
+          <div className="relative">
+            <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-yellow-400/[0.02] via-transparent to-zbooni-teal/[0.02]" />
+            <div className="relative space-y-4 rounded-3xl border border-border/30 p-6">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-yellow-400/10">
+                    <Lightbulb className="h-4 w-4 text-yellow-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold tracking-tight">Example Recommendations</h3>
+                    <p className="text-[11px] text-muted-foreground/50">
+                      These are sample recommendations the AI manager will generate
+                    </p>
+                  </div>
+                </div>
+                <span className="rounded-full bg-yellow-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-yellow-400">
+                  Preview
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                {PLACEHOLDER_RECOMMENDATIONS.map((rec) => (
+                  <RecommendationCard
+                    key={rec.id}
+                    rec={rec}
+                    isPlaceholder
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
       ) : null}
 
-      {/* Analysis cards */}
-      {data && data.items.length > 0 ? (
+      {/* Analysis cards (live data) */}
+      {hasData ? (
         <div className="space-y-6">
           {data.items.map((analysis) => (
             <AnalysisCard key={analysis.id} analysis={analysis} />

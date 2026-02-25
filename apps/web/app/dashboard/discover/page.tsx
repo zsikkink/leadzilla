@@ -9,6 +9,7 @@ import {
   Play,
   Rocket,
   Search,
+  Sparkles,
   Target,
   TrendingUp,
   Users,
@@ -16,27 +17,60 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { CustomSelect } from '../../../src/components/custom-select.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
+import { cn } from '../../../src/lib/utils.js';
 
-const PROVIDER_OPTIONS = [
-  { value: '', label: 'Auto (Best Match)' },
-  { value: 'APOLLO', label: 'Apollo' },
-  { value: 'BRAVE_SEARCH', label: 'Brave Search' },
-  { value: 'GOOGLE_PLACES', label: 'Google Places' },
-  { value: 'LINKEDIN_SCRAPE', label: 'LinkedIn Scrape' },
-  { value: 'COMPANY_SEARCH_FREE', label: 'Company Search' },
+// ── Provider options ──────────────────────────────────────
+const PROVIDER_OPTIONS: { value: string; label: string; description: string }[] = [
+  { value: '', label: 'Auto', description: 'Best match per ICP' },
+  { value: 'APOLLO', label: 'Apollo', description: 'B2B contacts' },
+  { value: 'BRAVE_SEARCH', label: 'Brave Search', description: 'Web results' },
+  { value: 'GOOGLE_PLACES', label: 'Google Places', description: 'Local businesses' },
+  { value: 'LINKEDIN_SCRAPE', label: 'LinkedIn', description: 'Professional profiles' },
+  { value: 'COMPANY_SEARCH_FREE', label: 'Company Search', description: 'Free company data' },
 ];
 
 const LIMIT_OPTIONS = [
-  { value: '25', label: '25 leads' },
-  { value: '50', label: '50 leads' },
-  { value: '100', label: '100 leads' },
-  { value: '250', label: '250 leads' },
-  { value: '500', label: '500 leads' },
-  { value: '1000', label: '1000 leads' },
+  { value: '25', label: '25' },
+  { value: '50', label: '50' },
+  { value: '100', label: '100' },
+  { value: '250', label: '250' },
+  { value: '500', label: '500' },
+  { value: '1000', label: '1000' },
 ];
+
+// Static recommended source mapping per ICP keyword pattern
+const RECOMMENDED_SOURCE_MAP: Record<string, { provider: string; reason: string }> = {
+  luxury: { provider: 'APOLLO', reason: 'Best for luxury B2B contacts' },
+  enterprise: { provider: 'APOLLO', reason: 'Deep B2B enrichment data' },
+  events: { provider: 'GOOGLE_PLACES', reason: 'Local event venues' },
+  restaurant: { provider: 'GOOGLE_PLACES', reason: 'Local business listings' },
+  retail: { provider: 'GOOGLE_PLACES', reason: 'Storefront discovery' },
+  saas: { provider: 'APOLLO', reason: 'Tech company contacts' },
+  ecommerce: { provider: 'BRAVE_SEARCH', reason: 'Web presence scanning' },
+  'e-commerce': { provider: 'BRAVE_SEARCH', reason: 'Web presence scanning' },
+  fintech: { provider: 'APOLLO', reason: 'Financial sector contacts' },
+  linkedin: { provider: 'LINKEDIN_SCRAPE', reason: 'Professional network' },
+  startup: { provider: 'LINKEDIN_SCRAPE', reason: 'Founder/exec profiles' },
+  local: { provider: 'GOOGLE_PLACES', reason: 'Local business focus' },
+};
+
+function getRecommendedSource(icp: IcpProfileResponse): { provider: string; reason: string } | null {
+  const searchText = `${icp.name} ${icp.description ?? ''} ${icp.targetIndustries.join(' ')}`.toLowerCase();
+  for (const [keyword, rec] of Object.entries(RECOMMENDED_SOURCE_MAP)) {
+    if (searchText.includes(keyword)) {
+      return rec;
+    }
+  }
+  return null;
+}
+
+function getProviderLabel(providerValue: string): string {
+  return PROVIDER_OPTIONS.find((p) => p.value === providerValue)?.label ?? providerValue;
+}
+
+// ── Sub-components ──────────────────────────────────────
 
 interface RunState {
   runId: string;
@@ -85,6 +119,8 @@ function ProgressBar({ processed, total }: { processed: number; total: number })
 }
 
 function IcpPreviewCard({ icp }: { icp: IcpProfileResponse }) {
+  const recommendation = getRecommendedSource(icp);
+
   return (
     <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
       <div className="flex items-start gap-3">
@@ -92,7 +128,15 @@ function IcpPreviewCard({ icp }: { icp: IcpProfileResponse }) {
           <Target className="h-5 w-5 text-zbooni-teal" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="font-bold">{icp.name}</p>
+          <div className="flex items-center gap-2">
+            <p className="font-bold">{icp.name}</p>
+            {recommendation ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-zbooni-teal/10 px-2 py-0.5 text-[10px] font-semibold text-zbooni-teal">
+                <Sparkles className="h-3 w-3" />
+                Best: {getProviderLabel(recommendation.provider)}
+              </span>
+            ) : null}
+          </div>
           {icp.description ? (
             <p className="mt-0.5 text-sm text-muted-foreground line-clamp-2">{icp.description}</p>
           ) : null}
@@ -147,11 +191,113 @@ function IcpPreviewCard({ icp }: { icp: IcpProfileResponse }) {
   );
 }
 
+// ── Pill selector components ──────────────────────────────
+
+function PillOption({
+  selected,
+  onClick,
+  children,
+  className,
+}: {
+  selected: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  className?: string | undefined;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-all duration-150',
+        selected
+          ? 'border-zbooni-teal/40 bg-zbooni-teal/10 text-zbooni-teal shadow-sm'
+          : 'border-border/40 bg-zbooni-dark/30 text-muted-foreground hover:border-border/60 hover:bg-zbooni-dark/50 hover:text-foreground',
+        className,
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function IcpCheckbox({
+  icp,
+  selected,
+  onToggle,
+}: {
+  icp: IcpProfileResponse;
+  selected: boolean;
+  onToggle: (id: string) => void;
+}) {
+  const recommendation = getRecommendedSource(icp);
+
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(icp.id)}
+      className={cn(
+        'flex items-start gap-3 rounded-xl border p-3 text-left transition-all duration-150',
+        selected
+          ? 'border-zbooni-teal/40 bg-zbooni-teal/5 shadow-sm'
+          : 'border-border/30 bg-zbooni-dark/20 hover:border-border/50 hover:bg-zbooni-dark/40',
+      )}
+    >
+      {/* Checkbox indicator */}
+      <div
+        className={cn(
+          'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 transition-colors duration-150',
+          selected
+            ? 'border-zbooni-teal bg-zbooni-teal text-zbooni-dark'
+            : 'border-border/50 bg-transparent',
+        )}
+      >
+        {selected ? (
+          <svg className="h-3 w-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={2.5}>
+            <path d="M2 6l3 3 5-5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ) : null}
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className={cn('text-sm font-semibold', selected ? 'text-foreground' : 'text-muted-foreground')}>
+            {icp.name}
+          </span>
+          {recommendation ? (
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-zbooni-teal/10 px-1.5 py-0.5 text-[10px] font-semibold text-zbooni-teal">
+              <Sparkles className="h-2.5 w-2.5" />
+              {getProviderLabel(recommendation.provider)}
+            </span>
+          ) : null}
+        </div>
+        {icp.description ? (
+          <p className="mt-0.5 text-xs text-muted-foreground/70 line-clamp-1">{icp.description}</p>
+        ) : null}
+        {icp.targetIndustries.length > 0 ? (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {icp.targetIndustries.slice(0, 3).map((ind) => (
+              <span key={ind} className="rounded bg-zbooni-dark/60 px-1.5 py-0.5 text-[10px] text-muted-foreground/60">
+                {ind}
+              </span>
+            ))}
+            {icp.targetIndustries.length > 3 ? (
+              <span className="text-[10px] text-muted-foreground/40">+{icp.targetIndustries.length - 3}</span>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </button>
+  );
+}
+
+// ── Main page ──────────────────────────────────────
+
 export default function DiscoverPage() {
   const { apiClient, user } = useAuth();
 
-  // Form state
-  const [selectedIcpId, setSelectedIcpId] = useState('');
+  // Form state: multi-ICP selection
+  const [selectedIcpIds, setSelectedIcpIds] = useState<Set<string>>(new Set());
   const [provider, setProvider] = useState('');
   const [limit, setLimit] = useState('25');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -166,14 +312,25 @@ export default function DiscoverPage() {
     useCallback(() => apiClient.listIcps({ page: 1, pageSize: 50, isActive: true }), [apiClient]),
   );
 
-  const selectedIcp = icps.data?.items.find((i) => i.id === selectedIcpId) ?? null;
+  // For the preview: show first selected ICP
+  const firstSelectedIcpId = selectedIcpIds.size > 0 ? Array.from(selectedIcpIds)[0] : null;
+  const selectedIcp = firstSelectedIcpId
+    ? (icps.data?.items.find((i) => i.id === firstSelectedIcpId) ?? null)
+    : null;
 
-  const icpOptions = [
-    { value: '', label: 'Select an ICP Profile...' },
-    ...(icps.data?.items.map((icp) => ({ value: icp.id, label: icp.name })) ?? []),
-  ];
+  const toggleIcp = (id: string) => {
+    setSelectedIcpIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
-  // Recent discovery records
+  // Recent discovery records — filter by first selected ICP
   const records = useApiQuery(
     useCallback(
       () =>
@@ -181,11 +338,11 @@ export default function DiscoverPage() {
           page: 1,
           pageSize: 10,
           includeQualityMetrics: true,
-          ...(selectedIcpId ? { icpProfileId: selectedIcpId } : {}),
+          ...(firstSelectedIcpId ? { icpProfileId: firstSelectedIcpId } : {}),
         }),
-      [apiClient, selectedIcpId],
+      [apiClient, firstSelectedIcpId],
     ),
-    [selectedIcpId],
+    [firstSelectedIcpId],
   );
 
   // Poll for run status
@@ -229,14 +386,18 @@ export default function DiscoverPage() {
   }, [activeRun, apiClient, records]);
 
   const handleStartDiscovery = async () => {
-    if (!selectedIcpId) return;
+    if (selectedIcpIds.size === 0) return;
 
     setIsSubmitting(true);
     setSubmitError(null);
 
     try {
+      // Launch a discovery run for each selected ICP
+      // For now, start the first one and track it; multi-ICP runs
+      // would be queued server-side
+      const icpId = Array.from(selectedIcpIds)[0]!;
       const result = await apiClient.createDiscoveryRun({
-        icpProfileId: selectedIcpId,
+        icpProfileId: icpId,
         ...(provider ? { provider: provider as DiscoveryProvider } : {}),
         limit: parseInt(limit, 10),
         ...(user?.id ? { requestedByUserId: user.id } : {}),
@@ -252,6 +413,17 @@ export default function DiscoverPage() {
         endedAt: null,
         errorMessage: null,
       });
+
+      // If multiple ICPs selected, fire off remaining runs (non-blocking)
+      const remainingIds = Array.from(selectedIcpIds).slice(1);
+      for (const id of remainingIds) {
+        void apiClient.createDiscoveryRun({
+          icpProfileId: id,
+          ...(provider ? { provider: provider as DiscoveryProvider } : {}),
+          limit: parseInt(limit, 10),
+          ...(user?.id ? { requestedByUserId: user.id } : {}),
+        });
+      }
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Failed to start discovery');
     } finally {
@@ -285,57 +457,94 @@ export default function DiscoverPage() {
           Configure Search
         </h2>
 
-        <div className="space-y-5">
-          {/* Step 1: Select ICP */}
+        <div className="space-y-6">
+          {/* Step 1: Select ICPs (multi-select with checkboxes) */}
           <div>
-            <div className="mb-2 flex items-center gap-2">
+            <div className="mb-3 flex items-center gap-2">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zbooni-teal/10 text-xs font-bold text-zbooni-teal">
                 1
               </span>
-              <label className="text-sm font-semibold">Select ICP Profile</label>
+              <label className="text-sm font-semibold">Select ICP Profiles</label>
+              {selectedIcpIds.size > 0 ? (
+                <span className="rounded-full bg-zbooni-teal/10 px-2 py-0.5 text-[11px] font-semibold text-zbooni-teal">
+                  {selectedIcpIds.size} selected
+                </span>
+              ) : null}
             </div>
-            <CustomSelect
-              value={selectedIcpId}
-              onChange={setSelectedIcpId}
-              options={icpOptions}
-              placeholder="Select an ICP Profile..."
-            />
+
+            {icps.isLoading ? (
+              <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
+                Loading profiles...
+              </div>
+            ) : null}
+
+            {icps.data && icps.data.items.length > 0 ? (
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {icps.data.items.map((icp) => (
+                  <IcpCheckbox
+                    key={icp.id}
+                    icp={icp}
+                    selected={selectedIcpIds.has(icp.id)}
+                    onToggle={toggleIcp}
+                  />
+                ))}
+              </div>
+            ) : null}
+
+            {icps.data && icps.data.items.length === 0 ? (
+              <p className="text-sm text-muted-foreground/60">No active ICP profiles found. Create one first.</p>
+            ) : null}
           </div>
 
           {/* ICP Preview */}
           {selectedIcp ? <IcpPreviewCard icp={selectedIcp} /> : null}
 
-          {/* Step 2: Provider */}
+          {/* Step 2: Provider — expanded inline pill selector */}
           <div>
-            <div className="mb-2 flex items-center gap-2">
+            <div className="mb-3 flex items-center gap-2">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zbooni-teal/10 text-xs font-bold text-zbooni-teal">
                 2
               </span>
               <label className="text-sm font-semibold">Data Source</label>
               <span className="text-xs text-muted-foreground">(optional)</span>
             </div>
-            <CustomSelect
-              value={provider}
-              onChange={setProvider}
-              options={PROVIDER_OPTIONS}
-              placeholder="Auto (Best Match)"
-            />
+            <div className="flex flex-wrap gap-2">
+              {PROVIDER_OPTIONS.map((opt) => (
+                <PillOption
+                  key={opt.value}
+                  selected={provider === opt.value}
+                  onClick={() => setProvider(opt.value)}
+                >
+                  <span>{opt.label}</span>
+                  <span className="hidden text-[10px] font-normal text-muted-foreground/70 sm:inline">
+                    {opt.description}
+                  </span>
+                </PillOption>
+              ))}
+            </div>
           </div>
 
-          {/* Step 3: Limit */}
+          {/* Step 3: Limit — expanded inline pill selector */}
           <div>
-            <div className="mb-2 flex items-center gap-2">
+            <div className="mb-3 flex items-center gap-2">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zbooni-teal/10 text-xs font-bold text-zbooni-teal">
                 3
               </span>
               <label className="text-sm font-semibold">Number of Leads</label>
             </div>
-            <CustomSelect
-              value={limit}
-              onChange={setLimit}
-              options={LIMIT_OPTIONS}
-              placeholder="25 leads"
-            />
+            <div className="flex flex-wrap gap-2">
+              {LIMIT_OPTIONS.map((opt) => (
+                <PillOption
+                  key={opt.value}
+                  selected={limit === opt.value}
+                  onClick={() => setLimit(opt.value)}
+                  className="min-w-[56px] justify-center"
+                >
+                  {opt.label}
+                </PillOption>
+              ))}
+            </div>
           </div>
 
           {/* Error */}
@@ -350,7 +559,7 @@ export default function DiscoverPage() {
           <button
             type="button"
             onClick={handleStartDiscovery}
-            disabled={!selectedIcpId || isSubmitting || !!isRunning}
+            disabled={selectedIcpIds.size === 0 || isSubmitting || !!isRunning}
             className="inline-flex w-full items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-zbooni-green to-zbooni-teal px-6 py-3 text-sm font-bold text-zbooni-dark shadow-lg shadow-zbooni-green/20 transition-all hover:shadow-xl hover:shadow-zbooni-green/30 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
           >
             {isSubmitting ? (
@@ -358,7 +567,13 @@ export default function DiscoverPage() {
             ) : (
               <Play className="h-4 w-4" />
             )}
-            {isSubmitting ? 'Starting...' : isRunning ? 'Discovery Running...' : 'Start Discovery'}
+            {isSubmitting
+              ? 'Starting...'
+              : isRunning
+                ? 'Discovery Running...'
+                : selectedIcpIds.size > 1
+                  ? `Start Discovery (${selectedIcpIds.size} ICPs)`
+                  : 'Start Discovery'}
           </button>
         </div>
       </div>

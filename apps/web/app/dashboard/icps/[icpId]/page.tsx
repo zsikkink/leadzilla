@@ -10,12 +10,14 @@ import {
   Plus,
   Star,
   Target,
+  Trash2,
   TrendingUp,
   X,
   Zap,
 } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useState } from 'react';
+import { toast } from 'sonner';
 
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
@@ -181,6 +183,22 @@ export default function IcpDetailPage() {
   const { apiClient } = useAuth();
   const router = useRouter();
   const [saving, setSaving] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await apiClient.deleteIcp(icpId);
+      toast.success('ICP profile deleted');
+      router.push('/dashboard/icps');
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete ICP profile');
+    } finally {
+      setDeleting(false);
+      setShowDeleteConfirm(false);
+    }
+  };
 
   const icp = useApiQuery(
     useCallback(() => apiClient.getIcp(icpId), [apiClient, icpId]),
@@ -489,6 +507,88 @@ export default function IcpDetailPage() {
                 </div>
               ));
             })()}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Danger Zone — Delete ICP */}
+      <div className="rounded-2xl border border-red-500/30 bg-red-500/5 p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-bold tracking-tight text-red-400">Danger Zone</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Permanently delete this ICP profile. This action cannot be undone.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowDeleteConfirm(true)}
+            className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-red-600/20 transition-all hover:bg-red-700 hover:shadow-red-600/30"
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete ICP Profile
+          </button>
+        </div>
+      </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowDeleteConfirm(false);
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-icp-title"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-red-500/30 bg-card p-8 shadow-xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-500/15">
+                <Trash2 className="h-5 w-5 text-red-400" />
+              </div>
+              <div>
+                <h2 id="delete-icp-title" className="text-lg font-extrabold tracking-tight">
+                  Delete ICP Profile
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  This will permanently remove &ldquo;{profile.name}&rdquo;
+                </p>
+              </div>
+            </div>
+
+            <p className="mb-6 text-sm text-muted-foreground">
+              All associated qualification rules, scoring data, and message history linked to this ICP will be affected. This action cannot be undone.
+            </p>
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deleting}
+                className="inline-flex h-11 flex-1 items-center justify-center rounded-xl border border-input text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 text-sm font-semibold text-white shadow-lg shadow-red-600/20 transition-all hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleting ? (
+                  <span className="flex items-center gap-2">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                    Deleting...
+                  </span>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" />
+                    Yes, Delete
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
