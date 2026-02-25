@@ -7,6 +7,7 @@ import type { Job, SendOptions } from 'pg-boss';
 import type { EmailRateLimiter } from '../messaging/email-rate-limiter.js';
 import type { WhatsAppRateLimiter } from '../messaging/rate-limiter.js';
 import { computeNextFollowUpAfter } from '../utils/jitter.js';
+import { assignAbVariant } from './message.generate.job.js';
 
 export const MESSAGE_SEND_JOB_NAME = 'message.send';
 export const MESSAGE_SEND_IDEMPOTENCY_KEY_PATTERN = 'message.send:${messageVariantId}';
@@ -110,6 +111,21 @@ export async function handleMessageSendJob(
       return;
     }
 
+    // Determine A/B variant assignment for tracking
+    const abVariant = assignAbVariant(send.lead.id);
+    const variantKey = send.messageVariant.variantKey ?? abVariant;
+
+    logger.info(
+      {
+        jobId: job.id,
+        sendId,
+        leadId: send.lead.id,
+        abVariant,
+        variantKey,
+      },
+      `A/B variant assignment: ${variantKey} (ab=${abVariant})`,
+    );
+
     const effectiveChannel = channel ?? send.channel;
 
     if (effectiveChannel === 'EMAIL') {
@@ -178,8 +194,8 @@ export async function handleMessageSendJob(
         ]);
 
         logger.info(
-          { jobId: job.id, sendId, providerMessageId: result.providerMessageId },
-          'Email sent successfully via Resend',
+          { jobId: job.id, sendId, providerMessageId: result.providerMessageId, variantKey, abVariant },
+          `Email sent successfully via Resend (variant=${variantKey})`,
         );
       } else if (result.status === 'retryable_error') {
         throw new Error(`Resend retryable error: ${result.failure.message}`);
@@ -286,8 +302,8 @@ export async function handleMessageSendJob(
         ]);
 
         logger.info(
-          { jobId: job.id, sendId, providerMessageId: result.providerMessageId },
-          'WhatsApp message sent via Trengo',
+          { jobId: job.id, sendId, providerMessageId: result.providerMessageId, variantKey, abVariant },
+          `WhatsApp message sent via Trengo (variant=${variantKey})`,
         );
       } else if (result.status === 'retryable_error') {
         throw new Error(`Trengo retryable error: ${result.failure.message}`);

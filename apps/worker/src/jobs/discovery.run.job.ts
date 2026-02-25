@@ -1328,6 +1328,43 @@ export async function handleDiscoveryRunJob(
     }
 
     const mergedLeads = mergeDiscoveryResults(providerResults);
+
+    // --- Early filtering: drop unenrichable leads ---
+    const icpTargetCountries = icpProfile.targetCountries.map((c) => c.trim().toLowerCase());
+    let filteredNoEmail = 0;
+    let filteredCountryMismatch = 0;
+
+    const filteredLeads = mergedLeads.filter((lead) => {
+      if (!lead.email || lead.email.trim() === '') {
+        filteredNoEmail += 1;
+        return false;
+      }
+      if (icpTargetCountries.length > 0 && lead.country) {
+        const normalizedCountry = lead.country.trim().toLowerCase();
+        if (!icpTargetCountries.includes(normalizedCountry)) {
+          filteredCountryMismatch += 1;
+          return false;
+        }
+      }
+      return true;
+    });
+
+    if (filteredNoEmail > 0 || filteredCountryMismatch > 0) {
+      logger.info(
+        {
+          jobId: job.id,
+          queue: job.name,
+          runId,
+          correlationId: effectiveCorrelationId,
+          totalMerged: mergedLeads.length,
+          filteredNoEmail,
+          filteredCountryMismatch,
+          remainingLeads: filteredLeads.length,
+        },
+        'Early filtering applied: dropped unenrichable leads before persistence',
+      );
+    }
+
     const primaryProviderResult =
       providerResults.find((result) => result.provider === selectedProvider) ??
       providerResults[0] ??
@@ -1369,7 +1406,7 @@ export async function handleDiscoveryRunJob(
       : [];
     const suppressedEmails = new Set(suppressedLeads.map((lead) => lead.email.trim().toLowerCase()));
 
-    const unsuppressedLeads = mergedLeads.filter((lead) => {
+    const unsuppressedLeads = filteredLeads.filter((lead) => {
       const emailKey = lead.email.trim().toLowerCase();
       if (suppressedEmails.has(emailKey)) {
         logger.info(
@@ -1394,7 +1431,7 @@ export async function handleDiscoveryRunJob(
           runId,
           correlationId: effectiveCorrelationId,
           suppressedCount: suppressedEmails.size,
-          totalDiscovered: mergedLeads.length,
+          totalDiscovered: filteredLeads.length,
           remainingCount: unsuppressedLeads.length,
         },
         `Filtered ${suppressedEmails.size} suppressed lead(s) from discovery results`,

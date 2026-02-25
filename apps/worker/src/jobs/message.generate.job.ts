@@ -55,6 +55,19 @@ function toInputJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
 
+/**
+ * Deterministically assign A/B variant based on leadId hash.
+ * Uses a simple string hash to split leads ~50/50 between variant_a and variant_b.
+ */
+export function assignAbVariant(leadId: string): 'variant_a' | 'variant_b' {
+  let hash = 0;
+  for (let i = 0; i < leadId.length; i++) {
+    const char = leadId.charCodeAt(i);
+    hash = ((hash << 5) - hash + char) | 0; // eslint-disable-line no-bitwise
+  }
+  return (hash & 1) === 0 ? 'variant_a' : 'variant_b'; // eslint-disable-line no-bitwise
+}
+
 export async function handleMessageGenerateJob(
   logger: MessageGenerateLogger,
   job: Job<MessageGenerateJobPayload>,
@@ -384,6 +397,9 @@ export async function handleMessageGenerateJob(
       }
     }
 
+    // Deterministically select A/B variant for this lead
+    const selectedVariantKey = assignAbVariant(leadId);
+
     const draft = await prisma.messageDraft.create({
       data: {
         leadId,
@@ -406,7 +422,7 @@ export async function handleMessageGenerateJob(
               bodyText: variantAContent.bodyText,
               bodyHtml: variantAContent.bodyHtml,
               ctaText: variantAContent.ctaText,
-              isSelected: autoApprove,
+              isSelected: autoApprove && selectedVariantKey === 'variant_a',
             },
             {
               variantKey: 'variant_b',
@@ -415,7 +431,7 @@ export async function handleMessageGenerateJob(
               bodyText: variantBContent.bodyText,
               bodyHtml: variantBContent.bodyHtml,
               ctaText: variantBContent.ctaText,
-              isSelected: false,
+              isSelected: autoApprove && selectedVariantKey === 'variant_b',
             },
           ],
         },
@@ -425,7 +441,7 @@ export async function handleMessageGenerateJob(
 
     // Auto-send for follow-ups
     if (autoApprove && deps?.boss) {
-      const selectedVariant = draft.variants.find((v) => v.variantKey === 'variant_a');
+      const selectedVariant = draft.variants.find((v) => v.variantKey === selectedVariantKey);
       if (selectedVariant) {
         const sendRecord = await prisma.messageSend.create({
           data: {

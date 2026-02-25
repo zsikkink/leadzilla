@@ -10,6 +10,7 @@ import {
   type ScoringComputeJobPayload,
 } from './scoring.compute.job.js';
 import { evaluateDeterministicScore, type DeterministicRule } from '../scoring/deterministic.js';
+import { computePopulationRates, detectFeatureDrift } from '../utils/feature-drift.js';
 
 export const FEATURES_COMPUTE_JOB_NAME = 'features.compute';
 export const FEATURES_COMPUTE_IDEMPOTENCY_KEY_PATTERN = 'features.compute:${leadId}:${snapshotVersion}';
@@ -46,6 +47,8 @@ export interface FeaturesComputeDependencies {
 }
 
 export const FEATURE_EXTRACTOR_VERSION = 'features_v1';
+export const DRIFT_DETECTION_MIN_BATCH_SIZE = 5;
+export const DRIFT_DETECTION_THRESHOLD = 0.3;
 export const FEATURE_KEYS = [
   'source_provider',
   'has_email',
@@ -698,6 +701,72 @@ export async function handleFeaturesComputeJob(
         singletonKey: `scoring.compute:${runId}:${leadId}:${icpProfileId}`,
         ...SCORING_COMPUTE_RETRY_OPTIONS,
       });
+    }
+
+    // --- Feature drift detection (lightweight, in-memory per batch) ---
+    try {
+      const currentBatchSnapshots = await prisma.leadFeatureSnapshot.findMany({
+        where: { icpProfileId, snapshotVersion },
+        select: { featuresJson: true },
+      });
+
+      if (currentBatchSnapshots.length >= DRIFT_DETECTION_MIN_BATCH_SIZE) {
+        const previousSnapshots = await prisma.leadFeatureSnapshot.findMany({
+          where: {
+            icpProfileId,
+            snapshotVersion: { lt: snapshotVersion },
+          },
+          select: { featuresJson: true },
+          orderBy: { computedAt: 'desc' },
+          take: 200,
+        });
+
+        if (previousSnapshots.length >= DRIFT_DETECTION_MIN_BATCH_SIZE) {
+          const featureKeys = FEATURE_KEYS as unknown as string[];
+          const previousRates = computePopulationRates(
+            previousSnapshots.map((s) => s.featuresJson as Record<string, unknown>),
+            featureKeys,
+          );
+          const currentRates = computePopulationRates(
+            currentBatchSnapshots.map((s) => s.featuresJson as Record<string, unknown>),
+            featureKeys,
+          );
+
+          const drifted = detectFeatureDrift(previousRates, currentRates, DRIFT_DETECTION_THRESHOLD);
+
+          if (drifted.length > 0) {
+            logger.warn(
+              {
+                jobId: job.id,
+                runId,
+                correlationId: effectiveCorrelationId,
+                icpProfileId,
+                snapshotVersion,
+                batchSize: currentBatchSnapshots.length,
+                previousBatchSize: previousSnapshots.length,
+                driftedFeatures: drifted.map((d) => ({
+                  feature: d.feature,
+                  previousRate: Number(d.previousRate.toFixed(3)),
+                  currentRate: d.currentRate,
+                })),
+              },
+              `Feature drift detected: ${drifted.length} feature(s) dropped to 0% (previously >30%)`,
+            );
+          }
+        }
+      }
+    } catch (driftError: unknown) {
+      // Drift detection is non-critical — never fail the job for it
+      logger.warn(
+        {
+          jobId: job.id,
+          runId,
+          correlationId: effectiveCorrelationId,
+          leadId,
+          error: driftError,
+        },
+        'Feature drift detection failed (non-critical)',
+      );
     }
 
     logger.info(

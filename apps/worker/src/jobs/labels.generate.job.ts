@@ -1,6 +1,8 @@
 import { prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
+import type { ModelTrainJobPayload } from './model.train.job.js';
+
 export const LABELS_GENERATE_JOB_NAME = 'labels.generate';
 export const LABELS_GENERATE_IDEMPOTENCY_KEY_PATTERN =
   'labels.generate:${feedbackEventId || `${from}:${to}` }';
@@ -29,6 +31,10 @@ export interface LabelsGenerateLogger {
   error: (object: Record<string, unknown>, message: string) => void;
 }
 
+export interface LabelsGenerateJobDependencies {
+  enqueueModelTrain?: ((payload: ModelTrainJobPayload) => Promise<void>) | undefined;
+}
+
 /** Feedback event types that indicate positive outcomes. */
 const POSITIVE_EVENT_TYPES = new Set(['REPLIED', 'MEETING_BOOKED', 'DEAL_WON']);
 /** Feedback event types that indicate negative outcomes. */
@@ -36,12 +42,13 @@ const NEGATIVE_EVENT_TYPES = new Set(['DEAL_LOST', 'UNSUBSCRIBED', 'BOUNCED']);
 
 /** Days after which a lead with no feedback is considered cold. */
 const COLD_LEAD_TIMEOUT_DAYS = 14;
-/** Minimum new labels before logging "retrain recommended". */
+/** Minimum new labels before auto-enqueuing model.train. */
 const RETRAIN_THRESHOLD = 50;
 
 export async function handleLabelsGenerateJob(
   logger: LabelsGenerateLogger,
   job: Job<LabelsGenerateJobPayload>,
+  deps?: LabelsGenerateJobDependencies,
 ): Promise<void> {
   const { runId, correlationId, from, to, leadId, feedbackEventId } = job.data;
 
@@ -145,8 +152,34 @@ export async function handleLabelsGenerateJob(
           newLabelCount,
           threshold: RETRAIN_THRESHOLD,
         },
-        'Retrain recommended: new label count exceeds threshold',
+        'Retrain threshold reached, enqueuing model.train',
       );
+
+      if (deps?.enqueueModelTrain) {
+        const trainRunId = `labels-triggered-${runId}-${Date.now()}`;
+        const trainPayload = {
+          runId: trainRunId,
+          trainingRunId: trainRunId,
+          trigger: 'FEEDBACK_THRESHOLD' as const,
+          windowDays: 90,
+          minSamples: 50,
+          activateIfPass: true,
+          correlationId: correlationId ?? job.id,
+        } satisfies ModelTrainJobPayload;
+
+        await deps.enqueueModelTrain(trainPayload);
+
+        logger.info(
+          {
+            jobId: job.id,
+            queue: job.name,
+            runId,
+            trainRunId,
+            newLabelCount,
+          },
+          'Enqueued model.train due to label threshold',
+        );
+      }
     }
 
     logger.info(

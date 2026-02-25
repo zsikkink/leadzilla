@@ -1,4 +1,5 @@
 import type {
+  AbInsightPerIcpItem,
   FunnelQuery,
   FunnelResponse,
   IcpBreakdownItem,
@@ -408,6 +409,7 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
       overallBounceRate: analysis.overallBounceRate,
       icpBreakdown: (analysis.icpBreakdownJson as unknown as IcpBreakdownItem[]) ?? [],
       variantBreakdown: (analysis.variantBreakdownJson as unknown as VariantBreakdownItem[]) ?? [],
+      abInsightsPerIcp: analysis.abInsightsPerIcpJson != null ? (analysis.abInsightsPerIcpJson as unknown as AbInsightPerIcpItem[]) : undefined,
       scoreBandBreakdown: (analysis.scoreBandBreakdownJson as unknown as ScoreBandBreakdownItem[]) ?? [],
       trend: analysis.trendJson as unknown as TrendComparison,
       recommendations: (analysis.recommendationsJson as unknown as ManagerRecommendation[]) ?? [],

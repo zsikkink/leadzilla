@@ -89,6 +89,7 @@ import {
 } from './jobs/model.evaluate.job.js';
 import {
   MODEL_TRAIN_JOB_NAME,
+  MODEL_TRAIN_RETRY_OPTIONS,
   handleModelTrainJob,
   type ModelTrainJobPayload,
 } from './jobs/model.train.job.js';
@@ -542,7 +543,15 @@ async function main(): Promise<void> {
     boss,
     logger,
     LABELS_GENERATE_JOB_NAME,
-    (jobLogger, job) => handleLabelsGenerateJob(jobLogger, job),
+    (jobLogger, job) =>
+      handleLabelsGenerateJob(jobLogger, job, {
+        enqueueModelTrain: async (payload) => {
+          await boss.send(MODEL_TRAIN_JOB_NAME, payload, {
+            singletonKey: `model.train:labels-triggered:${job.data.runId}`,
+            ...MODEL_TRAIN_RETRY_OPTIONS,
+          });
+        },
+      }),
   );
   await registerWorker<ScoringComputeJobPayload>(
     boss,

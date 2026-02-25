@@ -5,6 +5,7 @@ export const ManagerRecommendationTypeSchema = z.enum([
   'ADJUST_THRESHOLD',
   'PAUSE_ICP',
   'INCREASE_VOLUME',
+  'PREFER_VARIANT',
 ]);
 export type ManagerRecommendationType = z.infer<typeof ManagerRecommendationTypeSchema>;
 
@@ -46,6 +47,20 @@ export const VariantBreakdownItemSchema = z
   })
   .strict();
 export type VariantBreakdownItem = z.infer<typeof VariantBreakdownItemSchema>;
+
+export const AbInsightPerIcpItemSchema = z
+  .object({
+    icpProfileId: z.string(),
+    icpName: z.string(),
+    variantKey: z.string(),
+    sends: z.number().int().min(0),
+    replies: z.number().int().min(0),
+    replyRate: z.number(),
+    positiveOutcomes: z.number().int().min(0),
+    positiveRate: z.number(),
+  })
+  .strict();
+export type AbInsightPerIcpItem = z.infer<typeof AbInsightPerIcpItemSchema>;
 
 export const ScoreBandBreakdownItemSchema = z
   .object({
@@ -95,6 +110,7 @@ export const ManagerAnalysisResponseSchema = z
     overallBounceRate: z.number(),
     icpBreakdown: z.array(IcpBreakdownItemSchema),
     variantBreakdown: z.array(VariantBreakdownItemSchema),
+    abInsightsPerIcp: z.array(AbInsightPerIcpItemSchema).optional(),
     scoreBandBreakdown: z.array(ScoreBandBreakdownItemSchema),
     trend: TrendComparisonSchema,
     recommendations: z.array(ManagerRecommendationSchema),

@@ -1,4 +1,5 @@
 import type {
+  AbInsightPerIcpItem,
   IcpBreakdownItem,
   ManagerRecommendation,
   ScoreBandBreakdownItem,
@@ -183,6 +184,118 @@ async function computeVariantBreakdown(
   return results.sort((a, b) => b.replyRate - a.replyRate);
 }
 
+async function computeAbInsightsPerIcp(
+  weekStart: Date,
+  weekEnd: Date,
+): Promise<AbInsightPerIcpItem[]> {
+  // Fetch all sends with their variant key and ICP profile in the time window
+  const sends = await prisma.messageSend.findMany({
+    where: {
+      sentAt: { gte: weekStart, lt: weekEnd },
+      status: { in: ['SENT', 'DELIVERED', 'REPLIED'] },
+    },
+    select: {
+      id: true,
+      messageVariant: {
+        select: { variantKey: true },
+      },
+      messageDraft: {
+        select: {
+          icpProfileId: true,
+          icpProfile: { select: { name: true } },
+        },
+      },
+    },
+  });
+
+  // Group by (icpProfileId, variantKey)
+  const groupMap = new Map<
+    string,
+    { icpProfileId: string; icpName: string; variantKey: string; sendIds: string[]; sends: number; replies: number; positiveOutcomes: number }
+  >();
+
+  for (const send of sends) {
+    const icpId = send.messageDraft.icpProfileId;
+    const icpName = send.messageDraft.icpProfile.name;
+    const variantKey = send.messageVariant.variantKey;
+    const groupKey = `${icpId}:${variantKey}`;
+
+    const existing = groupMap.get(groupKey);
+    if (existing) {
+      existing.sends += 1;
+      existing.sendIds.push(send.id);
+    } else {
+      groupMap.set(groupKey, {
+        icpProfileId: icpId,
+        icpName,
+        variantKey,
+        sendIds: [send.id],
+        sends: 1,
+        replies: 0,
+        positiveOutcomes: 0,
+      });
+    }
+  }
+
+  // Batch-fetch reply and positive events for all sendIds
+  const allSendIds = sends.map((s) => s.id);
+  if (allSendIds.length > 0) {
+    const feedbackEvents = await prisma.feedbackEvent.findMany({
+      where: {
+        occurredAt: { gte: weekStart, lt: weekEnd },
+        eventType: { in: ['REPLIED', 'MEETING_BOOKED', 'DEAL_WON'] },
+        messageSendId: { in: allSendIds },
+      },
+      select: {
+        eventType: true,
+        messageSendId: true,
+        messageSend: {
+          select: {
+            messageVariant: { select: { variantKey: true } },
+            messageDraft: { select: { icpProfileId: true } },
+          },
+        },
+      },
+    });
+
+    for (const event of feedbackEvents) {
+      if (!event.messageSend) continue;
+      const icpId = event.messageSend.messageDraft.icpProfileId;
+      const variantKey = event.messageSend.messageVariant.variantKey;
+      const groupKey = `${icpId}:${variantKey}`;
+      const group = groupMap.get(groupKey);
+      if (group) {
+        if (event.eventType === 'REPLIED') {
+          group.replies += 1;
+        } else {
+          group.positiveOutcomes += 1;
+        }
+      }
+    }
+  }
+
+  const results: AbInsightPerIcpItem[] = [];
+  for (const [, data] of groupMap) {
+    results.push({
+      icpProfileId: data.icpProfileId,
+      icpName: data.icpName,
+      variantKey: data.variantKey,
+      sends: data.sends,
+      replies: data.replies,
+      replyRate: safeRate(data.replies, data.sends),
+      positiveOutcomes: data.positiveOutcomes,
+      positiveRate: safeRate(data.positiveOutcomes, data.sends),
+    });
+  }
+
+  // Sort by ICP, then variant for readable output
+  return results.sort((a, b) => {
+    const icpCmp = a.icpName.localeCompare(b.icpName);
+    if (icpCmp !== 0) return icpCmp;
+    return a.variantKey.localeCompare(b.variantKey);
+  });
+}
+
 async function computeScoreBandBreakdown(
   weekStart: Date,
   weekEnd: Date,
@@ -290,6 +403,7 @@ function generateRecommendations(
   variantBreakdown: VariantBreakdownItem[],
   scoreBandBreakdown: ScoreBandBreakdownItem[],
   trend: TrendComparison,
+  abInsightsPerIcp: AbInsightPerIcpItem[],
 ): ManagerRecommendation[] {
   const recommendations: ManagerRecommendation[] = [];
 
@@ -408,6 +522,42 @@ function generateRecommendations(
     }
   }
 
+  // 7. Per-ICP A/B variant insights — recommend preferred variant per ICP
+  const icpVariantPairs = new Map<string, AbInsightPerIcpItem[]>();
+  for (const item of abInsightsPerIcp) {
+    const existing = icpVariantPairs.get(item.icpProfileId);
+    if (existing) {
+      existing.push(item);
+    } else {
+      icpVariantPairs.set(item.icpProfileId, [item]);
+    }
+  }
+
+  for (const [icpId, variants] of icpVariantPairs) {
+    if (variants.length < 2) continue;
+
+    const sorted = [...variants].sort((a, b) => b.replyRate - a.replyRate);
+    const best = sorted[0]!;
+    const worst = sorted[sorted.length - 1]!;
+
+    // Only recommend if both have meaningful volume and significant difference
+    if (
+      best.sends >= 3 &&
+      worst.sends >= 3 &&
+      best.replyRate - worst.replyRate > 0.03
+    ) {
+      recommendations.push({
+        type: 'PREFER_VARIANT',
+        icpProfileId: icpId,
+        field: `ab:${best.variantKey}`,
+        currentValue: worst.replyRate,
+        recommendedValue: best.replyRate,
+        confidence: Math.min(0.85, 0.35 + (best.sends + worst.sends) * 0.015),
+        reasoning: `For ICP "${best.icpName}", variant "${best.variantKey}" has ${(best.replyRate * 100).toFixed(1)}% reply rate vs "${worst.variantKey}" at ${(worst.replyRate * 100).toFixed(1)}% (${best.sends + worst.sends} total sends). Consider preferring "${best.variantKey}" for this segment.`,
+      });
+    }
+  }
+
   return recommendations;
 }
 
@@ -442,12 +592,14 @@ export async function handleManagerAnalyzeJob(
       icpBreakdown,
       variantBreakdown,
       scoreBandBreakdown,
+      abInsightsPerIcp,
     ] = await Promise.all([
       computeWeekMetrics(weekStart, weekEnd),
       computeWeekMetrics(prevWeekStart, weekStart),
       computeIcpBreakdown(weekStart, weekEnd),
       computeVariantBreakdown(weekStart, weekEnd),
       computeScoreBandBreakdown(weekStart, weekEnd),
+      computeAbInsightsPerIcp(weekStart, weekEnd),
     ]);
 
     const currentReplyRate = safeRate(currentMetrics.replies, currentMetrics.sends);
@@ -481,6 +633,7 @@ export async function handleManagerAnalyzeJob(
       variantBreakdown,
       scoreBandBreakdown,
       trend,
+      abInsightsPerIcp,
     );
 
     // Persist analysis
@@ -500,6 +653,7 @@ export async function handleManagerAnalyzeJob(
         variantBreakdownJson: toInputJson(variantBreakdown),
         scoreBandBreakdownJson: toInputJson(scoreBandBreakdown),
         trendJson: toInputJson(trend),
+        abInsightsPerIcpJson: toInputJson(abInsightsPerIcp),
         recommendationsJson: toInputJson(recommendations),
         recommendationCount: recommendations.length,
       },
@@ -517,6 +671,25 @@ export async function handleManagerAnalyzeJob(
           confidence: rec.confidence,
         },
         `Recommendation: ${rec.reasoning}`,
+      );
+    }
+
+    // Log per-ICP A/B insights for visibility
+    for (const insight of abInsightsPerIcp) {
+      logger.info(
+        {
+          jobId: job.id,
+          runId,
+          icpProfileId: insight.icpProfileId,
+          icpName: insight.icpName,
+          variantKey: insight.variantKey,
+          sends: insight.sends,
+          replies: insight.replies,
+          replyRate: insight.replyRate,
+          positiveOutcomes: insight.positiveOutcomes,
+          positiveRate: insight.positiveRate,
+        },
+        `A/B insight: ICP "${insight.icpName}" variant "${insight.variantKey}" — ${insight.sends} sends, ${(insight.replyRate * 100).toFixed(1)}% reply rate`,
       );
     }
 
