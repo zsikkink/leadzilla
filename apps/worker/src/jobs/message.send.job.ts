@@ -4,6 +4,7 @@ import type { ResendAdapter, TrengoAdapter } from '@lead-flood/providers';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
+import type { EmailRateLimiter } from '../messaging/email-rate-limiter.js';
 import type { WhatsAppRateLimiter } from '../messaging/rate-limiter.js';
 import { computeNextFollowUpAfter } from '../utils/jitter.js';
 
@@ -38,6 +39,7 @@ export interface MessageSendJobDependencies {
   resendAdapter: ResendAdapter;
   trengoAdapter: TrengoAdapter;
   rateLimiter?: WhatsAppRateLimiter | undefined;
+  emailRateLimiter?: EmailRateLimiter | undefined;
   boss?: Pick<PgBoss, 'send'> | undefined;
 }
 
@@ -82,6 +84,32 @@ export async function handleMessageSendJob(
       return;
     }
 
+    // --- Global suppression check: skip leads that have bounced or unsubscribed ---
+    const suppressionEvent = await prisma.feedbackEvent.findFirst({
+      where: {
+        leadId: send.lead.id,
+        eventType: { in: ['BOUNCED', 'UNSUBSCRIBED'] },
+      },
+      select: { id: true, eventType: true, occurredAt: true },
+      orderBy: { occurredAt: 'desc' },
+    });
+
+    if (suppressionEvent) {
+      const reason = `Lead suppressed: ${suppressionEvent.eventType} event on ${suppressionEvent.occurredAt.toISOString()}`;
+      await markFailed(sendId, 'SUPPRESSED', reason);
+      logger.info(
+        {
+          jobId: job.id,
+          sendId,
+          leadId: send.lead.id,
+          suppressionEventId: suppressionEvent.id,
+          suppressionType: suppressionEvent.eventType,
+        },
+        `Skipping message send — lead is on suppression list (${suppressionEvent.eventType})`,
+      );
+      return;
+    }
+
     const effectiveChannel = channel ?? send.channel;
 
     if (effectiveChannel === 'EMAIL') {
@@ -89,6 +117,36 @@ export async function handleMessageSendJob(
         await markFailed(sendId, 'PROVIDER_NOT_CONFIGURED', 'Resend adapter not available');
         logger.error({ jobId: job.id, sendId }, 'Resend adapter not configured');
         return;
+      }
+
+      // Email rate limit check
+      if (deps.emailRateLimiter) {
+        const rateCheck = await deps.emailRateLimiter.canSend();
+        if (!rateCheck.allowed) {
+          // Re-enqueue for next send window instead of failing
+          if (deps.boss && rateCheck.nextWindowAt) {
+            await deps.boss.send(MESSAGE_SEND_JOB_NAME, job.data, {
+              singletonKey: `message.send:${sendId}:deferred`,
+              startAfter: rateCheck.nextWindowAt,
+              ...MESSAGE_SEND_RETRY_OPTIONS,
+            });
+            logger.info(
+              {
+                jobId: job.id,
+                sendId,
+                reason: rateCheck.reason,
+                nextWindowAt: rateCheck.nextWindowAt.toISOString(),
+              },
+              'Email send rate-limited, re-enqueued for next window',
+            );
+          } else {
+            logger.warn(
+              { jobId: job.id, sendId, reason: rateCheck.reason },
+              'Email send rate-limited but no boss to re-enqueue',
+            );
+          }
+          return;
+        }
       }
 
       const result = await deps.resendAdapter.sendEmail({

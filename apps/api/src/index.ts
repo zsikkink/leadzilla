@@ -382,6 +382,7 @@ async function main(): Promise<void> {
     },
     enqueueReplyClassify,
     trengoWebhookSecret: env.TRENGO_WEBHOOK_SECRET,
+    resendWebhookSecret: env.RESEND_WEBHOOK_SECRET,
     triggerDiscoverySeedJob,
     triggerDiscoveryTaskRun,
     ...(env.ADMIN_API_KEY ? { adminApiKey: env.ADMIN_API_KEY } : {}),

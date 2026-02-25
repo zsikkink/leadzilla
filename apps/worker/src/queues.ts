@@ -35,6 +35,7 @@ import {
   SCORING_COMPUTE_JOB_NAME,
   SCORING_COMPUTE_RETRY_OPTIONS,
 } from './jobs/scoring.compute.job.js';
+import { DLQ_JOB_NAME, DLQ_PROCESS_RETRY_OPTIONS } from './jobs/dlq.process.job.js';
 
 export const HEARTBEAT_QUEUE_NAME = 'system.heartbeat';
 
@@ -154,6 +155,10 @@ export const WORKER_QUEUE_DEFINITIONS: readonly WorkerQueueDefinition[] = [
   {
     name: MANAGER_ANALYZE_JOB_NAME,
     retryOptions: normalizeRetryOptions(MANAGER_ANALYZE_JOB_NAME, MANAGER_ANALYZE_RETRY_OPTIONS),
+  },
+  {
+    name: DLQ_JOB_NAME,
+    retryOptions: normalizeRetryOptions(DLQ_JOB_NAME, DLQ_PROCESS_RETRY_OPTIONS),
   },
 ] as const;
 

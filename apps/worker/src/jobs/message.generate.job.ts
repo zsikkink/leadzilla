@@ -4,7 +4,12 @@ import type { OpenAiAdapter } from '@lead-flood/providers';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
-import { validateMessageVariant, buildStricterPromptSuffix } from '../messaging/validate-message.js';
+import {
+  validateMessageVariant,
+  buildStricterPromptSuffix,
+  checkNegativeKeywords,
+  buildNegativeKeywordPromptSuffix,
+} from '../messaging/validate-message.js';
 import { getFallbackForChannel } from '../messaging/fallback-templates.js';
 import { MESSAGE_SEND_JOB_NAME, MESSAGE_SEND_RETRY_OPTIONS, type MessageSendJobPayload } from './message.send.job.js';
 
@@ -81,6 +86,46 @@ export async function handleMessageGenerateJob(
       return;
     }
 
+    // Cross-ICP dedup: skip if this lead already has an active message from ANY ICP
+    const existingDraft = await prisma.messageDraft.findFirst({
+      where: {
+        leadId,
+        approvalStatus: { in: ['PENDING', 'APPROVED', 'AUTO_APPROVED'] },
+      },
+      select: { id: true, icpProfileId: true, icpProfile: { select: { name: true } } },
+    });
+
+    if (!existingDraft) {
+      const existingSend = await prisma.messageSend.findFirst({
+        where: {
+          leadId,
+          status: { in: ['QUEUED', 'SENT', 'DELIVERED'] },
+        },
+        select: {
+          id: true,
+          messageDraft: {
+            select: { icpProfileId: true, icpProfile: { select: { name: true } } },
+          },
+        },
+      });
+
+      if (existingSend) {
+        const icpName = existingSend.messageDraft.icpProfile.name;
+        logger.info(
+          { jobId: job.id, leadId, existingSendId: existingSend.id, existingIcpProfileId: existingSend.messageDraft.icpProfileId },
+          `Lead already has active message from ICP ${icpName}, skipping`,
+        );
+        return;
+      }
+    } else {
+      const icpName = existingDraft.icpProfile.name;
+      logger.info(
+        { jobId: job.id, leadId, existingDraftId: existingDraft.id, existingIcpProfileId: existingDraft.icpProfileId },
+        `Lead already has active message from ICP ${icpName}, skipping`,
+      );
+      return;
+    }
+
     const icpProfile = await prisma.icpProfile.findUnique({
       where: { id: icpProfileId },
       select: { description: true, featureList: true },
@@ -146,7 +191,16 @@ export async function handleMessageGenerateJob(
       pitchedFeature = candidates[followUpNumber % candidates.length] ?? candidates[0] ?? null;
     }
 
-    const resolvedChannel = channel ?? 'WHATSAPP';
+    let resolvedChannel = channel ?? 'WHATSAPP';
+
+    // Phone validation: fall back to EMAIL if lead has no phone for WhatsApp
+    if (resolvedChannel === 'WHATSAPP' && (!lead.phone || lead.phone.trim() === '')) {
+      logger.info(
+        { jobId: job.id, leadId },
+        `Lead ${leadId} has no phone, falling back from WHATSAPP to EMAIL`,
+      );
+      resolvedChannel = 'EMAIL';
+    }
 
     let generatedByModel = 'stub';
     let variantAContent = { subject: null as string | null, bodyText: 'Message generation pending', bodyHtml: null as string | null, ctaText: null as string | null };
@@ -265,6 +319,69 @@ export async function handleMessageGenerateJob(
       generatedByModel = 'fallback-template';
       variantAContent = fallback;
       variantBContent = fallback;
+    }
+
+    // -----------------------------------------------------------------------
+    // Negative keyword filter — catch Zbooni ICP disqualification signals
+    // Runs after validation/cleaning, before persisting to DB.
+    // -----------------------------------------------------------------------
+    if (deps?.openAiAdapter?.isConfigured && generatedByModel !== 'fallback-template') {
+      const nkCheckA = checkNegativeKeywords(variantAContent.bodyText);
+      const nkCheckB = checkNegativeKeywords(variantBContent.bodyText);
+
+      const allFoundKeywords = [...new Set([...nkCheckA.matches, ...nkCheckB.matches])];
+
+      if (allFoundKeywords.length > 0) {
+        logger.warn(
+          {
+            jobId: job.id,
+            leadId,
+            variantAKeywords: nkCheckA.matches,
+            variantBKeywords: nkCheckB.matches,
+          },
+          'Negative keywords detected in generated variants, attempting regeneration',
+        );
+
+        const nkPromptSuffix = buildNegativeKeywordPromptSuffix(allFoundKeywords);
+        const nkRetryContext = {
+          ...groundingContext,
+          icpDescription: `${groundingContext.icpDescription}\n\n${nkPromptSuffix}`,
+        };
+
+        const nkRetryResult = await deps.openAiAdapter.generateMessageVariants(nkRetryContext);
+
+        if (nkRetryResult.status === 'success') {
+          generatedByModel = nkRetryResult.data.model;
+          const retryVarA = nkRetryResult.data.variant_a;
+          const retryVarB = nkRetryResult.data.variant_b;
+
+          const nkRecheckA = checkNegativeKeywords(retryVarA.bodyText);
+          const nkRecheckB = checkNegativeKeywords(retryVarB.bodyText);
+
+          if (!nkRecheckA.found) {
+            variantAContent = retryVarA;
+          } else {
+            logger.warn(
+              { jobId: job.id, leadId, keywords: nkRecheckA.matches },
+              'Variant A still contains negative keywords after regeneration, proceeding anyway',
+            );
+          }
+
+          if (!nkRecheckB.found) {
+            variantBContent = retryVarB;
+          } else {
+            logger.warn(
+              { jobId: job.id, leadId, keywords: nkRecheckB.matches },
+              'Variant B still contains negative keywords after regeneration, proceeding anyway',
+            );
+          }
+        } else {
+          logger.warn(
+            { jobId: job.id, leadId, status: nkRetryResult.status },
+            'Negative keyword regeneration failed, proceeding with original variants',
+          );
+        }
+      }
     }
 
     const draft = await prisma.messageDraft.create({

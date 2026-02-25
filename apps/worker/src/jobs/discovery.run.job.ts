@@ -1309,11 +1309,60 @@ export async function handleDiscoveryRunJob(
       throw new Error(`All discovery providers failed for run ${runId}: ${failedProviders}`);
     }
 
+    // --- Global suppression check: filter out leads with BOUNCED/UNSUBSCRIBED feedback ---
+    const discoveredEmails = mergedLeads.map((lead) => lead.email.trim().toLowerCase());
+    const suppressedLeads = discoveredEmails.length > 0
+      ? await prisma.lead.findMany({
+          where: {
+            email: { in: discoveredEmails },
+            feedbackEvents: {
+              some: {
+                eventType: { in: ['BOUNCED', 'UNSUBSCRIBED'] },
+              },
+            },
+          },
+          select: { email: true },
+        })
+      : [];
+    const suppressedEmails = new Set(suppressedLeads.map((lead) => lead.email.trim().toLowerCase()));
+
+    const unsuppressedLeads = mergedLeads.filter((lead) => {
+      const emailKey = lead.email.trim().toLowerCase();
+      if (suppressedEmails.has(emailKey)) {
+        logger.info(
+          {
+            jobId: job.id,
+            runId,
+            correlationId: effectiveCorrelationId,
+            email: lead.email,
+            provider: lead.provider,
+          },
+          'Skipping discovered lead — email is on suppression list (BOUNCED/UNSUBSCRIBED)',
+        );
+        return false;
+      }
+      return true;
+    });
+
+    if (suppressedEmails.size > 0) {
+      logger.info(
+        {
+          jobId: job.id,
+          runId,
+          correlationId: effectiveCorrelationId,
+          suppressedCount: suppressedEmails.size,
+          totalDiscovered: mergedLeads.length,
+          remainingCount: unsuppressedLeads.length,
+        },
+        `Filtered ${suppressedEmails.size} suppressed lead(s) from discovery results`,
+      );
+    }
+
     let createdLeads = 0;
     let enqueuedEnrichmentJobs = 0;
     let persistedDiscoveryRecords = 0;
 
-    for (const discoveredLead of mergedLeads) {
+    for (const discoveredLead of unsuppressedLeads) {
       const fallbackName = deriveLeadName(discoveredLead.email);
       const existingLead = await prisma.lead.findUnique({
         where: { email: discoveredLead.email },
@@ -1466,7 +1515,7 @@ export async function handleDiscoveryRunJob(
       select: { result: true },
     });
     const existingProgress = readRunProgress(existingRunExecution?.result ?? null);
-    const pageFailedItems = Math.max(mergedLeads.length - persistedDiscoveryRecords, 0);
+    const pageFailedItems = Math.max(unsuppressedLeads.length - persistedDiscoveryRecords, 0);
     const updatedProgress: DiscoveryRunProgress = {
       processedItems: existingProgress.processedItems + persistedDiscoveryRecords,
       failedItems: existingProgress.failedItems + pageFailedItems,
@@ -1495,6 +1544,7 @@ export async function handleDiscoveryRunJob(
         provider: selectedProvider,
         providersRan: providerResults.map((result) => result.provider),
         providerFailures: providerErrors.length,
+        suppressedLeads: suppressedEmails.size,
         createdLeads,
         persistedDiscoveryRecords,
         enqueuedEnrichmentJobs,

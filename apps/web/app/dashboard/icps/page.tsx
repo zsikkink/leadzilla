@@ -252,7 +252,7 @@ export default function IcpsPage() {
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   className="flex w-full rounded-xl border border-input bg-background px-4 py-3 text-sm transition-colors placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
-                  placeholder="Describe your ideal customer profile..."
+                  placeholder="Include: target company types, pain points (what's broken today), buying triggers (when they're most receptive), features to pitch, and objections to overcome.&#10;&#10;Example: 'Luxury yacht charters struggling with international payment failures. Average deal AED 5K-100K. Pain: Failed Amex/ApplePay kills bookings. Win with: Multi-MID retries, instant confirmation, live support.'"
                 />
               </div>
 

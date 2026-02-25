@@ -53,6 +53,7 @@ const ApiEnvSchema = z.object({
   OPENAI_API_KEY: z.string().min(1).optional(),
   OPENAI_GENERATION_MODEL: z.string().min(1).optional(),
   TRENGO_WEBHOOK_SECRET: z.string().min(1).optional(),
+  RESEND_WEBHOOK_SECRET: z.string().min(1).optional(),
   ADMIN_API_KEY: z.string().min(1).optional(),
 });
 

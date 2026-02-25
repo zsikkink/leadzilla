@@ -34,6 +34,11 @@ import {
   type ScoringComputeJobPayload,
   SCORING_COMPUTE_RETRY_OPTIONS,
 } from './jobs/scoring.compute.job.js';
+import {
+  DLQ_JOB_NAME,
+  type DlqProcessJobPayload,
+  DLQ_PROCESS_RETRY_OPTIONS,
+} from './jobs/dlq.process.job.js';
 import { HEARTBEAT_QUEUE_NAME, HEARTBEAT_RETRY_OPTIONS } from './queues.js';
 
 const ONE_DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -152,6 +157,18 @@ export async function registerWorkerSchedules(boss: Pick<PgBoss, 'schedule'>): P
     {
       singletonKey: 'schedule:followup.check',
       ...FOLLOWUP_CHECK_RETRY_OPTIONS,
+    },
+  );
+
+  await boss.schedule(
+    DLQ_JOB_NAME,
+    '0 * * * *',
+    {
+      correlationId: 'scheduler:dlq.process',
+    } satisfies DlqProcessJobPayload,
+    {
+      singletonKey: 'schedule:dlq.process',
+      ...DLQ_PROCESS_RETRY_OPTIONS,
     },
   );
 }

@@ -169,3 +169,42 @@ export function buildStricterPromptSuffix(channel: MessageChannel): string {
     '- Write a professional, natural message.',
   ].join(' ');
 }
+
+// ---------------------------------------------------------------------------
+// Negative keyword filter — Zbooni ICP disqualification signals
+// These terms misrepresent Zbooni's offering and must not appear in outreach.
+// ---------------------------------------------------------------------------
+
+export const NEGATIVE_KEYWORDS: string[] = [
+  'subscription',
+  'recurring billing',
+  'lowest fees',
+  'cheapest',
+  'automated checkout',
+  'web checkout',
+  'just need a payment link',
+  'sku-based',
+  'low-ticket ecommerce',
+];
+
+export interface NegativeKeywordResult {
+  found: boolean;
+  matches: string[];
+}
+
+/** Check a variant's bodyText for any Zbooni-disqualifying negative keywords. */
+export function checkNegativeKeywords(bodyText: string): NegativeKeywordResult {
+  const lower = bodyText.toLowerCase();
+  const matches = NEGATIVE_KEYWORDS.filter((kw) => lower.includes(kw.toLowerCase()));
+  return { found: matches.length > 0, matches };
+}
+
+/** Builds a prompt suffix that explicitly forbids the given negative keywords. */
+export function buildNegativeKeywordPromptSuffix(foundKeywords: string[]): string {
+  return [
+    'CRITICAL — DO NOT mention the following terms or concepts in the message:',
+    ...foundKeywords.map((kw) => `- "${kw}"`),
+    'These do not represent what Zbooni offers. Zbooni is a conversation-first commerce platform,',
+    'not a subscription, web-checkout, or low-price competitor.',
+  ].join('\n');
+}

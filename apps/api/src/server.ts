@@ -92,6 +92,7 @@ export interface BuildServerOptions {
   enqueueAnalyticsRollup?: ((payload: AnalyticsRollupJobPayload) => Promise<void>) | undefined;
   enqueueReplyClassify?: ((payload: ReplyClassifyJobPayload) => Promise<void>) | undefined;
   trengoWebhookSecret?: string | undefined;
+  resendWebhookSecret?: string | undefined;
   triggerDiscoverySeedJob?: ((input: RunDiscoverySeedRequest) => Promise<TriggerJobRunResponse>) | undefined;
   triggerDiscoveryTaskRun?: ((input: RunDiscoveryTasksRequest) => Promise<TriggerJobRunResponse>) | undefined;
   adminApiKey?: string | undefined;
@@ -153,9 +154,10 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
   });
 
   // Public webhook routes - no auth, signature-verified
-  if (options.trengoWebhookSecret) {
+  if (options.trengoWebhookSecret || options.resendWebhookSecret) {
     registerWebhookRoutes(app, {
       trengoWebhookSecret: options.trengoWebhookSecret,
+      resendWebhookSecret: options.resendWebhookSecret,
       enqueueReplyClassify: options.enqueueReplyClassify,
     });
   }

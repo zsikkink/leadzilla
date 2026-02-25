@@ -110,6 +110,7 @@ const WorkerEnvSchema = z.object({
   TRENGO_TEMPLATE_ID: z.string().min(1).optional(),
   MESSAGING_ENABLED: envBoolean.default(true),
   WHATSAPP_DAILY_SEND_LIMIT: z.coerce.number().int().min(1).default(50),
+  EMAIL_DAILY_SEND_LIMIT: z.coerce.number().int().min(1).default(10),
   SCORING_DETERMINISTIC_WEIGHT: z.coerce.number().min(0).max(1).default(0.6),
   SCORING_AI_WEIGHT: z.coerce.number().min(0).max(1).default(0.4),
   SLACK_WEBHOOK_URL: z.string().url().optional(),

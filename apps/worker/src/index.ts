@@ -107,7 +107,13 @@ import {
   handleScoringComputeJob,
   type ScoringComputeJobPayload,
 } from './jobs/scoring.compute.job.js';
+import {
+  DLQ_JOB_NAME,
+  handleDlqProcessJob,
+  type DlqProcessJobPayload,
+} from './jobs/dlq.process.job.js';
 import { buildDefaultWorkerId, startJobRequestDispatcher } from './job-requests/dispatcher.js';
+import { EmailRateLimiter } from './messaging/email-rate-limiter.js';
 import { WhatsAppRateLimiter } from './messaging/rate-limiter.js';
 import { dispatchPendingOutboxEvents } from './outbox-dispatcher.js';
 import { ensureWorkerQueues, HEARTBEAT_QUEUE_NAME } from './queues.js';
@@ -336,6 +342,10 @@ async function main(): Promise<void> {
     dailySendLimit: env.WHATSAPP_DAILY_SEND_LIMIT,
   });
 
+  const emailRateLimiter = new EmailRateLimiter(prisma, {
+    dailySendLimit: env.EMAIL_DAILY_SEND_LIMIT,
+  });
+
   let outboxDispatchRunning = false;
   const runOutboxDispatch = async (): Promise<void> => {
     if (outboxDispatchRunning) {
@@ -562,6 +572,7 @@ async function main(): Promise<void> {
         resendAdapter,
         trengoAdapter,
         rateLimiter: whatsAppRateLimiter,
+        emailRateLimiter,
         boss,
       }),
   );
@@ -600,6 +611,12 @@ async function main(): Promise<void> {
         trengoBaseUrl: env.TRENGO_BASE_URL,
         trengoInternalConversationId: env.TRENGO_INTERNAL_CONVERSATION_ID,
       }),
+  );
+  await registerWorker<DlqProcessJobPayload>(
+    boss,
+    logger,
+    DLQ_JOB_NAME,
+    (jobLogger, job) => handleDlqProcessJob(jobLogger, job, { boss }),
   );
 
   await registerWorker<ManagerAnalyzeJobPayload>(
