@@ -391,15 +391,16 @@ export async function handleFeaturesComputeJob(
       where: { id: leadId },
     });
 
-    if (!lead) {
+    if (!lead || lead.deletedAt) {
       logger.warn(
         {
           jobId: job.id,
           runId,
           correlationId: effectiveCorrelationId,
           leadId,
+          softDeleted: lead?.deletedAt ? true : undefined,
         },
-        'Skipping features.compute job because lead was not found',
+        lead?.deletedAt ? 'Skipping soft-deleted lead' : 'Skipping features.compute job because lead was not found',
       );
       return;
     }

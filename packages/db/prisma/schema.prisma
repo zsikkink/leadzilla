@@ -228,6 +228,7 @@ model Lead {
   @@index([status])
   @@index([source])
   @@index([phone])
+  @@index([deletedAt])
 }
 
 model JobExecution {
@@ -290,8 +291,8 @@ model IcpProfile {
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
 
+  @@unique([name])
   @@index([isActive])
-  @@index([name])
 }
 
 model QualificationRule {
@@ -474,7 +475,7 @@ model LeadScorePrediction {
   featureSnapshotId String
   featureSnapshot   LeadFeatureSnapshot @relation(fields: [featureSnapshotId], references: [id], onDelete: Cascade)
   modelVersionId    String
-  modelVersion      ModelVersion       @relation(fields: [modelVersionId], references: [id], onDelete: Cascade)
+  modelVersion      ModelVersion       @relation(fields: [modelVersionId], references: [id], onDelete: Restrict)
   deterministicScore Float
   logisticScore     Float
   blendedScore      Float
@@ -531,6 +532,7 @@ model MessageDraft {
   followUpNumber       Int                   @default(0)
   pitchedFeature       String?
   parentMessageSendId  String?
+  parentMessageSend    MessageSend?          @relation("followUpChain", fields: [parentMessageSendId], references: [id], onDelete: SetNull)
   variants             MessageVariant[]
   messageSends         MessageSend[]
   createdAt            DateTime              @default(now())
@@ -539,6 +541,7 @@ model MessageDraft {
   @@index([leadId, createdAt])
   @@index([icpProfileId, createdAt])
   @@index([approvalStatus])
+  @@index([leadId, approvalStatus])
 }
 
 model MessageVariant {
@@ -567,7 +570,7 @@ model MessageSend {
   messageDraftId          String
   messageDraft            MessageDraft      @relation(fields: [messageDraftId], references: [id], onDelete: Cascade)
   messageVariantId        String
-  messageVariant          MessageVariant    @relation(fields: [messageVariantId], references: [id], onDelete: Cascade)
+  messageVariant          MessageVariant    @relation(fields: [messageVariantId], references: [id], onDelete: Restrict)
   channel                 MessageChannel    @default(EMAIL)
   provider                SendProvider      @default(RESEND)
   providerMessageId       String?
@@ -583,6 +586,7 @@ model MessageSend {
   failureCode             String?
   failureReason           String?
   feedbackEvents          FeedbackEvent[]
+  followUpDrafts          MessageDraft[]    @relation("followUpChain")
   createdAt               DateTime          @default(now())
   updatedAt               DateTime          @updatedAt
 
@@ -591,6 +595,8 @@ model MessageSend {
   @@index([messageDraftId])
   @@index([providerConversationId])
   @@index([status, followUpNumber, nextFollowUpAfter])
+  @@index([sentAt, status])
+  @@index([leadId, status])
 }
 
 model FeedbackEvent {
@@ -615,6 +621,9 @@ model FeedbackEvent {
   @@index([messageSendId])
   @@index([eventType])
   @@index([leadId, eventType])
+  @@index([createdAt])
+  @@index([eventType, occurredAt])
+  @@index([messageSendId, eventType, occurredAt])
 }
 
 model TrainingLabel {
@@ -630,6 +639,7 @@ model TrainingLabel {
   @@unique([leadId, feedbackEventId])
   @@index([createdAt])
   @@index([label])
+  @@index([leadId])
 }
 
 model SearchTask {

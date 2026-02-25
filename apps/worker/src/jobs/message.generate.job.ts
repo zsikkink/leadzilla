@@ -91,11 +91,16 @@ export async function handleMessageGenerateJob(
   try {
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
-      select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+      select: { id: true, firstName: true, lastName: true, email: true, phone: true, deletedAt: true },
     });
 
     if (!lead) {
       logger.error({ jobId: job.id, leadId }, 'Lead not found for message generation');
+      return;
+    }
+
+    if (lead.deletedAt) {
+      logger.warn({ jobId: job.id, leadId }, 'Skipping soft-deleted lead');
       return;
     }
 

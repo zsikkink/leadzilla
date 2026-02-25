@@ -332,6 +332,7 @@ export async function handleScoringComputeJob(
         ? job.data.leadIds
         : (
             await prisma.lead.findMany({
+              where: { deletedAt: null },
               select: { id: true },
             })
           ).map((lead) => lead.id);

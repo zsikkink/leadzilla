@@ -56,6 +56,16 @@ export async function handleReplyClassifyJob(
   );
 
   try {
+    // Skip soft-deleted leads
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { deletedAt: true },
+    });
+    if (!lead || lead.deletedAt) {
+      logger.warn({ jobId: job.id, feedbackEventId, leadId }, lead?.deletedAt ? 'Skipping soft-deleted lead' : 'Lead not found');
+      return;
+    }
+
     // Voice note / media-only: no text to classify
     if (!replyText || replyText.trim().length === 0) {
       await prisma.lead.update({ where: { id: leadId }, data: { status: 'replied' } });

@@ -71,12 +71,18 @@ export async function handleMessageSendJob(
       where: { id: sendId },
       include: {
         messageVariant: true,
-        lead: { select: { id: true, email: true, phone: true, firstName: true, lastName: true } },
+        lead: { select: { id: true, email: true, phone: true, firstName: true, lastName: true, deletedAt: true } },
       },
     });
 
     if (!send) {
       logger.error({ jobId: job.id, sendId }, 'MessageSend not found');
+      return;
+    }
+
+    if (send.lead.deletedAt) {
+      await markFailed(sendId, 'LEAD_DELETED', 'Lead has been soft-deleted');
+      logger.warn({ jobId: job.id, sendId, leadId: send.lead.id }, 'Skipping soft-deleted lead');
       return;
     }
 

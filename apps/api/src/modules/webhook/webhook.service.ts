@@ -45,7 +45,7 @@ export async function processTrengoWebhook(
   // Fallback: try to correlate by phone number on the lead
   if (!messageSend && contactPhone) {
     const lead = await prisma.lead.findFirst({
-      where: { phone: contactPhone },
+      where: { phone: contactPhone, deletedAt: null },
       select: { id: true },
     });
     if (lead) {
@@ -192,7 +192,7 @@ export async function processResendWebhook(
   // Correlate to a MessageSend via the lead's email
   const recipientEmail = recipients[0]!;
   const lead = await prisma.lead.findUnique({
-    where: { email: recipientEmail },
+    where: { email: recipientEmail, deletedAt: null },
     select: { id: true },
   });
 

@@ -433,15 +433,16 @@ export async function handleEnrichmentRunJob(
     where: { id: leadId },
   });
 
-  if (!lead) {
+  if (!lead || lead.deletedAt) {
     logger.warn(
       {
         jobId: job.id,
         runId,
         correlationId: effectiveCorrelationId,
         leadId,
+        softDeleted: lead?.deletedAt ? true : undefined,
       },
-      'Skipping enrichment.run job because lead was not found',
+      lead?.deletedAt ? 'Skipping soft-deleted lead' : 'Skipping enrichment.run job because lead was not found',
     );
     return;
   }

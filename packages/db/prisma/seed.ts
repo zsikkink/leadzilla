@@ -333,47 +333,41 @@ async function main(): Promise<void> {
   // Auth handled by Supabase — createdByUserId is nullable, use null for seed data
   const seedUserId = null;
 
-  // Delete "test" ICP profile if it exists
-  const testIcp = await prisma.icpProfile.findFirst({ where: { name: 'test' } });
-  if (testIcp) {
-    console.log('Deleting "test" ICP profile...');
-    await prisma.qualificationRule.deleteMany({ where: { icpProfileId: testIcp.id } });
-    await prisma.icpProfile.delete({ where: { id: testIcp.id } });
-  }
-
-  // Delete existing ICPs and recreate from PDF
-  console.log('Clearing old ICPs and creating 8 segments from PDF...');
-  await prisma.qualificationRule.deleteMany({});
-  await prisma.icpProfile.deleteMany({});
+  // Upsert ICP profiles by name (safe for re-runs — no cascade deletion)
+  console.log('Upserting 8 ICP segments from PDF...');
 
   const icpIds: string[] = [];
   for (const segment of ICP_SEGMENTS) {
     const priority = (segment.metadataJson as { priority: string }).priority;
     const priorityBoost = PRIORITY_BOOST[priority] ?? 0;
 
-    const icp = await prisma.icpProfile.create({
-      data: {
-        name: segment.name,
-        description: segment.description,
-        qualificationLogic: 'WEIGHTED',
-        targetIndustries: segment.targetIndustries,
-        targetCountries: segment.targetCountries,
-        minCompanySize: segment.minCompanySize,
-        maxCompanySize: segment.maxCompanySize,
-        requiredTechnologies: [],
-        excludedDomains: [],
-        featureList: JSON.parse(JSON.stringify(segment.featureList)),
-        metadataJson: JSON.parse(JSON.stringify({
-          ...segment.metadataJson,
-          priorityBoost,
-        })),
-        isActive: true,
-        createdByUserId: seedUserId,
-      },
+    const icpData = {
+      description: segment.description,
+      qualificationLogic: 'WEIGHTED' as const,
+      targetIndustries: segment.targetIndustries,
+      targetCountries: segment.targetCountries,
+      minCompanySize: segment.minCompanySize,
+      maxCompanySize: segment.maxCompanySize,
+      requiredTechnologies: [] as string[],
+      excludedDomains: [] as string[],
+      featureList: JSON.parse(JSON.stringify(segment.featureList)),
+      metadataJson: JSON.parse(JSON.stringify({
+        ...segment.metadataJson,
+        priorityBoost,
+      })),
+      isActive: true,
+      createdByUserId: seedUserId,
+    };
+
+    const icp = await prisma.icpProfile.upsert({
+      where: { name: segment.name },
+      create: { name: segment.name, ...icpData },
+      update: icpData,
     });
     icpIds.push(icp.id);
 
-    // Create qualification rules for this ICP
+    // Replace qualification rules for this ICP (safe — only deletes rules for THIS ICP)
+    await prisma.qualificationRule.deleteMany({ where: { icpProfileId: icp.id } });
     for (const rule of segment.rules) {
       await prisma.qualificationRule.create({
         data: {
@@ -392,7 +386,7 @@ async function main(): Promise<void> {
       });
     }
 
-    console.log(`  Created ICP "${segment.name}" with ${segment.rules.length} qualification rules (priority boost: +${priorityBoost})`);
+    console.log(`  Upserted ICP "${segment.name}" with ${segment.rules.length} qualification rules (priority boost: +${priorityBoost})`);
   }
 
   // Seed leads

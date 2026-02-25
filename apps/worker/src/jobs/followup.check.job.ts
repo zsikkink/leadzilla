@@ -57,6 +57,7 @@ export async function handleFollowupCheckJob(
         followUpNumber: { lt: 3 },
         nextFollowUpAfter: { not: null, lte: now },
         lead: {
+          deletedAt: null,
           status: { in: ['messaged', 'replied'] },
         },
       },

@@ -116,6 +116,7 @@ export async function handleLabelsGenerateJob(
         status: 'SENT',
         sentAt: { lte: cutoffDate },
         lead: {
+          deletedAt: null,
           feedbackEvents: { none: {} },
           trainingLabels: {
             none: { source: 'COLD_LEAD_TIMEOUT' },

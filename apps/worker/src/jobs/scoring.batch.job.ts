@@ -298,6 +298,7 @@ export async function handleScoringBatchJob(
     // Find leads that have feature snapshots but no score predictions
     const unscoredLeads = await prisma.lead.findMany({
       where: {
+        deletedAt: null,
         featureSnapshots: { some: {} },
         scorePredictions: { none: {} },
         status: { in: ['enriched', 'new'] },
