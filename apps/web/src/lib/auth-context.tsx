@@ -89,7 +89,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       supabase = getSupabaseBrowserClient();
     } catch {
-      // Supabase not configured — use dev mock user so the UI is viewable
+      if (process.env.NODE_ENV === 'production') {
+        setIsLoading(false);
+        return;
+      }
+      // Dev-only fallback when Supabase is not configured
       const devUser: AuthUser = { id: 'dev-user', email: 'dev@localhost', firstName: 'Dev', lastName: 'User' };
       setToken('dev-token');
       setUser(devUser);

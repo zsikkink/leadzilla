@@ -1,6 +1,7 @@
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyPluginAsync } from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
+import { z } from 'zod';
 import {
   CreateLeadRequestSchema,
   CreateLeadResponseSchema,
@@ -218,16 +219,15 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     });
 
     api.get('/v1/leads/:id', async (request, reply) => {
-      const params = request.params as { id?: string };
-      const leadId = params.id;
-
-      if (!leadId) {
+      const parsedParams = z.object({ id: z.string().min(1) }).safeParse(request.params);
+      if (!parsedParams.success) {
         reply.status(400);
         return ErrorResponseSchema.parse({
-          error: 'Lead id is required',
+          error: 'Invalid lead id',
           requestId: request.id,
         });
       }
+      const leadId = parsedParams.data.id;
 
       const lead = await options.getLeadById(leadId);
 
@@ -247,16 +247,15 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     });
 
     api.delete('/v1/leads/:id', async (request, reply) => {
-      const params = request.params as { id?: string };
-      const leadId = params.id;
-
-      if (!leadId) {
+      const parsedParams = z.object({ id: z.string().min(1) }).safeParse(request.params);
+      if (!parsedParams.success) {
         reply.status(400);
         return ErrorResponseSchema.parse({
-          error: 'Lead id is required',
+          error: 'Invalid lead id',
           requestId: request.id,
         });
       }
+      const leadId = parsedParams.data.id;
 
       if (!options.softDeleteLead) {
         reply.status(501);
@@ -281,16 +280,15 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     });
 
     api.get('/v1/jobs/:id', async (request, reply) => {
-      const params = request.params as { id?: string };
-      const jobId = params.id;
-
-      if (!jobId) {
+      const parsedParams = z.object({ id: z.string().min(1) }).safeParse(request.params);
+      if (!parsedParams.success) {
         reply.status(400);
         return ErrorResponseSchema.parse({
-          error: 'Job id is required',
+          error: 'Invalid job id',
           requestId: request.id,
         });
       }
+      const jobId = parsedParams.data.id;
 
       const job = await options.getJobById(jobId);
 
@@ -344,9 +342,12 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     registerLearningRoutes(api);
     registerFeedbackRoutes(api);
     if (options.enqueueAnalyticsRollup) {
-      registerAnalyticsRoutes(api, { enqueueAnalyticsRollup: options.enqueueAnalyticsRollup });
+      registerAnalyticsRoutes(api, {
+        enqueueAnalyticsRollup: options.enqueueAnalyticsRollup,
+        adminApiKey: options.adminApiKey,
+      });
     } else {
-      registerAnalyticsRoutes(api);
+      registerAnalyticsRoutes(api, { adminApiKey: options.adminApiKey });
     }
     registerDiscoveryAdminRoutes(api, {
       ...(options.adminApiKey ? { adminApiKey: options.adminApiKey } : {}),

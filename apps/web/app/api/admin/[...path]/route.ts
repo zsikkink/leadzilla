@@ -65,6 +65,18 @@ function sanitizeResponseHeaders(source: Headers): Headers {
 }
 
 async function proxyAdminRequest(request: NextRequest, params: { path?: string[] }): Promise<Response> {
+  // Verify caller has a valid auth token before proxying
+  const authHeader = request.headers.get('authorization');
+  const hasToken = authHeader && authHeader.startsWith('Bearer ') && authHeader.length > 20;
+
+  if (!hasToken) {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    if (process.env.NODE_ENV === 'production' || (supabaseUrl && supabaseUrl !== 'https://example.supabase.co')) {
+      return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    // Dev passthrough only when Supabase is not configured
+  }
+
   let targetUrl: string;
   let headers: Headers;
 

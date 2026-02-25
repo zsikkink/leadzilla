@@ -9,6 +9,13 @@ import type {
 
 import type { FeedbackRepository } from './feedback.repository.js';
 
+export class FeedbackLeadNotFoundError extends Error {
+  constructor(leadId: string) {
+    super(`Lead not found: ${leadId}`);
+    this.name = 'FeedbackLeadNotFoundError';
+  }
+}
+
 export interface FeedbackService {
   ingestFeedbackEvent(input: IngestFeedbackEventRequest): Promise<IngestFeedbackEventResponse>;
   listFeedbackEvents(query: ListFeedbackEventsQuery): Promise<ListFeedbackEventsResponse>;
@@ -18,7 +25,10 @@ export interface FeedbackService {
 export function buildFeedbackService(repository: FeedbackRepository): FeedbackService {
   return {
     async ingestFeedbackEvent(input) {
-      // TODO: validate dedupe keys and source trust levels.
+      const leadExists = await repository.leadExists(input.leadId);
+      if (!leadExists) {
+        throw new FeedbackLeadNotFoundError(input.leadId);
+      }
       return repository.ingestFeedbackEvent(input);
     },
     async listFeedbackEvents(query) {

@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   ErrorResponseSchema,
@@ -20,6 +21,7 @@ import { buildAnalyticsService, type AnalyticsRollupJobPayload } from './analyti
 
 export interface AnalyticsRouteDependencies {
   enqueueAnalyticsRollup?: ((payload: AnalyticsRollupJobPayload) => Promise<void>) | undefined;
+  adminApiKey?: string | undefined;
 }
 
 function sendValidationError(reply: FastifyReply, requestId: string, message: string) {
@@ -139,6 +141,33 @@ export function registerAnalyticsRoutes(
   });
 
   app.post('/v1/analytics/rollups/recompute', async (request, reply) => {
+    // Admin-only: verify x-admin-key header
+    const adminKey = dependencies?.adminApiKey;
+    if (!adminKey) {
+      reply.status(503).send(
+        ErrorResponseSchema.parse({
+          error: 'Admin API key not configured',
+          requestId: request.id,
+        }),
+      );
+      return;
+    }
+
+    const provided = request.headers['x-admin-key'];
+    const candidate = Array.isArray(provided) ? (provided[0] ?? '') : (provided ?? '');
+    if (
+      candidate.length !== adminKey.length ||
+      !timingSafeEqual(Buffer.from(candidate, 'utf8'), Buffer.from(adminKey, 'utf8'))
+    ) {
+      reply.status(401).send(
+        ErrorResponseSchema.parse({
+          error: 'Unauthorized',
+          requestId: request.id,
+        }),
+      );
+      return;
+    }
+
     const parsedBody = RecomputeRollupRequestSchema.safeParse(request.body);
     if (!parsedBody.success) {
       return sendValidationError(reply, request.id, 'Invalid rollup recompute payload');

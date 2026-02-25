@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   AdminLeadDetailResponseSchema,
@@ -48,13 +49,22 @@ function requireAdminKey(
   adminApiKey: string | undefined,
 ): boolean {
   if (!adminApiKey) {
-    return true;
+    reply.status(503).send(
+      ErrorResponseSchema.parse({
+        error: 'Admin API key not configured',
+        requestId: request.id,
+      }),
+    );
+    return false;
   }
 
   const provided = request.headers['x-admin-key'];
-  const candidate = Array.isArray(provided) ? provided[0] : provided;
+  const candidate = Array.isArray(provided) ? (provided[0] ?? '') : (provided ?? '');
 
-  if (candidate === adminApiKey) {
+  if (
+    candidate.length === adminApiKey.length &&
+    timingSafeEqual(Buffer.from(candidate, 'utf8'), Buffer.from(adminApiKey, 'utf8'))
+  ) {
     return true;
   }
 

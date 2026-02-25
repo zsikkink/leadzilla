@@ -84,5 +84,18 @@ export function loadApiEnv(source: NodeJS.ProcessEnv): ApiEnv {
     );
   }
 
+  if (parsed.data.APP_ENV !== 'local') {
+    const jwtAccessSecret = source.JWT_ACCESS_SECRET;
+    const jwtRefreshSecret = source.JWT_REFRESH_SECRET;
+    if (
+      (typeof jwtAccessSecret === 'string' && jwtAccessSecret.includes('please-change')) ||
+      (typeof jwtRefreshSecret === 'string' && jwtRefreshSecret.includes('please-change'))
+    ) {
+      throw new Error(
+        'JWT_ACCESS_SECRET / JWT_REFRESH_SECRET must be changed from placeholder values in non-local environments',
+      );
+    }
+  }
+
   return parsed.data;
 }

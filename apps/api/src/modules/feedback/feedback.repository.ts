@@ -12,12 +12,17 @@ import { Prisma, prisma } from '@lead-flood/db';
 import { FeedbackNotImplementedError } from './feedback.errors.js';
 
 export interface FeedbackRepository {
+  leadExists(leadId: string): Promise<boolean>;
   ingestFeedbackEvent(input: IngestFeedbackEventRequest): Promise<IngestFeedbackEventResponse>;
   listFeedbackEvents(query: ListFeedbackEventsQuery): Promise<ListFeedbackEventsResponse>;
   getFeedbackSummary(query: FeedbackSummaryQuery): Promise<FeedbackSummaryResponse>;
 }
 
 export class StubFeedbackRepository implements FeedbackRepository {
+  async leadExists(_leadId: string): Promise<boolean> {
+    throw new FeedbackNotImplementedError('TODO: lead exists check');
+  }
+
   async ingestFeedbackEvent(_input: IngestFeedbackEventRequest): Promise<IngestFeedbackEventResponse> {
     throw new FeedbackNotImplementedError('TODO: ingest feedback event persistence');
   }
@@ -69,6 +74,11 @@ function countByEventType(
 }
 
 export class PrismaFeedbackRepository extends StubFeedbackRepository {
+  override async leadExists(leadId: string): Promise<boolean> {
+    const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { id: true } });
+    return lead !== null;
+  }
+
   override async ingestFeedbackEvent(input: IngestFeedbackEventRequest): Promise<IngestFeedbackEventResponse> {
     const dedupeKey = input.providerEventId ?? `${input.leadId}:${input.eventType}:${input.occurredAt}`;
 
