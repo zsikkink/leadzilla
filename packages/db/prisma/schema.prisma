@@ -211,6 +211,8 @@ model Lead {
   status         LeadStatus    @default(new)
   enrichmentData Json?
   error          String?
+  costCents      Int           @default(0)
+  deletedAt      DateTime?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
   jobs           JobExecution[]
@@ -618,9 +620,9 @@ model FeedbackEvent {
 model TrainingLabel {
   id              String         @id @default(cuid())
   leadId          String
-  lead            Lead           @relation(fields: [leadId], references: [id])
+  lead            Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
   feedbackEventId String?
-  feedbackEvent   FeedbackEvent? @relation(fields: [feedbackEventId], references: [id])
+  feedbackEvent   FeedbackEvent? @relation(fields: [feedbackEventId], references: [id], onDelete: SetNull)
   label           Int
   source          LabelSource
   createdAt       DateTime       @default(now())

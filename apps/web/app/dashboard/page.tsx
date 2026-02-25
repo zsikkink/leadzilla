@@ -84,13 +84,11 @@ export default function DashboardPage() {
 
   // Derive "today" stats from existing data
   const pendingMessages = drafts.data?.total ?? 0;
-  const totalLeads = leads.data?.total ?? funnel.data?.discoveredCount ?? 0;
   const newLeadsToday = funnel.data?.discoveredCount ?? 0;
   const sentToday = funnel.data?.messagesSentCount ?? 0;
 
-  // Cost per lead: placeholder calculation
-  // In production this would come from a billing/cost endpoint
-  const costPerLead = totalLeads > 0 ? 0.0 : 0.0;
+  // Cost per lead from analytics API (cents → dollars)
+  const costPerLead = funnel.data?.costPerLead != null ? funnel.data.costPerLead / 100 : 0;
 
   return (
     <div className="space-y-6">

@@ -97,6 +97,7 @@ export interface BuildServerOptions {
   triggerDiscoveryTaskRun?: ((input: RunDiscoveryTasksRequest) => Promise<TriggerJobRunResponse>) | undefined;
   adminApiKey?: string | undefined;
   getLeadById: (leadId: string) => Promise<LeadRecord | null>;
+  softDeleteLead?: ((leadId: string) => Promise<boolean>) | undefined;
   listLeads: (query: ListLeadsQuery) => Promise<ListLeadsResponse>;
   getJobById: (jobId: string) => Promise<JobRecord | null>;
 }
@@ -243,6 +244,40 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         createdAt: lead.createdAt.toISOString(),
         updatedAt: lead.updatedAt.toISOString(),
       });
+    });
+
+    api.delete('/v1/leads/:id', async (request, reply) => {
+      const params = request.params as { id?: string };
+      const leadId = params.id;
+
+      if (!leadId) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'Lead id is required',
+          requestId: request.id,
+        });
+      }
+
+      if (!options.softDeleteLead) {
+        reply.status(501);
+        return ErrorResponseSchema.parse({
+          error: 'Lead deletion not implemented',
+          requestId: request.id,
+        });
+      }
+
+      const deleted = await options.softDeleteLead(leadId);
+
+      if (!deleted) {
+        reply.status(404);
+        return ErrorResponseSchema.parse({
+          error: 'Lead not found',
+          requestId: request.id,
+        });
+      }
+
+      reply.status(204);
+      return;
     });
 
     api.get('/v1/jobs/:id', async (request, reply) => {

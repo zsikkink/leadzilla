@@ -63,9 +63,9 @@ export function assignAbVariant(leadId: string): 'variant_a' | 'variant_b' {
   let hash = 0;
   for (let i = 0; i < leadId.length; i++) {
     const char = leadId.charCodeAt(i);
-    hash = ((hash << 5) - hash + char) | 0; // eslint-disable-line no-bitwise
+    hash = ((hash << 5) - hash + char) | 0;
   }
-  return (hash & 1) === 0 ? 'variant_a' : 'variant_b'; // eslint-disable-line no-bitwise
+  return (hash & 1) === 0 ? 'variant_a' : 'variant_b';
 }
 
 export async function handleMessageGenerateJob(

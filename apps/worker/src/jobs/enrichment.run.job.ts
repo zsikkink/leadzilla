@@ -482,6 +482,14 @@ export async function handleEnrichmentRunJob(
       );
     }
 
+    // Accumulate provider cost on the Lead record for analytics
+    if (providerCostCents > 0) {
+      await prisma.lead.update({
+        where: { id: leadId },
+        data: { costCents: { increment: providerCostCents } },
+      });
+    }
+
     const currentMaxAttempt = await prisma.leadEnrichmentRecord.aggregate({
       where: {
         leadId,

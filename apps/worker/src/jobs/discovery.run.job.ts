@@ -1465,6 +1465,15 @@ export async function handleDiscoveryRunJob(
         },
       });
 
+      // Accumulate discovery cost to lead
+      const discoveryCostCents = getProviderCostCents(discoveredLead.provider);
+      if (discoveryCostCents > 0) {
+        await prisma.lead.update({
+          where: { id: lead.id },
+          data: { costCents: { increment: discoveryCostCents } },
+        });
+      }
+
       createdLeads += 1;
       const queryHash = computeQueryHash(discoveryPayload, discoveredLead.provider);
 

@@ -388,11 +388,24 @@ async function main(): Promise<void> {
     ...(env.ADMIN_API_KEY ? { adminApiKey: env.ADMIN_API_KEY } : {}),
     getLeadById: async (leadId) => {
       return prisma.lead.findUnique({
-        where: { id: leadId },
+        where: { id: leadId, deletedAt: null },
       });
+    },
+    softDeleteLead: async (leadId) => {
+      const lead = await prisma.lead.findUnique({
+        where: { id: leadId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!lead) return false;
+      await prisma.lead.update({
+        where: { id: leadId },
+        data: { deletedAt: new Date() },
+      });
+      return true;
     },
     listLeads: async (query) => {
       const where = {
+        deletedAt: null,
         ...(query.icpProfileId
           ? {
               discoveryRecords: {
