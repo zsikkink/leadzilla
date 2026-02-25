@@ -4,6 +4,9 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { JobRunListQuery, ListJobRunsResponse } from '@lead-flood/contracts';
 
+import { useAuth } from '@/hooks/use-auth.js';
+import { useApiQuery } from '@/hooks/use-api-query.js';
+
 import {
   fetchJobRequests,
   fetchJobRuns,
@@ -41,7 +44,72 @@ function statusClassName(status: string): string {
   }
 }
 
+/* ---- Pipeline Settings Reference ---------------------------------------- */
+
+const PIPELINE_SETTINGS = [
+  {
+    name: 'Deterministic / AI Blend',
+    default: '60% / 40%',
+    description: 'How much to trust rules vs ML model. Shift toward AI as model matures with more labeled data.',
+  },
+  {
+    name: 'Score Qualification Threshold',
+    default: '0.50',
+    description: 'Minimum score to trigger outreach. Higher = fewer but higher-quality leads. Lower = more volume, more noise.',
+  },
+  {
+    name: 'Enrichment Threshold',
+    default: '0.30 → 0.50',
+    description: 'Minimum pre-score to justify enrichment cost ($0.02/lead). Starts low (burn-in), tightens as data grows.',
+  },
+  {
+    name: 'Score Tier Bands',
+    default: 'LOW <0.34, MED 0.34–0.67, HIGH >0.67',
+    description: 'Visual classification only. Adjusting changes dashboard displays, not scoring logic.',
+  },
+  {
+    name: 'Follow-up Max Count',
+    default: '3',
+    description: 'Total follow-up messages per lead. More = persistent but riskier. Fewer = less annoyance.',
+  },
+  {
+    name: 'Follow-up Interval',
+    default: '72 hours',
+    description: 'Hours between follow-ups. Shorter = aggressive. Longer = patient.',
+  },
+  {
+    name: 'Cold Lead Timeout',
+    default: '14 days',
+    description: 'Days with no reply before labeling lead as negative for model training.',
+  },
+  {
+    name: 'WhatsApp Daily Limit',
+    default: '50/day',
+    description: 'Match Trengo tier. Exceeding triggers re-queue to next business day.',
+  },
+  {
+    name: 'Email Daily Limit',
+    default: '5–10/day (warm-up)',
+    description: 'Start low for new domains, increase weekly. Prevents spam flagging.',
+  },
+  {
+    name: 'Model Activation AUC',
+    default: '0.60',
+    description: 'Minimum model accuracy to auto-activate. Higher = safer but may delay deployment.',
+  },
+];
+
 export default function JobsPage() {
+  const { apiClient } = useAuth();
+
+  const funnelQuery = useApiQuery(
+    useCallback(() => apiClient.getFunnel(), [apiClient]),
+  );
+
+  const pendingDraftsQuery = useApiQuery(
+    useCallback(() => apiClient.listDrafts({ approvalStatus: 'PENDING', page: 1, pageSize: 1 }), [apiClient]),
+  );
+
   const [jobsQuery, setJobsQuery] = useState<JobRunListQuery>(DEFAULT_JOBS_QUERY);
   const [jobsData, setJobsData] = useState<ListJobRunsResponse | null>(null);
   const [requestsData, setRequestsData] = useState<JobRequestListResponse | null>(null);
@@ -154,6 +222,7 @@ export default function JobsPage() {
   }, [autoRefreshIntervalMs]);
 
   return (
+    <>
     <section className="jobs-grid">
       <div className="card">
         <h2>Job Controls</h2>
@@ -413,5 +482,80 @@ export default function JobsPage() {
         </div>
       </div>
     </section>
+
+      {/* ── Pipeline Overview ──────────────────────────────────────── */}
+      <section className="jobs-grid" style={{ marginTop: 16 }}>
+        <div className="card">
+          <h2>Pipeline Overview</h2>
+          <p className="muted">Live funnel metrics and pending work.</p>
+
+          {funnelQuery.isLoading ? (
+            <p className="muted" style={{ marginTop: 10 }}>Loading...</p>
+          ) : funnelQuery.data ? (
+            <div className="kpis" style={{ marginTop: 10 }}>
+              <div className="kpi">
+                <span className="text-xs text-muted-foreground">Discovered</span>
+                <strong>{funnelQuery.data.discoveredCount}</strong>
+              </div>
+              <div className="kpi">
+                <span className="text-xs text-muted-foreground">Enriched</span>
+                <strong>{funnelQuery.data.enrichedCount}</strong>
+              </div>
+              <div className="kpi">
+                <span className="text-xs text-muted-foreground">Scored</span>
+                <strong>{funnelQuery.data.scoredCount}</strong>
+              </div>
+              <div className="kpi">
+                <span className="text-xs text-muted-foreground">Messages Sent</span>
+                <strong>{funnelQuery.data.messagesSentCount}</strong>
+              </div>
+              <div className="kpi">
+                <span className="text-xs text-muted-foreground">Replies</span>
+                <strong>{funnelQuery.data.repliesCount}</strong>
+              </div>
+              <div className="kpi">
+                <span className="text-xs text-muted-foreground">Deals Won</span>
+                <strong>{funnelQuery.data.dealsWonCount}</strong>
+              </div>
+              <div className="kpi">
+                <span className="text-xs text-muted-foreground">Cost / Lead</span>
+                <strong>${funnelQuery.data.costPerLead.toFixed(2)}</strong>
+              </div>
+              <div className="kpi">
+                <span className="text-xs text-muted-foreground">Pending Approvals</span>
+                <strong>{pendingDraftsQuery.data?.total ?? '—'}</strong>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        {/* ── Pipeline Settings Reference ──────────────────────────── */}
+        <div className="card">
+          <h2>Pipeline Settings</h2>
+          <p className="muted">Current pipeline configuration defaults. Settings are applied via environment variables and worker config.</p>
+
+          <div className="table-wrap" style={{ marginTop: 10 }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Setting</th>
+                  <th>Default</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                {PIPELINE_SETTINGS.map((setting) => (
+                  <tr key={setting.name}>
+                    <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{setting.name}</td>
+                    <td className="mono" style={{ whiteSpace: 'nowrap' }}>{setting.default}</td>
+                    <td style={{ fontSize: '12px', color: 'var(--color-muted-foreground)' }}>{setting.description}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </>
   );
 }

@@ -479,6 +479,20 @@ export default function DiscoverPage() {
               </div>
             ) : null}
 
+            {!icps.isLoading && icps.error ? (
+              <div className="flex items-center gap-3 rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-400">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span className="flex-1">Failed to load ICP profiles: {icps.error}</span>
+                <button
+                  type="button"
+                  onClick={icps.refetch}
+                  className="shrink-0 rounded-md bg-red-500/20 px-2.5 py-1 text-xs font-semibold text-red-300 transition-colors hover:bg-red-500/30"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : null}
+
             {icps.data && icps.data.items.length > 0 ? (
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {icps.data.items.map((icp) => (

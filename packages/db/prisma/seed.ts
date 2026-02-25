@@ -330,8 +330,8 @@ const PITCHED_FEATURES = [
 ];
 
 async function main(): Promise<void> {
-  // Static seed user ID (auth is now handled by Supabase)
-  const seedUserId = 'seed-demo-user';
+  // Auth handled by Supabase — createdByUserId is nullable, use null for seed data
+  const seedUserId = null;
 
   // Delete "test" ICP profile if it exists
   const testIcp = await prisma.icpProfile.findFirst({ where: { name: 'test' } });
@@ -421,6 +421,51 @@ async function main(): Promise<void> {
 
     const icpId = icpIds[leadData.icpIndex] ?? icpIds[0]!;
     const pitchedFeature = PITCHED_FEATURES[Math.floor(Math.random() * PITCHED_FEATURES.length)]!;
+
+    // Map lead source to DiscoveryProvider enum
+    const SOURCE_TO_PROVIDER: Record<string, string> = {
+      apollo: 'APOLLO',
+      linkedin_scrape: 'LINKEDIN_SCRAPE',
+      google_search: 'GOOGLE_SEARCH',
+      google_places: 'GOOGLE_PLACES',
+      brave_search: 'BRAVE_SEARCH',
+      company_search_free: 'COMPANY_SEARCH_FREE',
+    };
+    const discoveryProvider = SOURCE_TO_PROVIDER[leadData.source] ?? 'APOLLO';
+
+    // Create discovery record so the funnel API counts this lead
+    const existingDiscovery = await prisma.leadDiscoveryRecord.findFirst({ where: { leadId: lead.id, icpProfileId: icpId } });
+    if (!existingDiscovery) {
+      await prisma.leadDiscoveryRecord.create({
+        data: {
+          leadId: lead.id,
+          icpProfileId: icpId,
+          provider: discoveryProvider as 'APOLLO',
+          providerRecordId: `seed-${lead.id}`,
+          queryHash: `seed-query-${leadData.icpIndex}`,
+          status: 'DISCOVERED',
+          rawPayload: JSON.parse(JSON.stringify(leadData.enrichmentData)),
+          discoveredAt: lead.createdAt,
+        },
+      });
+    }
+
+    // Create enrichment record so the API relation-based query returns enrichment data
+    const existingEnrichment = await prisma.leadEnrichmentRecord.findFirst({ where: { leadId: lead.id } });
+    if (!existingEnrichment) {
+      const { _scoreInfo, ...enrichmentPayload } = leadData.enrichmentData as Record<string, unknown>;
+      await prisma.leadEnrichmentRecord.create({
+        data: {
+          leadId: lead.id,
+          provider: 'OTHER_FREE',
+          status: 'COMPLETED',
+          normalizedPayload: JSON.parse(JSON.stringify(enrichmentPayload)),
+          rawPayload: JSON.parse(JSON.stringify(leadData.enrichmentData)),
+          enrichedAt: new Date(),
+          requestKey: `seed-enrich-${lead.id}`,
+        },
+      });
+    }
 
     // Create message drafts for messaged/replied/enriched leads
     if (leadData.status === 'messaged' || leadData.status === 'replied' || leadData.status === 'enriched') {

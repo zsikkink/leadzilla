@@ -7,6 +7,7 @@ import type {
   CreateLeadResponse,
   DiscoveryRunStatusResponse,
   FeedbackSummaryResponse,
+  ListFeedbackEventsResponse,
   FunnelQuery,
   FunnelResponse,
   GetLeadResponse,
@@ -224,6 +225,11 @@ export class ApiClient {
   getFeedbackSummary(query?: Record<string, unknown>): Promise<FeedbackSummaryResponse> {
     const qs = query ? `?${toSearchParams(query)}` : '';
     return this.request(`/v1/feedback/summary${qs}`);
+  }
+
+  listFeedbackEvents(query?: Record<string, unknown>): Promise<ListFeedbackEventsResponse> {
+    const qs = query ? `?${toSearchParams(query)}` : '';
+    return this.request(`/v1/feedback/events${qs}`);
   }
 
   // ── Discovery ───────────────────────────────────

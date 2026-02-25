@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -9,6 +9,7 @@ import {
   Clock,
   Globe,
   Layers,
+  Loader2,
   Mail,
   MessageSquare,
   Radar,
@@ -21,6 +22,8 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils.js';
+import { useAuth } from '@/hooks/use-auth.js';
+import { useApiQuery } from '@/hooks/use-api-query.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -53,343 +56,209 @@ interface LeadRecord {
   stages: PipelineStage[];
 }
 
-// ── Placeholder data ────────────────────────────────────────────────────────
+// ── Helpers to extract details from enrichment payload ───────────────────
 
-const PLACEHOLDER_LEADS: LeadRecord[] = [
-  {
-    id: 'lead_01HQXR9KFMV3PZ8YNWT2AG6D5E',
-    name: 'Abdullah Al-Rashid',
-    company: 'Premium Foods LLC',
-    email: 'abdullah@premiumfoods.ae',
-    country: 'AE',
-    city: 'Dubai',
-    industry: 'Food & Beverage',
-    score: 0.847,
-    tier: 'HIGH',
-    stages: [
-      {
-        id: 'discovery',
-        title: 'Discovery',
-        icon: Radar,
-        status: 'completed',
-        timestamp: '2026-02-18T08:12:34Z',
-        details: [
-          { label: 'Source', value: 'Google Maps Local' },
-          { label: 'Provider', value: 'SerpAPI' },
-          { label: 'Search Query', value: 'food delivery Dubai premium' },
-          { label: 'Evidence Count', value: '4 sources found' },
-          { label: 'Task Bucket', value: '2026-W08:default' },
-        ],
-      },
-      {
-        id: 'enrichment',
-        title: 'Enrichment',
-        icon: Layers,
-        status: 'completed',
-        timestamp: '2026-02-18T08:14:07Z',
-        details: [
-          { label: 'Provider', value: 'Apollo + PDL' },
-          { label: 'Records Found', value: '3 (Apollo: 2, PDL: 1)' },
-          { label: 'Email Verified', value: 'Yes (confidence: 0.94)' },
-          { label: 'Phone Found', value: '+971-50-XXX-XXXX' },
-          { label: 'LinkedIn URL', value: 'linkedin.com/in/abdullah-alrashid' },
-          { label: 'Data Quality', value: '87% completeness' },
-        ],
-      },
-      {
-        id: 'features',
-        title: 'Feature Computation',
-        icon: Sparkles,
-        status: 'completed',
-        timestamp: '2026-02-18T08:14:22Z',
-        details: [
-          { label: 'Features Computed', value: '24 of 24' },
-          { label: 'Has WhatsApp', value: 'Yes' },
-          { label: 'Has Instagram', value: 'Yes (12.4k followers)' },
-          { label: 'Review Count', value: '847 (Google Maps)' },
-          { label: 'Accepts Online Payments', value: 'Yes' },
-          { label: 'Recently Active', value: 'Yes (last 7 days)' },
-          { label: 'Website Tech Stack', value: 'Shopify, Google Analytics' },
-        ],
-      },
-      {
-        id: 'scoring',
-        title: 'Scoring',
-        icon: Target,
-        status: 'completed',
-        timestamp: '2026-02-18T08:14:28Z',
-        details: [
-          { label: 'Deterministic Score', value: '0.812' },
-          { label: 'AI Model Score', value: '0.883' },
-          { label: 'Blended Score', value: '0.847' },
-          { label: 'Score Tier', value: 'HIGH' },
-          { label: 'Model Version', value: 'v2.3.1-2026-02-15' },
-          { label: 'Top Signal', value: 'review_count (weight: 0.18)' },
-        ],
-      },
-      {
-        id: 'message-gen',
-        title: 'Message Generation',
-        icon: Mail,
-        status: 'completed',
-        timestamp: '2026-02-18T08:15:01Z',
-        details: [
-          { label: 'ICP Match', value: 'Segment C: Food & Beverage' },
-          { label: 'Template', value: 'WhatsApp Intro - F&B Personalized' },
-          { label: 'Variants Generated', value: '2 (A/B test)' },
-          { label: 'Tone', value: 'Professional, Arabic-friendly' },
-          { label: 'Personalization', value: 'Company name, review count, Instagram' },
-          { label: 'Approval', value: 'Auto-approved (score > 0.8)' },
-        ],
-      },
-      {
-        id: 'message-send',
-        title: 'Message Send',
-        icon: MessageSquare,
-        status: 'completed',
-        timestamp: '2026-02-18T09:00:12Z',
-        details: [
-          { label: 'Channel', value: 'WhatsApp (Trengo)' },
-          { label: 'Status', value: 'Delivered' },
-          { label: 'Variant Sent', value: 'B (personalized opener)' },
-          { label: 'Trengo Contact ID', value: 'trengo_c_48291' },
-          { label: 'Delivery Time', value: '< 3 seconds' },
-          { label: 'Session Window', value: '24h from delivery' },
-        ],
-      },
-      {
-        id: 'followups',
-        title: 'Follow-ups',
-        icon: Clock,
-        status: 'completed',
-        timestamp: '2026-02-21T09:00:00Z',
-        details: [
-          { label: 'Follow-up Count', value: '1 of 3 max' },
-          { label: 'Last Follow-up', value: '2026-02-21 09:00 UTC' },
-          { label: 'Next Scheduled', value: 'Cancelled (reply received)' },
-          { label: 'Follow-up Strategy', value: '72h interval, escalating urgency' },
-        ],
-      },
-      {
-        id: 'feedback',
-        title: 'Feedback',
-        icon: TrendingUp,
-        status: 'completed',
-        timestamp: '2026-02-21T14:23:45Z',
-        details: [
-          { label: 'Reply Received', value: 'Yes' },
-          { label: 'Reply Classification', value: 'INTERESTED' },
-          { label: 'Sentiment', value: 'Positive (0.91)' },
-          { label: 'Label', value: 'meeting_requested' },
-          { label: 'Sales Notified', value: 'Yes (Slack + Email)' },
-          { label: 'Outcome', value: 'Meeting booked - 2026-02-24' },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'lead_01HQXR9KFMV3PZ8YNWT2AG7F8K',
-    name: 'Sara Mahmoud',
-    company: 'Bloom Boutique',
-    email: 'sara@bloomboutique.sa',
-    country: 'SA',
-    city: 'Riyadh',
-    industry: 'Fashion & Retail',
-    score: 0.623,
-    tier: 'MEDIUM',
-    stages: [
-      {
-        id: 'discovery',
-        title: 'Discovery',
-        icon: Radar,
-        status: 'completed',
-        timestamp: '2026-02-19T11:30:00Z',
-        details: [
-          { label: 'Source', value: 'Google Search Local' },
-          { label: 'Provider', value: 'SerpAPI' },
-          { label: 'Search Query', value: 'boutique fashion Riyadh online' },
-          { label: 'Evidence Count', value: '2 sources found' },
-        ],
-      },
-      {
-        id: 'enrichment',
-        title: 'Enrichment',
-        icon: Layers,
-        status: 'completed',
-        timestamp: '2026-02-19T11:31:14Z',
-        details: [
-          { label: 'Provider', value: 'Hunter' },
-          { label: 'Records Found', value: '1 (email only)' },
-          { label: 'Data Quality', value: '54% completeness' },
-        ],
-      },
-      {
-        id: 'features',
-        title: 'Feature Computation',
-        icon: Sparkles,
-        status: 'completed',
-        timestamp: '2026-02-19T11:31:28Z',
-        details: [
-          { label: 'Features Computed', value: '18 of 24' },
-          { label: 'Has WhatsApp', value: 'No' },
-          { label: 'Has Instagram', value: 'Yes (3.2k followers)' },
-          { label: 'Review Count', value: '124' },
-        ],
-      },
-      {
-        id: 'scoring',
-        title: 'Scoring',
-        icon: Target,
-        status: 'completed',
-        timestamp: '2026-02-19T11:31:35Z',
-        details: [
-          { label: 'Deterministic Score', value: '0.590' },
-          { label: 'AI Model Score', value: '0.656' },
-          { label: 'Blended Score', value: '0.623' },
-          { label: 'Score Tier', value: 'MEDIUM' },
-        ],
-      },
-      {
-        id: 'message-gen',
-        title: 'Message Generation',
-        icon: Mail,
-        status: 'completed',
-        timestamp: '2026-02-19T11:32:10Z',
-        details: [
-          { label: 'ICP Match', value: 'Segment E: Retail' },
-          { label: 'Template', value: 'Email Intro - Retail' },
-          { label: 'Variants Generated', value: '2' },
-          { label: 'Approval', value: 'Pending manual review' },
-        ],
-      },
-      {
-        id: 'message-send',
-        title: 'Message Send',
-        icon: MessageSquare,
-        status: 'pending',
-        timestamp: null,
-        details: [
-          { label: 'Channel', value: 'Email (Resend)' },
-          { label: 'Status', value: 'Awaiting approval' },
-        ],
-      },
-      {
-        id: 'followups',
-        title: 'Follow-ups',
-        icon: Clock,
-        status: 'pending',
-        timestamp: null,
-        details: [],
-      },
-      {
-        id: 'feedback',
-        title: 'Feedback',
-        icon: TrendingUp,
-        status: 'pending',
-        timestamp: null,
-        details: [],
-      },
-    ],
-  },
-  {
-    id: 'lead_01HQXR9KFMV3PZ8YNWT2AG9J2M',
-    name: 'Omar Khalil',
-    company: 'GreenTech Solutions',
-    email: 'omar@greentech.jo',
-    country: 'JO',
-    city: 'Amman',
-    industry: 'Technology',
-    score: 0.312,
-    tier: 'LOW',
-    stages: [
-      {
-        id: 'discovery',
-        title: 'Discovery',
-        icon: Radar,
-        status: 'completed',
-        timestamp: '2026-02-20T06:45:00Z',
-        details: [
-          { label: 'Source', value: 'Google Search' },
-          { label: 'Provider', value: 'SerpAPI' },
-          { label: 'Evidence Count', value: '1 source found' },
-        ],
-      },
-      {
-        id: 'enrichment',
-        title: 'Enrichment',
-        icon: Layers,
-        status: 'failed',
-        timestamp: '2026-02-20T06:46:12Z',
-        details: [
-          { label: 'Provider', value: 'Apollo' },
-          { label: 'Error', value: '403 Forbidden - Rate limit exceeded' },
-          { label: 'Retries', value: '3 of 3 exhausted' },
-          { label: 'Fallback', value: 'PDL attempted, no match found' },
-        ],
-      },
-      {
-        id: 'features',
-        title: 'Feature Computation',
-        icon: Sparkles,
-        status: 'completed',
-        timestamp: '2026-02-20T06:47:01Z',
-        details: [
-          { label: 'Features Computed', value: '8 of 24 (partial)' },
-          { label: 'Data Quality', value: 'Low - enrichment failed' },
-        ],
-      },
-      {
-        id: 'scoring',
-        title: 'Scoring',
-        icon: Target,
-        status: 'completed',
-        timestamp: '2026-02-20T06:47:08Z',
-        details: [
-          { label: 'Deterministic Score', value: '0.312' },
-          { label: 'AI Model Score', value: 'Skipped (insufficient features)' },
-          { label: 'Blended Score', value: '0.312' },
-          { label: 'Score Tier', value: 'LOW' },
-        ],
-      },
-      {
-        id: 'message-gen',
-        title: 'Message Generation',
-        icon: Mail,
-        status: 'skipped',
-        timestamp: null,
-        details: [
-          { label: 'Reason', value: 'Score below threshold (0.50)' },
-        ],
-      },
-      {
-        id: 'message-send',
-        title: 'Message Send',
-        icon: MessageSquare,
-        status: 'skipped',
-        timestamp: null,
-        details: [
-          { label: 'Reason', value: 'No message generated' },
-        ],
-      },
-      {
-        id: 'followups',
-        title: 'Follow-ups',
-        icon: Clock,
-        status: 'skipped',
-        timestamp: null,
-        details: [],
-      },
-      {
-        id: 'feedback',
-        title: 'Feedback',
-        icon: TrendingUp,
-        status: 'skipped',
-        timestamp: null,
-        details: [],
-      },
-    ],
-  },
-];
+function extractEnrichmentDetails(payload: Record<string, unknown>): StageDetail[] {
+  const details: StageDetail[] = [];
+  if (payload.companyName) details.push({ label: 'Company', value: String(payload.companyName) });
+  if (payload.industry) details.push({ label: 'Industry', value: String(payload.industry) });
+  if (payload.country) details.push({ label: 'Country', value: String(payload.country) });
+  if (payload.city) details.push({ label: 'City', value: String(payload.city) });
+  if (payload.employeeCount) details.push({ label: 'Employees', value: String(payload.employeeCount) });
+  if (payload.linkedinUrl) details.push({ label: 'LinkedIn', value: String(payload.linkedinUrl) });
+  if (payload.websiteUrl) details.push({ label: 'Website', value: String(payload.websiteUrl) });
+  if (payload.googleRating) details.push({ label: 'Google Rating', value: `${payload.googleRating}/5` });
+  if (payload.googleReviewCount) details.push({ label: 'Reviews', value: String(payload.googleReviewCount) });
+  return details;
+}
+
+function extractFeatureDetails(payload: Record<string, unknown>): StageDetail[] {
+  const details: StageDetail[] = [];
+  if (payload.hasWhatsApp != null) details.push({ label: 'Has WhatsApp', value: payload.hasWhatsApp ? 'Yes' : 'No' });
+  if (payload.instagramFollowers) details.push({ label: 'Instagram Followers', value: String(payload.instagramFollowers) });
+  if (payload.acceptsOnlinePayments != null) details.push({ label: 'Online Payments', value: payload.acceptsOnlinePayments ? 'Yes' : 'No' });
+  if (payload.recentlyActive != null) details.push({ label: 'Recently Active', value: payload.recentlyActive ? 'Yes' : 'No' });
+  return details;
+}
+
+// ── Map lead data to pipeline stages ─────────────────────────────────────
+
+const STATUS_PROGRESSION: Record<string, number> = {
+  new: 0,
+  processing: 1,
+  enriched: 2,
+  failed: -1,
+  messaged: 4,
+  replied: 5,
+  cold: 6,
+};
+
+interface LeadItem {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  source: string;
+  status: string;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  latestScoreBand?: string | null | undefined;
+  latestBlendedScore?: number | null | undefined;
+  latestEnrichmentNormalizedPayload?: unknown | undefined;
+  latestEnrichmentRawPayload?: unknown | undefined;
+  latestDiscoveryRawPayload?: unknown | undefined;
+}
+
+function buildPipelineStages(lead: LeadItem): PipelineStage[] {
+  const enrichment = lead.latestEnrichmentNormalizedPayload as Record<string, unknown> | null;
+  const rawEnrichment = lead.latestEnrichmentRawPayload as Record<string, unknown> | null;
+  const hasEnrichment = enrichment !== null || rawEnrichment !== null;
+  const hasScore = lead.latestBlendedScore !== null;
+  const statusLevel = STATUS_PROGRESSION[lead.status] ?? 0;
+  const isFailed = lead.status === 'failed';
+  const isMessaged = statusLevel >= 4;
+  const isReplied = lead.status === 'replied';
+  const isCold = lead.status === 'cold';
+  const isLowScore = lead.latestScoreBand === 'LOW';
+
+  // Determine enrichment failure: status is 'failed' with no enrichment data
+  const enrichmentFailed = isFailed && !hasEnrichment;
+
+  return [
+    // 1. Discovery — always completed (lead exists in system)
+    {
+      id: 'discovery',
+      title: 'Discovery',
+      icon: Radar,
+      status: 'completed',
+      timestamp: lead.createdAt,
+      details: [
+        { label: 'Source', value: lead.source },
+        { label: 'Lead ID', value: lead.id },
+      ],
+    },
+
+    // 2. Enrichment
+    {
+      id: 'enrichment',
+      title: 'Enrichment',
+      icon: Layers,
+      status: enrichmentFailed ? 'failed'
+        : hasEnrichment ? 'completed'
+        : statusLevel >= 1 ? 'pending' : 'pending',
+      timestamp: hasEnrichment ? lead.updatedAt : null,
+      details: [
+        ...(enrichmentFailed && lead.error ? [{ label: 'Error', value: lead.error }] : []),
+        ...(enrichment ? extractEnrichmentDetails(enrichment) : []),
+      ],
+    },
+
+    // 3. Feature Computation
+    {
+      id: 'features',
+      title: 'Feature Computation',
+      icon: Sparkles,
+      status: hasScore ? 'completed'
+        : enrichmentFailed ? 'skipped'
+        : hasEnrichment ? 'pending' : 'pending',
+      timestamp: hasScore ? lead.updatedAt : null,
+      details: enrichment ? extractFeatureDetails(enrichment) : [],
+    },
+
+    // 4. Scoring
+    {
+      id: 'scoring',
+      title: 'Scoring',
+      icon: Target,
+      status: hasScore ? 'completed'
+        : enrichmentFailed ? 'skipped'
+        : 'pending',
+      timestamp: hasScore ? lead.updatedAt : null,
+      details: hasScore ? [
+        { label: 'Blended Score', value: lead.latestBlendedScore!.toFixed(3) },
+        { label: 'Score Band', value: lead.latestScoreBand ?? 'N/A' },
+      ] : [],
+    },
+
+    // 5. Message Generation
+    {
+      id: 'message-gen',
+      title: 'Message Generation',
+      icon: Mail,
+      status: isMessaged || isReplied || isCold ? 'completed'
+        : isLowScore ? 'skipped'
+        : !hasScore ? 'pending' : 'pending',
+      timestamp: null,
+      details: isLowScore
+        ? [{ label: 'Reason', value: 'Score below threshold' }]
+        : [],
+    },
+
+    // 6. Message Send
+    {
+      id: 'message-send',
+      title: 'Message Send',
+      icon: MessageSquare,
+      status: isMessaged || isReplied || isCold ? 'completed'
+        : isLowScore || enrichmentFailed ? 'skipped'
+        : 'pending',
+      timestamp: null,
+      details: isLowScore || enrichmentFailed
+        ? [{ label: 'Reason', value: 'No message generated' }]
+        : [],
+    },
+
+    // 7. Follow-ups
+    {
+      id: 'followups',
+      title: 'Follow-ups',
+      icon: Clock,
+      status: isReplied || isCold ? 'completed'
+        : isMessaged ? 'pending'
+        : 'skipped',
+      timestamp: null,
+      details: isCold
+        ? [{ label: 'Outcome', value: 'No reply received' }]
+        : isReplied
+          ? [{ label: 'Outcome', value: 'Reply received' }]
+          : [],
+    },
+
+    // 8. Feedback
+    {
+      id: 'feedback',
+      title: 'Feedback',
+      icon: TrendingUp,
+      status: isReplied ? 'completed'
+        : isMessaged || isCold ? 'pending'
+        : 'skipped',
+      timestamp: null,
+      details: isReplied
+        ? [{ label: 'Status', value: 'Reply classified' }]
+        : [],
+    },
+  ];
+}
+
+// ── Map API item to LeadRecord ───────────────────────────────────────────
+
+function mapToLeadRecord(item: LeadItem): LeadRecord {
+  const enrichment = item.latestEnrichmentNormalizedPayload as Record<string, unknown> | null;
+
+  return {
+    id: item.id,
+    name: `${item.firstName} ${item.lastName}`,
+    company: (enrichment?.companyName as string) ?? '',
+    email: item.email,
+    country: (enrichment?.country as string) ?? '',
+    city: (enrichment?.city as string) ?? '',
+    industry: (enrichment?.industry as string) ?? '',
+    score: item.latestBlendedScore ?? 0,
+    tier: item.latestScoreBand ?? 'LOW',
+    stages: buildPipelineStages(item),
+  };
+}
 
 // ── Status styling ──────────────────────────────────────────────────────────
 
@@ -515,10 +384,10 @@ function TimelineStage({
         </button>
 
         {expanded && stage.details.length > 0 && (
-          <div className="mt-3 space-y-1.5 rounded-xl border border-border/30 bg-zbooni-dark/30 p-4">
+          <div className="mt-3 space-y-1.5 rounded-xl border border-border/30 bg-slate-800 p-4">
             {stage.details.map((detail) => (
               <div key={detail.label} className="flex items-start gap-3 text-sm">
-                <span className="w-40 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/40">
+                <span className="w-40 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                   {detail.label}
                 </span>
                 <span className={cn(
@@ -579,11 +448,13 @@ function LeadSearchResult({
         </span>
       </div>
       <div className="mt-2.5 flex items-center gap-3 text-[11px] text-muted-foreground/40">
-        <span className="flex items-center gap-1">
-          <Globe className="h-3 w-3" />
-          {lead.country} / {lead.city}
-        </span>
-        <span className="text-muted-foreground/20">|</span>
+        {lead.country ? (
+          <span className="flex items-center gap-1">
+            <Globe className="h-3 w-3" />
+            {lead.country}{lead.city ? ` / ${lead.city}` : ''}
+          </span>
+        ) : null}
+        {lead.country ? <span className="text-muted-foreground/20">|</span> : null}
         <span className="font-mono tabular-nums">{lead.score.toFixed(3)}</span>
       </div>
       <div className="mt-2 flex items-center gap-2">
@@ -611,23 +482,32 @@ function LeadSearchResult({
 // ── Main page ───────────────────────────────────────────────────────────────
 
 export default function LeadLifecyclePage() {
+  const { apiClient } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
 
+  const leadsQuery = useApiQuery(
+    useCallback(() => apiClient.listLeads({ page: 1, pageSize: 50, includeQualityMetrics: false }), [apiClient]),
+  );
+
+  const allLeads = useMemo(() => {
+    return leadsQuery.data?.items.map(mapToLeadRecord) ?? [];
+  }, [leadsQuery.data]);
+
   const filteredLeads = useMemo(() => {
-    if (!searchQuery.trim()) return PLACEHOLDER_LEADS;
+    if (!searchQuery.trim()) return allLeads;
     const q = searchQuery.toLowerCase();
-    return PLACEHOLDER_LEADS.filter(
+    return allLeads.filter(
       (lead) =>
         lead.name.toLowerCase().includes(q) ||
         lead.company.toLowerCase().includes(q) ||
         lead.email.toLowerCase().includes(q) ||
         lead.id.toLowerCase().includes(q),
     );
-  }, [searchQuery]);
+  }, [searchQuery, allLeads]);
 
   const selectedLead = selectedLeadId
-    ? PLACEHOLDER_LEADS.find((l) => l.id === selectedLeadId) ?? null
+    ? allLeads.find((l) => l.id === selectedLeadId) ?? null
     : null;
 
   return (
@@ -648,10 +528,14 @@ export default function LeadLifecyclePage() {
             />
           </div>
           <span className="text-[11px] text-muted-foreground/40">
-            {filteredLeads.length} lead{filteredLeads.length !== 1 ? 's' : ''}
+            {leadsQuery.isLoading ? '...' : `${filteredLeads.length} lead${filteredLeads.length !== 1 ? 's' : ''}`}
           </span>
         </div>
       </div>
+
+      {leadsQuery.error ? (
+        <p className="text-sm text-destructive">{leadsQuery.error}</p>
+      ) : null}
 
       {/* ── Main layout: search results + timeline ──────────────────── */}
       <div className="grid gap-4 lg:grid-cols-[340px_1fr]">
@@ -660,7 +544,12 @@ export default function LeadLifecyclePage() {
           <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/40">
             Search Results
           </p>
-          {filteredLeads.length > 0 ? (
+          {leadsQuery.isLoading ? (
+            <div className="flex items-center gap-2 rounded-xl border border-border/30 bg-zbooni-dark/20 p-6">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground/40" />
+              <span className="text-sm text-muted-foreground/50">Loading leads...</span>
+            </div>
+          ) : filteredLeads.length > 0 ? (
             filteredLeads.map((lead) => (
               <LeadSearchResult
                 key={lead.id}
@@ -688,7 +577,7 @@ export default function LeadLifecyclePage() {
               <div className="mb-6 flex items-start justify-between gap-4 border-b border-border/30 pb-5">
                 <div>
                   <div className="flex items-center gap-2">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-zbooni-green/20 to-zbooni-teal/20">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800">
                       <Users className="h-5 w-5 text-zbooni-green" />
                     </div>
                     <div>
@@ -701,7 +590,7 @@ export default function LeadLifecyclePage() {
                 <div className="flex items-center gap-3">
                   <div className="text-right">
                     <p className="text-2xl font-extrabold tabular-nums tracking-tight">{selectedLead.score.toFixed(3)}</p>
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                       Blended Score
                     </p>
                   </div>
@@ -711,20 +600,20 @@ export default function LeadLifecyclePage() {
 
               {/* Lead metadata row */}
               <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <div className="rounded-lg border border-border/20 bg-zbooni-dark/20 p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">Country</p>
-                  <p className="mt-0.5 text-sm font-bold">{selectedLead.country} / {selectedLead.city}</p>
+                <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Country</p>
+                  <p className="mt-0.5 text-sm font-bold">{selectedLead.country}{selectedLead.city ? ` / ${selectedLead.city}` : ''}</p>
                 </div>
-                <div className="rounded-lg border border-border/20 bg-zbooni-dark/20 p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">Industry</p>
-                  <p className="mt-0.5 text-sm font-bold">{selectedLead.industry}</p>
+                <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Industry</p>
+                  <p className="mt-0.5 text-sm font-bold">{selectedLead.industry || 'N/A'}</p>
                 </div>
-                <div className="rounded-lg border border-border/20 bg-zbooni-dark/20 p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">Email</p>
+                <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Email</p>
                   <p className="mt-0.5 truncate font-mono text-xs">{selectedLead.email}</p>
                 </div>
-                <div className="rounded-lg border border-border/20 bg-zbooni-dark/20 p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">Lead ID</p>
+                <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Lead ID</p>
                   <p className="mt-0.5 truncate font-mono text-[10px]">{selectedLead.id}</p>
                 </div>
               </div>
@@ -785,12 +674,8 @@ export default function LeadLifecyclePage() {
                 No lead selected
               </h3>
               <p className="mt-1.5 max-w-xs text-center text-[12px] text-muted-foreground/35">
-                Search for a lead by name, company, email, or ID and select it to view the full pipeline trace from discovery through feedback.
+                Select a lead from the list to view the full pipeline trace from discovery through feedback.
               </p>
-              <div className="mt-6 flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/20 px-4 py-2.5 text-[11px] text-muted-foreground/40">
-                <Search className="h-3.5 w-3.5" />
-                Try searching &ldquo;Abdullah&rdquo; or &ldquo;Premium Foods&rdquo;
-              </div>
             </div>
           )}
         </div>

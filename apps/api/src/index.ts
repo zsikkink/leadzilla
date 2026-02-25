@@ -513,23 +513,32 @@ async function main(): Promise<void> {
         : undefined;
 
       return {
-        items: rows.map((lead) => ({
-          id: lead.id,
-          firstName: lead.firstName,
-          lastName: lead.lastName,
-          email: lead.email,
-          source: lead.source,
-          status: lead.status,
-          error: lead.error,
-          createdAt: lead.createdAt.toISOString(),
-          updatedAt: lead.updatedAt.toISOString(),
-          latestIcpProfileId: lead.discoveryRecords[0]?.icpProfileId ?? null,
-          latestScoreBand: lead.scorePredictions[0]?.scoreBand ?? null,
-          latestBlendedScore: lead.scorePredictions[0]?.blendedScore ?? null,
-          latestDiscoveryRawPayload: lead.discoveryRecords[0]?.rawPayload ?? null,
-          latestEnrichmentNormalizedPayload: lead.enrichmentRecords[0]?.normalizedPayload ?? null,
-          latestEnrichmentRawPayload: lead.enrichmentRecords[0]?.rawPayload ?? null,
-        })),
+        items: rows.map((lead) => {
+          // Fall back to lead.enrichmentData when relation tables are empty (e.g. seed data)
+          const enrichmentFallback = lead.enrichmentData as Record<string, unknown> | null;
+          const scoreInfoFallback = enrichmentFallback?._scoreInfo as Record<string, unknown> | undefined;
+
+          return {
+            id: lead.id,
+            firstName: lead.firstName,
+            lastName: lead.lastName,
+            email: lead.email,
+            source: lead.source,
+            status: lead.status,
+            error: lead.error,
+            createdAt: lead.createdAt.toISOString(),
+            updatedAt: lead.updatedAt.toISOString(),
+            latestIcpProfileId: lead.discoveryRecords[0]?.icpProfileId ?? null,
+            latestScoreBand: lead.scorePredictions[0]?.scoreBand
+              ?? (scoreInfoFallback?.scoreBand === 'HIGH' || scoreInfoFallback?.scoreBand === 'MEDIUM' || scoreInfoFallback?.scoreBand === 'LOW'
+                ? scoreInfoFallback.scoreBand : null),
+            latestBlendedScore: lead.scorePredictions[0]?.blendedScore
+              ?? (typeof scoreInfoFallback?.blendedScore === 'number' ? scoreInfoFallback.blendedScore : null),
+            latestDiscoveryRawPayload: lead.discoveryRecords[0]?.rawPayload ?? null,
+            latestEnrichmentNormalizedPayload: lead.enrichmentRecords[0]?.normalizedPayload ?? enrichmentFallback ?? null,
+            latestEnrichmentRawPayload: lead.enrichmentRecords[0]?.rawPayload ?? null,
+          };
+        }),
         qualityMetrics,
         page: query.page,
         pageSize: query.pageSize,

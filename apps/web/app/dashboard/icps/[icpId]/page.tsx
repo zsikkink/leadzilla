@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   BarChart3,
   Check,
+  DollarSign,
   Lightbulb,
   MessageSquare,
   Pencil,
@@ -26,9 +27,10 @@ interface EditableFieldProps {
   label: string;
   value: string;
   onSave: (val: string) => void;
+  multiline?: boolean | undefined;
 }
 
-function EditableField({ label, value, onSave }: EditableFieldProps) {
+function EditableField({ label, value, onSave, multiline }: EditableFieldProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
 
@@ -39,14 +41,25 @@ function EditableField({ label, value, onSave }: EditableFieldProps) {
     return (
       <div>
         <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">{label}</p>
-        <div className="mt-1 flex items-center gap-1.5">
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            className="h-8 flex-1 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-            autoFocus
-            onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel(); }}
-          />
+        <div className="mt-1 flex items-start gap-1.5">
+          {multiline ? (
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              rows={5}
+              className="flex-1 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 py-2 text-sm leading-relaxed focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              autoFocus
+              onKeyDown={(e) => { if (e.key === 'Escape') cancel(); }}
+            />
+          ) : (
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              className="h-8 flex-1 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              autoFocus
+              onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel(); }}
+            />
+          )}
           <button type="button" onClick={save} className="rounded-lg p-1.5 text-zbooni-green hover:bg-zbooni-green/10">
             <Check className="h-3.5 w-3.5" />
           </button>
@@ -61,8 +74,10 @@ function EditableField({ label, value, onSave }: EditableFieldProps) {
   return (
     <div className="group">
       <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">{label}</p>
-      <div className="mt-0.5 flex items-center gap-1.5">
-        <p className="font-medium">{value || <span className="text-muted-foreground/40 italic">Not set</span>}</p>
+      <div className="mt-0.5 flex items-start gap-1.5">
+        <p className={multiline ? 'font-medium whitespace-pre-line leading-relaxed' : 'font-medium'}>
+          {value || <span className="text-muted-foreground/40 italic">Not set</span>}
+        </p>
         <button
           type="button"
           onClick={() => setEditing(true)}
@@ -250,6 +265,8 @@ export default function IcpDetailPage() {
   const replies = icpFeedback.data?.repliedCount ?? 0;
   const conversionRate = leadsDiscovered > 0 ? leadsQualified / leadsDiscovered : 0;
   const replyRate = messagesSent > 0 ? replies / messagesSent : 0;
+  const costPerLead = icpFunnel.data?.costPerLead ?? 0;
+  const totalCostCents = icpFunnel.data?.totalCostCents ?? 0;
   const scoreBands = icpScoreDistribution.data?.bands ?? [];
   const scoreTotal = scoreBands.reduce((sum, band) => sum + band.count, 0);
   const scoreWeighted = scoreBands.reduce((sum, band) => {
@@ -300,6 +317,7 @@ export default function IcpDetailPage() {
                 label="Description"
                 value={profile.description ?? ''}
                 onSave={(val) => handleUpdate('description', val)}
+                multiline
               />
             </div>
           </div>
@@ -476,6 +494,24 @@ export default function IcpDetailPage() {
             <div>
               <p className="text-sm font-bold">{icpFunnel.data?.dealsWonCount ?? 0}</p>
               <p className="text-[10px] text-muted-foreground/50">Deals Won</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Cost per lead */}
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
+            <DollarSign className="h-4 w-4 text-amber-400" />
+            <div>
+              <p className="text-sm font-bold">${costPerLead.toFixed(2)}</p>
+              <p className="text-[10px] text-muted-foreground/50">Cost / Lead</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
+            <DollarSign className="h-4 w-4 text-slate-400" />
+            <div>
+              <p className="text-sm font-bold">${(totalCostCents / 100).toFixed(2)}</p>
+              <p className="text-[10px] text-muted-foreground/50">Total Spend</p>
             </div>
           </div>
         </div>
