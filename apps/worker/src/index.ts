@@ -697,7 +697,14 @@ async function main(): Promise<void> {
     boss,
     logger,
     PIPELINE_HEALTH_JOB_NAME,
-    handlePipelineHealthJob,
+    (jobLogger, job) =>
+      handlePipelineHealthJob(jobLogger, job, {
+        slackWebhookUrl: env.SLACK_WEBHOOK_URL,
+        dlqDepthThreshold: env.PIPELINE_DLQ_DEPTH_THRESHOLD,
+        staleJobMinutes: env.PIPELINE_STALE_JOB_MINUTES,
+        minSuccessRate: env.PIPELINE_MIN_SUCCESS_RATE,
+        minEnrichmentRate: env.PIPELINE_MIN_ENRICHMENT_RATE,
+      }),
   );
 
   await registerWorker<OutboxCleanupJobPayload>(
