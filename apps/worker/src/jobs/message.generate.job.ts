@@ -229,6 +229,9 @@ export async function handleMessageGenerateJob(
     let variantAContent = { subject: null as string | null, bodyText: 'Message generation pending', bodyHtml: null as string | null, ctaText: null as string | null };
     let variantBContent = { ...variantAContent };
 
+    // Build generateContext outside the if-block so NK retry can reference it
+    let generateContext = groundingContext;
+
     if (deps?.openAiAdapter?.isConfigured) {
       let systemPromptOverride: string | undefined;
 
@@ -247,7 +250,7 @@ export async function handleMessageGenerateJob(
         ].filter(Boolean).join(' ');
       }
 
-      const generateContext = systemPromptOverride
+      generateContext = systemPromptOverride
         ? { ...groundingContext, icpDescription: systemPromptOverride }
         : groundingContext;
 
@@ -367,8 +370,8 @@ export async function handleMessageGenerateJob(
 
         const nkPromptSuffix = buildNegativeKeywordPromptSuffix(allFoundKeywords);
         const nkRetryContext = {
-          ...groundingContext,
-          icpDescription: `${groundingContext.icpDescription}\n\n${nkPromptSuffix}`,
+          ...generateContext,
+          icpDescription: `${generateContext.icpDescription}\n\n${nkPromptSuffix}`,
         };
 
         const nkRetryResult = await deps.openAiAdapter.generateMessageVariants(nkRetryContext);
@@ -461,6 +464,18 @@ export async function handleMessageGenerateJob(
     if (autoApprove && deps?.boss) {
       const selectedVariant = draft.variants.find((v) => v.variantKey === selectedVariantKey);
       if (selectedVariant) {
+        // Idempotent: skip if MessageSend already exists for this draft (crash-retry safety)
+        const existingSendForDraft = await prisma.messageSend.findFirst({
+          where: { messageDraftId: draft.id },
+        });
+        if (existingSendForDraft) {
+          logger.info(
+            { jobId: job.id, sendId: existingSendForDraft.id, draftId: draft.id },
+            'MessageSend already exists for draft, skipping',
+          );
+          return;
+        }
+
         const sendRecord = await prisma.messageSend.create({
           data: {
             leadId,

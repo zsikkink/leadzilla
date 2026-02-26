@@ -577,7 +577,7 @@ describe('pipeline full lifecycle', () => {
     expect(generatePayload.leadId).toBe(LEAD_ID);
     expect(generatePayload.followUpNumber).toBe(1);
     expect(generatePayload.autoApprove).toBe(true);
-    expect(generatePayload.channel).toBe('WHATSAPP');
+    expect(generatePayload.channel).toBe('EMAIL');
     expect(generatePayload.parentMessageSendId).toBe(initialSend!.id);
 
     // Initial send's nextFollowUpAfter should be cleared

@@ -65,11 +65,12 @@ export async function handleFollowupCheckJob(
         id: true,
         leadId: true,
         followUpNumber: true,
+        channel: true,
         lead: {
           select: {
             id: true,
             feedbackEvents: {
-              where: { eventType: { in: ['REPLIED', 'UNSUBSCRIBED'] } },
+              where: { eventType: { in: ['REPLIED', 'UNSUBSCRIBED', 'MEETING_BOOKED', 'DEAL_WON', 'BOUNCED'] } },
               select: { id: true },
               take: 1,
             },
@@ -85,20 +86,22 @@ export async function handleFollowupCheckJob(
       orderBy: { nextFollowUpAfter: 'asc' },
     });
 
-    // Batch-fetch previously pitched features for all eligible leads
+    // Batch-fetch previously pitched features for all eligible leads, scoped by ICP
     const leadIds = [...new Set(eligibleSends.map((s) => s.leadId))];
     const allPreviousDrafts = leadIds.length > 0
       ? await prisma.messageDraft.findMany({
           where: { leadId: { in: leadIds }, pitchedFeature: { not: null } },
-          select: { leadId: true, pitchedFeature: true },
+          select: { leadId: true, icpProfileId: true, pitchedFeature: true },
         })
       : [];
-    const pitchedByLead = new Map<string, string[]>();
+    // Key: `${leadId}:${icpProfileId}` → pitched features for that lead+ICP pair
+    const pitchedByLeadIcp = new Map<string, string[]>();
     for (const d of allPreviousDrafts) {
       if (d.pitchedFeature) {
-        const list = pitchedByLead.get(d.leadId) ?? [];
+        const key = `${d.leadId}:${d.icpProfileId}`;
+        const list = pitchedByLeadIcp.get(key) ?? [];
         list.push(d.pitchedFeature);
-        pitchedByLead.set(d.leadId, list);
+        pitchedByLeadIcp.set(key, list);
       }
     }
 
@@ -115,8 +118,8 @@ export async function handleFollowupCheckJob(
         continue;
       }
 
-      const previouslyPitchedFeatures = pitchedByLead.get(send.leadId) ?? [];
       const icpProfileId = send.messageDraft.icpProfileId;
+      const previouslyPitchedFeatures = pitchedByLeadIcp.get(`${send.leadId}:${icpProfileId}`) ?? [];
 
       // Clear first (idempotent guard) — prevents double-enqueue on crash
       await prisma.messageSend.update({
@@ -135,7 +138,7 @@ export async function handleFollowupCheckJob(
           parentMessageSendId: send.id,
           previouslyPitchedFeatures,
           autoApprove: true,
-          channel: 'WHATSAPP',
+          channel: send.channel,
           knowledgeEntryIds: [],
           promptVersion: 'v1-followup',
           correlationId: correlationId ?? job.id,
