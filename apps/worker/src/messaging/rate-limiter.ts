@@ -89,7 +89,7 @@ export class WhatsAppRateLimiter {
     const count = await this.prisma.messageSend.count({
       where: {
         channel: 'WHATSAPP',
-        status: { in: ['SENT', 'QUEUED'] },
+        status: 'SENT',
         createdAt: { gte: dayStartUtc },
       },
     });

@@ -135,8 +135,8 @@ export async function handleMessageSendJob(
     const effectiveChannel = channel ?? send.channel;
 
     if (effectiveChannel === 'EMAIL') {
-      if (!deps?.resendAdapter) {
-        await markFailed(sendId, 'PROVIDER_NOT_CONFIGURED', 'Resend adapter not available');
+      if (!deps?.resendAdapter || !deps.resendAdapter.isConfigured) {
+        await markFailed(sendId, 'PROVIDER_NOT_CONFIGURED', 'Resend adapter not available or not configured');
         logger.error({ jobId: job.id, sendId }, 'Resend adapter not configured');
         return;
       }
@@ -169,6 +169,15 @@ export async function handleMessageSendJob(
           }
           return;
         }
+      }
+
+      // Dedup check: if this send is already SENT or DELIVERED (e.g. pg-boss retry after transient post-send failure), skip
+      const alreadySent = await prisma.messageSend.findFirst({
+        where: { id: sendId, status: { in: ['SENT', 'DELIVERED'] } },
+      });
+      if (alreadySent) {
+        logger.info({ jobId: job.id, sendId }, 'Email already sent, skipping');
+        return;
       }
 
       const result = await deps.resendAdapter.sendEmail({
@@ -210,8 +219,8 @@ export async function handleMessageSendJob(
         logger.error({ jobId: job.id, sendId, failure: result.failure }, 'Email send failed permanently');
       }
     } else if (effectiveChannel === 'WHATSAPP') {
-      if (!deps?.trengoAdapter) {
-        await markFailed(sendId, 'PROVIDER_NOT_CONFIGURED', 'Trengo adapter not available');
+      if (!deps?.trengoAdapter || !deps.trengoAdapter.isConfigured) {
+        await markFailed(sendId, 'PROVIDER_NOT_CONFIGURED', 'Trengo adapter not available or not configured');
         logger.error({ jobId: job.id, sendId }, 'Trengo adapter not configured');
         return;
       }
@@ -253,9 +262,9 @@ export async function handleMessageSendJob(
         }
       }
 
-      // Dedup check: if a MessageSend with this idempotencyKey is already SENT, skip
+      // Dedup check: if a MessageSend with this idempotencyKey is already SENT or DELIVERED, skip
       const existingSend = await prisma.messageSend.findFirst({
-        where: { idempotencyKey: send.idempotencyKey, status: 'SENT' },
+        where: { idempotencyKey: send.idempotencyKey, status: { in: ['SENT', 'DELIVERED'] } },
         select: { id: true, providerMessageId: true },
       });
       if (existingSend) {

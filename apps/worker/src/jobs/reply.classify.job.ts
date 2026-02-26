@@ -56,6 +56,16 @@ export async function handleReplyClassifyJob(
   );
 
   try {
+    // Idempotency: skip if already classified (e.g. duplicate Trengo webhook)
+    const existingEvent = await prisma.feedbackEvent.findUnique({
+      where: { id: feedbackEventId },
+      select: { replyClassification: true },
+    });
+    if (existingEvent?.replyClassification) {
+      logger.info({ jobId: job.id, feedbackEventId }, 'Already classified, skipping');
+      return;
+    }
+
     // Skip soft-deleted leads
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
@@ -81,7 +91,10 @@ export async function handleReplyClassifyJob(
         correlationId: correlationId ?? job.id,
       };
 
-      await deps.boss.send(deps.notifySalesJobName, notifyPayload, deps.notifySalesRetryOptions);
+      await deps.boss.send(deps.notifySalesJobName, notifyPayload, {
+        ...deps.notifySalesRetryOptions,
+        singletonKey: `notify.sales:${feedbackEventId}`,
+      });
 
       logger.info(
         { jobId: job.id, feedbackEventId, leadId },
@@ -119,7 +132,10 @@ export async function handleReplyClassifyJob(
           reason: 'CLASSIFICATION_FAILED',
           correlationId: correlationId ?? job.id,
         } satisfies NotifySalesJobPayload,
-        deps.notifySalesRetryOptions,
+        {
+          ...deps.notifySalesRetryOptions,
+          singletonKey: `notify.sales:${feedbackEventId}`,
+        },
       );
       return;
     }
@@ -146,7 +162,10 @@ export async function handleReplyClassifyJob(
             classification,
             correlationId: correlationId ?? job.id,
           } satisfies NotifySalesJobPayload,
-          deps.notifySalesRetryOptions,
+          {
+            ...deps.notifySalesRetryOptions,
+            singletonKey: `notify.sales:${feedbackEventId}`,
+          },
         );
         break;
       }
@@ -155,6 +174,21 @@ export async function handleReplyClassifyJob(
       case 'UNSUBSCRIBE': {
         await prisma.lead.update({ where: { id: leadId }, data: { status: 'cold' } });
         await cancelFollowUps(leadId);
+
+        // Write suppression record so message.send blocks future sends
+        if (classification === 'UNSUBSCRIBE') {
+          await prisma.feedbackEvent.create({
+            data: {
+              leadId,
+              messageSendId: messageSendId ?? null,
+              eventType: 'UNSUBSCRIBED',
+              source: 'MANUAL',
+              replyClassification: 'UNSUBSCRIBE',
+              dedupeKey: `unsubscribe:${feedbackEventId}`,
+              occurredAt: new Date(),
+            },
+          });
+        }
         break;
       }
 
