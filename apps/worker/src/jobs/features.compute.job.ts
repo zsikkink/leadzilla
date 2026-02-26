@@ -84,6 +84,13 @@ export const FEATURE_KEYS = [
   'discovery_attempt_count',
   'enrichment_attempt_count',
   'days_since_discovery',
+  'high_ticket_signals',
+  'deposit_milestone_signals',
+  'subscription_billing_detected',
+  'international_customer_signals',
+  'icp_segment_priority',
+  'review_count_tier',
+  'follower_count_tier',
   'rule_match_count',
   'hard_filter_passed',
 ] as const;
@@ -306,6 +313,13 @@ function buildFeaturePayload(input: {
   discoveryAttemptCount: number;
   enrichmentAttemptCount: number;
   daysSinceDiscovery: number;
+  highTicketSignals: boolean;
+  depositMilestoneSignals: boolean;
+  subscriptionBillingDetected: boolean;
+  internationalCustomerSignals: boolean;
+  icpSegmentPriority: number;
+  reviewCountTier: number;
+  followerCountTier: number;
   ruleMatchCount: number;
   hardFilterPassed: boolean;
 }): Record<(typeof FEATURE_KEYS)[number], unknown> {
@@ -344,6 +358,13 @@ function buildFeaturePayload(input: {
     discovery_attempt_count: input.discoveryAttemptCount,
     enrichment_attempt_count: input.enrichmentAttemptCount,
     days_since_discovery: input.daysSinceDiscovery,
+    high_ticket_signals: input.highTicketSignals,
+    deposit_milestone_signals: input.depositMilestoneSignals,
+    subscription_billing_detected: input.subscriptionBillingDetected,
+    international_customer_signals: input.internationalCustomerSignals,
+    icp_segment_priority: input.icpSegmentPriority,
+    review_count_tier: input.reviewCountTier,
+    follower_count_tier: input.followerCountTier,
     rule_match_count: input.ruleMatchCount,
     hard_filter_passed: input.hardFilterPassed,
   };
@@ -363,6 +384,58 @@ function asDeterministicRules(value: Awaited<ReturnType<typeof prisma.qualificat
     orderIndex: rule.orderIndex,
     priority: rule.priority,
   }));
+}
+
+/** Classify review count into tiers: 0=none, 1=low, 2=medium, 3=high, 4=very_high */
+function toReviewCountTier(count: number): number {
+  if (count <= 0) return 0;
+  if (count <= 10) return 1;
+  if (count <= 50) return 2;
+  if (count <= 200) return 3;
+  return 4;
+}
+
+/** Classify follower count into tiers: 0=none, 1=low, 2=medium, 3=high, 4=very_high */
+function toFollowerCountTier(count: number): number {
+  if (count <= 0) return 0;
+  if (count <= 500) return 1;
+  if (count <= 5000) return 2;
+  if (count <= 50000) return 3;
+  return 4;
+}
+
+const P1_INDUSTRIES = new Set([
+  'luxury', 'yacht', 'charter', 'concierge', 'personal shopping', 'stylist',
+  'gifting', 'corporate gifting', 'bespoke', 'florist',
+  'events', 'wedding', 'wedding planner', 'event production', 'exhibition', 'festival',
+  'interior design', 'renovation', 'architecture', 'contracting', 'fit-out',
+  'hospitality', 'hotel', 'boutique hotel', 'holiday home', 'serviced residence', 'property management',
+]);
+
+const P2_INDUSTRIES = new Set([
+  'wellness', 'aesthetics', 'clinic', 'cosmetic', 'longevity', 'iv therapy',
+  'coaching', 'consulting', 'advisory', 'membership', 'mastermind',
+  'education', 'training', 'bootcamp', 'certification',
+]);
+
+function classifyIcpSegmentPriority(industry: string | null, targetIndustries: Set<string>): number {
+  if (!industry) return 0;
+  const lower = industry.toLowerCase();
+
+  // Check P1 first
+  for (const p1 of P1_INDUSTRIES) {
+    if (lower.includes(p1)) return 2;
+  }
+
+  // Check P2
+  for (const p2 of P2_INDUSTRIES) {
+    if (lower.includes(p2)) return 1;
+  }
+
+  // Fall back to target industry match
+  if (targetIndustries.size > 0 && targetIndustries.has(lower)) return 1;
+
+  return 0;
 }
 
 export async function handleFeaturesComputeJob(
@@ -540,7 +613,12 @@ export async function handleFeaturesComputeJob(
       (recentActivityDays !== null ? recentActivityDays <= 45 : false);
     const customOrderSignals =
       extractBooleanFromSources(featureSources, ['customOrderSignals']) ??
-      includesAnyKeyword(featureSources, ['custom order', 'made to order', 'dm to order']);
+      includesAnyKeyword(featureSources, [
+        'custom order', 'made to order', 'dm to order',
+        'by appointment', 'request a quote', 'consultation',
+        'proposal', 'bespoke', 'made-to-measure', 'inquire',
+        'book a session', 'get a quote', 'request quote',
+      ]);
     const shopifyDetected =
       extractBooleanFromSources(featureSources, ['shopifyDetected']) ??
       includesAnyKeyword(featureSources, ['shopify', 'myshopify']);
@@ -566,6 +644,40 @@ export async function handleFeaturesComputeJob(
       extractBooleanFromSources(featureSources, ['pureSelfServeEcom']) ??
       (shopifyDetected && !hasWhatsapp && !customOrderSignals);
 
+    const highTicketSignals =
+      extractBooleanFromSources(featureSources, ['highTicketSignals']) ??
+      includesAnyKeyword(featureSources, [
+        'luxury', 'premium', 'bespoke', 'VIP', 'concierge',
+        'high-end', 'exclusive', 'by appointment only',
+        'AED 5,000', 'AED 10,000', 'AED 50,000', 'AED 100,000',
+        'starting at AED', 'from AED',
+      ]);
+
+    const depositMilestoneSignals =
+      extractBooleanFromSources(featureSources, ['depositMilestoneSignals']) ??
+      includesAnyKeyword(featureSources, [
+        'deposit required', '50% upfront', 'milestone payment',
+        'staged payment', 'balance payment', 'partial payment',
+        'installment', 'advance payment', 'balance due',
+        'deposit', 'down payment',
+      ]);
+
+    const subscriptionBillingDetected =
+      extractBooleanFromSources(featureSources, ['subscriptionBillingDetected']) ??
+      includesAnyKeyword(featureSources, [
+        'subscription', 'monthly plan', 'recurring billing',
+        'auto-renew', 'annual plan', 'per month', 'SaaS',
+        'recurring payment', 'monthly fee',
+      ]);
+
+    const internationalCustomerSignals =
+      extractBooleanFromSources(featureSources, ['internationalCustomerSignals']) ??
+      includesAnyKeyword(featureSources, [
+        'international clients', 'remote payment', 'worldwide',
+        'multi-currency', 'global clients', 'international customers',
+        'overseas', 'cross-border',
+      ]);
+
     const targetIndustries = new Set(icp.targetIndustries.map((entry) => entry.toLowerCase()));
     const targetCountries = new Set(
       icp.targetCountries
@@ -583,6 +695,10 @@ export async function handleFeaturesComputeJob(
       targetCountries.size === 0 ||
       (normalizedCountry !== null && targetCountries.has(normalizedCountry));
     const industrySupported = industryMatch;
+
+    const icpSegmentPriority = classifyIcpSegmentPriority(industry, targetIndustries);
+    const reviewCountTier = toReviewCountTier(reviewCount);
+    const followerCountTier = toFollowerCountTier(followerCount);
 
     const featurePayload = buildFeaturePayload({
       sourceProvider: latestDiscovery?.provider ?? 'UNKNOWN',
@@ -629,6 +745,13 @@ export async function handleFeaturesComputeJob(
       discoveryAttemptCount,
       enrichmentAttemptCount,
       daysSinceDiscovery: calculateDaysSince(latestDiscovery?.discoveredAt ?? null),
+      highTicketSignals,
+      depositMilestoneSignals,
+      subscriptionBillingDetected,
+      internationalCustomerSignals,
+      icpSegmentPriority,
+      reviewCountTier,
+      followerCountTier,
       ruleMatchCount: 0,
       hardFilterPassed: false,
     });

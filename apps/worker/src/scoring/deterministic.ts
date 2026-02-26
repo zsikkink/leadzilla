@@ -11,6 +11,51 @@ export const DETERMINISTIC_REASON_CODES = {
 export type DeterministicReasonCode =
   (typeof DETERMINISTIC_REASON_CODES)[keyof typeof DETERMINISTIC_REASON_CODES];
 
+export const QUALIFICATION_CATEGORIES = {
+  SALES_MOTION_FIT: 'SALES_MOTION_FIT',
+  PAYMENT_COMPLEXITY: 'PAYMENT_COMPLEXITY',
+  RISK_URGENCY: 'RISK_URGENCY',
+  OPERATIONAL_PAIN: 'OPERATIONAL_PAIN',
+  SWITCHING_WILLINGNESS: 'SWITCHING_WILLINGNESS',
+  GENERAL: 'GENERAL',
+} as const;
+
+export type QualificationCategory = (typeof QUALIFICATION_CATEGORIES)[keyof typeof QUALIFICATION_CATEGORIES];
+
+/**
+ * Maps feature field keys to Zbooni qualification categories.
+ * Rules with fieldKeys not in this map fall under GENERAL.
+ */
+const FIELD_KEY_CATEGORY_MAP: Record<string, QualificationCategory> = {
+  // Sales Motion Fit — "Deals closed via WhatsApp/chat, conversation-led, multi-person"
+  has_whatsapp: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
+  has_instagram: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
+  custom_order_signals: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
+  multi_staff_detected: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
+
+  // Payment Complexity — "High ticket, deposits, irregular amounts, international"
+  high_ticket_signals: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
+  deposit_milestone_signals: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
+  variable_pricing_detected: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
+  international_customer_signals: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
+  accepts_online_payments: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
+
+  // Risk & Urgency — "Failed payment kills deal, timing matters"
+  recent_activity: QUALIFICATION_CATEGORIES.RISK_URGENCY,
+  has_booking_or_contact_form: QUALIFICATION_CATEGORIES.RISK_URGENCY,
+
+  // Disqualification signals (negative weight rules) — GENERAL
+  pure_self_serve_ecom: QUALIFICATION_CATEGORIES.GENERAL,
+  shopify_detected: QUALIFICATION_CATEGORIES.GENERAL,
+  subscription_billing_detected: QUALIFICATION_CATEGORIES.GENERAL,
+  abandonment_signal_detected: QUALIFICATION_CATEGORIES.GENERAL,
+
+  // Match signals
+  industry_match: QUALIFICATION_CATEGORIES.GENERAL,
+  geo_match: QUALIFICATION_CATEGORIES.GENERAL,
+  icp_segment_priority: QUALIFICATION_CATEGORIES.GENERAL,
+};
+
 export interface DeterministicRule {
   id: string;
   name: string;
@@ -36,12 +81,20 @@ export interface RuleEvaluationResult {
   reasonCode: string;
 }
 
+export interface CategoryScore {
+  matched: number;
+  total: number;
+  rate: number;
+}
+
 export interface DeterministicScoreResult {
   qualificationScore: number;
   hardFilterPassed: boolean;
   ruleMatchCount: number;
   reasonCodes: string[];
   ruleEvaluation: RuleEvaluationResult[];
+  categoryScores: Record<string, CategoryScore>;
+  qualificationPath: 'PROCEED' | 'SELECTIVE' | 'DISQUALIFY' | 'HARD_FILTERED';
 }
 
 function normalizeString(value: unknown): string | null {
@@ -261,6 +314,64 @@ export function evaluateDeterministicScore(
     });
   }
 
+  // --- Category-based scoring (Zbooni qualification checklist) ---
+  const categoryBuckets = new Map<string, { matched: number; total: number }>();
+
+  for (const evaluation of ruleEvaluation) {
+    if (evaluation.ruleType === 'HARD_FILTER') continue;
+
+    const category = FIELD_KEY_CATEGORY_MAP[evaluation.fieldKey] ?? QUALIFICATION_CATEGORIES.GENERAL;
+    const existing = categoryBuckets.get(category) ?? { matched: 0, total: 0 };
+    existing.total += 1;
+    if (evaluation.matched) {
+      existing.matched += 1;
+    }
+    categoryBuckets.set(category, existing);
+  }
+
+  const categoryScores: Record<string, CategoryScore> = {};
+  for (const [category, bucket] of categoryBuckets) {
+    categoryScores[category] = {
+      matched: bucket.matched,
+      total: bucket.total,
+      rate: bucket.total > 0 ? bucket.matched / bucket.total : 0,
+    };
+  }
+
+  // Count categories that pass (>=50% match rate, at least 1 rule matched)
+  const CATEGORY_PASS_THRESHOLD = 0.5;
+  const passedCategories = new Set<string>();
+  for (const [category, score] of Object.entries(categoryScores)) {
+    if (category === QUALIFICATION_CATEGORIES.GENERAL) continue;
+    if (score.rate >= CATEGORY_PASS_THRESHOLD && score.matched >= 1) {
+      passedCategories.add(category);
+    }
+  }
+
+  const hasSalesMotion = passedCategories.has(QUALIFICATION_CATEGORIES.SALES_MOTION_FIT);
+  const hasPaymentComplexity = passedCategories.has(QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY);
+
+  // Zbooni Decision Guide:
+  // PROCEED: Sales + Payment + 1 other -> base 0.75
+  // SELECTIVE: 2+ categories passed -> base 0.50
+  // DISQUALIFY: < 2 categories -> base 0.25
+  let qualificationPath: 'PROCEED' | 'SELECTIVE' | 'DISQUALIFY' | 'HARD_FILTERED';
+  let categoryBonus = 0;
+
+  if (!hardFilterPassed) {
+    qualificationPath = 'HARD_FILTERED';
+  } else if (hasSalesMotion && hasPaymentComplexity && passedCategories.size >= 3) {
+    qualificationPath = 'PROCEED';
+    categoryBonus = 0.15;
+  } else if (passedCategories.size >= 2) {
+    qualificationPath = 'SELECTIVE';
+    categoryBonus = 0.05;
+  } else {
+    qualificationPath = 'DISQUALIFY';
+    categoryBonus = -0.10;
+  }
+
+  // --- Weighted-average scoring (existing formula + category adjustment) ---
   let qualificationScore = 0;
   if (hardFilterPassed) {
     if (weightedPositiveTotal > 0 || weightedNegativeTotal > 0) {
@@ -274,6 +385,9 @@ export function evaluateDeterministicScore(
           : 1;
       const boundedPenaltyFactor = Math.max(0.2, Math.min(1, penaltyFactor));
       qualificationScore = baseScore * boundedPenaltyFactor;
+
+      // Apply category bonus/penalty
+      qualificationScore = Math.max(0, Math.min(1, qualificationScore + categoryBonus));
     } else {
       qualificationScore = 1;
       reasonCodes.push(DETERMINISTIC_REASON_CODES.noWeightedRules);
@@ -298,5 +412,7 @@ export function evaluateDeterministicScore(
     ruleMatchCount,
     reasonCodes: uniqueReasonCodes,
     ruleEvaluation,
+    categoryScores,
+    qualificationPath,
   };
 }

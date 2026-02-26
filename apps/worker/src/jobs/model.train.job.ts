@@ -46,11 +46,8 @@ export interface ModelTrainJobDependencies {
   boss: Pick<PgBoss, 'send'>;
 }
 
-/** Feature keys extracted from featuresJson — must match scoring.compute BASELINE_FEATURE_KEYS. */
+/** Feature keys for the ML model — matches scoring shared TRAINED_MODEL_FEATURE_KEYS. */
 const NUMERIC_FEATURE_KEYS = [
-  'has_email',
-  'has_domain',
-  'has_company_name',
   'industry_supported',
   'has_whatsapp',
   'has_instagram',
@@ -71,10 +68,13 @@ const NUMERIC_FEATURE_KEYS = [
   'variable_pricing_detected',
   'industry_match',
   'geo_match',
-  'enrichment_success_rate',
-  'discovery_attempt_count',
-  'enrichment_attempt_count',
-  'days_since_discovery',
+  'high_ticket_signals',
+  'deposit_milestone_signals',
+  'subscription_billing_detected',
+  'international_customer_signals',
+  'icp_segment_priority',
+  'review_count_tier',
+  'follower_count_tier',
 ] as const;
 
 export const FEATURE_KEYS_FOR_TRAINING = NUMERIC_FEATURE_KEYS;
@@ -193,11 +193,21 @@ export async function handleModelTrainJob(
     // 4. Split dataset deterministically by trainingRunId
     const splits = splitDataset(dataset, trainingRunId);
 
-    // 5. Train logistic regression on train split
+    // 5. Train logistic regression on train split with class weights for imbalance
+    const trainPositive = splits.train.filter((d) => d.label === 1).length;
+    const trainNegative = splits.train.length - trainPositive;
+    const classWeights = trainPositive > 0 && trainNegative > 0
+      ? {
+          positive: splits.train.length / (2 * trainPositive),
+          negative: splits.train.length / (2 * trainNegative),
+        }
+      : undefined;
+
     const trainResult = trainLogisticRegression(splits.train, {
       learningRate: 0.01,
       lambda: 0.01,
       maxIterations: 1000,
+      classWeights,
     });
 
     // 6. Create ModelVersion

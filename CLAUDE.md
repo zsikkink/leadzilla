@@ -53,6 +53,11 @@ pnpm build           # 4. Full build — final gate
 ```
 IMPORTANT: Fix all errors before committing. Do not skip steps.
 
+## Memory Sync (MANDATORY)
+- **Start of every session**: Read `~/.claude/projects/-Users-os-architect-Desktop-OS-Architect-Projects-lead-flood/memory/MEMORY.md` before doing anything
+- **End of every output that changes code or decisions**: Update MEMORY.md with what was done, what changed, and what's left
+- This ensures all sessions share the same context. No exceptions.
+
 ## Self-Improvement
 After any correction or mistake: update CLAUDE.md or module CLAUDE.md so the error doesn't recur. Ask "should I update CLAUDE.md?" after receiving corrections.
 

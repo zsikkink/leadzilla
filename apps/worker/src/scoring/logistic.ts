@@ -12,6 +12,7 @@ export interface TrainOptions {
   maxIterations?: number | undefined;
   convergenceThreshold?: number | undefined;
   lambda?: number | undefined;
+  classWeights?: { positive: number; negative: number } | undefined;
 }
 
 export interface TrainResult {
@@ -128,6 +129,7 @@ export function trainLogisticRegression(
   const maxIterations = options?.maxIterations ?? 1000;
   const convergenceThreshold = options?.convergenceThreshold ?? 1e-6;
   const lambda = options?.lambda ?? 0.01;
+  const classWeights = options?.classWeights;
 
   if (dataset.length === 0) {
     return {
@@ -167,11 +169,14 @@ export function trainLogisticRegression(
       }
       const p = sigmoid(z);
       const error = p - y[i]!;
+      const sampleWeight = classWeights
+        ? (y[i] === 1 ? classWeights.positive : classWeights.negative)
+        : 1;
 
       for (let j = 0; j < numFeatures; j++) {
-        gradW[j]! += error * X[i]![j]!;
+        gradW[j]! += error * X[i]![j]! * sampleWeight;
       }
-      gradB += error;
+      gradB += error * sampleWeight;
     }
 
     const n = X.length;

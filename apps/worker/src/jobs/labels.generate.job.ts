@@ -36,12 +36,12 @@ export interface LabelsGenerateJobDependencies {
 }
 
 /** Feedback event types that indicate positive outcomes. */
-const POSITIVE_EVENT_TYPES = new Set(['REPLIED', 'MEETING_BOOKED', 'DEAL_WON']);
+const POSITIVE_EVENT_TYPES = new Set(['MEETING_BOOKED', 'DEAL_WON']);
 /** Feedback event types that indicate negative outcomes. */
-const NEGATIVE_EVENT_TYPES = new Set(['DEAL_LOST', 'UNSUBSCRIBED', 'BOUNCED']);
+const NEGATIVE_EVENT_TYPES = new Set(['DEAL_LOST', 'UNSUBSCRIBED']);
 
 /** Days after which a lead with no feedback is considered cold. */
-const COLD_LEAD_TIMEOUT_DAYS = 14;
+const COLD_LEAD_TIMEOUT_DAYS = 30;
 /** Minimum new labels before auto-enqueuing model.train. */
 const RETRAIN_THRESHOLD = 50;
 

@@ -7,7 +7,14 @@ import {
   toScoreBand,
   type DeterministicRule,
 } from '../scoring/deterministic.js';
-import { predictLogistic, type LogisticModel } from '../scoring/logistic.js';
+import { predictLogistic } from '../scoring/logistic.js';
+import {
+  BASELINE_MODEL_VERSION_TAG,
+  QUALIFICATION_THRESHOLD,
+  extractFeatureVectorForModel,
+  findActiveTrainedModel,
+  computeBlendRatio,
+} from '../scoring/shared.js';
 
 export const SCORING_BATCH_JOB_NAME = 'scoring.batch';
 
@@ -43,9 +50,7 @@ export interface ScoringBatchJobDependencies {
 }
 
 const DEFAULT_BATCH_SIZE = 50;
-const QUALIFICATION_THRESHOLD = 0.5;
 
-const BASELINE_MODEL_VERSION_TAG = 'deterministic-baseline-v1';
 const BASELINE_FEATURE_EXTRACTOR_VERSION = 'features_v1';
 const BASELINE_FEATURE_KEYS = [
   'source_provider',
@@ -88,37 +93,6 @@ const BASELINE_FEATURE_KEYS = [
 
 const BASELINE_TRAINING_RUN_TRIGGER = 'MANUAL';
 
-/** Feature keys used by the trained logistic model (must match model.train NUMERIC_FEATURE_KEYS). */
-const TRAINED_MODEL_FEATURE_KEYS = [
-  'has_email',
-  'has_domain',
-  'has_company_name',
-  'industry_supported',
-  'has_whatsapp',
-  'has_instagram',
-  'accepts_online_payments',
-  'review_count',
-  'follower_count',
-  'physical_address_present',
-  'physical_store_present',
-  'recent_activity',
-  'custom_order_signals',
-  'pure_self_serve_ecom',
-  'shopify_detected',
-  'abandonment_signal_detected',
-  'multi_staff_detected',
-  'follower_growth_signal',
-  'high_engagement_signal',
-  'has_booking_or_contact_form',
-  'variable_pricing_detected',
-  'industry_match',
-  'geo_match',
-  'enrichment_success_rate',
-  'discovery_attempt_count',
-  'enrichment_attempt_count',
-  'days_since_discovery',
-] as const;
-
 function toInputJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
@@ -143,58 +117,6 @@ function asDeterministicRules(
     orderIndex: rule.orderIndex,
     priority: rule.priority,
   }));
-}
-
-function extractFeatureVectorForModel(featuresJson: Record<string, unknown>): number[] {
-  const vector: number[] = [];
-  for (const key of TRAINED_MODEL_FEATURE_KEYS) {
-    const raw = featuresJson[key];
-    if (typeof raw === 'number' && Number.isFinite(raw)) {
-      vector.push(raw);
-    } else if (typeof raw === 'boolean') {
-      vector.push(raw ? 1 : 0);
-    } else if (typeof raw === 'string') {
-      const parsed = Number(raw);
-      vector.push(Number.isFinite(parsed) ? parsed : 0);
-    } else {
-      vector.push(0);
-    }
-  }
-  return vector;
-}
-
-function parseTrainedModel(coefficientsJson: unknown): LogisticModel | null {
-  if (!coefficientsJson || typeof coefficientsJson !== 'object') return null;
-  const payload = coefficientsJson as Record<string, unknown>;
-  const values = payload['values'];
-  const intercept = payload['intercept'];
-  const featureStats = payload['featureStats'];
-  if (!Array.isArray(values) || typeof intercept !== 'number' || !Array.isArray(featureStats)) {
-    return null;
-  }
-  return {
-    coefficients: values as number[],
-    intercept,
-    featureStats: featureStats as { mean: number; std: number }[],
-  };
-}
-
-async function findActiveTrainedModel(): Promise<{ id: string; model: LogisticModel } | null> {
-  const active = await prisma.modelVersion.findFirst({
-    where: {
-      stage: 'ACTIVE',
-      modelType: 'LOGISTIC_REGRESSION',
-      versionTag: { not: BASELINE_MODEL_VERSION_TAG },
-    },
-    orderBy: { createdAt: 'desc' },
-    select: { id: true, coefficientsJson: true },
-  });
-  if (!active) return null;
-
-  const model = parseTrainedModel(active.coefficientsJson);
-  if (!model) return null;
-
-  return { id: active.id, model };
 }
 
 async function ensureBaselineModelVersion(): Promise<string> {
@@ -268,9 +190,6 @@ async function ensureBaselineModelVersion(): Promise<string> {
     throw error;
   }
 }
-
-const DEFAULT_DETERMINISTIC_WEIGHT = 0.6;
-const DEFAULT_AI_WEIGHT = 0.4;
 
 export async function handleScoringBatchJob(
   logger: ScoringBatchLogger,
@@ -362,6 +281,7 @@ export async function handleScoringBatchJob(
     // Ensure baseline model version exists and find active trained model
     const effectiveModelVersionId = await ensureBaselineModelVersion();
     const trainedModel = await findActiveTrainedModel();
+    const blendRatio = await computeBlendRatio();
 
     let scored = 0;
     let qualified = 0;
@@ -406,8 +326,8 @@ export async function handleScoringBatchJob(
         // Blend scores
         const blendedScore =
           usedTrainedModel || logisticScore > 0
-            ? DEFAULT_DETERMINISTIC_WEIGHT * deterministicScore +
-              DEFAULT_AI_WEIGHT * logisticScore
+            ? blendRatio.deterministicWeight * deterministicScore +
+              blendRatio.aiWeight * logisticScore
             : deterministicScore;
         const scoreBand = toScoreBand(blendedScore);
 
@@ -433,7 +353,10 @@ export async function handleScoringBatchJob(
             reasonsJson: toInputJson({
               reasonCodes: deterministic.reasonCodes,
               hardFilterPassed: deterministic.hardFilterPassed,
+              categoryScores: deterministic.categoryScores,
+              qualificationPath: deterministic.qualificationPath,
               usedTrainedModel,
+              blendWeights: { deterministic: blendRatio.deterministicWeight, ai: blendRatio.aiWeight },
             }),
             ruleEvaluationJson: toInputJson(deterministic.ruleEvaluation),
             predictedAt: new Date(),
@@ -446,7 +369,10 @@ export async function handleScoringBatchJob(
             reasonsJson: toInputJson({
               reasonCodes: deterministic.reasonCodes,
               hardFilterPassed: deterministic.hardFilterPassed,
+              categoryScores: deterministic.categoryScores,
+              qualificationPath: deterministic.qualificationPath,
               usedTrainedModel,
+              blendWeights: { deterministic: blendRatio.deterministicWeight, ai: blendRatio.aiWeight },
             }),
             ruleEvaluationJson: toInputJson(deterministic.ruleEvaluation),
             predictedAt: new Date(),

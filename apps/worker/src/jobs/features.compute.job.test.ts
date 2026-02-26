@@ -90,6 +90,13 @@ describe('features.compute helpers', () => {
       'discovery_attempt_count',
       'enrichment_attempt_count',
       'days_since_discovery',
+      'high_ticket_signals',
+      'deposit_milestone_signals',
+      'subscription_billing_detected',
+      'international_customer_signals',
+      'icp_segment_priority',
+      'review_count_tier',
+      'follower_count_tier',
       'rule_match_count',
       'hard_filter_passed',
     ]);
