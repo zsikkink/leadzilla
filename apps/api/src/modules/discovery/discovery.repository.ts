@@ -5,6 +5,8 @@ import type {
   DiscoveryRunStatusResponse,
   ListDiscoveryRecordsQuery,
   ListDiscoveryRecordsResponse,
+  ListDiscoveryRunsQuery,
+  ListDiscoveryRunsResponse,
   PipelineRunStatus,
 } from '@lead-flood/contracts';
 
@@ -79,6 +81,7 @@ export interface DiscoveryRepository {
   markDiscoveryRunFailed(runId: string, message: string): Promise<void>;
   getDiscoveryRunStatus(runId: string): Promise<DiscoveryRunStatusResponse>;
   listDiscoveryRecords(query: ListDiscoveryRecordsQuery): Promise<ListDiscoveryRecordsResponse>;
+  listDiscoveryRuns(query: ListDiscoveryRunsQuery): Promise<ListDiscoveryRunsResponse>;
 }
 
 export class StubDiscoveryRepository implements DiscoveryRepository {
@@ -100,6 +103,10 @@ export class StubDiscoveryRepository implements DiscoveryRepository {
 
   async listDiscoveryRecords(_query: ListDiscoveryRecordsQuery): Promise<ListDiscoveryRecordsResponse> {
     throw new DiscoveryNotImplementedError('TODO: list discovery records persistence');
+  }
+
+  async listDiscoveryRuns(_query: ListDiscoveryRunsQuery): Promise<ListDiscoveryRunsResponse> {
+    throw new DiscoveryNotImplementedError('TODO: list discovery runs persistence');
   }
 }
 
@@ -262,6 +269,56 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
         createdAt: row.createdAt.toISOString(),
       })),
       qualityMetrics,
+      page: query.page,
+      pageSize: query.pageSize,
+      total,
+    };
+  }
+
+  async listDiscoveryRuns(query: ListDiscoveryRunsQuery): Promise<ListDiscoveryRunsResponse> {
+    const where = { type: DISCOVERY_RUN_JOB_TYPE };
+
+    const [total, rows] = await Promise.all([
+      prisma.jobExecution.count({ where }),
+      prisma.jobExecution.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+    ]);
+
+    return {
+      runs: rows.map((row) => {
+        const progress = readRunProgress(row.result);
+        const status = mapJobStatusToPipelineStatus(row.status, progress.failedItems);
+        const payload = (row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload))
+          ? row.payload as Record<string, unknown>
+          : {};
+
+        const countries: string[] = Array.isArray(payload.countries)
+          ? (payload.countries as string[])
+          : [];
+        const limit = typeof payload.limit === 'number' ? payload.limit : 0;
+        const icpProfileId = typeof payload.icpProfileId === 'string'
+          ? payload.icpProfileId
+          : null;
+
+        return {
+          runId: row.id,
+          status,
+          totalItems: progress.totalItems,
+          processedItems: progress.processedItems,
+          failedItems: progress.failedItems,
+          createdAt: row.createdAt.toISOString(),
+          startedAt: row.startedAt?.toISOString() ?? null,
+          finishedAt: row.finishedAt?.toISOString() ?? null,
+          icpProfileId,
+          countries,
+          limit,
+          errorMessage: row.error,
+        };
+      }),
       page: query.page,
       pageSize: query.pageSize,
       total,

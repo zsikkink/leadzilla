@@ -133,6 +133,7 @@ const WorkerEnvSchema = z.object({
   JOB_REQUEST_POLL_MS: z.coerce.number().int().min(250).default(5000),
   JOB_REQUEST_MAX_PER_TICK: z.coerce.number().int().min(1).max(50).default(1),
   JOB_REQUEST_WORKER_ID: optionalNonEmptyString(),
+  /** @deprecated Apify replaced by built-in scrapers — kept for env compat */
   APIFY_API_KEY: optionalNonEmptyString(),
   APIFY_WEBSITE_ACTOR_ID: optionalNonEmptyString(),
   APIFY_INSTAGRAM_ACTOR_ID: optionalNonEmptyString(),

@@ -23,6 +23,8 @@ import {
 import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
 
+import { useApiQuery } from '../../src/hooks/use-api-query.js';
+import { useAuth } from '../../src/hooks/use-auth.js';
 import { cn } from '../../src/lib/utils.js';
 
 // ── Setting types ──────────────────────────────────────────────────────
@@ -230,29 +232,7 @@ const PIPELINE_SETTINGS: PipelineSetting[] = [
   },
 ];
 
-// ── Placeholder data ───────────────────────────────────────────────────
-const PLACEHOLDER_STATUS_DISTRIBUTION = {
-  discovered: 823,
-  enriched: 614,
-  scored: 587,
-  messaged: 342,
-};
-
-const PLACEHOLDER_PROVIDER_SUMMARY = [
-  { name: 'Apollo', successRate: 0.84 },
-  { name: 'Hunter', successRate: 0.91 },
-  { name: 'PDL', successRate: 0.78 },
-  { name: 'Apify', successRate: 0.67 },
-];
-
-const PLACEHOLDER_OUTBOX_EVENTS = [
-  { id: '1', type: 'discovery.run', status: 'completed', createdAt: '2026-02-24T09:12:34Z' },
-  { id: '2', type: 'enrichment.run', status: 'completed', createdAt: '2026-02-24T09:13:01Z' },
-  { id: '3', type: 'scoring.compute', status: 'completed', createdAt: '2026-02-24T09:14:22Z' },
-  { id: '4', type: 'message.generate', status: 'pending', createdAt: '2026-02-24T09:15:05Z' },
-  { id: '5', type: 'message.send', status: 'failed', createdAt: '2026-02-24T09:15:48Z' },
-  { id: '6', type: 'followup.check', status: 'completed', createdAt: '2026-02-24T09:16:30Z' },
-];
+// Placeholder data removed — now using real API queries
 
 // ── Sub-components ─────────────────────────────────────────────────────
 
@@ -279,24 +259,6 @@ function StatusCard({
       </div>
       {children}
     </div>
-  );
-}
-
-function OutboxStatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    completed: 'bg-zbooni-green/15 text-zbooni-green',
-    pending: 'bg-yellow-500/15 text-yellow-400',
-    failed: 'bg-red-500/15 text-red-400',
-  };
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider',
-        styles[status] ?? 'bg-muted/20 text-muted-foreground',
-      )}
-    >
-      {status}
-    </span>
   );
 }
 
@@ -457,7 +419,7 @@ function SettingTierBands({
                 onChange={(e) =>
                   onChange({ ...value, low: Number(e.target.value) })
                 }
-                className="w-14 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
+                className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
                 aria-label="Low tier upper bound"
               />
             </div>
@@ -475,7 +437,7 @@ function SettingTierBands({
                 onChange={(e) =>
                   onChange({ ...value, med: Number(e.target.value) })
                 }
-                className="w-14 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
+                className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
                 aria-label="Medium tier upper bound"
               />
             </div>
@@ -493,7 +455,7 @@ function SettingTierBands({
                 onChange={(e) =>
                   onChange({ ...value, high: Number(e.target.value) })
                 }
-                className="w-14 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
+                className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
                 aria-label="High tier lower bound"
               />
             </div>
@@ -539,8 +501,20 @@ function getDefaultSettings(): SettingsState {
 // ── Main page ──────────────────────────────────────────────────────────
 
 export default function ControlsSettingsPage() {
+  const { apiClient } = useAuth();
   const [settings, setSettings] = useState<SettingsState>(getDefaultSettings);
   const [hasChanges, setHasChanges] = useState(false);
+
+  // Real data queries
+  const stats = useApiQuery(
+    useCallback(() => apiClient.getPipelineStats(), [apiClient]),
+  );
+  const pendingDrafts = useApiQuery(
+    useCallback(
+      () => apiClient.listDrafts({ approvalStatus: 'PENDING' as never, page: 1, pageSize: 1 }),
+      [apiClient],
+    ),
+  );
 
   const updateSetting = useCallback(
     <K extends keyof SettingsState>(key: K, value: SettingsState[K]) => {
@@ -606,42 +580,52 @@ export default function ControlsSettingsPage() {
           bgColor="bg-zbooni-teal/10"
           label="Lead Distribution"
         >
-          <div className="space-y-2">
-            {Object.entries(PLACEHOLDER_STATUS_DISTRIBUTION).map(([status, count]) => (
-              <div key={status} className="flex items-center justify-between">
-                <span className="text-[11px] font-medium capitalize text-muted-foreground/60">
-                  {status}
-                </span>
-                <span className="font-mono text-xs font-bold tabular-nums">{count}</span>
-              </div>
-            ))}
-          </div>
+          {stats.isLoading ? (
+            <p className="text-xs text-muted-foreground/50">Loading...</p>
+          ) : stats.data ? (
+            <div className="space-y-2">
+              {Object.entries(stats.data.leadDistribution).map(([status, count]) => (
+                <div key={status} className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium capitalize text-muted-foreground/60">
+                    {status}
+                  </span>
+                  <span className="font-mono text-xs font-bold tabular-nums">{count}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground/40">No data</p>
+          )}
         </StatusCard>
 
-        {/* Enrichment Provider Summary */}
+        {/* Provider Status */}
         <StatusCard
           icon={Zap}
           iconColor="text-zbooni-green"
           bgColor="bg-zbooni-green/10"
-          label="Provider Health"
+          label="Provider Status"
         >
           <div className="space-y-2">
-            {PLACEHOLDER_PROVIDER_SUMMARY.map((provider) => (
+            {[
+              { name: 'SerpAPI', configured: true },
+              { name: 'Hunter', configured: true },
+              { name: 'Apollo', configured: false },
+            ].map((provider) => (
               <div key={provider.name} className="flex items-center justify-between">
                 <span className="text-[11px] font-medium text-muted-foreground/60">
                   {provider.name}
                 </span>
-                <div className="flex items-center gap-1.5">
-                  <div className="h-1 w-10 overflow-hidden rounded-full bg-zbooni-dark/60">
-                    <div
-                      className="h-full rounded-full bg-zbooni-green/70"
-                      style={{ width: `${Math.round(provider.successRate * 100)}%` }}
-                    />
+                {provider.configured ? (
+                  <div className="flex items-center gap-1">
+                    <CheckCircle2 className="h-3 w-3 text-zbooni-green" />
+                    <span className="text-[10px] font-semibold text-zbooni-green">Active</span>
                   </div>
-                  <span className="font-mono text-[10px] font-bold tabular-nums text-zbooni-green">
-                    {Math.round(provider.successRate * 100)}%
-                  </span>
-                </div>
+                ) : (
+                  <div className="flex items-center gap-1">
+                    <AlertTriangle className="h-3 w-3 text-muted-foreground/40" />
+                    <span className="text-[10px] font-semibold text-muted-foreground/40">Not configured</span>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -673,7 +657,9 @@ export default function ControlsSettingsPage() {
           label="Pending Approvals"
         >
           <div className="flex flex-col items-center py-2">
-            <span className="text-2xl font-extrabold tracking-tight text-yellow-400">7</span>
+            <span className="text-2xl font-extrabold tracking-tight text-yellow-400">
+              {stats.data?.pendingApprovals ?? pendingDrafts.data?.total ?? 0}
+            </span>
             <p className="mt-1 text-[10px] font-medium text-muted-foreground/40">
               Message drafts awaiting review
             </p>
@@ -754,34 +740,12 @@ export default function ControlsSettingsPage() {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border/50 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
-                <th className="py-2.5 pr-4">Event Type</th>
-                <th className="py-2.5 pr-4">Status</th>
-                <th className="py-2.5">Created</th>
-              </tr>
-            </thead>
-            <tbody>
-              {PLACEHOLDER_OUTBOX_EVENTS.map((event) => (
-                <tr
-                  key={event.id}
-                  className="border-b border-border/20 last:border-0"
-                >
-                  <td className="py-3 pr-4">
-                    <span className="font-mono text-xs font-semibold">{event.type}</span>
-                  </td>
-                  <td className="py-3 pr-4">
-                    <OutboxStatusBadge status={event.status} />
-                  </td>
-                  <td className="py-3 text-xs tabular-nums text-muted-foreground/60">
-                    {new Date(event.createdAt).toLocaleString()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="flex flex-col items-center justify-center py-8 text-center">
+          <FileText className="mb-2 h-8 w-8 text-muted-foreground/20" />
+          <p className="text-sm font-medium text-muted-foreground/50">No recent events</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground/30">
+            Pipeline events will appear here as discovery runs process
+          </p>
         </div>
       </div>
     </div>

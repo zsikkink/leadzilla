@@ -14,6 +14,8 @@ import type {
   IcpProfileResponse,
   ListDiscoveryRecordsQuery,
   ListDiscoveryRecordsResponse,
+  ListDiscoveryRunsQuery,
+  ListDiscoveryRunsResponse,
   ListIcpProfilesQuery,
   ListIcpProfilesResponse,
   ListLeadsQuery,
@@ -26,6 +28,7 @@ import type {
   ManagerRecommendationsResponse,
   MessageDraftResponse,
   ModelMetricsResponse,
+  PipelineStatsResponse,
   QualificationRuleResponse,
   RetrainStatusResponse,
   ScoreDistributionResponse,
@@ -247,6 +250,15 @@ export class ApiClient {
   listDiscoveryRecords(query?: ListDiscoveryRecordsQuery): Promise<ListDiscoveryRecordsResponse> {
     const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
     return this.request(`/v1/discovery/records${qs}`);
+  }
+
+  listDiscoveryRuns(query?: ListDiscoveryRunsQuery): Promise<ListDiscoveryRunsResponse> {
+    const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
+    return this.request(`/v1/discovery/runs${qs}`);
+  }
+
+  getPipelineStats(): Promise<PipelineStatsResponse> {
+    return this.request('/v1/stats/pipeline');
   }
 
   // ── Settings ───────────────────────────────────

@@ -5,6 +5,8 @@ import type {
   DiscoveryRunStatusResponse,
   ListDiscoveryRecordsQuery,
   ListDiscoveryRecordsResponse,
+  ListDiscoveryRunsQuery,
+  ListDiscoveryRunsResponse,
   PipelineRunStatus,
 } from '@lead-flood/contracts';
 
@@ -33,6 +35,7 @@ export interface DiscoveryService {
   createDiscoveryRun(input: CreateDiscoveryRunRequest): Promise<CreateDiscoveryRunResponse>;
   getDiscoveryRunStatus(runId: string): Promise<DiscoveryRunStatusResponse>;
   listDiscoveryRecords(query: ListDiscoveryRecordsQuery): Promise<ListDiscoveryRecordsResponse>;
+  listDiscoveryRuns(query: ListDiscoveryRunsQuery): Promise<ListDiscoveryRunsResponse>;
 }
 
 export function buildDiscoveryService(
@@ -77,6 +80,9 @@ export function buildDiscoveryService(
     },
     async listDiscoveryRecords(query) {
       return repository.listDiscoveryRecords(query);
+    },
+    async listDiscoveryRuns(query) {
+      return repository.listDiscoveryRuns(query);
     },
   };
 }

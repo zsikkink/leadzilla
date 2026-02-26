@@ -360,7 +360,6 @@ async function main(): Promise<void> {
           {
             reason: 'api',
             correlationId: payload.runId,
-            jobRunId: payload.runId,
             countries: payload.countries,
             discoveryRunId: payload.runId,
             icpProfileId: payload.icpProfileId,

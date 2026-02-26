@@ -182,6 +182,20 @@ export async function handleDiscoverySeedJob(
           }),
         },
       });
+    } else if (job.data.discoveryRunId) {
+      await prisma.jobExecution.update({
+        where: { id: job.data.discoveryRunId },
+        data: {
+          status: 'running',
+          startedAt: new Date(),
+          result: toInputJson({
+            totalItems: seedResult.generated,
+            processedItems: 0,
+            failedItems: 0,
+            searchTasksInserted: seedResult.inserted,
+          }),
+        },
+      });
     }
   } catch (error: unknown) {
     if (job.data.jobRunId) {
@@ -193,6 +207,15 @@ export async function handleDiscoverySeedJob(
           durationMs: Math.max(0, Date.now() - startedAt),
           errorText:
             error instanceof Error ? error.message : 'Failed to execute discovery seed job',
+        },
+      });
+    } else if (job.data.discoveryRunId) {
+      await prisma.jobExecution.update({
+        where: { id: job.data.discoveryRunId },
+        data: {
+          status: 'failed',
+          error: error instanceof Error ? error.message : 'Failed to execute discovery seed job',
+          finishedAt: new Date(),
         },
       });
     }

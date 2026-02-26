@@ -8,6 +8,8 @@ import {
   ErrorResponseSchema,
   ListDiscoveryRecordsQuerySchema,
   ListDiscoveryRecordsResponseSchema,
+  ListDiscoveryRunsQuerySchema,
+  ListDiscoveryRunsResponseSchema,
 } from '@lead-flood/contracts';
 
 import { z } from 'zod';
@@ -158,6 +160,23 @@ export function registerDiscoveryRoutes(
         requestedByUserId: parsed.data.requestedByUserId ?? userId,
       });
       return CreateDiscoveryRunResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.get('/v1/discovery/runs', async (request, reply) => {
+    const parsedQuery = ListDiscoveryRunsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid discovery runs query');
+    }
+
+    try {
+      const result = await service.listDiscoveryRuns(parsedQuery.data);
+      return ListDiscoveryRunsResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;

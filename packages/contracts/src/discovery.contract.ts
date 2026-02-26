@@ -176,6 +176,57 @@ export type DiscoveryQualityMetrics = z.infer<typeof DiscoveryQualityMetricsSche
 export type ListDiscoveryRecordsResponse = z.infer<
   typeof ListDiscoveryRecordsResponseSchema
 >;
+// ── List Discovery Runs ─────────────────────────────────────────────────
+export const ListDiscoveryRunsQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(50).default(20),
+  })
+  .strict();
+
+export const DiscoveryRunSummarySchema = z
+  .object({
+    runId: z.string(),
+    status: DiscoveryPipelineRunStatusSchema,
+    totalItems: z.number().int().min(0),
+    processedItems: z.number().int().min(0),
+    failedItems: z.number().int().min(0),
+    createdAt: z.string().datetime(),
+    startedAt: z.string().datetime().nullable(),
+    finishedAt: z.string().datetime().nullable(),
+    icpProfileId: z.string().nullable(),
+    countries: z.array(z.string()),
+    limit: z.number().int().min(0),
+    errorMessage: z.string().nullable(),
+  })
+  .strict();
+
+export const ListDiscoveryRunsResponseSchema = z
+  .object({
+    runs: z.array(DiscoveryRunSummarySchema),
+    page: z.number().int().min(1),
+    pageSize: z.number().int().min(1),
+    total: z.number().int().min(0),
+  })
+  .strict();
+
+// ── Pipeline Stats ──────────────────────────────────────────────────────
+export const PipelineStatsResponseSchema = z
+  .object({
+    leadDistribution: z.object({
+      discovered: z.number().int().min(0),
+      enriched: z.number().int().min(0),
+      scored: z.number().int().min(0),
+      messaged: z.number().int().min(0),
+    }),
+    pendingApprovals: z.number().int().min(0),
+  })
+  .strict();
+
 export type CostEventProvider = z.infer<typeof CostEventProviderSchema>;
 export type DiscoveryCostSummary = z.infer<typeof DiscoveryCostSummarySchema>;
 export type DiscoveryAdvancedSettings = z.infer<typeof DiscoveryAdvancedSettingsSchema>;
+export type ListDiscoveryRunsQuery = z.infer<typeof ListDiscoveryRunsQuerySchema>;
+export type DiscoveryRunSummary = z.infer<typeof DiscoveryRunSummarySchema>;
+export type ListDiscoveryRunsResponse = z.infer<typeof ListDiscoveryRunsResponseSchema>;
+export type PipelineStatsResponse = z.infer<typeof PipelineStatsResponseSchema>;

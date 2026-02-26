@@ -15,7 +15,6 @@ import {
   Settings2,
   Target,
   TrendingUp,
-  Users,
   Zap,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -49,17 +48,6 @@ const LIMIT_OPTIONS = [
 ];
 
 // ── Sub-components ──────────────────────────────────────
-
-interface RunState {
-  runId: string;
-  status: PipelineRunStatus;
-  totalItems: number;
-  processedItems: number;
-  failedItems: number;
-  startedAt: string | null;
-  endedAt: string | null;
-  errorMessage: string | null;
-}
 
 function StatusIcon({ status }: { status: PipelineRunStatus }) {
   switch (status) {
@@ -269,9 +257,42 @@ export default function DiscoverPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Run tracking
-  const [activeRun, setActiveRun] = useState<RunState | null>(null);
+  // Run tracking — multi-run via API
+  const [runsRefreshKey, setRunsRefreshKey] = useState(0);
+  const discoveryRuns = useApiQuery(
+    useCallback(
+      () => apiClient.listDiscoveryRuns({ page: 1, pageSize: 20 }),
+      [apiClient, runsRefreshKey],
+    ),
+    [runsRefreshKey],
+  );
+
+  // Poll for runs when any are QUEUED or RUNNING
+  const hasActiveRuns = discoveryRuns.data?.runs.some(
+    (r) => r.status === 'QUEUED' || r.status === 'RUNNING',
+  );
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (!hasActiveRuns) {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      return;
+    }
+
+    pollRef.current = setInterval(() => {
+      setRunsRefreshKey((k) => k + 1);
+    }, 3000);
+
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [hasActiveRuns]);
 
   // Load ICPs
   const icps = useApiQuery(
@@ -340,61 +361,6 @@ export default function DiscoverPage() {
     });
   };
 
-  // Recent discovery records — filter by first selected ICP
-  const records = useApiQuery(
-    useCallback(
-      () =>
-        apiClient.listDiscoveryRecords({
-          page: 1,
-          pageSize: 10,
-          includeQualityMetrics: true,
-          ...(firstSelectedIcpId ? { icpProfileId: firstSelectedIcpId } : {}),
-        }),
-      [apiClient, firstSelectedIcpId],
-    ),
-    [firstSelectedIcpId],
-  );
-
-  // Poll for run status
-  useEffect(() => {
-    if (!activeRun || activeRun.status === 'SUCCEEDED' || activeRun.status === 'FAILED') {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-      return;
-    }
-
-    pollRef.current = setInterval(async () => {
-      try {
-        const status = await apiClient.getDiscoveryRunStatus(activeRun.runId);
-        setActiveRun({
-          runId: status.runId,
-          status: status.status,
-          totalItems: status.totalItems,
-          processedItems: status.processedItems,
-          failedItems: status.failedItems,
-          startedAt: status.startedAt,
-          endedAt: status.endedAt,
-          errorMessage: status.errorMessage,
-        });
-
-        if (status.status === 'SUCCEEDED' || status.status === 'FAILED' || status.status === 'PARTIAL') {
-          records.refetch();
-        }
-      } catch {
-        // silently retry
-      }
-    }, 3000);
-
-    return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-  }, [activeRun, apiClient, records]);
-
   const handleStartDiscovery = async () => {
     if (selectedIcpIds.size === 0 || derivedCountries.length === 0) return;
 
@@ -408,34 +374,10 @@ export default function DiscoverPage() {
 
     try {
       // Launch a discovery run for each selected ICP
-      const icpId = Array.from(selectedIcpIds)[0]!;
-      const result = await apiClient.createDiscoveryRun({
-        icpProfileId: icpId,
-        countries: derivedCountries,
-        ...(cities ? { cities } : {}),
-        includeWebsiteAnalysis,
-        includeSocialMediaAnalysis,
-        ...(advancedSettings ? { advancedSettings } : {}),
-        limit: parseInt(limit, 10),
-        ...(user?.id ? { requestedByUserId: user.id } : {}),
-      });
-
-      setActiveRun({
-        runId: result.runId,
-        status: result.status,
-        totalItems: 0,
-        processedItems: 0,
-        failedItems: 0,
-        startedAt: null,
-        endedAt: null,
-        errorMessage: null,
-      });
-
-      // If multiple ICPs selected, fire off remaining runs (non-blocking)
-      const remainingIds = Array.from(selectedIcpIds).slice(1);
-      for (const id of remainingIds) {
-        void apiClient.createDiscoveryRun({
-          icpProfileId: id,
+      const allIds = Array.from(selectedIcpIds);
+      for (const icpId of allIds) {
+        await apiClient.createDiscoveryRun({
+          icpProfileId: icpId,
           countries: derivedCountries,
           ...(cities ? { cities } : {}),
           includeWebsiteAnalysis,
@@ -445,6 +387,9 @@ export default function DiscoverPage() {
           ...(user?.id ? { requestedByUserId: user.id } : {}),
         });
       }
+
+      // Refresh run list to show new runs
+      setRunsRefreshKey((k) => k + 1);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Failed to start discovery');
     } finally {
@@ -452,7 +397,7 @@ export default function DiscoverPage() {
     }
   };
 
-  const isRunning = activeRun && (activeRun.status === 'QUEUED' || activeRun.status === 'RUNNING');
+  const isRunning = hasActiveRuns;
 
   return (
     <div className="space-y-6">
@@ -608,7 +553,7 @@ export default function DiscoverPage() {
                     className="h-4 w-4 rounded border-border/50 bg-zbooni-dark/30 text-zbooni-teal accent-zbooni-teal"
                   />
                   <span className="text-sm font-medium">Website analysis</span>
-                  <span className="text-[10px] text-muted-foreground/50">Apify scraping</span>
+                  <span className="text-[10px] text-muted-foreground/50">Scrape website</span>
                 </label>
                 <label className="flex cursor-pointer items-center gap-2">
                   <input
@@ -712,177 +657,137 @@ export default function DiscoverPage() {
         </div>
       </div>
 
-      {/* Active Run Status */}
-      {activeRun ? (
-        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-base font-bold tracking-tight">
-              <Zap className="h-4 w-4 text-zbooni-green" />
-              Discovery Run
-            </h2>
-            <div className="flex items-center gap-2">
-              <StatusIcon status={activeRun.status} />
-              <span
-                className={`text-sm font-semibold ${
-                  activeRun.status === 'SUCCEEDED'
-                    ? 'text-zbooni-green'
-                    : activeRun.status === 'FAILED'
-                      ? 'text-red-400'
-                      : 'text-zbooni-teal'
-                }`}
-              >
-                {activeRun.status}
-              </span>
-            </div>
-          </div>
-
-          {/* Progress */}
-          {activeRun.totalItems > 0 || activeRun.status === 'RUNNING' ? (
-            <ProgressBar processed={activeRun.processedItems} total={activeRun.totalItems || parseInt(limit, 10)} />
-          ) : null}
-
-          {/* Stats */}
-          <div className="mt-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Total</p>
-              <p className="mt-0.5 text-lg font-bold">{activeRun.totalItems}</p>
-            </div>
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Processed</p>
-              <p className="mt-0.5 text-lg font-bold text-zbooni-green">{activeRun.processedItems}</p>
-            </div>
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Failed</p>
-              <p className="mt-0.5 text-lg font-bold text-red-400">{activeRun.failedItems}</p>
-            </div>
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Duration</p>
-              <p className="mt-0.5 text-lg font-bold">
-                {activeRun.startedAt
-                  ? activeRun.endedAt
-                    ? `${Math.round((new Date(activeRun.endedAt).getTime() - new Date(activeRun.startedAt).getTime()) / 1000)}s`
-                    : 'Running...'
-                  : 'Queued'}
-              </p>
-            </div>
-          </div>
-
-          {/* Error message */}
-          {activeRun.errorMessage ? (
-            <div className="mt-4 flex items-center gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              {activeRun.errorMessage}
-            </div>
-          ) : null}
-
-          {/* Success message */}
-          {activeRun.status === 'SUCCEEDED' ? (
-            <div className="mt-4 flex items-center gap-2 rounded-lg bg-zbooni-green/10 px-3 py-2 text-sm text-zbooni-green">
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
-              Discovery complete! {activeRun.processedItems} leads found. Check the Leads page to review them.
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/* Recent Discovery Records */}
+      {/* Discovery Runs */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-base font-bold tracking-tight">
-            <Users className="h-4 w-4 text-zbooni-teal" />
-            Recent Discoveries
+            <Zap className="h-4 w-4 text-zbooni-green" />
+            Discovery Runs
           </h2>
-          {records.data?.qualityMetrics ? (
-            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <span>
-                Emails: <strong className="text-foreground">{records.data.qualityMetrics.validEmailCount}</strong>
-              </span>
-              <span>
-                Industry match:{' '}
-                <strong className="text-foreground">
-                  {Math.round(records.data.qualityMetrics.industryMatchRate * 100)}%
-                </strong>
-              </span>
-              <span>
-                Geo match:{' '}
-                <strong className="text-foreground">
-                  {Math.round(records.data.qualityMetrics.geoMatchRate * 100)}%
-                </strong>
-              </span>
-            </div>
-          ) : null}
+          <button
+            type="button"
+            onClick={() => setRunsRefreshKey((k) => k + 1)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/40"
+          >
+            <Loader2 className={cn('h-3 w-3', discoveryRuns.isLoading && 'animate-spin')} />
+            Refresh
+          </button>
         </div>
 
-        {records.isLoading ? (
+        {discoveryRuns.isLoading && !discoveryRuns.data ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
-            Loading records...
+            Loading runs...
           </div>
         ) : null}
 
-        {!records.isLoading && records.data?.items.length === 0 ? (
+        {discoveryRuns.data && discoveryRuns.data.runs.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="mb-3 flex h-16 w-16 items-center justify-center rounded-2xl bg-zbooni-dark/60">
               <Search className="h-7 w-7 text-muted-foreground/40" />
             </div>
-            <p className="font-medium text-muted-foreground/60">No discoveries yet</p>
+            <p className="font-medium text-muted-foreground/60">No discovery runs yet</p>
             <p className="mt-1 max-w-sm text-sm text-muted-foreground/40">
-              Select an ICP profile above and start discovering leads matching your criteria.
+              Configure search above and start discovering leads.
             </p>
           </div>
         ) : null}
 
-        {records.data && records.data.items.length > 0 ? (
-          <div className="overflow-hidden rounded-xl border border-border/30">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border/30 bg-zbooni-dark/30">
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Provider</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Lead</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Discovered</th>
-                </tr>
-              </thead>
-              <tbody>
-                {records.data.items.map((record) => (
-                  <tr key={record.id} className="border-b border-border/20 last:border-0 transition-colors hover:bg-accent/30">
-                    <td className="px-4 py-2.5">
-                      <span className="rounded-full bg-zbooni-teal/10 px-2 py-0.5 text-xs font-medium text-zbooni-teal">
-                        {record.provider.replace(/_/g, ' ')}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <span
-                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                          record.status === 'DISCOVERED'
-                            ? 'bg-zbooni-green/15 text-zbooni-green'
-                            : record.status === 'DUPLICATE'
-                              ? 'bg-yellow-500/15 text-yellow-400'
-                              : record.status === 'ERROR'
-                                ? 'bg-red-500/15 text-red-400'
-                                : 'bg-gray-500/15 text-gray-400'
-                        }`}
-                      >
-                        {record.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                      {record.leadId.slice(0, 12)}...
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                      {new Date(record.discoveredAt).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
+        {discoveryRuns.data && discoveryRuns.data.runs.length > 0 ? (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {discoveryRuns.data.runs.map((run) => {
+              const statusColors: Record<string, string> = {
+                QUEUED: 'bg-gray-500/15 text-gray-400',
+                RUNNING: 'bg-zbooni-teal/15 text-zbooni-teal',
+                SUCCEEDED: 'bg-zbooni-green/15 text-zbooni-green',
+                FAILED: 'bg-red-500/15 text-red-400',
+                PARTIAL: 'bg-yellow-500/15 text-yellow-400',
+              };
+              const duration = run.startedAt
+                ? run.finishedAt
+                  ? `${Math.round((new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime()) / 1000)}s`
+                  : 'Running...'
+                : 'Queued';
+              const icpName = run.icpProfileId
+                ? (icps.data?.items.find((i) => i.id === run.icpProfileId)?.name ?? 'ICP')
+                : 'Unknown';
 
-        {records.data && records.data.total > 10 ? (
-          <p className="mt-3 text-center text-xs text-muted-foreground/60">
-            Showing 10 of {records.data.total} records. View all in the Leads page.
-          </p>
+              return (
+                <div
+                  key={run.runId}
+                  className="rounded-xl border border-border/30 bg-zbooni-dark/20 p-4 transition-colors hover:border-border/50"
+                >
+                  {/* Header: status + time */}
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <StatusIcon status={run.status} />
+                      <span
+                        className={cn(
+                          'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider',
+                          statusColors[run.status] ?? 'bg-muted/20 text-muted-foreground',
+                        )}
+                      >
+                        {run.status}
+                      </span>
+                    </div>
+                    <span className="text-[10px] tabular-nums text-muted-foreground/50">
+                      {new Date(run.createdAt).toLocaleString()}
+                    </span>
+                  </div>
+
+                  {/* ICP + countries */}
+                  <div className="mb-3 space-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <Target className="h-3 w-3 text-zbooni-teal" />
+                      <span className="text-xs font-semibold">{icpName}</span>
+                    </div>
+                    {run.countries.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {run.countries.map((c) => (
+                          <span key={c} className="rounded bg-zbooni-teal/10 px-1.5 py-0.5 text-[10px] text-zbooni-teal">
+                            {c}
+                          </span>
+                        ))}
+                        {run.limit > 0 ? (
+                          <span className="rounded bg-muted/20 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                            {run.limit} leads
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* Progress bar */}
+                  {run.totalItems > 0 || run.status === 'RUNNING' ? (
+                    <ProgressBar
+                      processed={run.processedItems}
+                      total={run.totalItems || run.limit || 1}
+                    />
+                  ) : null}
+
+                  {/* Stats row */}
+                  <div className="mt-2 flex items-center gap-3 text-[10px] text-muted-foreground/60">
+                    <span>
+                      Processed: <strong className="text-foreground">{run.processedItems}</strong>
+                    </span>
+                    {run.failedItems > 0 ? (
+                      <span>
+                        Failed: <strong className="text-red-400">{run.failedItems}</strong>
+                      </span>
+                    ) : null}
+                    <span className="ml-auto">{duration}</span>
+                  </div>
+
+                  {/* Error */}
+                  {run.errorMessage ? (
+                    <p className="mt-2 truncate rounded bg-red-500/10 px-2 py-1 text-[10px] text-red-400" title={run.errorMessage}>
+                      {run.errorMessage}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
         ) : null}
       </div>
 

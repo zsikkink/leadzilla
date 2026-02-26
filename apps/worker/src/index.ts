@@ -10,18 +10,18 @@ import type { DiscoveryProvider } from '@lead-flood/contracts';
 import { createLogger } from '@lead-flood/observability';
 import {
   ApolloDiscoveryAdapter,
-  ApifyInstagramAdapter,
-  ApifyWebsiteAdapter,
   BraveSearchAdapter,
   CompanySearchAdapter,
   GooglePlacesAdapter,
   HunterEnrichmentAdapter,
+  InstagramScraperAdapter,
   LinkedInScrapeAdapter,
   PdlEnrichmentAdapter,
   PublicWebLookupAdapter,
   OpenAiAdapter,
   ResendAdapter,
   TrengoAdapter,
+  WebsiteScraperAdapter,
 } from '@lead-flood/providers';
 
 import { loadWorkerEnv } from './env.js';
@@ -290,15 +290,8 @@ async function main(): Promise<void> {
     baseUrl: env.PUBLIC_LOOKUP_BASE_URL,
   });
 
-  const apifyWebsiteAdapter = new ApifyWebsiteAdapter({
-    apiKey: env.APIFY_API_KEY,
-    actorId: env.APIFY_WEBSITE_ACTOR_ID,
-  });
-
-  const apifyInstagramAdapter = new ApifyInstagramAdapter({
-    apiKey: env.APIFY_API_KEY,
-    actorId: env.APIFY_INSTAGRAM_ACTOR_ID,
-  });
+  const websiteScraperAdapter = new WebsiteScraperAdapter({});
+  const instagramScraperAdapter = new InstagramScraperAdapter({});
   const discoveryProviderOrder: DiscoveryProvider[] = [];
   if (env.COMPANY_SEARCH_ENABLED) discoveryProviderOrder.push('COMPANY_SEARCH_FREE');
   if (env.APOLLO_ENABLED) discoveryProviderOrder.push('APOLLO');
@@ -589,8 +582,8 @@ async function main(): Promise<void> {
           searchDomainContacts: (domain) => hunterAdapter.searchDomainContacts(domain),
           isConfigured: Boolean(env.HUNTER_API_KEY),
         },
-        apifyWebsiteAdapter: env.APIFY_ENABLED ? apifyWebsiteAdapter : undefined,
-        apifyInstagramAdapter: env.APIFY_ENABLED ? apifyInstagramAdapter : undefined,
+        websiteScraperAdapter,
+        instagramScraperAdapter,
         enqueueEnrichmentRun: async (payload) => {
           const enrichmentPayload: EnrichmentRunJobPayload = {
             runId: payload.runId,

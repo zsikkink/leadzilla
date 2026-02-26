@@ -42,6 +42,7 @@ import type { MessageGenerateJobPayload, MessagingSendJobPayload } from './modul
 import { registerScoringRoutes } from './modules/scoring/scoring.routes.js';
 import type { ScoringRunJobPayload } from './modules/scoring/scoring.service.js';
 import { registerSettingsRoutes } from './modules/settings/settings.routes.js';
+import { registerStatsRoutes } from './modules/stats/stats.routes.js';
 import { registerWebhookRoutes } from './modules/webhook/webhook.routes.js';
 
 export class LeadAlreadyExistsError extends Error {
@@ -367,6 +368,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         : {}),
     });
     registerSettingsRoutes(api);
+    registerStatsRoutes(api);
   };
 
   app.register(protectedRoutes);

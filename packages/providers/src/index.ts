@@ -14,3 +14,5 @@ export * from './whatsapp/trengo.adapter.js';
 export * from './whatsapp/trengo-webhook.js';
 export * from './scraping/apify-website.adapter.js';
 export * from './scraping/apify-instagram.adapter.js';
+export * from './scraping/website-scraper.adapter.js';
+export * from './scraping/instagram-scraper.adapter.js';

@@ -67,24 +67,26 @@ interface HunterDomainSearchResult {
   } | undefined;
 }
 
-interface ApifyWebsiteResult {
+interface WebsiteScraperResult {
   status: 'success' | 'retryable_error' | 'terminal_error';
   data?: {
     paymentWidgets: string[];
     hasShopify: boolean;
+    platform: string | null;
     hasBookingForm: boolean;
     hasPricingTiers: boolean;
     hasProductCatalog: boolean;
+    hasWhatsApp: boolean;
     detectedPlatforms: string[];
   } | undefined;
 }
 
-interface ApifyInstagramResult {
+interface InstagramScraperResult {
   status: 'success' | 'retryable_error' | 'terminal_error';
   data?: {
     followerCount: number;
     followingCount: number;
-    engagementRate: number;
+    engagementRate: number | null;
     recentPostCount: number;
     lastPostDate: string | null;
     bio: string | null;
@@ -102,12 +104,12 @@ export interface BusinessConvertJobDependencies {
     searchDomainContacts(domain: string): Promise<HunterDomainSearchResult>;
     isConfigured: boolean;
   };
-  apifyWebsiteAdapter?: {
-    scrapeWebsite(domain: string): Promise<ApifyWebsiteResult>;
+  websiteScraperAdapter?: {
+    scrapeWebsite(domain: string): Promise<WebsiteScraperResult>;
     isConfigured: boolean;
   } | undefined;
-  apifyInstagramAdapter?: {
-    scrapeProfile(handle: string): Promise<ApifyInstagramResult>;
+  instagramScraperAdapter?: {
+    scrapeProfile(handle: string): Promise<InstagramScraperResult>;
     isConfigured: boolean;
   } | undefined;
   enqueueEnrichmentRun?: ((payload: {
@@ -311,10 +313,10 @@ export async function handleBusinessConvertJob(
     return;
   }
 
-  // ── 4. Apify website scrape (optional) ────────────────────────────────
+  // ── 4. Website scrape (optional, zero cost — our own scraper) ─────────
   if (
     includeWebsiteAnalysis !== false &&
-    deps.apifyWebsiteAdapter?.isConfigured
+    deps.websiteScraperAdapter?.isConfigured
   ) {
     if (isCacheValid(business.websiteScrapedAt)) {
       logger.info(
@@ -322,7 +324,7 @@ export async function handleBusinessConvertJob(
         'Skipping website scrape — cache still valid',
       );
     } else {
-      const websiteResult = await deps.apifyWebsiteAdapter.scrapeWebsite(domain);
+      const websiteResult = await deps.websiteScraperAdapter.scrapeWebsite(domain);
 
       if (websiteResult.status === 'success' && websiteResult.data) {
         await prisma.business.update({
@@ -330,16 +332,6 @@ export async function handleBusinessConvertJob(
           data: {
             apifyWebsiteScrapeJson: toInputJson(websiteResult.data),
             websiteScrapedAt: new Date(),
-          },
-        });
-
-        await prisma.discoveryCostEvent.create({
-          data: {
-            discoveryRunId,
-            provider: 'APIFY_WEBSITE',
-            costCents: 5,
-            apiCallType: 'website_scrape',
-            businessId,
           },
         });
 
@@ -353,10 +345,10 @@ export async function handleBusinessConvertJob(
     }
   }
 
-  // ── 5. Apify Instagram scrape (optional) ──────────────────────────────
+  // ── 5. Instagram scrape (optional, zero cost — our own scraper) ──────
   if (
     includeSocialMediaAnalysis !== false &&
-    deps.apifyInstagramAdapter?.isConfigured &&
+    deps.instagramScraperAdapter?.isConfigured &&
     business.instagramHandle
   ) {
     if (isCacheValid(business.instagramScrapedAt)) {
@@ -365,7 +357,7 @@ export async function handleBusinessConvertJob(
         'Skipping Instagram scrape — cache still valid',
       );
     } else {
-      const igResult = await deps.apifyInstagramAdapter.scrapeProfile(
+      const igResult = await deps.instagramScraperAdapter.scrapeProfile(
         business.instagramHandle,
       );
 
@@ -375,16 +367,6 @@ export async function handleBusinessConvertJob(
           data: {
             apifyInstagramScrapeJson: toInputJson(igResult.data),
             instagramScrapedAt: new Date(),
-          },
-        });
-
-        await prisma.discoveryCostEvent.create({
-          data: {
-            discoveryRunId,
-            provider: 'APIFY_INSTAGRAM',
-            costCents: 3,
-            apiCallType: 'instagram_scrape',
-            businessId,
           },
         });
 
