@@ -8,7 +8,7 @@ export const QUALIFICATION_THRESHOLD = 0.5;
  * Feature keys consumed by the trained logistic regression model.
  * Must stay in sync with model.train NUMERIC_FEATURE_KEYS.
  *
- * 27 features: 20 original (noise removed) + 7 Wave-1 additions.
+ * 29 features: 20 original (noise removed) + 7 Wave-1 additions + 2 category-coverage additions.
  */
 export const TRAINED_MODEL_FEATURE_KEYS = [
   // ── Original 20 (noise features removed) ──
@@ -40,6 +40,9 @@ export const TRAINED_MODEL_FEATURE_KEYS = [
   'icp_segment_priority',
   'review_count_tier',
   'follower_count_tier',
+  // ── Category-coverage additions (2) ──
+  'bank_transfer_reliance',
+  'upsell_signals',
 ] as const;
 
 /**

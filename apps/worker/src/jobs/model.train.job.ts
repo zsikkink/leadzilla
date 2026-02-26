@@ -6,6 +6,7 @@ import type { Job, SendOptions } from 'pg-boss';
 
 import { adjustDeterministicWeights, computeFactorLift } from '../scoring/lift-analysis.js';
 import { splitDataset, trainLogisticRegression } from '../scoring/logistic.js';
+import { TRAINED_MODEL_FEATURE_KEYS } from '../scoring/shared.js';
 import {
   MODEL_EVALUATE_JOB_NAME,
   MODEL_EVALUATE_RETRY_OPTIONS,
@@ -46,45 +47,14 @@ export interface ModelTrainJobDependencies {
   boss: Pick<PgBoss, 'send'>;
 }
 
-/** Feature keys for the ML model — matches scoring shared TRAINED_MODEL_FEATURE_KEYS. */
-const NUMERIC_FEATURE_KEYS = [
-  'industry_supported',
-  'has_whatsapp',
-  'has_instagram',
-  'accepts_online_payments',
-  'review_count',
-  'follower_count',
-  'physical_address_present',
-  'physical_store_present',
-  'recent_activity',
-  'custom_order_signals',
-  'pure_self_serve_ecom',
-  'shopify_detected',
-  'abandonment_signal_detected',
-  'multi_staff_detected',
-  'follower_growth_signal',
-  'high_engagement_signal',
-  'has_booking_or_contact_form',
-  'variable_pricing_detected',
-  'industry_match',
-  'geo_match',
-  'high_ticket_signals',
-  'deposit_milestone_signals',
-  'subscription_billing_detected',
-  'international_customer_signals',
-  'icp_segment_priority',
-  'review_count_tier',
-  'follower_count_tier',
-] as const;
-
-export const FEATURE_KEYS_FOR_TRAINING = NUMERIC_FEATURE_KEYS;
+export const FEATURE_KEYS_FOR_TRAINING = TRAINED_MODEL_FEATURE_KEYS;
 
 function extractFeatureVector(featuresJson: unknown): number[] | null {
   if (!featuresJson || typeof featuresJson !== 'object') return null;
   const features = featuresJson as Record<string, unknown>;
 
   const vector: number[] = [];
-  for (const key of NUMERIC_FEATURE_KEYS) {
+  for (const key of TRAINED_MODEL_FEATURE_KEYS) {
     const raw = features[key];
     if (typeof raw === 'number' && Number.isFinite(raw)) {
       vector.push(raw);
@@ -212,7 +182,7 @@ export async function handleModelTrainJob(
 
     // 6. Create ModelVersion
     const coefficientsPayload = JSON.parse(JSON.stringify({
-      keys: [...NUMERIC_FEATURE_KEYS],
+      keys: [...TRAINED_MODEL_FEATURE_KEYS],
       values: trainResult.coefficients,
       intercept: trainResult.intercept,
       featureStats: trainResult.featureStats,
@@ -233,7 +203,7 @@ export async function handleModelTrainJob(
         stage: 'SHADOW',
         featureSchemaJson: {
           sourceVersion: 'features_v1',
-          keys: [...NUMERIC_FEATURE_KEYS],
+          keys: [...TRAINED_MODEL_FEATURE_KEYS],
         },
         coefficientsJson: coefficientsPayload,
         intercept: trainResult.intercept,

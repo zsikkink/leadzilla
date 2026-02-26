@@ -218,6 +218,14 @@ async function main(): Promise<void> {
     env,
     logger,
     verifyAccessToken,
+    checkUserActive: async (userId: string) => {
+      const rows = await prisma.$queryRaw<Array<{ banned_until: Date | null }>>`
+        SELECT banned_until FROM auth.users WHERE id = ${userId}::uuid LIMIT 1
+      `;
+      if (rows.length === 0) return false;
+      const bannedUntil = rows[0]!.banned_until;
+      return bannedUntil === null || bannedUntil < new Date();
+    },
     checkDatabaseHealth: async () => {
       try {
         await prisma.$queryRaw`SELECT 1`;

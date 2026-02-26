@@ -20,6 +20,7 @@ Quality: `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
 - Outbox pattern: API → OutboxEvent → Dispatcher → pg-boss → Worker
 - Error classification: RetryableError (pg-boss retries) vs PermanentError (mark failed, stop) vs unknown (retry)
 - **Agent teams skip hard work**: Parallel agent teams cherry-pick easy greenfield tasks and skip integration/wiring. For UI plans: (1) one objective per task — never compound bullets, (2) verify agent output against the full plan item-by-item, (3) visual QA is mandatory — typecheck/build passing does NOT mean UI is correct or complete
+- **Zero file overlap in parallel sessions**: When running multiple sessions concurrently, each session MUST own exclusive files. No two sessions may touch the same file. Restructure task grouping to eliminate overlap entirely — the merge conflict risk is never worth the time saved. Plan file ownership before writing prompts.
 - **Discovery button is the core product**: The "Start Discovery" flow requires UI → API POST /v1/discovery/runs → pg-boss discovery.seed job. Verify it works end-to-end after any discovery-related changes
 - **Dual DB**: API uses Supabase Postgres at `:54322` (apps/api/.env.local), Prisma CLI uses Docker at `:5434` (packages/db/.env). New migrations must be applied to BOTH databases
 
