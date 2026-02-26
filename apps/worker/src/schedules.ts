@@ -45,6 +45,16 @@ import {
   SCORING_BATCH_RETRY_OPTIONS,
 } from './jobs/scoring.batch.job.js';
 import {
+  LEAD_RECOVERY_JOB_NAME,
+  type LeadRecoveryJobPayload,
+  LEAD_RECOVERY_RETRY_OPTIONS,
+} from './jobs/lead.recovery.job.js';
+import {
+  OUTBOX_CLEANUP_JOB_NAME,
+  type OutboxCleanupJobPayload,
+  OUTBOX_CLEANUP_RETRY_OPTIONS,
+} from './jobs/outbox.cleanup.job.js';
+import {
   PIPELINE_HEALTH_JOB_NAME,
   type PipelineHealthJobPayload,
   PIPELINE_HEALTH_RETRY_OPTIONS,
@@ -202,6 +212,30 @@ export async function registerWorkerSchedules(boss: Pick<PgBoss, 'schedule'>): P
     {
       singletonKey: 'schedule:pipeline.health',
       ...PIPELINE_HEALTH_RETRY_OPTIONS,
+    },
+  );
+
+  await boss.schedule(
+    OUTBOX_CLEANUP_JOB_NAME,
+    '30 * * * *',
+    {
+      correlationId: 'scheduler:outbox.cleanup',
+    } satisfies OutboxCleanupJobPayload,
+    {
+      singletonKey: 'schedule:outbox.cleanup',
+      ...OUTBOX_CLEANUP_RETRY_OPTIONS,
+    },
+  );
+
+  await boss.schedule(
+    LEAD_RECOVERY_JOB_NAME,
+    '*/15 * * * *',
+    {
+      correlationId: 'scheduler:lead.recovery',
+    } satisfies LeadRecoveryJobPayload,
+    {
+      singletonKey: 'schedule:lead.recovery',
+      ...LEAD_RECOVERY_RETRY_OPTIONS,
     },
   );
 }

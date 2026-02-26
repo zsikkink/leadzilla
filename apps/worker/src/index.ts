@@ -124,6 +124,16 @@ import {
   handleDlqProcessJob,
   type DlqProcessJobPayload,
 } from './jobs/dlq.process.job.js';
+import {
+  LEAD_RECOVERY_JOB_NAME,
+  handleLeadRecoveryJob,
+  type LeadRecoveryJobPayload,
+} from './jobs/lead.recovery.job.js';
+import {
+  OUTBOX_CLEANUP_JOB_NAME,
+  handleOutboxCleanupJob,
+  type OutboxCleanupJobPayload,
+} from './jobs/outbox.cleanup.job.js';
 import { buildDefaultWorkerId, startJobRequestDispatcher } from './job-requests/dispatcher.js';
 import { EmailRateLimiter } from './messaging/email-rate-limiter.js';
 import { WhatsAppRateLimiter } from './messaging/rate-limiter.js';
@@ -688,6 +698,20 @@ async function main(): Promise<void> {
     logger,
     PIPELINE_HEALTH_JOB_NAME,
     handlePipelineHealthJob,
+  );
+
+  await registerWorker<OutboxCleanupJobPayload>(
+    boss,
+    logger,
+    OUTBOX_CLEANUP_JOB_NAME,
+    handleOutboxCleanupJob,
+  );
+
+  await registerWorker<LeadRecoveryJobPayload>(
+    boss,
+    logger,
+    LEAD_RECOVERY_JOB_NAME,
+    handleLeadRecoveryJob,
   );
 
   const shutdown = async (signal: string): Promise<void> => {

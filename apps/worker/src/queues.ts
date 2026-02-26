@@ -39,6 +39,8 @@ import {
   SCORING_BATCH_JOB_NAME,
   SCORING_BATCH_RETRY_OPTIONS,
 } from './jobs/scoring.batch.job.js';
+import { LEAD_RECOVERY_JOB_NAME, LEAD_RECOVERY_RETRY_OPTIONS } from './jobs/lead.recovery.job.js';
+import { OUTBOX_CLEANUP_JOB_NAME, OUTBOX_CLEANUP_RETRY_OPTIONS } from './jobs/outbox.cleanup.job.js';
 import {
   PIPELINE_HEALTH_JOB_NAME,
   PIPELINE_HEALTH_RETRY_OPTIONS,
@@ -182,6 +184,14 @@ export const WORKER_QUEUE_DEFINITIONS: readonly WorkerQueueDefinition[] = [
   {
     name: PIPELINE_HEALTH_JOB_NAME,
     retryOptions: normalizeRetryOptions(PIPELINE_HEALTH_JOB_NAME, PIPELINE_HEALTH_RETRY_OPTIONS),
+  },
+  {
+    name: OUTBOX_CLEANUP_JOB_NAME,
+    retryOptions: normalizeRetryOptions(OUTBOX_CLEANUP_JOB_NAME, OUTBOX_CLEANUP_RETRY_OPTIONS),
+  },
+  {
+    name: LEAD_RECOVERY_JOB_NAME,
+    retryOptions: normalizeRetryOptions(LEAD_RECOVERY_JOB_NAME, LEAD_RECOVERY_RETRY_OPTIONS),
   },
 ] as const;
 
