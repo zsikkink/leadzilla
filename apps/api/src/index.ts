@@ -352,12 +352,38 @@ async function main(): Promise<void> {
       }
     },
     enqueueDiscoveryRun: async (payload: DiscoveryRunJobPayload) => {
-      await boss.send('discovery.run', payload, {
-        singletonKey: `discovery.run:${payload.runId}`,
-        retryLimit: 3,
-        retryDelay: 30,
-        retryBackoff: true,
-      });
+      // Route to discovery.seed (SerpAPI pipeline v2) when countries are provided;
+      // otherwise fall back to legacy discovery.run.
+      if (payload.countries && payload.countries.length > 0) {
+        await boss.send(
+          'discovery.seed',
+          {
+            reason: 'api',
+            correlationId: payload.runId,
+            jobRunId: payload.runId,
+            countries: payload.countries,
+            discoveryRunId: payload.runId,
+            icpProfileId: payload.icpProfileId,
+            includeWebsiteAnalysis: payload.includeWebsiteAnalysis,
+            includeSocialMediaAnalysis: payload.includeSocialMediaAnalysis,
+            ...(payload.limit !== undefined ? { maxTasks: payload.limit } : {}),
+            enqueueRunTasks: true,
+          },
+          {
+            singletonKey: `discovery.seed:${payload.runId}`,
+            retryLimit: 3,
+            retryDelay: 60,
+            retryBackoff: true,
+          },
+        );
+      } else {
+        await boss.send('discovery.run', payload, {
+          singletonKey: `discovery.run:${payload.runId}`,
+          retryLimit: 3,
+          retryDelay: 30,
+          retryBackoff: true,
+        });
+      }
     },
     enqueueEnrichmentRun: async (payload: EnrichmentRunJobPayload) => {
       await boss.send('enrichment.run', payload, {

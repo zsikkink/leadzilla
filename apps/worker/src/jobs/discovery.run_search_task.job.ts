@@ -28,6 +28,11 @@ export interface DiscoveryRunSearchTaskJobPayload {
   jobRunId?: string;
   maxTasks?: number;
   timeBucket?: string;
+  /** Pipeline v2 fields — passed from discovery.seed to enable business.prequalify chaining. */
+  discoveryRunId?: string | undefined;
+  icpProfileId?: string | undefined;
+  includeWebsiteAnalysis?: boolean | undefined;
+  includeSocialMediaAnalysis?: boolean | undefined;
 }
 
 export interface DiscoveryRunSearchTaskLogger {
@@ -41,6 +46,14 @@ export interface DiscoveryRunSearchTaskDependencies {
   provider: SerpDiscoveryProvider;
   config: DiscoveryRuntimeConfig;
   maxTasks?: number;
+  enqueueBusinessPrequalify?: ((payload: {
+    businessId: string;
+    discoveryRunId: string;
+    icpProfileId: string;
+    includeWebsiteAnalysis?: boolean | undefined;
+    includeSocialMediaAnalysis?: boolean | undefined;
+    correlationId?: string | undefined;
+  }) => Promise<void>) | undefined;
 }
 
 interface RunState {
@@ -199,8 +212,44 @@ export async function handleDiscoveryRunSearchTaskJob(
   const runResult = await runSearchTask(
     dependencies.provider,
     dependencies.config,
-    job.data.timeBucket ? { timeBucket: job.data.timeBucket } : {},
+    {
+      ...(job.data.timeBucket ? { timeBucket: job.data.timeBucket } : {}),
+      ...(job.data.discoveryRunId ? { discoveryRunId: job.data.discoveryRunId } : {}),
+    },
   );
+
+  // ── Enqueue business.prequalify for each newly created business ──
+  if (
+    runResult.newBusinessIds.length > 0 &&
+    dependencies.enqueueBusinessPrequalify &&
+    job.data.discoveryRunId &&
+    job.data.icpProfileId
+  ) {
+    for (const businessId of runResult.newBusinessIds) {
+      await dependencies.enqueueBusinessPrequalify({
+        businessId,
+        discoveryRunId: job.data.discoveryRunId,
+        icpProfileId: job.data.icpProfileId,
+        ...(job.data.includeWebsiteAnalysis !== undefined
+          ? { includeWebsiteAnalysis: job.data.includeWebsiteAnalysis }
+          : {}),
+        ...(job.data.includeSocialMediaAnalysis !== undefined
+          ? { includeSocialMediaAnalysis: job.data.includeSocialMediaAnalysis }
+          : {}),
+        ...(correlationId ? { correlationId } : {}),
+      });
+    }
+
+    logger.info(
+      {
+        jobId: job.id,
+        queue: job.name,
+        discoveryRunId: job.data.discoveryRunId,
+        enqueuedPrequalifyCount: runResult.newBusinessIds.length,
+      },
+      'Enqueued business.prequalify for newly discovered businesses',
+    );
+  }
 
   if (runResult.taskId) {
     runState.processedTaskCount += 1;
@@ -316,6 +365,10 @@ export async function handleDiscoveryRunSearchTaskJob(
       jobRunId: job.data.jobRunId,
       maxTasks: effectiveMaxTasks,
       timeBucket: job.data.timeBucket,
+      discoveryRunId: job.data.discoveryRunId,
+      icpProfileId: job.data.icpProfileId,
+      includeWebsiteAnalysis: job.data.includeWebsiteAnalysis,
+      includeSocialMediaAnalysis: job.data.includeSocialMediaAnalysis,
     },
     {
       startAfter: startAfterSeconds,

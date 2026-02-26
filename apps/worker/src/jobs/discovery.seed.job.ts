@@ -39,6 +39,11 @@ export interface DiscoverySeedJobPayload {
   countries?: DiscoveryCountryCode[];
   languages?: DiscoveryLanguageCode[];
   enqueueRunTasks?: boolean;
+  /** Pipeline v2 fields — forwarded to search task workers for business.prequalify chaining. */
+  discoveryRunId?: string | undefined;
+  icpProfileId?: string | undefined;
+  includeWebsiteAnalysis?: boolean | undefined;
+  includeSocialMediaAnalysis?: boolean | undefined;
 }
 
 export interface DiscoverySeedLogger {
@@ -147,6 +152,10 @@ export async function handleDiscoverySeedJob(
             reason: 'seed',
             correlationId,
             jobRunId: job.data.jobRunId,
+            discoveryRunId: job.data.discoveryRunId,
+            icpProfileId: job.data.icpProfileId,
+            includeWebsiteAnalysis: job.data.includeWebsiteAnalysis,
+            includeSocialMediaAnalysis: job.data.includeSocialMediaAnalysis,
           },
           {
             ...DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,

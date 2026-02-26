@@ -45,6 +45,7 @@ interface SearchTaskRow {
 
 interface TaskProcessStats {
   newBusinesses: number;
+  newBusinessIds: string[];
   newSources: number;
   localBusinessCount: number;
   organicResultCount: number;
@@ -59,6 +60,7 @@ export interface RunSearchTaskResult {
   language?: 'en' | 'ar';
   durationMs: number;
   newBusinesses: number;
+  newBusinessIds: string[];
   newSources: number;
   localBusinessCount: number;
   organicResultCount: number;
@@ -68,6 +70,7 @@ export interface RunSearchTaskResult {
 
 export interface RunSearchTaskOptions {
   timeBucket?: string;
+  discoveryRunId?: string | undefined;
 }
 
 const SOCIAL_DOMAINS = new Set([
@@ -465,6 +468,7 @@ async function upsertSource(
 async function upsertBusinessFromLocalResult(
   task: SearchTaskRow,
   local: NormalizedLocalBusiness,
+  discoveryRunId?: string | undefined,
 ): Promise<{ businessId: string; created: boolean }> {
   const websiteDomain = deriveRootDomainFromUrl(local.websiteUrl ?? local.url);
   const phoneE164 = normalizePhoneE164(local.phone, task.country_code);
@@ -593,6 +597,7 @@ async function upsertBusinessFromLocalResult(
       recentActivity: signals.recentActivity,
       deterministicScore: signals.deterministicScore,
       scoreBand: signals.scoreBand,
+      ...(discoveryRunId ? { discoveryRunId } : {}),
     },
     select: {
       id: true,
@@ -628,9 +633,11 @@ async function insertEvidence(
 async function persistProviderResults(
   task: SearchTaskRow,
   providerResponse: NormalizedProviderResponse,
+  discoveryRunId?: string | undefined,
 ): Promise<TaskProcessStats> {
   let newSources = 0;
   let newBusinesses = 0;
+  const newBusinessIds: string[] = [];
 
   for (const result of providerResponse.organicResults) {
     const created = await upsertSource(
@@ -660,9 +667,10 @@ async function persistProviderResults(
       }
     }
 
-    const businessUpsert = await upsertBusinessFromLocalResult(task, local);
+    const businessUpsert = await upsertBusinessFromLocalResult(task, local, discoveryRunId);
     if (businessUpsert.created) {
       newBusinesses += 1;
+      newBusinessIds.push(businessUpsert.businessId);
       incrementMetric('new_businesses');
     }
 
@@ -683,6 +691,7 @@ async function persistProviderResults(
 
   return {
     newBusinesses,
+    newBusinessIds,
     newSources,
     localBusinessCount: providerResponse.localBusinesses.length,
     organicResultCount: providerResponse.organicResults.length,
@@ -775,6 +784,7 @@ export async function runSearchTask(
       status: 'EMPTY',
       durationMs: Date.now() - startedAt,
       newBusinesses: 0,
+      newBusinessIds: [],
       newSources: 0,
       localBusinessCount: 0,
       organicResultCount: 0,
@@ -786,7 +796,7 @@ export async function runSearchTask(
     const resultHash = hashResultSet(providerResponse);
     const unchanged = task.last_result_hash !== null && task.last_result_hash === resultHash;
 
-    const stats = await persistProviderResults(task, providerResponse);
+    const stats = await persistProviderResults(task, providerResponse, options.discoveryRunId);
     const isEmpty = stats.localBusinessCount === 0 && stats.organicResultCount === 0;
 
     const status: 'DONE' | 'SKIPPED' = isEmpty ? 'SKIPPED' : 'DONE';
@@ -810,6 +820,7 @@ export async function runSearchTask(
       attempts: task.attempts,
       durationMs: Date.now() - startedAt,
       newBusinesses: stats.newBusinesses,
+      newBusinessIds: stats.newBusinessIds,
       newSources: stats.newSources,
       localBusinessCount: stats.localBusinessCount,
       organicResultCount: stats.organicResultCount,
@@ -830,6 +841,7 @@ export async function runSearchTask(
       attempts: task.attempts,
       durationMs: Date.now() - startedAt,
       newBusinesses: 0,
+      newBusinessIds: [],
       newSources: 0,
       localBusinessCount: 0,
       organicResultCount: 0,

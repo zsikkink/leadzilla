@@ -483,6 +483,12 @@ async function main(): Promise<void> {
             ...(env.DISCOVERY_RUN_MAX_TASKS !== undefined
               ? { maxTasks: env.DISCOVERY_RUN_MAX_TASKS }
               : {}),
+            enqueueBusinessPrequalify: async (payload) => {
+              await boss.send(BUSINESS_PREQUALIFY_JOB_NAME, payload, {
+                singletonKey: `business.prequalify:${payload.businessId}`,
+                ...BUSINESS_PREQUALIFY_RETRY_OPTIONS,
+              });
+            },
           }),
         {
           batchSize: discoveryRuntimeConfig.concurrency,
