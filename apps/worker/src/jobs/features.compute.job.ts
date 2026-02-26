@@ -46,7 +46,7 @@ export interface FeaturesComputeDependencies {
   enqueueScoring?: boolean;
 }
 
-export const FEATURE_EXTRACTOR_VERSION = 'features_v1';
+export const FEATURE_EXTRACTOR_VERSION = 'features_v2';
 export const DRIFT_DETECTION_MIN_BATCH_SIZE = 5;
 export const DRIFT_DETECTION_THRESHOLD = 0.3;
 export const FEATURE_KEYS = [
@@ -63,13 +63,10 @@ export const FEATURE_KEYS = [
   'review_count',
   'follower_count',
   'physical_address_present',
-  'physical_location',
-  'physical_store_present',
   'recent_activity',
   'custom_order_signals',
   'pure_self_serve_ecom',
   'shopify_detected',
-  'abandonment_signal_detected',
   'multi_staff_detected',
   'follower_growth_signal',
   'high_engagement_signal',
@@ -97,6 +94,21 @@ export const FEATURE_KEYS = [
   'price_led_mindset',
   'rule_match_count',
   'hard_filter_passed',
+  // ── v2 features (Apify + Instagram + Apollo) ──
+  'apify_payment_widget_count',
+  'apify_has_shopify',
+  'apify_has_booking_form',
+  'apify_has_pricing_tiers',
+  'apify_has_product_catalog',
+  'apify_platform',
+  'instagram_follower_count',
+  'instagram_engagement_rate',
+  'instagram_is_business_account',
+  'instagram_days_since_last_post',
+  'instagram_has_bio_link',
+  'has_decision_maker_phone',
+  'decision_maker_seniority',
+  'contact_source',
 ] as const;
 
 function toInputJson(value: unknown): Prisma.InputJsonValue {
@@ -296,13 +308,10 @@ function buildFeaturePayload(input: {
   reviewCount: number;
   followerCount: number;
   physicalAddressPresent: boolean;
-  physicalLocation: boolean;
-  physicalStorePresent: boolean;
   recentActivity: boolean;
   customOrderSignals: boolean;
   pureSelfServeEcom: boolean;
   shopifyDetected: boolean;
-  abandonmentSignalDetected: boolean;
   multiStaffDetected: boolean;
   followerGrowthSignal: boolean;
   highEngagementSignal: boolean;
@@ -330,6 +339,21 @@ function buildFeaturePayload(input: {
   priceLedMindset: boolean;
   ruleMatchCount: number;
   hardFilterPassed: boolean;
+  // v2 features
+  apifyPaymentWidgetCount: number;
+  apifyHasShopify: boolean;
+  apifyHasBookingForm: boolean;
+  apifyHasPricingTiers: boolean;
+  apifyHasProductCatalog: boolean;
+  apifyPlatform: string;
+  instagramFollowerCount: number;
+  instagramEngagementRate: number;
+  instagramIsBusinessAccount: boolean;
+  instagramDaysSinceLastPost: number;
+  instagramHasBioLink: boolean;
+  hasDecisionMakerPhone: boolean;
+  decisionMakerSeniority: string;
+  contactSource: string;
 }): Record<(typeof FEATURE_KEYS)[number], unknown> {
   return {
     source_provider: input.sourceProvider,
@@ -345,13 +369,10 @@ function buildFeaturePayload(input: {
     review_count: input.reviewCount,
     follower_count: input.followerCount,
     physical_address_present: input.physicalAddressPresent,
-    physical_location: input.physicalLocation,
-    physical_store_present: input.physicalStorePresent,
     recent_activity: input.recentActivity,
     custom_order_signals: input.customOrderSignals,
     pure_self_serve_ecom: input.pureSelfServeEcom,
     shopify_detected: input.shopifyDetected,
-    abandonment_signal_detected: input.abandonmentSignalDetected,
     multi_staff_detected: input.multiStaffDetected,
     follower_growth_signal: input.followerGrowthSignal,
     high_engagement_signal: input.highEngagementSignal,
@@ -379,6 +400,21 @@ function buildFeaturePayload(input: {
     price_led_mindset: input.priceLedMindset,
     rule_match_count: input.ruleMatchCount,
     hard_filter_passed: input.hardFilterPassed,
+    // v2 features
+    apify_payment_widget_count: input.apifyPaymentWidgetCount,
+    apify_has_shopify: input.apifyHasShopify,
+    apify_has_booking_form: input.apifyHasBookingForm,
+    apify_has_pricing_tiers: input.apifyHasPricingTiers,
+    apify_has_product_catalog: input.apifyHasProductCatalog,
+    apify_platform: input.apifyPlatform,
+    instagram_follower_count: input.instagramFollowerCount,
+    instagram_engagement_rate: input.instagramEngagementRate,
+    instagram_is_business_account: input.instagramIsBusinessAccount,
+    instagram_days_since_last_post: input.instagramDaysSinceLastPost,
+    instagram_has_bio_link: input.instagramHasBioLink,
+    has_decision_maker_phone: input.hasDecisionMakerPhone,
+    decision_maker_seniority: input.decisionMakerSeniority,
+    contact_source: input.contactSource,
   };
 }
 
@@ -558,6 +594,35 @@ export async function handleFeaturesComputeJob(
       enrichmentSuccessRate = totalCount > 0 ? successCount / totalCount : 0;
     }
 
+    // ── Load Business + BusinessConversion for Apify/Apollo structured data ──
+    const business = lead.businessId
+      ? await prisma.business.findUnique({
+          where: { id: lead.businessId },
+          select: {
+            apifyWebsiteScrapeJson: true,
+            apifyInstagramScrapeJson: true,
+            websiteScrapedAt: true,
+            instagramScrapedAt: true,
+          },
+        })
+      : null;
+
+    const businessConversion = lead.businessId
+      ? await prisma.businessConversion.findFirst({
+          where: { leadId },
+          select: { apolloContactJson: true, hunterContactJson: true },
+          orderBy: { convertedAt: 'desc' },
+        })
+      : null;
+
+    // Parse Apify structured data (Tier 1)
+    const apifyWebsite = business?.apifyWebsiteScrapeJson && typeof business.apifyWebsiteScrapeJson === 'object'
+      ? (business.apifyWebsiteScrapeJson as Record<string, unknown>)
+      : null;
+    const apifyInstagram = business?.apifyInstagramScrapeJson && typeof business.apifyInstagramScrapeJson === 'object'
+      ? (business.apifyInstagramScrapeJson as Record<string, unknown>)
+      : null;
+
     const domain = normalizeString(lead.email.split('@')[1])?.toLowerCase() ?? null;
     const normalizedPayload =
       latestEnrichment?.normalizedPayload && typeof latestEnrichment.normalizedPayload === 'object'
@@ -590,69 +655,113 @@ export async function handleFeaturesComputeJob(
       ]) ?? null;
     const reviewCount =
       extractNumberFromSources(featureSources, ['reviewCount', 'reviews', 'ratingsCount']) ?? 0;
-    const followerCount =
-      extractNumberFromSources(featureSources, ['followerCount', 'followers', 'instagramFollowers']) ??
-      0;
+    const baseFollowerCount =
+      extractNumberFromSources(featureSources, ['followerCount', 'followers', 'instagramFollowers']) ?? 0;
     const recentActivityDays =
       extractNumberFromSources(featureSources, ['lastActivityDays', 'daysSinceLastPost']) ?? null;
 
+    // ── Extract Apify v2 structured features (Tier 1) ──
+    const apifyPaymentWidgets = Array.isArray(apifyWebsite?.paymentWidgets)
+      ? (apifyWebsite.paymentWidgets as string[])
+      : [];
+    const apifyPaymentWidgetCount = apifyPaymentWidgets.length;
+    const apifyHasShopify = asBoolean(apifyWebsite?.hasShopify) ?? false;
+    const apifyHasBookingForm = asBoolean(apifyWebsite?.hasBookingForm) ?? false;
+    const apifyHasPricingTiers = asBoolean(apifyWebsite?.hasPricingTiers) ?? false;
+    const apifyHasProductCatalog = asBoolean(apifyWebsite?.hasProductCatalog) ?? false;
+    const apifyDetectedPlatforms = Array.isArray(apifyWebsite?.detectedPlatforms)
+      ? (apifyWebsite.detectedPlatforms as string[])
+      : [];
+    const apifyPlatform = apifyDetectedPlatforms[0] ?? 'unknown';
+
+    const instagramFollowerCount = asNumber(apifyInstagram?.followerCount) ?? 0;
+    const instagramEngagementRate = asNumber(apifyInstagram?.engagementRate) ?? 0;
+    const instagramIsBusinessAccount = asBoolean(apifyInstagram?.isBusinessAccount) ?? false;
+    const instagramLastPostDate = typeof apifyInstagram?.lastPostDate === 'string'
+      ? new Date(apifyInstagram.lastPostDate)
+      : null;
+    const instagramDaysSinceLastPost = instagramLastPostDate
+      ? Math.max(0, Math.floor((Date.now() - instagramLastPostDate.getTime()) / 86_400_000))
+      : -1;
+    const instagramHasBioLink = typeof apifyInstagram?.bioLink === 'string' && apifyInstagram.bioLink.length > 0;
+
+    // Determine contact source and decision-maker seniority from BusinessConversion
+    const apolloContact = businessConversion?.apolloContactJson && typeof businessConversion.apolloContactJson === 'object'
+      ? (businessConversion.apolloContactJson as Record<string, unknown>)
+      : null;
+    const hunterContact = businessConversion?.hunterContactJson && typeof businessConversion.hunterContactJson === 'object'
+      ? (businessConversion.hunterContactJson as Record<string, unknown>)
+      : null;
+    const contactSource = apolloContact ? 'APOLLO' : hunterContact ? 'HUNTER' : 'NONE';
+    const hasDecisionMakerPhone = Boolean(lead.decisionMakerPhone);
+    const decisionMakerTitle = typeof apolloContact?.title === 'string' ? apolloContact.title.toLowerCase() : '';
+    const decisionMakerSeniority =
+      /owner|ceo|founder/i.test(decisionMakerTitle) ? 'executive'
+      : /director|vp|head/i.test(decisionMakerTitle) ? 'director'
+      : /manager/i.test(decisionMakerTitle) ? 'manager'
+      : decisionMakerTitle.length > 0 ? 'other'
+      : 'unknown';
+
+    // Reconcile follower count: prefer Instagram structured data over enrichment/keyword fallback
+    const followerCount = instagramFollowerCount > 0 ? instagramFollowerCount : baseFollowerCount;
+
+    // ── Feature extraction: Tier 1 (Apify) → Tier 2 (enrichment) → Tier 3 (keyword) ──
     const hasWhatsapp =
-      extractBooleanFromSources(featureSources, ['hasWhatsapp', 'whatsapp']) ??
-      includesAnyKeyword(featureSources, ['whatsapp', 'wa.me']);
+      (apifyPaymentWidgets.some((w) => w.toLowerCase().includes('whatsapp'))) ||
+      (extractBooleanFromSources(featureSources, ['hasWhatsapp', 'whatsapp']) ??
+      includesAnyKeyword(featureSources, ['whatsapp', 'wa.me']));
     const hasInstagram =
-      extractBooleanFromSources(featureSources, ['hasInstagram', 'instagramActive']) ??
-      includesAnyKeyword(featureSources, ['instagram.com', 'instagram']);
+      apifyInstagram !== null ||
+      (extractBooleanFromSources(featureSources, ['hasInstagram', 'instagramActive']) ??
+      includesAnyKeyword(featureSources, ['instagram.com', 'instagram']));
     const acceptsOnlinePayments =
-      extractBooleanFromSources(featureSources, ['acceptsOnlinePayments', 'onlinePayments']) ??
+      apifyPaymentWidgetCount > 0 ||
+      (extractBooleanFromSources(featureSources, ['acceptsOnlinePayments', 'onlinePayments']) ??
       includesAnyKeyword(featureSources, [
-        'online payment',
-        'checkout',
-        'stripe',
-        'paytabs',
-        'apple pay',
-        'mada',
-      ]);
+        'online payment', 'checkout', 'stripe', 'paytabs', 'apple pay', 'mada',
+      ]));
     const physicalAddressPresent =
       extractBooleanFromSources(featureSources, ['physicalAddressPresent', 'hasAddress']) ??
       Boolean(normalizeString(findValueByKey(featureSources, 'address')));
-    const physicalLocation =
-      extractBooleanFromSources(featureSources, ['physicalLocation']) ?? physicalAddressPresent;
-    const physicalStorePresent =
-      extractBooleanFromSources(featureSources, ['physicalStorePresent']) ??
-      physicalAddressPresent;
     const recentActivity =
-      extractBooleanFromSources(featureSources, ['recentActivity', 'isRecentlyActive']) ??
-      (recentActivityDays !== null ? recentActivityDays <= 45 : false);
+      (instagramDaysSinceLastPost >= 0 && instagramDaysSinceLastPost <= 45) ||
+      (extractBooleanFromSources(featureSources, ['recentActivity', 'isRecentlyActive']) ??
+      (recentActivityDays !== null ? recentActivityDays <= 45 : false));
     const customOrderSignals =
-      extractBooleanFromSources(featureSources, ['customOrderSignals']) ??
+      apifyHasBookingForm ||
+      (extractBooleanFromSources(featureSources, ['customOrderSignals']) ??
       includesAnyKeyword(featureSources, [
         'custom order', 'made to order', 'dm to order',
         'by appointment', 'request a quote', 'consultation',
         'proposal', 'bespoke', 'made-to-measure', 'inquire',
         'book a session', 'get a quote', 'request quote',
         'whatsapp order', 'dm for price', 'quotation', 'retainer',
-      ]);
+      ]));
     const shopifyDetected =
-      extractBooleanFromSources(featureSources, ['shopifyDetected']) ??
-      includesAnyKeyword(featureSources, ['shopify', 'myshopify']);
-    const abandonmentSignalDetected =
-      extractBooleanFromSources(featureSources, ['abandonmentSignalDetected']) ??
-      includesAnyKeyword(featureSources, ['abandoned cart', 'cart recovery']);
+      apifyHasShopify ||
+      (extractBooleanFromSources(featureSources, ['shopifyDetected']) ??
+      includesAnyKeyword(featureSources, ['shopify', 'myshopify']));
     const multiStaffDetected =
       extractBooleanFromSources(featureSources, ['multiStaffDetected']) ??
       (companySize !== null ? companySize >= 4 : false);
     const followerGrowthSignal =
-      extractBooleanFromSources(featureSources, ['followerGrowthSignal']) ??
-      ((extractNumberFromSources(featureSources, ['followerGrowthRate']) ?? 0) > 0);
+      (instagramFollowerCount > 0 && asNumber(apifyInstagram?.recentPostCount) !== null
+        ? instagramFollowerCount / Math.max(1, asNumber(apifyInstagram?.recentPostCount) ?? 1) > 100
+        : false) ||
+      (extractBooleanFromSources(featureSources, ['followerGrowthSignal']) ??
+      ((extractNumberFromSources(featureSources, ['followerGrowthRate']) ?? 0) > 0));
     const highEngagementSignal =
-      extractBooleanFromSources(featureSources, ['highEngagementSignal']) ??
-      ((extractNumberFromSources(featureSources, ['engagementRate']) ?? 0) >= 0.03);
+      instagramEngagementRate >= 0.03 ||
+      (extractBooleanFromSources(featureSources, ['highEngagementSignal']) ??
+      ((extractNumberFromSources(featureSources, ['engagementRate']) ?? 0) >= 0.03));
     const hasBookingOrContactForm =
-      extractBooleanFromSources(featureSources, ['hasBookingOrContactForm']) ??
-      includesAnyKeyword(featureSources, ['book now', 'book a call', 'contact us', 'appointment']);
+      apifyHasBookingForm ||
+      (extractBooleanFromSources(featureSources, ['hasBookingOrContactForm']) ??
+      includesAnyKeyword(featureSources, ['book now', 'book a call', 'contact us', 'appointment']));
     const variablePricingDetected =
-      extractBooleanFromSources(featureSources, ['variablePricingDetected']) ??
-      includesAnyKeyword(featureSources, ['starting at', 'from ', 'price on request']);
+      apifyHasPricingTiers ||
+      (extractBooleanFromSources(featureSources, ['variablePricingDetected']) ??
+      includesAnyKeyword(featureSources, ['starting at', 'from ', 'price on request']));
     const pureSelfServeEcom =
       extractBooleanFromSources(featureSources, ['pureSelfServeEcom']) ??
       (shopifyDetected && !hasWhatsapp && !customOrderSignals);
@@ -764,13 +873,10 @@ export async function handleFeaturesComputeJob(
       reviewCount,
       followerCount,
       physicalAddressPresent,
-      physicalLocation,
-      physicalStorePresent,
       recentActivity,
       customOrderSignals,
       pureSelfServeEcom,
       shopifyDetected,
-      abandonmentSignalDetected,
       multiStaffDetected,
       followerGrowthSignal,
       highEngagementSignal,
@@ -808,6 +914,21 @@ export async function handleFeaturesComputeJob(
       priceLedMindset,
       ruleMatchCount: 0,
       hardFilterPassed: false,
+      // v2 features
+      apifyPaymentWidgetCount,
+      apifyHasShopify,
+      apifyHasBookingForm,
+      apifyHasPricingTiers,
+      apifyHasProductCatalog,
+      apifyPlatform,
+      instagramFollowerCount,
+      instagramEngagementRate,
+      instagramIsBusinessAccount,
+      instagramDaysSinceLastPost,
+      instagramHasBioLink,
+      hasDecisionMakerPhone,
+      decisionMakerSeniority,
+      contactSource,
     });
 
     const deterministicPreview = evaluateDeterministicScore(asDeterministicRules(rules), {

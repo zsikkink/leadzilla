@@ -38,7 +38,7 @@ export async function getQualificationThreshold(): Promise<number> {
  * 29 features: 20 original (noise removed) + 7 Wave-1 additions + 2 category-coverage additions.
  */
 export const TRAINED_MODEL_FEATURE_KEYS = [
-  // ── Original 20 (noise features removed) ──
+  // ── Original (noise features physical_store_present + abandonment_signal_detected removed) ──
   'industry_supported',
   'has_whatsapp',
   'has_instagram',
@@ -46,12 +46,10 @@ export const TRAINED_MODEL_FEATURE_KEYS = [
   'review_count',
   'follower_count',
   'physical_address_present',
-  'physical_store_present',
   'recent_activity',
   'custom_order_signals',
   'pure_self_serve_ecom',
   'shopify_detected',
-  'abandonment_signal_detected',
   'multi_staff_detected',
   'follower_growth_signal',
   'high_engagement_signal',
@@ -70,6 +68,18 @@ export const TRAINED_MODEL_FEATURE_KEYS = [
   // ── Category-coverage additions (2) ──
   'bank_transfer_reliance',
   'upsell_signals',
+  // ── v2 additions (Apify + Instagram + Apollo) ──
+  'apify_payment_widget_count',
+  'apify_has_shopify',
+  'apify_has_booking_form',
+  'apify_has_pricing_tiers',
+  'apify_has_product_catalog',
+  'instagram_follower_count',
+  'instagram_engagement_rate',
+  'instagram_is_business_account',
+  'instagram_days_since_last_post',
+  'instagram_has_bio_link',
+  'has_decision_maker_phone',
 ] as const;
 
 /**

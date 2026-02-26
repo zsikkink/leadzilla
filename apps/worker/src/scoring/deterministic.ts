@@ -57,13 +57,28 @@ const FIELD_KEY_CATEGORY_MAP: Record<string, QualificationCategory> = {
   pure_self_serve_ecom: QUALIFICATION_CATEGORIES.GENERAL,
   shopify_detected: QUALIFICATION_CATEGORIES.GENERAL,
   subscription_billing_detected: QUALIFICATION_CATEGORIES.GENERAL,
-  abandonment_signal_detected: QUALIFICATION_CATEGORIES.GENERAL,
   price_led_mindset: QUALIFICATION_CATEGORIES.GENERAL,
 
   // Match signals
   industry_match: QUALIFICATION_CATEGORIES.GENERAL,
   geo_match: QUALIFICATION_CATEGORIES.GENERAL,
   icp_segment_priority: QUALIFICATION_CATEGORIES.GENERAL,
+
+  // v2 — Apify structured features
+  apify_payment_widget_count: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
+  apify_has_shopify: QUALIFICATION_CATEGORIES.GENERAL,
+  apify_has_booking_form: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
+  apify_has_pricing_tiers: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
+  apify_has_product_catalog: QUALIFICATION_CATEGORIES.GENERAL,
+
+  // v2 — Instagram structured features
+  instagram_follower_count: QUALIFICATION_CATEGORIES.SWITCHING_WILLINGNESS,
+  instagram_engagement_rate: QUALIFICATION_CATEGORIES.SWITCHING_WILLINGNESS,
+  instagram_is_business_account: QUALIFICATION_CATEGORIES.GENERAL,
+  instagram_has_bio_link: QUALIFICATION_CATEGORIES.SWITCHING_WILLINGNESS,
+
+  // v2 — Contact quality
+  has_decision_maker_phone: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
 };
 
 export interface DeterministicRule {
