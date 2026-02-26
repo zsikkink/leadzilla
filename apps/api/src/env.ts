@@ -55,6 +55,9 @@ const ApiEnvSchema = z.object({
   TRENGO_WEBHOOK_SECRET: z.string().min(1).optional(),
   RESEND_WEBHOOK_SECRET: z.string().min(1).optional(),
   ADMIN_API_KEY: z.string().min(1).optional(),
+  DISCOVERY_MAX_RUNS_PER_DAY: z.coerce.number().int().min(1).optional(),
+  DISCOVERY_MAX_CONCURRENT_RUNS: z.coerce.number().int().min(1).optional(),
+  DISCOVERY_MAX_LEADS_PER_RUN: z.coerce.number().int().min(1).optional(),
 });
 
 export type ApiEnv = z.infer<typeof ApiEnvSchema>;

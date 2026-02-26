@@ -24,6 +24,15 @@ export interface PipelineHealthLogger {
   error: (object: Record<string, unknown>, message: string) => void;
 }
 
+export interface PipelineHealthJobDependencies {
+  slackWebhookUrl?: string | undefined;
+  fetchImpl?: typeof fetch | undefined;
+  dlqDepthThreshold?: number | undefined;
+  staleJobMinutes?: number | undefined;
+  minSuccessRate?: number | undefined;
+  minEnrichmentRate?: number | undefined;
+}
+
 interface DlqDepthRow {
   name: string;
   count: bigint;
@@ -34,31 +43,79 @@ interface StaleJobRow {
   count: bigint;
 }
 
-const DLQ_DEPTH_THRESHOLD = 10;
-const STALE_JOB_MINUTES = 30;
+interface HealthAlert {
+  check: string;
+  message: string;
+  metric: number;
+  threshold: number;
+}
+
+const DEFAULT_DLQ_DEPTH_THRESHOLD = 10;
+const DEFAULT_STALE_JOB_MINUTES = 30;
+const DEFAULT_MIN_SUCCESS_RATE = 0.8;
+const DEFAULT_MIN_ENRICHMENT_RATE = 0.7;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const ONE_WEEK_MS = 7 * ONE_DAY_MS;
+
+async function sendSlackAlert(
+  logger: PipelineHealthLogger,
+  alerts: HealthAlert[],
+  deps: PipelineHealthJobDependencies,
+): Promise<void> {
+  if (!deps.slackWebhookUrl || alerts.length === 0) return;
+
+  const fetchFn = deps.fetchImpl ?? globalThis.fetch;
+  const lines = alerts.map(
+    (a) => `- *${a.check}*: ${a.message} (value: ${a.metric}, threshold: ${a.threshold})`,
+  );
+  const body = JSON.stringify({
+    text: `🚨 *Pipeline Health Alert* (${new Date().toISOString()})\n${lines.join('\n')}`,
+  });
+
+  try {
+    await fetchFn(deps.slackWebhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+  } catch {
+    // Slack notification is best-effort — don't fail the health check
+    logger.warn({ alertCount: alerts.length }, 'Failed to send Slack health alert');
+  }
+}
 
 export async function handlePipelineHealthJob(
   logger: PipelineHealthLogger,
   job: Job<PipelineHealthJobPayload>,
+  deps?: PipelineHealthJobDependencies,
 ): Promise<void> {
   const { correlationId } = job.data;
+  const resolvedDeps = deps ?? {};
+  const dlqDepthThreshold = resolvedDeps.dlqDepthThreshold ?? DEFAULT_DLQ_DEPTH_THRESHOLD;
+  const staleJobMinutes = resolvedDeps.staleJobMinutes ?? DEFAULT_STALE_JOB_MINUTES;
+  const minSuccessRate = resolvedDeps.minSuccessRate ?? DEFAULT_MIN_SUCCESS_RATE;
+  const minEnrichmentRate = resolvedDeps.minEnrichmentRate ?? DEFAULT_MIN_ENRICHMENT_RATE;
 
   logger.info(
     { jobId: job.id, queue: job.name, correlationId: correlationId ?? job.id },
     'Started pipeline.health job',
   );
 
+  const alerts: HealthAlert[] = [];
+
   try {
-    await checkDlqDepth(logger, job);
-    await checkStaleJobs(logger, job);
+    await checkDlqDepth(logger, job, dlqDepthThreshold, alerts);
+    await checkStaleJobs(logger, job, staleJobMinutes, alerts);
     await checkLeadThroughput(logger, job);
-    await checkMessageSendSuccessRate(logger, job);
-    await checkEnrichmentCompletionRate(logger, job);
+    await checkMessageSendSuccessRate(logger, job, minSuccessRate, alerts);
+    await checkEnrichmentCompletionRate(logger, job, minEnrichmentRate, alerts);
+
+    if (alerts.length > 0) {
+      await sendSlackAlert(logger, alerts, resolvedDeps);
+    }
 
     logger.info(
-      { jobId: job.id, queue: job.name, correlationId: correlationId ?? job.id },
+      { jobId: job.id, queue: job.name, correlationId: correlationId ?? job.id, alertCount: alerts.length },
       'Completed pipeline.health job',
     );
   } catch (error: unknown) {
@@ -73,6 +130,8 @@ export async function handlePipelineHealthJob(
 async function checkDlqDepth(
   logger: PipelineHealthLogger,
   job: Job<PipelineHealthJobPayload>,
+  threshold: number,
+  alerts: HealthAlert[],
 ): Promise<void> {
   try {
     const rows = await prisma.$queryRawUnsafe<DlqDepthRow[]>(
@@ -82,12 +141,18 @@ async function checkDlqDepth(
     let hasWarning = false;
     for (const row of rows) {
       const count = Number(row.count);
-      if (count > DLQ_DEPTH_THRESHOLD) {
+      if (count > threshold) {
         hasWarning = true;
         logger.warn(
           { jobId: job.id, check: 'dlq_depth', queue: row.name, count },
-          `Dead letter queue "${row.name}" has ${count} jobs (threshold: ${DLQ_DEPTH_THRESHOLD})`,
+          `Dead letter queue "${row.name}" has ${count} jobs (threshold: ${threshold})`,
         );
+        alerts.push({
+          check: 'dlq_depth',
+          message: `Queue "${row.name}" has ${count} dead-letter jobs`,
+          metric: count,
+          threshold,
+        });
       }
     }
 
@@ -108,10 +173,12 @@ async function checkDlqDepth(
 async function checkStaleJobs(
   logger: PipelineHealthLogger,
   job: Job<PipelineHealthJobPayload>,
+  staleMinutes: number,
+  alerts: HealthAlert[],
 ): Promise<void> {
   try {
     const rows = await prisma.$queryRawUnsafe<StaleJobRow[]>(
-      `SELECT name, count(*) FROM pgboss.job WHERE state = 'active' AND startedon < NOW() - INTERVAL '${STALE_JOB_MINUTES} minutes' GROUP BY name`,
+      `SELECT name, count(*) FROM pgboss.job WHERE state = 'active' AND startedon < NOW() - INTERVAL '${staleMinutes} minutes' GROUP BY name`,
     );
 
     let hasWarning = false;
@@ -119,9 +186,15 @@ async function checkStaleJobs(
       const count = Number(row.count);
       hasWarning = true;
       logger.warn(
-        { jobId: job.id, check: 'stale_jobs', queue: row.name, count, thresholdMinutes: STALE_JOB_MINUTES },
-        `Queue "${row.name}" has ${count} jobs stuck in active state for >${STALE_JOB_MINUTES}min`,
+        { jobId: job.id, check: 'stale_jobs', queue: row.name, count, thresholdMinutes: staleMinutes },
+        `Queue "${row.name}" has ${count} jobs stuck in active state for >${staleMinutes}min`,
       );
+      alerts.push({
+        check: 'stale_jobs',
+        message: `Queue "${row.name}" has ${count} stale active jobs (>${staleMinutes}min)`,
+        metric: count,
+        threshold: 0,
+      });
     }
 
     if (!hasWarning) {
@@ -190,6 +263,8 @@ async function checkLeadThroughput(
 async function checkMessageSendSuccessRate(
   logger: PipelineHealthLogger,
   job: Job<PipelineHealthJobPayload>,
+  minRate: number,
+  alerts: HealthAlert[],
 ): Promise<void> {
   try {
     const since = new Date(Date.now() - ONE_DAY_MS);
@@ -210,8 +285,7 @@ async function checkMessageSendSuccessRate(
     const successCount = sentCount + deliveredCount;
     const successRate = totalAttempted > 0 ? successCount / totalAttempted : 1;
 
-    // Warn if success rate drops below 80% with a meaningful sample
-    if (totalAttempted >= 5 && successRate < 0.8) {
+    if (totalAttempted >= 5 && successRate < minRate) {
       logger.warn(
         {
           jobId: job.id,
@@ -224,6 +298,12 @@ async function checkMessageSendSuccessRate(
         },
         `Message send success rate is ${(successRate * 100).toFixed(1)}% (${failedCount} failed out of ${totalAttempted})`,
       );
+      alerts.push({
+        check: 'message_send_rate',
+        message: `Success rate ${(successRate * 100).toFixed(1)}% (${failedCount} failed / ${totalAttempted} total)`,
+        metric: Number(successRate.toFixed(4)),
+        threshold: minRate,
+      });
     } else {
       logger.info(
         {
@@ -249,6 +329,8 @@ async function checkMessageSendSuccessRate(
 async function checkEnrichmentCompletionRate(
   logger: PipelineHealthLogger,
   job: Job<PipelineHealthJobPayload>,
+  minRate: number,
+  alerts: HealthAlert[],
 ): Promise<void> {
   try {
     // Count leads that have at least one score prediction (scored leads)
@@ -268,8 +350,7 @@ async function checkEnrichmentCompletionRate(
 
     const completionRate = totalScoredLeads > 0 ? totalEnrichedLeads / totalScoredLeads : 1;
 
-    // Warn if fewer than 70% of scored leads have enrichment data
-    if (totalScoredLeads >= 10 && completionRate < 0.7) {
+    if (totalScoredLeads >= 10 && completionRate < minRate) {
       logger.warn(
         {
           jobId: job.id,
@@ -280,6 +361,12 @@ async function checkEnrichmentCompletionRate(
         },
         `Enrichment completion rate is ${(completionRate * 100).toFixed(1)}% (${totalEnrichedLeads} enriched of ${totalScoredLeads} scored)`,
       );
+      alerts.push({
+        check: 'enrichment_completion',
+        message: `Enrichment rate ${(completionRate * 100).toFixed(1)}% (${totalEnrichedLeads} / ${totalScoredLeads})`,
+        metric: Number(completionRate.toFixed(4)),
+        threshold: minRate,
+      });
     } else {
       logger.info(
         {

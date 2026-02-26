@@ -36,7 +36,7 @@ export class EmailRateLimiter {
     const count = await this.prisma.messageSend.count({
       where: {
         channel: 'EMAIL',
-        status: { in: ['SENT', 'QUEUED'] },
+        status: 'SENT',
         createdAt: { gte: dayStartUtc },
       },
     });

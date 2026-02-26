@@ -133,6 +133,10 @@ const WorkerEnvSchema = z.object({
   JOB_REQUEST_POLL_MS: z.coerce.number().int().min(250).default(5000),
   JOB_REQUEST_MAX_PER_TICK: z.coerce.number().int().min(1).max(50).default(1),
   JOB_REQUEST_WORKER_ID: optionalNonEmptyString(),
+  PIPELINE_DLQ_DEPTH_THRESHOLD: z.coerce.number().int().min(1).default(10),
+  PIPELINE_STALE_JOB_MINUTES: z.coerce.number().int().min(1).default(30),
+  PIPELINE_MIN_SUCCESS_RATE: z.coerce.number().min(0).max(1).default(0.8),
+  PIPELINE_MIN_ENRICHMENT_RATE: z.coerce.number().min(0).max(1).default(0.7),
 });
 
 export type WorkerEnv = z.infer<typeof WorkerEnvSchema>;
