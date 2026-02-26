@@ -25,8 +25,14 @@ const env: ApiEnv = {
   ENRICHMENT_ENABLED: true,
 };
 
+const TEST_ADMIN_KEY = 'test-admin-key-secret';
+
 function authHeaders(): Record<string, string> {
   return { authorization: 'Bearer test-token' };
+}
+
+function adminHeaders(): Record<string, string> {
+  return { authorization: 'Bearer test-token', 'x-admin-key': TEST_ADMIN_KEY };
 }
 
 describe('qualification rules integration', () => {
@@ -91,6 +97,7 @@ describe('qualification rules integration', () => {
       getLeadById: async () => null,
       listLeads: async () => ({ items: [], page: 1, pageSize: 20, total: 0 }),
       getJobById: async () => null,
+      adminApiKey: TEST_ADMIN_KEY,
     });
 
     const listResponse = await server.inject({
@@ -129,7 +136,7 @@ describe('qualification rules integration', () => {
     const replaceResponse = await server.inject({
       method: 'PUT',
       url: `/v1/icps/${icp.id}/rules`,
-      headers: authHeaders(),
+      headers: adminHeaders(),
       payload: {
         rules: [
           {

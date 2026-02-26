@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { prisma } from '@lead-flood/db';
 import {
   CreateDiscoveryRunRequestSchema,
   CreateDiscoveryRunResponseSchema,
@@ -15,6 +16,10 @@ import {
   buildDiscoveryService,
   type DiscoveryRunJobPayload,
 } from './discovery.service.js';
+
+const DISCOVERY_MAX_RUNS_PER_DAY = Number(process.env.DISCOVERY_MAX_RUNS_PER_DAY) || 10;
+const DISCOVERY_MAX_CONCURRENT_RUNS = Number(process.env.DISCOVERY_MAX_CONCURRENT_RUNS) || 3;
+const DISCOVERY_MAX_LEADS_PER_RUN = Number(process.env.DISCOVERY_MAX_LEADS_PER_RUN) || 200;
 
 export interface DiscoveryRouteDependencies {
   enqueueDiscoveryRun?: (payload: DiscoveryRunJobPayload) => Promise<void>;
@@ -71,8 +76,72 @@ export function registerDiscoveryRoutes(
       return sendValidationError(reply, request.id, 'Invalid discovery run payload');
     }
 
+    const userId = request.user?.sub;
+    if (!userId) {
+      reply.status(401).send(
+        ErrorResponseSchema.parse({
+          error: 'Authentication required',
+          requestId: request.id,
+        }),
+      );
+      return;
+    }
+
+    // Cap leads per run
+    const cappedLimit = Math.min(parsed.data.limit ?? DISCOVERY_MAX_LEADS_PER_RUN, DISCOVERY_MAX_LEADS_PER_RUN);
+
+    // Check per-user concurrent runs (QUEUED or RUNNING)
+    const concurrentCount = await prisma.jobExecution.count({
+      where: {
+        type: 'discovery.run',
+        status: { in: ['queued', 'running'] },
+        payload: {
+          path: ['requestedByUserId'],
+          equals: userId,
+        },
+      },
+    });
+
+    if (concurrentCount >= DISCOVERY_MAX_CONCURRENT_RUNS) {
+      reply.status(429);
+      reply.header('retry-after', '60');
+      return ErrorResponseSchema.parse({
+        error: `Concurrent discovery run limit reached (max ${DISCOVERY_MAX_CONCURRENT_RUNS}). Wait for existing runs to complete.`,
+        requestId: request.id,
+      });
+    }
+
+    // Check per-user daily cap
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const dailyCount = await prisma.jobExecution.count({
+      where: {
+        type: 'discovery.run',
+        createdAt: { gte: twentyFourHoursAgo },
+        payload: {
+          path: ['requestedByUserId'],
+          equals: userId,
+        },
+      },
+    });
+
+    if (dailyCount >= DISCOVERY_MAX_RUNS_PER_DAY) {
+      const retryAfterSeconds = Math.ceil(
+        (twentyFourHoursAgo.getTime() + 24 * 60 * 60 * 1000 - Date.now()) / 1000,
+      );
+      reply.status(429);
+      reply.header('retry-after', String(Math.max(retryAfterSeconds, 60)));
+      return ErrorResponseSchema.parse({
+        error: `Daily discovery run limit reached (max ${DISCOVERY_MAX_RUNS_PER_DAY} per 24h).`,
+        requestId: request.id,
+      });
+    }
+
     try {
-      const result = await service.createDiscoveryRun(parsed.data);
+      const result = await service.createDiscoveryRun({
+        ...parsed.data,
+        limit: cappedLimit,
+        requestedByUserId: parsed.data.requestedByUserId ?? userId,
+      });
       return CreateDiscoveryRunResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {

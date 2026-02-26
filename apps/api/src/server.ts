@@ -25,7 +25,7 @@ import {
   ReadyResponseSchema,
 } from '@lead-flood/contracts';
 
-import { buildAuthGuard, type VerifyAccessToken } from './auth/guard.js';
+import { buildAuthGuard, type AuthGuardOptions, type VerifyAccessToken } from './auth/guard.js';
 import type { ApiEnv } from './env.js';
 import { registerAnalyticsRoutes } from './modules/analytics/analytics.routes.js';
 import type { AnalyticsRollupJobPayload } from './modules/analytics/analytics.service.js';
@@ -97,6 +97,7 @@ export interface BuildServerOptions {
   triggerDiscoverySeedJob?: ((input: RunDiscoverySeedRequest) => Promise<TriggerJobRunResponse>) | undefined;
   triggerDiscoveryTaskRun?: ((input: RunDiscoveryTasksRequest) => Promise<TriggerJobRunResponse>) | undefined;
   adminApiKey?: string | undefined;
+  checkUserActive?: ((userId: string) => Promise<boolean>) | undefined;
   getLeadById: (leadId: string) => Promise<LeadRecord | null>;
   softDeleteLead?: ((leadId: string) => Promise<boolean>) | undefined;
   listLeads: (query: ListLeadsQuery) => Promise<ListLeadsResponse>;
@@ -171,7 +172,11 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 
   const verifyAccessToken = options.verifyAccessToken;
 
-  const authGuard = buildAuthGuard(verifyAccessToken);
+  const guardOptions: AuthGuardOptions = {};
+  if (options.checkUserActive) {
+    guardOptions.checkUserActive = options.checkUserActive;
+  }
+  const authGuard = buildAuthGuard(verifyAccessToken, guardOptions);
 
   const protectedRoutes: FastifyPluginAsync = async (api) => {
     api.addHook('onRequest', authGuard);
@@ -309,7 +314,9 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       });
     });
 
-    registerIcpRoutes(api);
+    registerIcpRoutes(api, {
+      ...(options.adminApiKey ? { adminApiKey: options.adminApiKey } : {}),
+    });
     if (options.enqueueDiscoveryRun) {
       registerDiscoveryRoutes(api, {
         enqueueDiscoveryRun: options.enqueueDiscoveryRun,
