@@ -97,6 +97,10 @@ describe('features.compute helpers', () => {
       'icp_segment_priority',
       'review_count_tier',
       'follower_count_tier',
+      'seasonal_signals',
+      'bank_transfer_reliance',
+      'upsell_signals',
+      'price_led_mindset',
       'rule_match_count',
       'hard_filter_passed',
     ]);

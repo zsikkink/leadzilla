@@ -40,15 +40,25 @@ const FIELD_KEY_CATEGORY_MAP: Record<string, QualificationCategory> = {
   international_customer_signals: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
   accepts_online_payments: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
 
-  // Risk & Urgency — "Failed payment kills deal, timing matters"
+  // Risk & Urgency — "Failed payment kills deal, timing matters, seasonal peaks"
   recent_activity: QUALIFICATION_CATEGORIES.RISK_URGENCY,
   has_booking_or_contact_form: QUALIFICATION_CATEGORIES.RISK_URGENCY,
+  seasonal_signals: QUALIFICATION_CATEGORIES.RISK_URGENCY,
+
+  // Operational Pain — "Manual reconciliation, hard to track, bank transfer reliance"
+  bank_transfer_reliance: QUALIFICATION_CATEGORIES.OPERATIONAL_PAIN,
+  upsell_signals: QUALIFICATION_CATEGORIES.OPERATIONAL_PAIN,
+
+  // Switching Willingness — "Growing business, engagement-focused, open to tools"
+  follower_growth_signal: QUALIFICATION_CATEGORIES.SWITCHING_WILLINGNESS,
+  high_engagement_signal: QUALIFICATION_CATEGORIES.SWITCHING_WILLINGNESS,
 
   // Disqualification signals (negative weight rules) — GENERAL
   pure_self_serve_ecom: QUALIFICATION_CATEGORIES.GENERAL,
   shopify_detected: QUALIFICATION_CATEGORIES.GENERAL,
   subscription_billing_detected: QUALIFICATION_CATEGORIES.GENERAL,
   abandonment_signal_detected: QUALIFICATION_CATEGORIES.GENERAL,
+  price_led_mindset: QUALIFICATION_CATEGORIES.GENERAL,
 
   // Match signals
   industry_match: QUALIFICATION_CATEGORIES.GENERAL,
@@ -362,13 +372,13 @@ export function evaluateDeterministicScore(
     qualificationPath = 'HARD_FILTERED';
   } else if (hasSalesMotion && hasPaymentComplexity && passedCategories.size >= 3) {
     qualificationPath = 'PROCEED';
-    categoryBonus = 0.15;
+    categoryBonus = 0.10;
   } else if (passedCategories.size >= 2) {
     qualificationPath = 'SELECTIVE';
     categoryBonus = 0.05;
   } else {
     qualificationPath = 'DISQUALIFY';
-    categoryBonus = -0.10;
+    categoryBonus = -0.15;
   }
 
   // --- Weighted-average scoring (existing formula + category adjustment) ---

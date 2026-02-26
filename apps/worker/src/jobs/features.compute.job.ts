@@ -91,6 +91,10 @@ export const FEATURE_KEYS = [
   'icp_segment_priority',
   'review_count_tier',
   'follower_count_tier',
+  'seasonal_signals',
+  'bank_transfer_reliance',
+  'upsell_signals',
+  'price_led_mindset',
   'rule_match_count',
   'hard_filter_passed',
 ] as const;
@@ -320,6 +324,10 @@ function buildFeaturePayload(input: {
   icpSegmentPriority: number;
   reviewCountTier: number;
   followerCountTier: number;
+  seasonalSignals: boolean;
+  bankTransferReliance: boolean;
+  upsellSignals: boolean;
+  priceLedMindset: boolean;
   ruleMatchCount: number;
   hardFilterPassed: boolean;
 }): Record<(typeof FEATURE_KEYS)[number], unknown> {
@@ -365,6 +373,10 @@ function buildFeaturePayload(input: {
     icp_segment_priority: input.icpSegmentPriority,
     review_count_tier: input.reviewCountTier,
     follower_count_tier: input.followerCountTier,
+    seasonal_signals: input.seasonalSignals,
+    bank_transfer_reliance: input.bankTransferReliance,
+    upsell_signals: input.upsellSignals,
+    price_led_mindset: input.priceLedMindset,
     rule_match_count: input.ruleMatchCount,
     hard_filter_passed: input.hardFilterPassed,
   };
@@ -618,6 +630,7 @@ export async function handleFeaturesComputeJob(
         'by appointment', 'request a quote', 'consultation',
         'proposal', 'bespoke', 'made-to-measure', 'inquire',
         'book a session', 'get a quote', 'request quote',
+        'whatsapp order', 'dm for price', 'quotation', 'retainer',
       ]);
     const shopifyDetected =
       extractBooleanFromSources(featureSources, ['shopifyDetected']) ??
@@ -651,6 +664,7 @@ export async function handleFeaturesComputeJob(
         'high-end', 'exclusive', 'by appointment only',
         'AED 5,000', 'AED 10,000', 'AED 50,000', 'AED 100,000',
         'starting at AED', 'from AED',
+        'charter', 'wedding package', 'treatment package',
       ]);
 
     const depositMilestoneSignals =
@@ -660,6 +674,7 @@ export async function handleFeaturesComputeJob(
         'staged payment', 'balance payment', 'partial payment',
         'installment', 'advance payment', 'balance due',
         'deposit', 'down payment',
+        'booking fee', 'reservation fee', 'retainer', 'progress payment',
       ]);
 
     const subscriptionBillingDetected =
@@ -676,6 +691,41 @@ export async function handleFeaturesComputeJob(
         'international clients', 'remote payment', 'worldwide',
         'multi-currency', 'global clients', 'international customers',
         'overseas', 'cross-border',
+        'GCC', 'expat', 'tourist',
+      ]);
+
+    const seasonalSignals =
+      extractBooleanFromSources(featureSources, ['seasonalSignals']) ??
+      includesAnyKeyword(featureSources, [
+        'seasonal collection', 'ramadan collection', 'eid collection',
+        'valentine special', 'holiday season', 'peak season',
+        'festive season', 'seasonal menu', 'seasonal offer',
+        'limited edition', 'trunk show', 'pop-up market',
+        'seasonal sale', "mother's day special",
+      ]);
+
+    const bankTransferReliance =
+      extractBooleanFromSources(featureSources, ['bankTransferReliance']) ??
+      includesAnyKeyword(featureSources, [
+        'bank transfer', 'wire transfer', 'IBAN',
+        'bank deposit', 'account transfer', 'swift transfer',
+        'bank details',
+      ]);
+
+    const upsellSignals =
+      extractBooleanFromSources(featureSources, ['upsellSignals']) ??
+      includesAnyKeyword(featureSources, [
+        'add-on', 'upgrade', 'upsell', 'extras',
+        'additional services', 'premium upgrade',
+        'add-on service', 'package upgrade',
+      ]);
+
+    const priceLedMindset =
+      extractBooleanFromSources(featureSources, ['priceLedMindset']) ??
+      includesAnyKeyword(featureSources, [
+        'lowest price', 'cheapest', 'budget-friendly',
+        'best price guarantee', 'price match', 'compare prices',
+        'bargain', 'wholesale pricing', 'economy',
       ]);
 
     const targetIndustries = new Set(icp.targetIndustries.map((entry) => entry.toLowerCase()));
@@ -752,6 +802,10 @@ export async function handleFeaturesComputeJob(
       icpSegmentPriority,
       reviewCountTier,
       followerCountTier,
+      seasonalSignals,
+      bankTransferReliance,
+      upsellSignals,
+      priceLedMindset,
       ruleMatchCount: 0,
       hardFilterPassed: false,
     });
