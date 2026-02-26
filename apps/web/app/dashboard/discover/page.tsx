@@ -1,35 +1,41 @@
 'use client';
 
-import type { DiscoveryProvider, IcpProfileResponse, PipelineRunStatus } from '@lead-flood/contracts';
+import type { IcpProfileResponse, PipelineRunStatus } from '@lead-flood/contracts';
 import {
   AlertCircle,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
+  Globe,
   Loader2,
+  MapPin,
   Play,
   Rocket,
   Search,
-  Sparkles,
+  Settings2,
   Target,
   TrendingUp,
   Users,
   Zap,
 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 import { cn } from '../../../src/lib/utils.js';
 
-// ── Provider options ──────────────────────────────────────
-const PROVIDER_OPTIONS: { value: string; label: string; description: string }[] = [
-  { value: '', label: 'Auto', description: 'Best match per ICP' },
-  { value: 'APOLLO', label: 'Apollo', description: 'B2B contacts' },
-  { value: 'BRAVE_SEARCH', label: 'Brave Search', description: 'Web results' },
-  { value: 'GOOGLE_PLACES', label: 'Google Places', description: 'Local businesses' },
-  { value: 'LINKEDIN_SCRAPE', label: 'LinkedIn', description: 'Professional profiles' },
-  { value: 'COMPANY_SEARCH_FREE', label: 'Company Search', description: 'Free company data' },
-];
+// ── City mapping by country ──────────────────────────────
+const COUNTRY_CITIES: Record<string, string[]> = {
+  AE: ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Ras Al Khaimah', 'Fujairah', 'Umm Al Quwain', 'Al Ain'],
+  SA: ['Riyadh', 'Jeddah', 'Dammam', 'Mecca', 'Medina', 'Khobar', 'Tabuk', 'Abha'],
+  BH: ['Manama', 'Muharraq', 'Riffa', 'Hamad Town'],
+  KW: ['Kuwait City', 'Hawalli', 'Salmiya', 'Jahra'],
+  QA: ['Doha', 'Al Wakrah', 'Al Khor', 'Lusail'],
+  OM: ['Muscat', 'Salalah', 'Sohar', 'Nizwa'],
+  EG: ['Cairo', 'Alexandria', 'Giza', 'Sharm El Sheikh'],
+  JO: ['Amman', 'Irbid', 'Zarqa', 'Aqaba'],
+  LB: ['Beirut', 'Tripoli', 'Sidon', 'Jounieh'],
+};
 
 const LIMIT_OPTIONS = [
   { value: '5', label: '5' },
@@ -41,36 +47,6 @@ const LIMIT_OPTIONS = [
   { value: '500', label: '500' },
   { value: '1000', label: '1000' },
 ];
-
-// Static recommended source mapping per ICP keyword pattern
-const RECOMMENDED_SOURCE_MAP: Record<string, { provider: string; reason: string }> = {
-  luxury: { provider: 'APOLLO', reason: 'Best for luxury B2B contacts' },
-  enterprise: { provider: 'APOLLO', reason: 'Deep B2B enrichment data' },
-  events: { provider: 'GOOGLE_PLACES', reason: 'Local event venues' },
-  restaurant: { provider: 'GOOGLE_PLACES', reason: 'Local business listings' },
-  retail: { provider: 'GOOGLE_PLACES', reason: 'Storefront discovery' },
-  saas: { provider: 'APOLLO', reason: 'Tech company contacts' },
-  ecommerce: { provider: 'BRAVE_SEARCH', reason: 'Web presence scanning' },
-  'e-commerce': { provider: 'BRAVE_SEARCH', reason: 'Web presence scanning' },
-  fintech: { provider: 'APOLLO', reason: 'Financial sector contacts' },
-  linkedin: { provider: 'LINKEDIN_SCRAPE', reason: 'Professional network' },
-  startup: { provider: 'LINKEDIN_SCRAPE', reason: 'Founder/exec profiles' },
-  local: { provider: 'GOOGLE_PLACES', reason: 'Local business focus' },
-};
-
-function getRecommendedSource(icp: IcpProfileResponse): { provider: string; reason: string } | null {
-  const searchText = `${icp.name} ${icp.description ?? ''} ${icp.targetIndustries.join(' ')}`.toLowerCase();
-  for (const [keyword, rec] of Object.entries(RECOMMENDED_SOURCE_MAP)) {
-    if (searchText.includes(keyword)) {
-      return rec;
-    }
-  }
-  return null;
-}
-
-function getProviderLabel(providerValue: string): string {
-  return PROVIDER_OPTIONS.find((p) => p.value === providerValue)?.label ?? providerValue;
-}
 
 // ── Sub-components ──────────────────────────────────────
 
@@ -121,8 +97,6 @@ function ProgressBar({ processed, total }: { processed: number; total: number })
 }
 
 function IcpPreviewCard({ icp }: { icp: IcpProfileResponse }) {
-  const recommendation = getRecommendedSource(icp);
-
   return (
     <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
       <div className="flex items-start gap-3">
@@ -132,12 +106,6 @@ function IcpPreviewCard({ icp }: { icp: IcpProfileResponse }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <p className="font-bold">{icp.name}</p>
-            {recommendation ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-zbooni-teal/10 px-2 py-0.5 text-[10px] font-semibold text-zbooni-teal">
-                <Sparkles className="h-3 w-3" />
-                Best: {getProviderLabel(recommendation.provider)}
-              </span>
-            ) : null}
           </div>
           {icp.description ? (
             <p className="mt-0.5 text-sm text-muted-foreground line-clamp-2">{icp.description}</p>
@@ -232,8 +200,6 @@ function IcpCheckbox({
   selected: boolean;
   onToggle: (id: string) => void;
 }) {
-  const recommendation = getRecommendedSource(icp);
-
   return (
     <button
       type="button"
@@ -266,12 +232,6 @@ function IcpCheckbox({
           <span className={cn('text-sm font-semibold', selected ? 'text-foreground' : 'text-muted-foreground')}>
             {icp.name}
           </span>
-          {recommendation ? (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-zbooni-teal/10 px-1.5 py-0.5 text-[10px] font-semibold text-zbooni-teal">
-              <Sparkles className="h-2.5 w-2.5" />
-              {getProviderLabel(recommendation.provider)}
-            </span>
-          ) : null}
         </div>
         {icp.description ? (
           <p className="mt-0.5 text-xs text-muted-foreground/70 line-clamp-1">{icp.description}</p>
@@ -298,9 +258,13 @@ function IcpCheckbox({
 export default function DiscoverPage() {
   const { apiClient, user } = useAuth();
 
-  // Form state: multi-ICP selection
+  // Form state: multi-ICP selection + pipeline v2 settings
   const [selectedIcpIds, setSelectedIcpIds] = useState<Set<string>>(new Set());
-  const [provider, setProvider] = useState('');
+  const [selectedCities, setSelectedCities] = useState<Set<string>>(new Set());
+  const [includeWebsiteAnalysis, setIncludeWebsiteAnalysis] = useState(true);
+  const [includeSocialMediaAnalysis, setIncludeSocialMediaAnalysis] = useState(true);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [minReviewCount, setMinReviewCount] = useState(15);
   const [limit, setLimit] = useState('25');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -319,6 +283,50 @@ export default function DiscoverPage() {
   const selectedIcp = firstSelectedIcpId
     ? (icps.data?.items.find((i) => i.id === firstSelectedIcpId) ?? null)
     : null;
+
+  // Derive countries from selected ICPs
+  const derivedCountries = useMemo(() => {
+    if (!icps.data) return [];
+    const countries = new Set<string>();
+    for (const id of selectedIcpIds) {
+      const icp = icps.data.items.find((i) => i.id === id);
+      if (icp) {
+        for (const c of icp.targetCountries) countries.add(c);
+      }
+    }
+    return Array.from(countries).sort();
+  }, [selectedIcpIds, icps.data]);
+
+  // Available cities based on derived countries
+  const availableCities = useMemo(() => {
+    const cities: string[] = [];
+    for (const country of derivedCountries) {
+      const mapped = COUNTRY_CITIES[country];
+      if (mapped) cities.push(...mapped);
+    }
+    return cities.sort();
+  }, [derivedCountries]);
+
+  // Reset city selection when countries change
+  useEffect(() => {
+    setSelectedCities((prev) => {
+      const citySet = new Set(availableCities);
+      const filtered = new Set(Array.from(prev).filter((c) => citySet.has(c)));
+      return filtered.size !== prev.size ? filtered : prev;
+    });
+  }, [availableCities]);
+
+  const toggleCity = (city: string) => {
+    setSelectedCities((prev) => {
+      const next = new Set(prev);
+      if (next.has(city)) {
+        next.delete(city);
+      } else {
+        next.add(city);
+      }
+      return next;
+    });
+  };
 
   const toggleIcp = (id: string) => {
     setSelectedIcpIds((prev) => {
@@ -388,22 +396,26 @@ export default function DiscoverPage() {
   }, [activeRun, apiClient, records]);
 
   const handleStartDiscovery = async () => {
-    if (selectedIcpIds.size === 0) return;
+    if (selectedIcpIds.size === 0 || derivedCountries.length === 0) return;
 
     setIsSubmitting(true);
     setSubmitError(null);
 
+    const cities = selectedCities.size > 0 ? Array.from(selectedCities) : undefined;
+    const advancedSettings = minReviewCount !== 15
+      ? { minReviewCount }
+      : undefined;
+
     try {
       // Launch a discovery run for each selected ICP
-      // For now, start the first one and track it; multi-ICP runs
-      // would be queued server-side
       const icpId = Array.from(selectedIcpIds)[0]!;
       const result = await apiClient.createDiscoveryRun({
         icpProfileId: icpId,
-        countries: ['AE'],
-        includeWebsiteAnalysis: true,
-        includeSocialMediaAnalysis: true,
-        ...(provider ? { provider: provider as DiscoveryProvider } : {}),
+        countries: derivedCountries,
+        ...(cities ? { cities } : {}),
+        includeWebsiteAnalysis,
+        includeSocialMediaAnalysis,
+        ...(advancedSettings ? { advancedSettings } : {}),
         limit: parseInt(limit, 10),
         ...(user?.id ? { requestedByUserId: user.id } : {}),
       });
@@ -424,10 +436,11 @@ export default function DiscoverPage() {
       for (const id of remainingIds) {
         void apiClient.createDiscoveryRun({
           icpProfileId: id,
-          countries: ['AE'],
-          includeWebsiteAnalysis: true,
-          includeSocialMediaAnalysis: true,
-          ...(provider ? { provider: provider as DiscoveryProvider } : {}),
+          countries: derivedCountries,
+          ...(cities ? { cities } : {}),
+          includeWebsiteAnalysis,
+          includeSocialMediaAnalysis,
+          ...(advancedSettings ? { advancedSettings } : {}),
           limit: parseInt(limit, 10),
           ...(user?.id ? { requestedByUserId: user.id } : {}),
         });
@@ -522,28 +535,127 @@ export default function DiscoverPage() {
           {/* ICP Preview */}
           {selectedIcp ? <IcpPreviewCard icp={selectedIcp} /> : null}
 
-          {/* Step 2: Provider — expanded inline pill selector */}
+          {/* Step 2: Search Settings — countries, cities, analysis toggles */}
           <div>
             <div className="mb-3 flex items-center gap-2">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zbooni-teal/10 text-xs font-bold text-zbooni-teal">
                 2
               </span>
-              <label className="text-sm font-semibold">Data Source</label>
-              <span className="text-xs text-muted-foreground">(optional)</span>
+              <label className="text-sm font-semibold">Search Settings</label>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {PROVIDER_OPTIONS.map((opt) => (
-                <PillOption
-                  key={opt.value}
-                  selected={provider === opt.value}
-                  onClick={() => setProvider(opt.value)}
+
+            <div className="space-y-4 rounded-xl border border-border/30 bg-zbooni-dark/10 p-4">
+              {/* Countries (derived from ICP, read-only display) */}
+              <div>
+                <div className="mb-2 flex items-center gap-1.5">
+                  <Globe className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-xs font-semibold text-muted-foreground">Target Countries</span>
+                </div>
+                {derivedCountries.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {derivedCountries.map((c) => (
+                      <span key={c} className="rounded-full bg-zbooni-teal/10 px-2.5 py-1 text-xs font-medium text-zbooni-teal">
+                        {c}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground/50">Select an ICP profile to see target countries</p>
+                )}
+              </div>
+
+              {/* Cities (optional multi-select) */}
+              {availableCities.length > 0 ? (
+                <div>
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-xs font-semibold text-muted-foreground">Cities</span>
+                      <span className="text-[10px] text-muted-foreground/50">(optional — empty = all cities)</span>
+                    </div>
+                    {selectedCities.size > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCities(new Set())}
+                        className="text-[10px] font-medium text-muted-foreground/60 hover:text-foreground"
+                      >
+                        Clear all
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {availableCities.map((city) => (
+                      <PillOption
+                        key={city}
+                        selected={selectedCities.has(city)}
+                        onClick={() => toggleCity(city)}
+                        className="px-2.5 py-1 text-xs"
+                      >
+                        {city}
+                      </PillOption>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Analysis toggles */}
+              <div className="flex flex-wrap gap-4">
+                <label className="flex cursor-pointer items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={includeWebsiteAnalysis}
+                    onChange={(e) => setIncludeWebsiteAnalysis(e.target.checked)}
+                    className="h-4 w-4 rounded border-border/50 bg-zbooni-dark/30 text-zbooni-teal accent-zbooni-teal"
+                  />
+                  <span className="text-sm font-medium">Website analysis</span>
+                  <span className="text-[10px] text-muted-foreground/50">Apify scraping</span>
+                </label>
+                <label className="flex cursor-pointer items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={includeSocialMediaAnalysis}
+                    onChange={(e) => setIncludeSocialMediaAnalysis(e.target.checked)}
+                    className="h-4 w-4 rounded border-border/50 bg-zbooni-dark/30 text-zbooni-teal accent-zbooni-teal"
+                  />
+                  <span className="text-sm font-medium">Social media analysis</span>
+                  <span className="text-[10px] text-muted-foreground/50">Instagram data</span>
+                </label>
+              </div>
+
+              {/* Advanced settings collapsible */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced((prev) => !prev)}
+                  className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground/70 hover:text-foreground"
                 >
-                  <span>{opt.label}</span>
-                  <span className="hidden text-[10px] font-normal text-muted-foreground/70 sm:inline">
-                    {opt.description}
-                  </span>
-                </PillOption>
-              ))}
+                  <Settings2 className="h-3.5 w-3.5" />
+                  Advanced Settings
+                  <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showAdvanced && 'rotate-180')} />
+                </button>
+                {showAdvanced ? (
+                  <div className="mt-3 space-y-3 border-t border-border/20 pt-3">
+                    <div>
+                      <div className="mb-1.5 flex items-center justify-between">
+                        <label className="text-xs font-semibold text-muted-foreground">Min Review Count</label>
+                        <span className="rounded bg-zbooni-dark/40 px-1.5 py-0.5 text-[11px] font-bold tabular-nums">{minReviewCount}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={50}
+                        value={minReviewCount}
+                        onChange={(e) => setMinReviewCount(parseInt(e.target.value, 10))}
+                        className="h-2 w-full cursor-pointer appearance-none rounded-full bg-zbooni-dark/40 accent-zbooni-teal [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-zbooni-teal"
+                      />
+                      <div className="mt-0.5 flex justify-between text-[10px] text-muted-foreground/40">
+                        <span>0 (no filter)</span>
+                        <span>50</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </div>
           </div>
 
@@ -581,7 +693,7 @@ export default function DiscoverPage() {
           <button
             type="button"
             onClick={handleStartDiscovery}
-            disabled={selectedIcpIds.size === 0 || isSubmitting || !!isRunning}
+            disabled={selectedIcpIds.size === 0 || derivedCountries.length === 0 || isSubmitting || !!isRunning}
             className="inline-flex w-full items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-zbooni-green to-zbooni-teal px-6 py-3 text-sm font-bold text-zbooni-dark shadow-lg shadow-zbooni-green/20 transition-all hover:shadow-xl hover:shadow-zbooni-green/30 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
           >
             {isSubmitting ? (
