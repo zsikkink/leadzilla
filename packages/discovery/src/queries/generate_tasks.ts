@@ -9,9 +9,12 @@ import type {
   SearchTaskType,
 } from '../providers/types.js';
 import {
+  COUNTRY_NAMES,
+  defaultCitiesByCountry,
   getCategoryTaxonomy,
   getInitialCitiesByCountry,
   getQueryTemplates,
+  queryTemplatesV2EN,
 } from './seeds.js';
 
 function toCountrySearchName(countryCode: DiscoveryCountryCode): string {
@@ -111,7 +114,7 @@ function buildTimeBucket(
   return `${baseBucket}:${seedBucket}`;
 }
 
-function createGeneratedTask(
+export function createGeneratedTask(
   taskType: SearchTaskType,
   countryCode: DiscoveryCountryCode,
   language: DiscoveryLanguageCode,
@@ -283,4 +286,91 @@ export function generateTasks(
   }
 
   return generateDefaultTasks(config, timeBucket);
+}
+
+/* ------------------------------------------------------------------ */
+/* V2 — ICP-driven task generation                                    */
+/* ------------------------------------------------------------------ */
+
+export interface GenerateTasksV2Input {
+  categories: string[];
+  countries: string[];
+  cities?: string[] | undefined;
+  maxPagesPerQuery?: number | undefined;
+  taskTypes?: SearchTaskType[] | undefined;
+}
+
+/**
+ * Resolve the list of cities for a single country.
+ *
+ * - If explicit `cities` are provided and do NOT include "All", use them.
+ * - If `cities` includes the literal string "All" (case-insensitive), expand
+ *   to all default cities for every country.
+ * - If `cities` is omitted, look up `defaultCitiesByCountry` and fall back to
+ *   the country code itself (so queries still run even without city data).
+ */
+function resolveCitiesForCountry(
+  countryCode: string,
+  explicitCities: string[] | undefined,
+): string[] {
+  if (explicitCities && explicitCities.length > 0) {
+    const hasAll = explicitCities.some((c) => c.toLowerCase() === 'all');
+    if (hasAll) {
+      return defaultCitiesByCountry[countryCode] ?? [countryCode];
+    }
+    return explicitCities;
+  }
+
+  return defaultCitiesByCountry[countryCode] ?? [countryCode];
+}
+
+export function generateTasksV2(
+  input: GenerateTasksV2Input,
+  options?: GenerateTasksOptions | undefined,
+): GeneratedSearchTask[] {
+  const now = options?.now ?? new Date();
+  const timeBucket = buildTimeBucket(now, 'weekly', 'v2');
+
+  const maxPages = input.maxPagesPerQuery ?? 1;
+  const taskTypes: SearchTaskType[] =
+    input.taskTypes ?? ['SERP_GOOGLE_LOCAL', 'SERP_MAPS_LOCAL'];
+  const templates = queryTemplatesV2EN;
+  const language: DiscoveryLanguageCode = 'en';
+
+  const tasks: GeneratedSearchTask[] = [];
+
+  for (const countryCode of input.countries) {
+    const countryName = COUNTRY_NAMES[countryCode] ?? countryCode;
+    const cities = resolveCitiesForCountry(countryCode, input.cities);
+
+    for (const cityRaw of cities) {
+      for (const category of input.categories) {
+        for (const template of templates) {
+          const queryText = renderTemplate(template, {
+            category,
+            city: cityRaw,
+            country: countryName,
+          });
+
+          for (let page = 1; page <= maxPages; page += 1) {
+            for (const taskType of taskTypes) {
+              tasks.push(
+                createGeneratedTask(
+                  taskType,
+                  countryCode as DiscoveryCountryCode,
+                  language,
+                  cityRaw,
+                  queryText,
+                  page,
+                  timeBucket,
+                ),
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return tasks;
 }

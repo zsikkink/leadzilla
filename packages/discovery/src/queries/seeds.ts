@@ -136,3 +136,42 @@ export function getQueryTemplates(
   }
   return language === 'ar' ? queryTemplatesAR : queryTemplatesEN;
 }
+
+/* ------------------------------------------------------------------ */
+/* V2 additions — ICP-driven discovery                                */
+/* ------------------------------------------------------------------ */
+
+/** V2 query templates (English). Use with generateTasksV2. */
+export const queryTemplatesV2EN: string[] = [
+  '{category} in {city} {country}',
+  '{category} in {city} {country} order online',
+  '{category} in {city} {country} request quote custom',
+];
+
+/** ISO 3166-1 alpha-2 → human-readable country name. */
+export const COUNTRY_NAMES: Record<string, string> = {
+  AE: 'United Arab Emirates',
+  SA: 'Saudi Arabia',
+  JO: 'Jordan',
+  EG: 'Egypt',
+  QA: 'Qatar',
+  BH: 'Bahrain',
+  KW: 'Kuwait',
+  OM: 'Oman',
+  LB: 'Lebanon',
+  US: 'United States',
+  GB: 'United Kingdom',
+};
+
+/** Default cities per country code for V2 discovery. */
+export const defaultCitiesByCountry: Record<string, string[]> = {
+  AE: ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman'],
+  SA: ['Riyadh', 'Jeddah', 'Dammam', 'Mecca'],
+  JO: ['Amman', 'Irbid', 'Zarqa', 'Aqaba'],
+  EG: ['Cairo', 'Alexandria', 'Giza', 'Mansoura'],
+  QA: ['Doha'],
+  BH: ['Manama'],
+  KW: ['Kuwait City'],
+  OM: ['Muscat'],
+  LB: ['Beirut'],
+};

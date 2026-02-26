@@ -237,6 +237,14 @@ async function main(): Promise<void> {
     },
     createLeadAndEnqueue: async (input) => {
       try {
+        // B5 fix: resolve icpProfileId for manual leads — use first active ICP
+        const activeIcp = await prisma.icpProfile.findFirst({
+          where: { isActive: true },
+          select: { id: true },
+          orderBy: { createdAt: 'asc' },
+        });
+        const icpProfileId = activeIcp?.id ?? undefined;
+
         const { lead, jobExecution, outboxEvent } = await prisma.$transaction(async (tx) => {
           const lead = await tx.lead.create({
             data: {
@@ -255,6 +263,7 @@ async function main(): Promise<void> {
               payload: {
                 leadId: lead.id,
                 source: input.source,
+                icpProfileId,
               },
               leadId: lead.id,
             },
@@ -267,6 +276,7 @@ async function main(): Promise<void> {
                 leadId: lead.id,
                 jobExecutionId: jobExecution.id,
                 source: input.source,
+                icpProfileId,
               },
               status: 'pending',
             },
@@ -286,6 +296,7 @@ async function main(): Promise<void> {
               leadId: lead.id,
               jobExecutionId: jobExecution.id,
               source: input.source,
+              icpProfileId,
             },
             {
               singletonKey: `outbox:${outboxEvent.id}`,

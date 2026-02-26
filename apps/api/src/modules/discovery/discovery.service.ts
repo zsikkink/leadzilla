@@ -13,7 +13,14 @@ import type { DiscoveryRepository } from './discovery.repository.js';
 export interface DiscoveryRunJobPayload
   extends Pick<
     CreateDiscoveryRunRequest,
-    'icpProfileId' | 'provider' | 'limit' | 'cursor' | 'requestedByUserId'
+    | 'icpProfileId'
+    | 'provider'
+    | 'countries'
+    | 'includeWebsiteAnalysis'
+    | 'includeSocialMediaAnalysis'
+    | 'limit'
+    | 'cursor'
+    | 'requestedByUserId'
   > {
   runId: string;
 }
@@ -41,6 +48,9 @@ export function buildDiscoveryService(
         runId,
         icpProfileId: input.icpProfileId,
         provider: input.provider,
+        countries: input.countries,
+        includeWebsiteAnalysis: input.includeWebsiteAnalysis,
+        includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
         limit: input.limit,
         cursor: input.cursor,
         requestedByUserId: input.requestedByUserId,

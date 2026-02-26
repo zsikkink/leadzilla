@@ -6,9 +6,11 @@ export const DiscoveryProviderSchema = z.enum([
   'LINKEDIN_SCRAPE',
   'COMPANY_SEARCH_FREE',
   'APOLLO',
+  'SERPAPI',
 ]);
 
 // Legacy read compatibility for historical records written before Google CSE retirement.
+// Includes all current providers + deprecated GOOGLE_SEARCH for historical data.
 export const DiscoveryRecordProviderSchema = z.union([
   DiscoveryProviderSchema,
   z.literal('GOOGLE_SEARCH'),
@@ -35,13 +37,27 @@ export const DiscoveryRunIdParamsSchema = z
   })
   .strict();
 
+export const DiscoveryAdvancedSettingsSchema = z
+  .object({
+    minReviewCount: z.coerce.number().int().min(0).default(15),
+    searchCategories: z.array(z.string().min(1)).optional(),
+  })
+  .strict();
+
 export const CreateDiscoveryRunRequestSchema = z
   .object({
     icpProfileId: z.string().min(1),
-    provider: DiscoveryProviderSchema.optional(),
+    countries: z.array(z.string().min(1)).min(1),
+    cities: z.array(z.string().min(1)).optional(),
+    includeWebsiteAnalysis: z.boolean().default(true),
+    includeSocialMediaAnalysis: z.boolean().default(true),
     limit: z.coerce.number().int().min(1).max(1000).optional(),
-    cursor: z.string().min(1).optional(),
+    advancedSettings: DiscoveryAdvancedSettingsSchema.optional(),
     requestedByUserId: z.string().min(1).optional(),
+    /** @deprecated Use countries/cities instead */
+    provider: DiscoveryProviderSchema.optional(),
+    /** @deprecated No longer used in v2 pipeline */
+    cursor: z.string().min(1).optional(),
   })
   .strict();
 
@@ -121,6 +137,28 @@ export const ListDiscoveryRecordsResponseSchema = z
   })
   .strict();
 
+export const CostEventProviderSchema = z.enum([
+  'SERPAPI',
+  'APOLLO',
+  'APIFY_WEBSITE',
+  'APIFY_INSTAGRAM',
+  'HUNTER',
+]);
+
+export const DiscoveryCostSummarySchema = z
+  .object({
+    totalCostCents: z.number().int().min(0),
+    perLeadCostCents: z.number().min(0),
+    breakdown: z.array(
+      z.object({
+        provider: CostEventProviderSchema,
+        callCount: z.number().int().min(0),
+        totalCostCents: z.number().int().min(0),
+      }),
+    ),
+  })
+  .strict();
+
 export type DiscoveryProvider = z.infer<typeof DiscoveryProviderSchema>;
 export type DiscoveryRecordProvider = z.infer<typeof DiscoveryRecordProviderSchema>;
 export type DiscoveryRecordStatus = z.infer<typeof DiscoveryRecordStatusSchema>;
@@ -138,3 +176,6 @@ export type DiscoveryQualityMetrics = z.infer<typeof DiscoveryQualityMetricsSche
 export type ListDiscoveryRecordsResponse = z.infer<
   typeof ListDiscoveryRecordsResponseSchema
 >;
+export type CostEventProvider = z.infer<typeof CostEventProviderSchema>;
+export type DiscoveryCostSummary = z.infer<typeof DiscoveryCostSummarySchema>;
+export type DiscoveryAdvancedSettings = z.infer<typeof DiscoveryAdvancedSettingsSchema>;

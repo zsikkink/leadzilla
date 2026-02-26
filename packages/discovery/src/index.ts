@@ -5,6 +5,7 @@ export * from './metrics.js';
 export * from './providers/serpapi.client.js';
 export * from './providers/types.js';
 export * from './queries/generate_tasks.js';
+export * from './queries/icp-category-map.js';
 export * from './queries/seeds.js';
 export * from './seed_tasks.js';
 export * from './workers/run_search_task.js';

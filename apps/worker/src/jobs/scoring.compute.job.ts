@@ -12,11 +12,11 @@ import {
 import { predictLogistic } from '../scoring/logistic.js';
 import {
   BASELINE_MODEL_VERSION_TAG,
-  QUALIFICATION_THRESHOLD,
   TRAINED_MODEL_FEATURE_KEYS,
   extractFeatureVectorForModel,
   findActiveTrainedModel,
   computeBlendRatio,
+  getQualificationThreshold,
 } from '../scoring/shared.js';
 
 export const SCORING_COMPUTE_JOB_NAME = 'scoring.compute';
@@ -178,6 +178,9 @@ export async function handleScoringComputeJob(
   );
 
   try {
+    // Dynamic qualification threshold from PipelineSetting table
+    const qualificationThreshold = await getQualificationThreshold();
+
     const effectiveModelVersionId =
       modelVersionId ??
       (await ensureBaselineModelVersion());
@@ -356,7 +359,7 @@ export async function handleScoringComputeJob(
 
         persistedPredictions += 1;
 
-        if (deps?.enqueueMessageGenerate && blendedScore >= QUALIFICATION_THRESHOLD) {
+        if (deps?.enqueueMessageGenerate && blendedScore >= qualificationThreshold) {
           await deps.enqueueMessageGenerate({
             leadId: targetLeadId,
             icpProfileId: targetIcpId,

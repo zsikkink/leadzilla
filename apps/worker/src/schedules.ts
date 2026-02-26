@@ -104,12 +104,15 @@ export async function registerWorkerSchedules(boss: Pick<PgBoss, 'schedule'>): P
     },
   );
 
+  // B6 fix: Generate unique trainingRunId per invocation to avoid PK collisions.
+  // pg-boss schedule sends a new job each cron tick — the static ID was causing
+  // duplicate TrainingRun upserts to collide with old records.
   await boss.schedule(
     MODEL_TRAIN_JOB_NAME,
     '0 3 * * 1',
     {
-      runId: 'scheduled:model.train',
-      trainingRunId: 'scheduled:model.train',
+      runId: `scheduled:model.train:${Date.now()}`,
+      trainingRunId: `scheduled:model.train:${Date.now()}`,
       trigger: 'SCHEDULED',
       windowDays: 90,
       minSamples: 100,

@@ -91,7 +91,7 @@ export async function handleMessageGenerateJob(
   try {
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
-      select: { id: true, firstName: true, lastName: true, email: true, phone: true, deletedAt: true },
+      select: { id: true, firstName: true, lastName: true, email: true, phone: true, decisionMakerPhone: true, deletedAt: true },
     });
 
     if (!lead) {
@@ -214,9 +214,31 @@ export async function handleMessageGenerateJob(
       pitchedFeature = candidates[followUpNumber % candidates.length] ?? candidates[0] ?? null;
     }
 
-    let resolvedChannel = channel ?? 'WHATSAPP';
+    // Score-based channel selection:
+    // HIGH (>=0.67) + has decision maker phone → WhatsApp
+    // MEDIUM (0.3-0.67) → Email only
+    // Explicit channel override takes priority
+    let resolvedChannel = channel ?? 'EMAIL';
 
-    // Phone validation: fall back to EMAIL if lead has no phone for WhatsApp
+    if (!channel) {
+      const blendedScore = latestScore?.blendedScore ?? 0;
+      // Use decisionMakerPhone (from Apollo) over lead.phone (from Google)
+      const hasDecisionMakerPhone = !!(lead.decisionMakerPhone && lead.decisionMakerPhone.trim() !== '');
+      const hasPhone = hasDecisionMakerPhone || !!(lead.phone && lead.phone.trim() !== '');
+
+      if (blendedScore >= 0.67 && hasPhone) {
+        resolvedChannel = 'WHATSAPP';
+      } else {
+        resolvedChannel = 'EMAIL';
+      }
+
+      logger.info(
+        { jobId: job.id, leadId, blendedScore, hasDecisionMakerPhone, hasPhone, resolvedChannel },
+        'Score-based channel selection',
+      );
+    }
+
+    // Final phone validation: fall back to EMAIL if lead has no phone for WhatsApp
     if (resolvedChannel === 'WHATSAPP' && (!lead.phone || lead.phone.trim() === '')) {
       logger.info(
         { jobId: job.id, leadId },

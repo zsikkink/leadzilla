@@ -217,6 +217,7 @@ const IcpDebugDiscoveryProviderSchema = z.enum([
   'LINKEDIN_SCRAPE',
   'COMPANY_SEARCH_FREE',
   'APOLLO',
+  'SERPAPI',
 ]);
 
 const IcpDebugRecordProviderSchema = z.union([

@@ -10,6 +10,8 @@ import type { DiscoveryProvider } from '@lead-flood/contracts';
 import { createLogger } from '@lead-flood/observability';
 import {
   ApolloDiscoveryAdapter,
+  ApifyInstagramAdapter,
+  ApifyWebsiteAdapter,
   BraveSearchAdapter,
   CompanySearchAdapter,
   GooglePlacesAdapter,
@@ -29,6 +31,18 @@ import {
   type AnalyticsRollupJobPayload,
 } from './jobs/analytics.rollup.job.js';
 import {
+  BUSINESS_CONVERT_JOB_NAME,
+  BUSINESS_CONVERT_RETRY_OPTIONS,
+  handleBusinessConvertJob,
+  type BusinessConvertJobPayload,
+} from './jobs/business.convert.job.js';
+import {
+  BUSINESS_PREQUALIFY_JOB_NAME,
+  BUSINESS_PREQUALIFY_RETRY_OPTIONS,
+  handleBusinessPrequalifyJob,
+  type BusinessPrequalifyJobPayload,
+} from './jobs/business.prequalify.job.js';
+import {
   DISCOVERY_RUN_JOB_NAME,
   handleDiscoveryRunJob,
   type DiscoveryRunJobPayload,
@@ -47,6 +61,7 @@ import {
 } from './jobs/discovery.seed.job.js';
 import {
   ENRICHMENT_RUN_JOB_NAME,
+  ENRICHMENT_RUN_RETRY_OPTIONS,
   handleEnrichmentRunJob,
   type EnrichmentRunJobPayload,
 } from './jobs/enrichment.run.job.js';
@@ -274,7 +289,22 @@ async function main(): Promise<void> {
     enabled: env.OTHER_FREE_ENRICHMENT_ENABLED,
     baseUrl: env.PUBLIC_LOOKUP_BASE_URL,
   });
+
+  const apifyWebsiteAdapter = new ApifyWebsiteAdapter({
+    apiKey: env.APIFY_API_KEY,
+    actorId: env.APIFY_WEBSITE_ACTOR_ID,
+  });
+
+  const apifyInstagramAdapter = new ApifyInstagramAdapter({
+    apiKey: env.APIFY_API_KEY,
+    actorId: env.APIFY_INSTAGRAM_ACTOR_ID,
+  });
   const discoveryProviderOrder: DiscoveryProvider[] = [];
+  if (env.COMPANY_SEARCH_ENABLED) discoveryProviderOrder.push('COMPANY_SEARCH_FREE');
+  if (env.APOLLO_ENABLED) discoveryProviderOrder.push('APOLLO');
+  if (env.BRAVE_SEARCH_ENABLED) discoveryProviderOrder.push('BRAVE_SEARCH');
+  if (env.GOOGLE_PLACES_ENABLED) discoveryProviderOrder.push('GOOGLE_PLACES');
+  if (env.LINKEDIN_SCRAPE_ENABLED) discoveryProviderOrder.push('LINKEDIN_SCRAPE');
 
   let discoveryRuntimeConfig: DiscoveryRuntimeConfig | null = null;
   let serpApiProvider: SerpApiDiscoveryProvider | null = null;
@@ -337,7 +367,7 @@ async function main(): Promise<void> {
   logger.info(
     {
       legacyDiscoveryRunEnabled: env.DISCOVERY_ENABLED,
-      legacyDefaultProvider: 'BRAVE_SEARCH',
+      legacyDefaultProvider: discoveryProviderOrder[0] ?? 'COMPANY_SEARCH_FREE',
       legacyProviderOrder: discoveryProviderOrder,
     },
     'Legacy discovery.run provider pipeline configuration',
@@ -413,7 +443,7 @@ async function main(): Promise<void> {
         googlePlacesEnabled: env.GOOGLE_PLACES_ENABLED,
         linkedInScrapeEnabled: env.LINKEDIN_SCRAPE_ENABLED,
         companySearchEnabled: env.COMPANY_SEARCH_ENABLED,
-        defaultProvider: 'BRAVE_SEARCH',
+        defaultProvider: discoveryProviderOrder[0] ?? 'COMPANY_SEARCH_FREE',
         providerOrder: discoveryProviderOrder,
         defaultEnrichmentProvider: env.ENRICHMENT_DEFAULT_PROVIDER,
         budgetTracker: providerBudgetTracker,
@@ -520,6 +550,57 @@ async function main(): Promise<void> {
     });
     stopJobRequestDispatcher = dispatcher.stop;
   }
+
+  // ── New pipeline: business.prequalify → business.convert → enrichment.run ──
+  await registerWorker<BusinessPrequalifyJobPayload>(
+    boss,
+    logger,
+    BUSINESS_PREQUALIFY_JOB_NAME,
+    (jobLogger, job) =>
+      handleBusinessPrequalifyJob(jobLogger, job, {
+        enqueueBusinessConvert: async (payload) => {
+          await boss.send(BUSINESS_CONVERT_JOB_NAME, payload, {
+            singletonKey: `business.convert:${payload.businessId}`,
+            ...BUSINESS_CONVERT_RETRY_OPTIONS,
+          });
+        },
+      }),
+  );
+
+  await registerWorker<BusinessConvertJobPayload>(
+    boss,
+    logger,
+    BUSINESS_CONVERT_JOB_NAME,
+    (jobLogger, job) =>
+      handleBusinessConvertJob(jobLogger, job, {
+        apolloAdapter: {
+          searchContactsByDomain: (domain) => apolloAdapter.searchContactsByDomain(domain),
+          isConfigured: Boolean(env.APOLLO_API_KEY),
+        },
+        hunterAdapter: {
+          searchDomainContacts: (domain) => hunterAdapter.searchDomainContacts(domain),
+          isConfigured: Boolean(env.HUNTER_API_KEY),
+        },
+        apifyWebsiteAdapter: env.APIFY_ENABLED ? apifyWebsiteAdapter : undefined,
+        apifyInstagramAdapter: env.APIFY_ENABLED ? apifyInstagramAdapter : undefined,
+        enqueueEnrichmentRun: async (payload) => {
+          const enrichmentPayload: EnrichmentRunJobPayload = {
+            runId: payload.runId,
+            leadId: payload.leadId,
+            icpProfileId: payload.icpProfileId,
+            ...(payload.correlationId !== undefined ? { correlationId: payload.correlationId } : {}),
+          };
+          await boss.send(
+            ENRICHMENT_RUN_JOB_NAME,
+            enrichmentPayload,
+            {
+              singletonKey: `enrichment.run:${payload.leadId}:convert`,
+              ...ENRICHMENT_RUN_RETRY_OPTIONS,
+            },
+          );
+        },
+      }),
+  );
 
   await registerWorker<EnrichmentRunJobPayload>(
     boss,

@@ -61,6 +61,15 @@ enum DiscoveryProvider {
   LINKEDIN_SCRAPE
   COMPANY_SEARCH_FREE
   APOLLO
+  SERPAPI
+}
+
+enum CostEventProvider {
+  SERPAPI
+  APOLLO
+  APIFY_WEBSITE
+  APIFY_INSTAGRAM
+  HUNTER
 }
 
 enum DiscoveryRecordStatus {
@@ -202,33 +211,39 @@ enum JobRunStatus {
 }
 
 model Lead {
-  id             String        @id @default(cuid())
-  firstName      String
-  lastName       String
-  email          String        @unique
-  phone          String?
-  source         String
-  status         LeadStatus    @default(new)
-  enrichmentData Json?
-  error          String?
-  costCents      Int           @default(0)
-  deletedAt      DateTime?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
-  jobs           JobExecution[]
-  discoveryRecords LeadDiscoveryRecord[]
-  enrichmentRecords LeadEnrichmentRecord[]
-  featureSnapshots LeadFeatureSnapshot[]
-  scorePredictions LeadScorePrediction[]
-  messageDrafts    MessageDraft[]
-  messageSends     MessageSend[]
-  feedbackEvents   FeedbackEvent[]
-  trainingLabels   TrainingLabel[]
+  id                  String        @id @default(cuid())
+  firstName           String
+  lastName            String
+  email               String        @unique
+  phone               String?
+  source              String
+  status              LeadStatus    @default(new)
+  enrichmentData      Json?
+  error               String?
+  costCents           Int           @default(0)
+  deletedAt           DateTime?
+  businessId          String?
+  business            Business?     @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  decisionMakerTitle  String?
+  decisionMakerPhone  String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  jobs                JobExecution[]
+  discoveryRecords    LeadDiscoveryRecord[]
+  enrichmentRecords   LeadEnrichmentRecord[]
+  featureSnapshots    LeadFeatureSnapshot[]
+  scorePredictions    LeadScorePrediction[]
+  messageDrafts       MessageDraft[]
+  messageSends        MessageSend[]
+  feedbackEvents      FeedbackEvent[]
+  trainingLabels      TrainingLabel[]
+  businessConversions BusinessConversion[]
 
   @@index([status])
   @@index([source])
   @@index([phone])
   @@index([deletedAt])
+  @@index([businessId])
 }
 
 model JobExecution {
@@ -693,36 +708,48 @@ model Source {
 }
 
 model Business {
-  id              String              @id @default(uuid())
-  name            String
-  countryCode     String              @map("country_code")
-  city            String?
-  address         String?
-  phoneE164       String?             @map("phone_e164")
-  websiteDomain   String?             @map("website_domain")
-  instagramHandle String?             @map("instagram_handle")
-  category        String?
-  rating          Float?
-  reviewCount     Int?                @map("review_count")
-  deterministicScore Float            @default(0) @map("deterministic_score")
-  scoreBand       ScoreBand?          @map("score_band")
-  hasWhatsapp     Boolean             @default(false) @map("has_whatsapp")
-  hasInstagram    Boolean             @default(false) @map("has_instagram")
-  acceptsOnlinePayments Boolean       @default(false) @map("accepts_online_payments")
-  followerCount   Int?                @map("follower_count")
-  physicalAddressPresent Boolean      @default(false) @map("physical_address_present")
-  recentActivity  Boolean             @default(false) @map("recent_activity")
-  lat             Float?
-  lng             Float?
-  confidence      Float               @default(0.5)
-  createdAt       DateTime            @default(now()) @map("created_at")
-  updatedAt       DateTime            @updatedAt @map("updated_at")
+  id                       String              @id @default(uuid())
+  name                     String
+  countryCode              String              @map("country_code")
+  city                     String?
+  address                  String?
+  phoneE164                String?             @map("phone_e164")
+  websiteDomain            String?             @map("website_domain")
+  instagramHandle          String?             @map("instagram_handle")
+  category                 String?
+  rating                   Float?
+  reviewCount              Int?                @map("review_count")
+  deterministicScore       Float               @default(0) @map("deterministic_score")
+  scoreBand                ScoreBand?          @map("score_band")
+  hasWhatsapp              Boolean             @default(false) @map("has_whatsapp")
+  hasInstagram             Boolean             @default(false) @map("has_instagram")
+  acceptsOnlinePayments    Boolean             @default(false) @map("accepts_online_payments")
+  followerCount            Int?                @map("follower_count")
+  physicalAddressPresent   Boolean             @default(false) @map("physical_address_present")
+  recentActivity           Boolean             @default(false) @map("recent_activity")
+  lat                      Float?
+  lng                      Float?
+  confidence               Float               @default(0.5)
+  apifyWebsiteScrapeJson   Json?               @map("apify_website_scrape_json")
+  apifyInstagramScrapeJson Json?               @map("apify_instagram_scrape_json")
+  websiteScrapedAt         DateTime?           @map("website_scraped_at")
+  instagramScrapedAt       DateTime?           @map("instagram_scraped_at")
+  discoveryRunId           String?             @map("discovery_run_id")
+  preQualified             Boolean?            @map("pre_qualified")
+  disqualificationReason   String?             @map("disqualification_reason")
+  createdAt                DateTime            @default(now()) @map("created_at")
+  updatedAt                DateTime            @updatedAt @map("updated_at")
 
-  evidence        BusinessEvidence[]
+  evidence                 BusinessEvidence[]
+  leads                    Lead[]
+  businessConversions      BusinessConversion[]
+  costEvents               DiscoveryCostEvent[]
 
   @@index([countryCode, city])
   @@index([websiteDomain])
   @@index([phoneE164])
+  @@index([discoveryRunId])
+  @@index([preQualified])
   @@map("businesses")
 }
 
@@ -785,4 +812,49 @@ model JobRun {
   @@index([jobName, startedAt])
   @@index([status, startedAt])
   @@map("job_runs")
+}
+
+model DiscoveryCostEvent {
+  id             String            @id @default(cuid())
+  discoveryRunId String
+  provider       CostEventProvider
+  costCents      Int
+  apiCallType    String
+  businessId     String?
+  business       Business?         @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  leadId         String?
+  recordedAt     DateTime          @default(now())
+  createdAt      DateTime          @default(now())
+
+  @@index([discoveryRunId])
+  @@index([provider])
+  @@index([businessId])
+  @@map("discovery_cost_events")
+}
+
+model BusinessConversion {
+  id                String   @id @default(cuid())
+  businessId        String
+  business          Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  leadId            String
+  lead              Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  apolloContactJson Json?
+  hunterContactJson Json?
+  convertedAt       DateTime @default(now())
+  createdAt         DateTime @default(now())
+
+  @@unique([businessId, leadId])
+  @@index([businessId])
+  @@index([leadId])
+  @@map("business_conversions")
+}
+
+model PipelineSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  valueJson Json
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@map("pipeline_settings")
 }

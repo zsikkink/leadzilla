@@ -83,7 +83,50 @@ export function buildMessagingService(
       return repository.getMessageDraft(draftId);
     },
     async approveMessageDraft(draftId, input) {
-      return repository.approveMessageDraft(draftId, input);
+      const draft = await repository.approveMessageDraft(draftId, input);
+
+      // B4 fix: After approval, select A/B variant, create MessageSend, enqueue message.send
+      if (draft.approvalStatus === 'APPROVED' && draft.variants.length > 0) {
+        // Pick selected variant (user may have chosen one, or use first available)
+        const selectedVariant =
+          (input.selectedVariantId
+            ? draft.variants.find((v) => v.id === input.selectedVariantId)
+            : undefined) ??
+          draft.variants.find((v) => v.isSelected) ??
+          draft.variants[0];
+
+        if (selectedVariant) {
+          const idempotencyKey = `approve:${draftId}:${selectedVariant.id}`;
+          try {
+            const send = await repository.createMessageSendForApproval({
+              leadId: draft.leadId,
+              messageDraftId: draft.id,
+              messageVariantId: selectedVariant.id,
+              channel: selectedVariant.channel,
+              idempotencyKey,
+              followUpNumber: 0,
+            });
+
+            await dependencies.enqueueMessageSend({
+              runId: `message.send:${send.id}`,
+              sendId: send.id,
+              messageDraftId: draft.id,
+              messageVariantId: selectedVariant.id,
+              idempotencyKey,
+              channel: selectedVariant.channel as 'EMAIL' | 'WHATSAPP',
+            });
+          } catch (error: unknown) {
+            // Idempotency: if MessageSend already exists (unique constraint on idempotencyKey),
+            // or enqueue fails, the send record is already QUEUED and pg-boss retry will handle it
+            console.error('[messaging] Failed to create/enqueue send after approval', {
+              error,
+              draftId,
+            });
+          }
+        }
+      }
+
+      return draft;
     },
     async rejectMessageDraft(draftId, input) {
       return repository.rejectMessageDraft(draftId, input);

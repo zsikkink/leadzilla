@@ -400,6 +400,9 @@ export default function DiscoverPage() {
       const icpId = Array.from(selectedIcpIds)[0]!;
       const result = await apiClient.createDiscoveryRun({
         icpProfileId: icpId,
+        countries: ['AE'],
+        includeWebsiteAnalysis: true,
+        includeSocialMediaAnalysis: true,
         ...(provider ? { provider: provider as DiscoveryProvider } : {}),
         limit: parseInt(limit, 10),
         ...(user?.id ? { requestedByUserId: user.id } : {}),
@@ -421,6 +424,9 @@ export default function DiscoverPage() {
       for (const id of remainingIds) {
         void apiClient.createDiscoveryRun({
           icpProfileId: id,
+          countries: ['AE'],
+          includeWebsiteAnalysis: true,
+          includeSocialMediaAnalysis: true,
           ...(provider ? { provider: provider as DiscoveryProvider } : {}),
           limit: parseInt(limit, 10),
           ...(user?.id ? { requestedByUserId: user.id } : {}),
