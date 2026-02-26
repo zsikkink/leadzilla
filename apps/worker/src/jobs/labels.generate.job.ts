@@ -50,7 +50,18 @@ export async function handleLabelsGenerateJob(
   job: Job<LabelsGenerateJobPayload>,
   deps?: LabelsGenerateJobDependencies,
 ): Promise<void> {
-  const { runId, correlationId, from, to, leadId, feedbackEventId } = job.data;
+  const { runId, correlationId, from: rawFrom, to: rawTo, leadId, feedbackEventId } = job.data;
+
+  // Compute the time window at runtime to avoid stale schedule payloads.
+  // Schedule bakes from/to at boot time; by computing here we always get a fresh 24h window.
+  const now = new Date();
+  const effectiveTo = rawTo ? new Date(rawTo) : now;
+  const effectiveFrom = rawFrom ? new Date(rawFrom) : new Date(now.getTime() - 86_400_000);
+
+  // If schedule values are older than 2 hours, use fresh runtime values
+  const isStale = now.getTime() - effectiveTo.getTime() > 2 * 60 * 60 * 1000;
+  const from = isStale ? new Date(now.getTime() - 86_400_000) : effectiveFrom;
+  const to = isStale ? now : effectiveTo;
 
   logger.info(
     {
@@ -58,8 +69,9 @@ export async function handleLabelsGenerateJob(
       queue: job.name,
       runId,
       correlationId: correlationId ?? job.id,
-      from,
-      to,
+      from: from.toISOString(),
+      to: to.toISOString(),
+      stalePayloadOverridden: isStale,
       leadId,
       feedbackEventId,
     },
@@ -74,7 +86,7 @@ export async function handleLabelsGenerateJob(
       where: {
         ...(feedbackEventId ? { id: feedbackEventId } : {}),
         ...(leadId ? { leadId } : {}),
-        createdAt: { gte: new Date(from), lte: new Date(to) },
+        createdAt: { gte: from, lte: to },
         trainingLabels: { none: {} },
       },
       select: { id: true, leadId: true, eventType: true },

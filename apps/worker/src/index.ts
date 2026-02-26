@@ -672,7 +672,8 @@ async function main(): Promise<void> {
     boss,
     logger,
     DLQ_JOB_NAME,
-    (jobLogger, job) => handleDlqProcessJob(jobLogger, job, { boss }),
+    (jobLogger, job) =>
+      handleDlqProcessJob(jobLogger, job, { boss, slackWebhookUrl: env.SLACK_WEBHOOK_URL }),
   );
 
   await registerWorker<ManagerAnalyzeJobPayload>(
