@@ -232,21 +232,6 @@ export async function handleAnalyticsRollupJob(
         },
       });
 
-      // TODO(migration): AnalyticsDailyRollup needs sentCount, repliedCount,
-      // bouncedCount, failedCount columns. Until then, log for observability.
-      logger.info(
-        {
-          jobId: job.id,
-          icpProfileId: targetIcpId,
-          day,
-          sentCount,
-          failedCount,
-          repliedCount,
-          bouncedCount,
-        },
-        'Bottom-of-funnel metrics computed (awaiting schema migration)',
-      );
-
       await prisma.analyticsDailyRollup.upsert({
         where: {
           day_icpProfileId: {
@@ -264,6 +249,10 @@ export async function handleAnalyticsRollupJob(
           validDomainCount: validDomains.size,
           industryMatchRate,
           geoMatchRate,
+          sentCount,
+          failedCount,
+          repliedCount,
+          bouncedCount,
         },
         update: {
           discoveredCount,
@@ -273,6 +262,10 @@ export async function handleAnalyticsRollupJob(
           validDomainCount: validDomains.size,
           industryMatchRate,
           geoMatchRate,
+          sentCount,
+          failedCount,
+          repliedCount,
+          bouncedCount,
         },
       });
     }

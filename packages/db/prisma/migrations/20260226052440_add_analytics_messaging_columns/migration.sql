@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "AnalyticsDailyRollup" ADD COLUMN     "bouncedCount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "failedCount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "repliedCount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "sentCount" INTEGER NOT NULL DEFAULT 0;
