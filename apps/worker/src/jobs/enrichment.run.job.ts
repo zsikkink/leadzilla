@@ -576,10 +576,28 @@ export async function handleEnrichmentRunJob(
         await markEnrichmentJobCompleted(jobExecutionId, result.normalized);
       }
 
+      if (!icpProfileId) {
+        logger.warn(
+          {
+            jobId: job.id,
+            queue: job.name,
+            runId,
+            correlationId: effectiveCorrelationId,
+            leadId,
+          },
+          'Missing icpProfileId in enrichment payload — cannot proceed to features',
+        );
+        await prisma.lead.update({
+          where: { id: leadId },
+          data: { status: 'failed', error: 'Missing icpProfileId in enrichment payload' },
+        });
+        return;
+      }
+
       const featuresPayload: FeaturesComputeJobPayload = {
         runId,
         leadId,
-        icpProfileId: icpProfileId ?? 'default',
+        icpProfileId,
         snapshotVersion: 1,
         sourceVersion: 'features_v1',
         enrichmentRecordId: enrichmentRecord.id,

@@ -51,12 +51,7 @@ import {
 } from './jobs/pipeline.health.job.js';
 import { HEARTBEAT_QUEUE_NAME, HEARTBEAT_RETRY_OPTIONS } from './queues.js';
 
-const ONE_DAY_IN_MS = 24 * 60 * 60 * 1000;
-
 export async function registerWorkerSchedules(boss: Pick<PgBoss, 'schedule'>): Promise<void> {
-  const now = new Date();
-  const nowIso = now.toISOString();
-  const previousDayIso = new Date(now.getTime() - ONE_DAY_IN_MS).toISOString();
 
   await boss.schedule(
     HEARTBEAT_QUEUE_NAME,
@@ -81,13 +76,16 @@ export async function registerWorkerSchedules(boss: Pick<PgBoss, 'schedule'>): P
     },
   );
 
+  // TODO(staleness): from/to are baked at schedule-registration time.
+  // labels.generate handler should compute the window at runtime
+  // (e.g. now - 24h → now) and ignore stale schedule values.
   await boss.schedule(
     LABELS_GENERATE_JOB_NAME,
     '0 * * * *',
     {
       runId: 'scheduled:labels.generate',
-      from: previousDayIso,
-      to: nowIso,
+      from: new Date(Date.now() - 86_400_000).toISOString(),
+      to: new Date().toISOString(),
       correlationId: 'scheduler:labels.generate',
     } satisfies LabelsGenerateJobPayload,
     {
@@ -133,7 +131,7 @@ export async function registerWorkerSchedules(boss: Pick<PgBoss, 'schedule'>): P
     '0 1 * * *',
     {
       runId: 'scheduled:analytics.rollup',
-      day: nowIso.slice(0, 10),
+      day: 'auto',
       fullRecompute: false,
       correlationId: 'scheduler:analytics.rollup',
     } satisfies AnalyticsRollupJobPayload,

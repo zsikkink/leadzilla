@@ -58,7 +58,14 @@ export async function handleAnalyticsRollupJob(
   logger: AnalyticsRollupLogger,
   job: Job<AnalyticsRollupJobPayload>,
 ): Promise<void> {
-  const { runId, correlationId, day, icpProfileId, fullRecompute } = job.data;
+  const { runId, correlationId, icpProfileId, fullRecompute } = job.data;
+
+  // Compute day at runtime when the schedule sends 'auto' or an invalid value
+  const rawDay = job.data.day;
+  const day =
+    rawDay && rawDay !== 'auto' && /^\d{4}-\d{2}-\d{2}$/.test(rawDay)
+      ? rawDay
+      : new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
 
   logger.info(
     {
@@ -67,6 +74,7 @@ export async function handleAnalyticsRollupJob(
       runId,
       correlationId: correlationId ?? job.id,
       day,
+      rawDay,
       icpProfileId,
       fullRecompute,
     },
@@ -194,6 +202,50 @@ export async function handleAnalyticsRollupJob(
         snapshotCount > 0 ? Number((industryMatchCount / snapshotCount).toFixed(6)) : 0;
       const geoMatchRate =
         snapshotCount > 0 ? Number((geoMatchCount / snapshotCount).toFixed(6)) : 0;
+
+      // ── Bottom-of-funnel metrics ──────────────────────────────────────
+      const sentCount = await prisma.messageSend.count({
+        where: {
+          status: { in: ['SENT', 'DELIVERED'] },
+          sentAt: { gte: dayStart, lt: dayEnd },
+        },
+      });
+
+      const failedCount = await prisma.messageSend.count({
+        where: {
+          status: 'FAILED',
+          createdAt: { gte: dayStart, lt: dayEnd },
+        },
+      });
+
+      const repliedCount = await prisma.feedbackEvent.count({
+        where: {
+          eventType: 'REPLIED',
+          createdAt: { gte: dayStart, lt: dayEnd },
+        },
+      });
+
+      const bouncedCount = await prisma.feedbackEvent.count({
+        where: {
+          eventType: { in: ['BOUNCED', 'UNSUBSCRIBED'] },
+          createdAt: { gte: dayStart, lt: dayEnd },
+        },
+      });
+
+      // TODO(migration): AnalyticsDailyRollup needs sentCount, repliedCount,
+      // bouncedCount, failedCount columns. Until then, log for observability.
+      logger.info(
+        {
+          jobId: job.id,
+          icpProfileId: targetIcpId,
+          day,
+          sentCount,
+          failedCount,
+          repliedCount,
+          bouncedCount,
+        },
+        'Bottom-of-funnel metrics computed (awaiting schema migration)',
+      );
 
       await prisma.analyticsDailyRollup.upsert({
         where: {

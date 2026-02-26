@@ -1,3 +1,4 @@
+import { prisma } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
@@ -61,6 +62,8 @@ function collectDeadLetterQueues(): string[] {
 
 export interface DlqProcessJobDependencies {
   boss: Pick<PgBoss, 'fetch' | 'send' | 'complete' | 'getQueueSize'>;
+  slackWebhookUrl?: string | undefined;
+  fetchImpl?: typeof fetch | undefined;
 }
 
 export async function handleDlqProcessJob(
@@ -136,7 +139,7 @@ export async function handleDlqProcessJob(
 
           flaggedCount += 1;
 
-          logger.warn(
+          logger.error(
             {
               dlqQueue: dlqName,
               originalQueue,
@@ -144,8 +147,41 @@ export async function handleDlqProcessJob(
               dlqRetryCount: currentRetryCount,
               data,
             },
-            'Dead letter job flagged for manual review — max DLQ retries exceeded',
+            'Dead letter job permanently failed — max DLQ retries exceeded',
           );
+
+          // Mark the lead as failed so it surfaces in the dashboard
+          const leadId =
+            typeof data.leadId === 'string' ? data.leadId : undefined;
+          if (leadId) {
+            try {
+              await prisma.lead.update({
+                where: { id: leadId },
+                data: {
+                  status: 'failed',
+                  error: `DLQ max retries exceeded for ${originalQueue}`,
+                },
+              });
+            } catch {
+              // Lead may have been deleted — non-fatal
+            }
+          }
+
+          // Send Slack alert if webhook is configured
+          const fetchFn = deps.fetchImpl ?? globalThis.fetch;
+          if (deps.slackWebhookUrl) {
+            try {
+              await fetchFn(deps.slackWebhookUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  text: `🚨 *DLQ permanently failed*\nQueue: \`${originalQueue}\`\nDead Job: \`${deadJob.id}\`\nRetries: ${currentRetryCount}\n${leadId ? `Lead: \`${leadId}\`` : 'No leadId in payload'}`,
+                }),
+              });
+            } catch {
+              // Slack notification is best-effort
+            }
+          }
         }
       }
 
