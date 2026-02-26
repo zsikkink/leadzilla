@@ -590,7 +590,7 @@ async function main(): Promise<void> {
               correlationId: job.data.correlationId ?? job.id,
             } satisfies MessageGenerateJobPayload,
             {
-              singletonKey: `message.generate:${payload.leadId}:${payload.scorePredictionId}`,
+              singletonKey: `message.generate:${payload.leadId}:${payload.icpProfileId}`,
               ...MESSAGE_GENERATE_RETRY_OPTIONS,
             },
           );

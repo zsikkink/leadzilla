@@ -410,7 +410,15 @@ export async function handleMessageGenerateJob(
     // Deterministically select A/B variant for this lead
     const selectedVariantKey = assignAbVariant(leadId);
 
-    const draft = await prisma.messageDraft.create({
+    // Idempotent draft creation: if a draft already exists for this lead+ICP+followUp
+    // combination (e.g. from a retry), reuse it instead of creating a duplicate.
+    const existingDraftForRetry = await prisma.messageDraft.findFirst({
+      where: { leadId, icpProfileId, followUpNumber },
+      include: { variants: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const draft = existingDraftForRetry ?? await prisma.messageDraft.create({
       data: {
         leadId,
         icpProfileId,
@@ -478,7 +486,10 @@ export async function handleMessageGenerateJob(
             followUpNumber,
             correlationId: correlationId ?? job.id,
           } satisfies MessageSendJobPayload,
-          MESSAGE_SEND_RETRY_OPTIONS,
+          {
+            singletonKey: `message.send:${sendRecord.id}`,
+            ...MESSAGE_SEND_RETRY_OPTIONS,
+          },
         );
 
         logger.info(

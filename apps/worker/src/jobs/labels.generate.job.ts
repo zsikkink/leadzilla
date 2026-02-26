@@ -158,6 +158,26 @@ export async function handleLabelsGenerateJob(
 
       if (deps?.enqueueModelTrain) {
         const trainRunId = `labels-triggered-${runId}-${Date.now()}`;
+
+        // Create the TrainingRun record BEFORE enqueuing, so model.train can
+        // find it when it starts (it does prisma.trainingRun.update).
+        const now = new Date();
+        await prisma.trainingRun.create({
+          data: {
+            id: trainRunId,
+            modelType: 'LOGISTIC_REGRESSION',
+            status: 'QUEUED',
+            trigger: 'FEEDBACK_THRESHOLD',
+            configJson: {
+              windowDays: 90,
+              minSamples: 50,
+              triggeredByLabelsRun: runId,
+            },
+            trainingWindowStart: new Date(now.getTime() - 90 * 86_400_000),
+            trainingWindowEnd: now,
+          },
+        });
+
         const trainPayload = {
           runId: trainRunId,
           trainingRunId: trainRunId,

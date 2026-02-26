@@ -13,6 +13,7 @@ import { predictLogistic } from '../scoring/logistic.js';
 import {
   BASELINE_MODEL_VERSION_TAG,
   QUALIFICATION_THRESHOLD,
+  TRAINED_MODEL_FEATURE_KEYS,
   extractFeatureVectorForModel,
   findActiveTrainedModel,
   computeBlendRatio,
@@ -58,44 +59,6 @@ export interface ScoringComputeJobDependencies {
 
 const BASELINE_TRAINING_RUN_TRIGGER = 'MANUAL';
 const BASELINE_FEATURE_EXTRACTOR_VERSION = 'features_v1';
-const BASELINE_FEATURE_KEYS = [
-  'source_provider',
-  'has_email',
-  'has_domain',
-  'has_company_name',
-  'country',
-  'industry',
-  'industry_supported',
-  'has_whatsapp',
-  'has_instagram',
-  'accepts_online_payments',
-  'review_count',
-  'follower_count',
-  'physical_address_present',
-  'physical_location',
-  'physical_store_present',
-  'recent_activity',
-  'custom_order_signals',
-  'pure_self_serve_ecom',
-  'shopify_detected',
-  'abandonment_signal_detected',
-  'multi_staff_detected',
-  'follower_growth_signal',
-  'high_engagement_signal',
-  'has_booking_or_contact_form',
-  'variable_pricing_detected',
-  'industry_match',
-  'industry_match_reason',
-  'geo_match',
-  'geo_match_reason',
-  'employee_size_bucket',
-  'enrichment_success_rate',
-  'discovery_attempt_count',
-  'enrichment_attempt_count',
-  'days_since_discovery',
-  'rule_match_count',
-  'hard_filter_passed',
-] as const;
 
 function toInputJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
@@ -134,7 +97,7 @@ async function ensureBaselineModelVersion(): Promise<string> {
   const checksumSource = JSON.stringify({
     versionTag: BASELINE_MODEL_VERSION_TAG,
     sourceVersion: BASELINE_FEATURE_EXTRACTOR_VERSION,
-    featureKeys: BASELINE_FEATURE_KEYS,
+    featureKeys: TRAINED_MODEL_FEATURE_KEYS,
   });
 
   try {
@@ -166,7 +129,7 @@ async function ensureBaselineModelVersion(): Promise<string> {
           stage: 'ACTIVE',
           featureSchemaJson: {
             sourceVersion: BASELINE_FEATURE_EXTRACTOR_VERSION,
-            keys: BASELINE_FEATURE_KEYS,
+            keys: TRAINED_MODEL_FEATURE_KEYS,
           },
           coefficientsJson: Prisma.JsonNull,
           intercept: 0,
@@ -394,24 +357,17 @@ export async function handleScoringComputeJob(
         persistedPredictions += 1;
 
         if (deps?.enqueueMessageGenerate && blendedScore >= QUALIFICATION_THRESHOLD) {
-          try {
-            await deps.enqueueMessageGenerate({
-              leadId: targetLeadId,
-              icpProfileId: targetIcpId,
-              scorePredictionId: prediction.id,
-              runId,
-              correlationId: effectiveCorrelationId,
-            });
-            logger.info(
-              { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, blendedScore },
-              'Enqueued message.generate for qualifying lead',
-            );
-          } catch (enqueueError: unknown) {
-            logger.error(
-              { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, error: enqueueError },
-              'Failed to enqueue message.generate',
-            );
-          }
+          await deps.enqueueMessageGenerate({
+            leadId: targetLeadId,
+            icpProfileId: targetIcpId,
+            scorePredictionId: prediction.id,
+            runId,
+            correlationId: effectiveCorrelationId,
+          });
+          logger.info(
+            { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, blendedScore },
+            'Enqueued message.generate for qualifying lead',
+          );
         }
       }
     }
