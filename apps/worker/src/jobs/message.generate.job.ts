@@ -104,20 +104,33 @@ export async function handleMessageGenerateJob(
       return;
     }
 
-    // Cross-ICP dedup: skip if this lead already has an active message from ANY ICP
-    const existingDraft = await prisma.messageDraft.findFirst({
-      where: {
-        leadId,
-        approvalStatus: { in: ['PENDING', 'APPROVED', 'AUTO_APPROVED'] },
-      },
-      select: { id: true, icpProfileId: true, icpProfile: { select: { name: true } } },
-    });
+    // Cross-ICP dedup: skip if this lead already has an active message from a DIFFERENT ICP.
+    // Follow-ups (followUpNumber > 0) are explicitly chained from the parent — skip dedup for them.
+    const followUpNumber = job.data.followUpNumber ?? 0;
+    if (followUpNumber === 0) {
+      const existingDraft = await prisma.messageDraft.findFirst({
+        where: {
+          leadId,
+          icpProfileId: { not: icpProfileId },
+          approvalStatus: { in: ['PENDING', 'APPROVED', 'AUTO_APPROVED'] },
+        },
+        select: { id: true, icpProfileId: true, icpProfile: { select: { name: true } } },
+      });
 
-    if (!existingDraft) {
+      if (existingDraft) {
+        const icpName = existingDraft.icpProfile.name;
+        logger.info(
+          { jobId: job.id, leadId, existingDraftId: existingDraft.id, existingIcpProfileId: existingDraft.icpProfileId },
+          `Lead already has active message from ICP ${icpName}, skipping`,
+        );
+        return;
+      }
+
       const existingSend = await prisma.messageSend.findFirst({
         where: {
           leadId,
           status: { in: ['QUEUED', 'SENT', 'DELIVERED'] },
+          messageDraft: { icpProfileId: { not: icpProfileId } },
         },
         select: {
           id: true,
@@ -135,13 +148,6 @@ export async function handleMessageGenerateJob(
         );
         return;
       }
-    } else {
-      const icpName = existingDraft.icpProfile.name;
-      logger.info(
-        { jobId: job.id, leadId, existingDraftId: existingDraft.id, existingIcpProfileId: existingDraft.icpProfileId },
-        `Lead already has active message from ICP ${icpName}, skipping`,
-      );
-      return;
     }
 
     const icpProfile = await prisma.icpProfile.findUnique({
@@ -195,7 +201,6 @@ export async function handleMessageGenerateJob(
       icpDescription: icpProfile?.description ?? 'No ICP description available',
     };
 
-    const followUpNumber = job.data.followUpNumber ?? 0;
     const previouslyPitchedFeatures = job.data.previouslyPitchedFeatures ?? [];
     const autoApprove = job.data.autoApprove ?? false;
 
