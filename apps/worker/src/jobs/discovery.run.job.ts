@@ -1144,6 +1144,18 @@ export async function handleDiscoveryRunJob(
   const providersToRun = resolveProvidersToRun(job.data.provider, dependencies);
   const normalizedIcpProfileId = icpProfileId ?? null;
 
+  logger.warn(
+    {
+      jobId: job.id,
+      queue: job.name,
+      runId,
+      correlationId: effectiveCorrelationId,
+      icpProfileId,
+      provider: selectedProvider,
+    },
+    '[DEPRECATED] discovery.run is deprecated. Use the v2 pipeline: discovery.seed → business.prequalify → business.convert. This job will be removed after legacy in-flight jobs complete.',
+  );
+
   logger.info(
     {
       jobId: job.id,

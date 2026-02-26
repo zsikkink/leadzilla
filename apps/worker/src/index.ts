@@ -429,6 +429,8 @@ async function main(): Promise<void> {
 
   await registerWorker<HeartbeatJobPayload>(boss, logger, HEARTBEAT_QUEUE_NAME, handleHeartbeatJob);
   if (discoveryQueueWorkersEnabled) {
+    // [DEPRECATED] Legacy discovery.run — kept registered for in-flight jobs only.
+    // New pipeline uses: discovery.seed → run_search_task → business.prequalify → business.convert
     await registerWorker<DiscoveryRunJobPayload>(boss, logger, DISCOVERY_RUN_JOB_NAME, (jobLogger, job) =>
       handleDiscoveryRunJob(jobLogger, job, {
         boss,
