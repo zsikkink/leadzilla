@@ -248,4 +248,20 @@ export class ApiClient {
     const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
     return this.request(`/v1/discovery/records${qs}`);
   }
+
+  // ── Settings ───────────────────────────────────
+  listPipelineSettings(): Promise<{ items: { key: string; value: unknown; updatedAt: string }[] }> {
+    return this.request('/v1/settings/pipeline');
+  }
+
+  getPipelineSetting(key: string): Promise<{ key: string; value: unknown; updatedAt: string }> {
+    return this.request(`/v1/settings/pipeline/${key}`);
+  }
+
+  updatePipelineSetting(key: string, value: unknown): Promise<{ key: string; value: unknown; updatedAt: string }> {
+    return this.request(`/v1/settings/pipeline/${key}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    });
+  }
 }
