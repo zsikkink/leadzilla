@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import type { Browser } from 'playwright-core';
+import type { Browser, BrowserType } from 'playwright-core';
 
 // ── Config ─────────────────────────────────────────────────────────────────
 
@@ -1280,7 +1280,7 @@ export class WebsiteScraperAdapter {
     urlsToCrawl: Set<string>,
     crawlStart: number,
   ): Promise<WebsiteScraperData | null> {
-    let chromium: typeof import('playwright-core').chromium;
+    let chromium: BrowserType;
     try {
       const pw = await import('playwright-core');
       chromium = pw.chromium;
