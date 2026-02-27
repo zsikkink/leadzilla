@@ -42,6 +42,14 @@ import {
 import { LEAD_RECOVERY_JOB_NAME, LEAD_RECOVERY_RETRY_OPTIONS } from './jobs/lead.recovery.job.js';
 import { OUTBOX_CLEANUP_JOB_NAME, OUTBOX_CLEANUP_RETRY_OPTIONS } from './jobs/outbox.cleanup.job.js';
 import {
+  BUSINESS_PREQUALIFY_JOB_NAME,
+  BUSINESS_PREQUALIFY_RETRY_OPTIONS,
+} from './jobs/business.prequalify.job.js';
+import {
+  BUSINESS_CONVERT_JOB_NAME,
+  BUSINESS_CONVERT_RETRY_OPTIONS,
+} from './jobs/business.convert.job.js';
+import {
   PIPELINE_HEALTH_JOB_NAME,
   PIPELINE_HEALTH_RETRY_OPTIONS,
 } from './jobs/pipeline.health.job.js';
@@ -120,6 +128,14 @@ export const WORKER_QUEUE_DEFINITIONS: readonly WorkerQueueDefinition[] = [
       DISCOVERY_RUN_SEARCH_TASK_JOB_NAME,
       DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,
     ),
+  },
+  {
+    name: BUSINESS_PREQUALIFY_JOB_NAME,
+    retryOptions: normalizeRetryOptions(BUSINESS_PREQUALIFY_JOB_NAME, BUSINESS_PREQUALIFY_RETRY_OPTIONS),
+  },
+  {
+    name: BUSINESS_CONVERT_JOB_NAME,
+    retryOptions: normalizeRetryOptions(BUSINESS_CONVERT_JOB_NAME, BUSINESS_CONVERT_RETRY_OPTIONS),
   },
   {
     name: ENRICHMENT_RUN_JOB_NAME,
