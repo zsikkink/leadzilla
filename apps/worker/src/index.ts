@@ -2,9 +2,11 @@ import PgBoss, { type Job } from 'pg-boss';
 
 import { prisma } from '@lead-flood/db';
 import {
+  GooglePlacesDiscoveryProvider,
   loadDiscoveryRuntimeConfig,
   SerpApiDiscoveryProvider,
   type DiscoveryRuntimeConfig,
+  type DiscoveryProvider as V2DiscoveryProvider,
 } from '@lead-flood/discovery';
 import type { DiscoveryProvider } from '@lead-flood/contracts';
 import { createLogger } from '@lead-flood/observability';
@@ -290,8 +292,17 @@ async function main(): Promise<void> {
     baseUrl: env.PUBLIC_LOOKUP_BASE_URL,
   });
 
-  const websiteScraperAdapter = new WebsiteScraperAdapter({});
-  const instagramScraperAdapter = new InstagramScraperAdapter({});
+  const websiteScraperAdapter = new WebsiteScraperAdapter({
+    enablePlaywright: env.WEBSITE_SCRAPER_PLAYWRIGHT_ENABLED,
+    ...(env.WEBSITE_SCRAPER_CHROMIUM_PATH ? { chromiumPath: env.WEBSITE_SCRAPER_CHROMIUM_PATH } : {}),
+  });
+  const instagramScraperAdapter = new InstagramScraperAdapter({
+    ...(env.INSTAGRAM_USERNAME ? { username: env.INSTAGRAM_USERNAME } : {}),
+    ...(env.INSTAGRAM_PASSWORD ? { password: env.INSTAGRAM_PASSWORD } : {}),
+    ...(env.INSTAGRAM_RATE_LIMIT_PER_MIN !== undefined
+      ? { rateLimitPerMinute: env.INSTAGRAM_RATE_LIMIT_PER_MIN }
+      : {}),
+  });
   const discoveryProviderOrder: DiscoveryProvider[] = [];
   if (env.COMPANY_SEARCH_ENABLED) discoveryProviderOrder.push('COMPANY_SEARCH_FREE');
   if (env.APOLLO_ENABLED) discoveryProviderOrder.push('APOLLO');
@@ -300,19 +311,42 @@ async function main(): Promise<void> {
   if (env.LINKEDIN_SCRAPE_ENABLED) discoveryProviderOrder.push('LINKEDIN_SCRAPE');
 
   let discoveryRuntimeConfig: DiscoveryRuntimeConfig | null = null;
-  let serpApiProvider: SerpApiDiscoveryProvider | null = null;
-  if (env.SERPAPI_DISCOVERY_ENABLED) {
-    try {
-      discoveryRuntimeConfig = loadDiscoveryRuntimeConfig(process.env);
-      if (discoveryRuntimeConfig.mapsZoomWarning) {
-        logger.warn(
-          {
-            warning: discoveryRuntimeConfig.mapsZoomWarning,
-          },
-          'Using default discovery maps zoom',
-        );
-      }
-      serpApiProvider = new SerpApiDiscoveryProvider({
+  let v2SearchProvider: V2DiscoveryProvider | null = null;
+  try {
+    discoveryRuntimeConfig = loadDiscoveryRuntimeConfig(process.env);
+    if (discoveryRuntimeConfig.mapsZoomWarning) {
+      logger.warn(
+        { warning: discoveryRuntimeConfig.mapsZoomWarning },
+        'Using default discovery maps zoom',
+      );
+    }
+
+    if (discoveryRuntimeConfig.searchProvider === 'GOOGLE_PLACES' && discoveryRuntimeConfig.googlePlacesApiKey) {
+      v2SearchProvider = new GooglePlacesDiscoveryProvider({
+        apiKey: discoveryRuntimeConfig.googlePlacesApiKey,
+        rps: discoveryRuntimeConfig.rps,
+        maxAttempts: discoveryRuntimeConfig.maxTaskAttempts,
+        backoffBaseSeconds: discoveryRuntimeConfig.backoffBaseSeconds,
+      });
+      logger.info(
+        {
+          provider: 'GOOGLE_PLACES',
+          enabled: true,
+          rps: discoveryRuntimeConfig.rps,
+          concurrency: discoveryRuntimeConfig.concurrency,
+          maxTaskAttempts: discoveryRuntimeConfig.maxTaskAttempts,
+          runMaxTasks: env.DISCOVERY_RUN_MAX_TASKS ?? null,
+          countries: discoveryRuntimeConfig.countries,
+          languages: discoveryRuntimeConfig.languages,
+          discoveryQueueWorkersEnabled,
+          jobRequestPollMs: env.JOB_REQUEST_POLL_MS,
+          jobRequestMaxPerTick: env.JOB_REQUEST_MAX_PER_TICK,
+          jobRequestWorkerId: env.JOB_REQUEST_WORKER_ID ?? buildDefaultWorkerId(),
+        },
+        'Discovery search-task pipeline configured (Google Places)',
+      );
+    } else if (discoveryRuntimeConfig.searchProvider === 'SERPAPI' && discoveryRuntimeConfig.serpApiKey) {
+      v2SearchProvider = new SerpApiDiscoveryProvider({
         apiKey: discoveryRuntimeConfig.serpApiKey,
         rps: discoveryRuntimeConfig.rps,
         enableCache: discoveryRuntimeConfig.enableCache,
@@ -335,25 +369,24 @@ async function main(): Promise<void> {
           jobRequestMaxPerTick: env.JOB_REQUEST_MAX_PER_TICK,
           jobRequestWorkerId: env.JOB_REQUEST_WORKER_ID ?? buildDefaultWorkerId(),
         },
-        'Discovery search-task pipeline configured',
+        'Discovery search-task pipeline configured (SerpAPI)',
       );
-    } catch (error: unknown) {
+    } else {
       logger.warn(
         {
-          provider: 'SERPAPI',
-          enabled: false,
-          error: error instanceof Error ? error.message : 'invalid discovery runtime config',
+          searchProvider: discoveryRuntimeConfig.searchProvider,
+          hasGooglePlacesKey: Boolean(discoveryRuntimeConfig.googlePlacesApiKey),
+          hasSerpApiKey: Boolean(discoveryRuntimeConfig.serpApiKey),
         },
-        'SerpAPI discovery runtime disabled; set SERPAPI_API_KEY and discovery env vars to enable',
+        'No discovery search provider configured — set GOOGLE_PLACES_API_KEY or SERPAPI_API_KEY',
       );
     }
-  } else {
+  } catch (error: unknown) {
     logger.warn(
       {
-        provider: 'SERPAPI',
-        enabled: false,
+        error: error instanceof Error ? error.message : 'invalid discovery runtime config',
       },
-      'SerpAPI discovery runtime disabled via SERPAPI_DISCOVERY_ENABLED=false',
+      'Discovery runtime disabled; check DISCOVERY_SEARCH_PROVIDER and API key env vars',
     );
   }
 
@@ -453,7 +486,7 @@ async function main(): Promise<void> {
     );
   }
 
-  if (discoveryRuntimeConfig && serpApiProvider) {
+  if (discoveryRuntimeConfig && v2SearchProvider) {
     if (discoveryQueueWorkersEnabled) {
       await registerWorker<DiscoverySeedJobPayload>(
         boss,
@@ -473,7 +506,7 @@ async function main(): Promise<void> {
         (jobLogger, job) =>
           handleDiscoveryRunSearchTaskJob(jobLogger, job, {
             boss,
-            provider: serpApiProvider,
+            provider: v2SearchProvider,
             config: discoveryRuntimeConfig,
             ...(env.DISCOVERY_RUN_MAX_TASKS !== undefined
               ? { maxTasks: env.DISCOVERY_RUN_MAX_TASKS }
@@ -544,7 +577,7 @@ async function main(): Promise<void> {
     const dispatcher = startJobRequestDispatcher({
       logger,
       config: discoveryRuntimeConfig,
-      provider: serpApiProvider,
+      provider: v2SearchProvider,
       pollMs: env.JOB_REQUEST_POLL_MS,
       maxPerTick: env.JOB_REQUEST_MAX_PER_TICK,
       workerId: env.JOB_REQUEST_WORKER_ID ?? buildDefaultWorkerId(),

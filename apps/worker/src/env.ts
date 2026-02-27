@@ -142,6 +142,12 @@ const WorkerEnvSchema = z.object({
   PIPELINE_STALE_JOB_MINUTES: z.coerce.number().int().min(1).default(30),
   PIPELINE_MIN_SUCCESS_RATE: z.coerce.number().min(0).max(1).default(0.8),
   PIPELINE_MIN_ENRICHMENT_RATE: z.coerce.number().min(0).max(1).default(0.7),
+  INSTAGRAM_USERNAME: optionalNonEmptyString(),
+  INSTAGRAM_PASSWORD: optionalNonEmptyString(),
+  INSTAGRAM_RATE_LIMIT_PER_MIN: z.coerce.number().int().min(1).max(60).optional(),
+  DISCOVERY_SEARCH_PROVIDER: z.enum(['GOOGLE_PLACES', 'SERPAPI']).default('GOOGLE_PLACES'),
+  WEBSITE_SCRAPER_PLAYWRIGHT_ENABLED: envBoolean.default(true),
+  WEBSITE_SCRAPER_CHROMIUM_PATH: optionalNonEmptyString(),
 });
 
 export type WorkerEnv = z.infer<typeof WorkerEnvSchema>;
