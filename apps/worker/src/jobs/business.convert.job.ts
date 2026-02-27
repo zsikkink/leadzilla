@@ -70,6 +70,7 @@ interface HunterDomainSearchResult {
 interface WebsiteScraperResult {
   status: 'success' | 'retryable_error' | 'terminal_error';
   data?: {
+    // Original signals
     paymentWidgets: string[];
     hasShopify: boolean;
     platform: string | null;
@@ -78,12 +79,51 @@ interface WebsiteScraperResult {
     hasProductCatalog: boolean;
     hasWhatsApp: boolean;
     detectedPlatforms: string[];
+    // Multi-page intelligence (v2)
+    decisionMakers: Array<{
+      name: string;
+      title: string | null;
+      email: string | null;
+      linkedinUrl: string | null;
+      seniority: 'executive' | 'director' | 'manager' | 'other';
+      source: string;
+    }>;
+    contactInfo: {
+      emails: Array<{ email: string; context: string; pageUrl: string }>;
+      phones: Array<{ number: string; type: 'whatsapp' | 'mobile' | 'landline' | 'unknown'; pageUrl: string }>;
+      addresses: Array<{ text: string; pageUrl: string }>;
+    };
+    socialLinks: Array<{
+      platform: 'instagram' | 'linkedin' | 'facebook' | 'twitter' | 'tiktok' | 'youtube' | 'whatsapp';
+      url: string;
+      handle: string | null;
+    }>;
+    technologies: {
+      analytics: string[];
+      crm: string[];
+      liveChat: string[];
+      emailMarketing: string[];
+      ecommerce: string[];
+      payments: string[];
+      cssFrameworks: string[];
+      hosting: string[];
+    };
+    businessSignals: {
+      estimatedEmployeeCount: number | null;
+      certifications: string[];
+      hasClientLogos: boolean;
+      hasTestimonials: boolean;
+      hasCaseStudies: boolean;
+    };
+    pagesCrawled: number;
+    crawlDurationMs: number;
   } | undefined;
 }
 
 interface InstagramScraperResult {
   status: 'success' | 'retryable_error' | 'terminal_error';
   data?: {
+    // Original fields
     followerCount: number;
     followingCount: number;
     engagementRate: number | null;
@@ -92,6 +132,14 @@ interface InstagramScraperResult {
     bio: string | null;
     bioLink: string | null;
     isBusinessAccount: boolean;
+    // Authenticated-only fields (v2)
+    isVerified: boolean;
+    businessCategory: string | null;
+    businessEmail: string | null;
+    businessPhone: string | null;
+    mediaCount: number;
+    storyHighlightsCount: number;
+    isProfessionalAccount: boolean;
   } | undefined;
 }
 
@@ -314,6 +362,7 @@ export async function handleBusinessConvertJob(
   }
 
   // ── 4. Website scrape (optional, zero cost — our own scraper) ─────────
+  let discoveredInstagramHandle: string | null = null;
   if (
     includeWebsiteAnalysis !== false &&
     deps.websiteScraperAdapter?.isConfigured
@@ -323,19 +372,50 @@ export async function handleBusinessConvertJob(
         { ...logCtx, websiteScrapedAt: business.websiteScrapedAt },
         'Skipping website scrape — cache still valid',
       );
+      // Even from cache, try to extract Instagram handle for step 5
+      if (!business.instagramHandle && business.apifyWebsiteScrapeJson) {
+        const cached = business.apifyWebsiteScrapeJson as Record<string, unknown>;
+        const socialLinks = Array.isArray(cached.socialLinks)
+          ? (cached.socialLinks as Array<Record<string, unknown>>)
+          : [];
+        const igLink = socialLinks.find((s) => s.platform === 'instagram');
+        if (igLink && typeof igLink.handle === 'string' && igLink.handle.length > 0) {
+          discoveredInstagramHandle = igLink.handle;
+        }
+      }
     } else {
       const websiteResult = await deps.websiteScraperAdapter.scrapeWebsite(domain);
 
       if (websiteResult.status === 'success' && websiteResult.data) {
+        const updateData: Record<string, unknown> = {
+          apifyWebsiteScrapeJson: toInputJson(websiteResult.data),
+          websiteScrapedAt: new Date(),
+        };
+
+        // Discover Instagram handle from website social links if not already known
+        if (!business.instagramHandle && websiteResult.data.socialLinks) {
+          const igLink = websiteResult.data.socialLinks.find(
+            (s) => s.platform === 'instagram',
+          );
+          if (igLink?.handle) {
+            discoveredInstagramHandle = igLink.handle;
+            updateData.instagramHandle = igLink.handle;
+            logger.info(
+              { ...logCtx, discoveredInstagramHandle: igLink.handle },
+              'Discovered Instagram handle from website social links',
+            );
+          }
+        }
+
         await prisma.business.update({
           where: { id: businessId },
-          data: {
-            apifyWebsiteScrapeJson: toInputJson(websiteResult.data),
-            websiteScrapedAt: new Date(),
-          },
+          data: updateData as Prisma.BusinessUpdateInput,
         });
 
-        logger.info(logCtx, 'Website scrape completed and cached');
+        logger.info(
+          { ...logCtx, pagesCrawled: websiteResult.data.pagesCrawled, crawlDurationMs: websiteResult.data.crawlDurationMs },
+          'Website scrape completed and cached',
+        );
       } else {
         logger.warn(
           { ...logCtx, websiteScrapeStatus: websiteResult.status },
@@ -346,10 +426,11 @@ export async function handleBusinessConvertJob(
   }
 
   // ── 5. Instagram scrape (optional, zero cost — our own scraper) ──────
+  const instagramHandle = business.instagramHandle ?? discoveredInstagramHandle;
   if (
     includeSocialMediaAnalysis !== false &&
     deps.instagramScraperAdapter?.isConfigured &&
-    business.instagramHandle
+    instagramHandle
   ) {
     if (isCacheValid(business.instagramScrapedAt)) {
       logger.info(
@@ -358,7 +439,7 @@ export async function handleBusinessConvertJob(
       );
     } else {
       const igResult = await deps.instagramScraperAdapter.scrapeProfile(
-        business.instagramHandle,
+        instagramHandle,
       );
 
       if (igResult.status === 'success' && igResult.data) {
@@ -370,10 +451,13 @@ export async function handleBusinessConvertJob(
           },
         });
 
-        logger.info(logCtx, 'Instagram scrape completed and cached');
+        logger.info(
+          { ...logCtx, instagramHandle, authenticated: Boolean(igResult.data.isVerified !== undefined) },
+          'Instagram scrape completed and cached',
+        );
       } else {
         logger.warn(
-          { ...logCtx, instagramScrapeStatus: igResult.status },
+          { ...logCtx, instagramScrapeStatus: igResult.status, instagramHandle },
           'Instagram scrape failed — continuing without Instagram data',
         );
       }
