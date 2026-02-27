@@ -596,6 +596,15 @@ export async function handleFeaturesComputeJob(
             apifyInstagramScrapeJson: true,
             websiteScrapedAt: true,
             instagramScrapedAt: true,
+            countryCode: true,
+            reviewCount: true,
+            hasWhatsapp: true,
+            hasInstagram: true,
+            followerCount: true,
+            physicalAddressPresent: true,
+            recentActivity: true,
+            category: true,
+            instagramHandle: true,
           },
         })
       : null;
@@ -637,7 +646,8 @@ export async function handleFeaturesComputeJob(
       normalizedPayload?.country ??
         normalizedPayload?.locationCountry ??
         findValueByKey(enrichmentRawPayload, 'country') ??
-        findValueByKey(discoveryRawPayload, 'country'),
+        findValueByKey(discoveryRawPayload, 'country') ??
+        business?.countryCode,
     );
     const companySize =
       extractNumberFromSources(featureSources, [
@@ -647,9 +657,11 @@ export async function handleFeaturesComputeJob(
         'teamSize',
       ]) ?? null;
     const reviewCount =
-      extractNumberFromSources(featureSources, ['reviewCount', 'reviews', 'ratingsCount']) ?? 0;
+      extractNumberFromSources(featureSources, ['reviewCount', 'reviews', 'ratingsCount']) ||
+      (business?.reviewCount ?? 0);
     const baseFollowerCount =
-      extractNumberFromSources(featureSources, ['followerCount', 'followers', 'instagramFollowers']) ?? 0;
+      extractNumberFromSources(featureSources, ['followerCount', 'followers', 'instagramFollowers']) ||
+      (business?.followerCount ?? 0);
     const recentActivityDays =
       extractNumberFromSources(featureSources, ['lastActivityDays', 'daysSinceLastPost']) ?? null;
 
@@ -761,11 +773,14 @@ export async function handleFeaturesComputeJob(
     // ── Feature extraction: Tier 1 (Apify) → Tier 2 (enrichment) → Tier 3 (keyword) ──
     const hasWhatsapp =
       apifyHasWhatsApp ||
+      (business?.hasWhatsapp ?? false) ||
       (apifyPaymentWidgets.some((w) => w.toLowerCase().includes('whatsapp'))) ||
       (extractBooleanFromSources(featureSources, ['hasWhatsapp', 'whatsapp']) ??
       includesAnyKeyword(featureSources, ['whatsapp', 'wa.me']));
     const hasInstagram =
       apifyInstagram !== null ||
+      (business?.hasInstagram ?? false) ||
+      Boolean(business?.instagramHandle) ||
       (extractBooleanFromSources(featureSources, ['hasInstagram', 'instagramActive']) ??
       includesAnyKeyword(featureSources, ['instagram.com', 'instagram']));
     const acceptsOnlinePayments =
@@ -775,10 +790,12 @@ export async function handleFeaturesComputeJob(
         'online payment', 'checkout', 'stripe', 'paytabs', 'apple pay', 'mada',
       ]));
     const physicalAddressPresent =
-      extractBooleanFromSources(featureSources, ['physicalAddressPresent', 'hasAddress']) ??
-      Boolean(normalizeString(findValueByKey(featureSources, 'address')));
+      (business?.physicalAddressPresent ?? false) ||
+      (extractBooleanFromSources(featureSources, ['physicalAddressPresent', 'hasAddress']) ??
+      Boolean(normalizeString(findValueByKey(featureSources, 'address'))));
     const recentActivity =
       (instagramDaysSinceLastPost >= 0 && instagramDaysSinceLastPost <= 45) ||
+      (business?.recentActivity ?? false) ||
       (extractBooleanFromSources(featureSources, ['recentActivity', 'isRecentlyActive']) ??
       (recentActivityDays !== null ? recentActivityDays <= 45 : false));
     const customOrderSignals =

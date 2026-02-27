@@ -32,40 +32,27 @@ interface ApolloContact {
   phone: string | null;
   firstName: string;
   lastName: string;
-  title: string;
-  companyName: string;
+  title: string | null;
+  companyName: string | null;
 }
 
-interface ApolloContactSearchResult {
-  status: 'success' | 'retryable_error' | 'terminal_error';
-  data?: { contacts: ApolloContact[] } | undefined;
-  failure?: {
-    classification: 'retryable' | 'terminal';
-    statusCode: number | null;
-    message: string;
-    raw: unknown;
-  } | undefined;
-}
+type ApolloContactSearchResult =
+  | { status: 'success'; contacts: ApolloContact[] }
+  | { status: 'retryable_error'; failure: { classification: 'retryable'; statusCode: number | null; message: string; raw: unknown } }
+  | { status: 'terminal_error'; failure: { classification: 'terminal'; statusCode: number | null; message: string; raw: unknown } };
 
 interface HunterContact {
   email: string;
   firstName: string | null;
   lastName: string | null;
   position: string | null;
-  type: string | null;
-  confidence: number;
+  type: 'personal' | 'generic' | null;
 }
 
-interface HunterDomainSearchResult {
-  status: 'success' | 'retryable_error' | 'terminal_error';
-  data?: { contacts: HunterContact[] } | undefined;
-  failure?: {
-    classification: 'retryable' | 'terminal';
-    statusCode: number | null;
-    message: string;
-    raw: unknown;
-  } | undefined;
-}
+type HunterDomainSearchResult =
+  | { status: 'success'; contacts: HunterContact[] }
+  | { status: 'retryable_error'; failure: { classification: 'retryable' | 'terminal'; statusCode: number | null; message: string; raw: unknown } }
+  | { status: 'terminal_error'; failure: { classification: 'retryable' | 'terminal'; statusCode: number | null; message: string; raw: unknown } };
 
 interface WebsiteScraperResult {
   status: 'success' | 'retryable_error' | 'terminal_error';
@@ -275,8 +262,8 @@ export async function handleBusinessConvertJob(
   if (deps.apolloAdapter.isConfigured) {
     const apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
 
-    if (apolloResult.status === 'success' && apolloResult.data && apolloResult.data.contacts.length > 0) {
-      const contact = apolloResult.data.contacts[0]!;
+    if (apolloResult.status === 'success' && apolloResult.contacts.length > 0) {
+      const contact = apolloResult.contacts[0]!;
       apolloContactJson = contact;
       resolvedContact = {
         firstName: contact.firstName,
@@ -303,7 +290,7 @@ export async function handleBusinessConvertJob(
     });
 
     logger.info(
-      { ...logCtx, apolloStatus: apolloResult.status, contactsFound: apolloResult.data?.contacts?.length ?? 0 },
+      { ...logCtx, apolloStatus: apolloResult.status, contactsFound: apolloResult.status === 'success' ? apolloResult.contacts.length : 0 },
       'Apollo contact search completed',
     );
   }
@@ -312,8 +299,8 @@ export async function handleBusinessConvertJob(
   if (!resolvedContact && deps.hunterAdapter.isConfigured) {
     const hunterResult = await deps.hunterAdapter.searchDomainContacts(domain);
 
-    if (hunterResult.status === 'success' && hunterResult.data && hunterResult.data.contacts.length > 0) {
-      const contact = hunterResult.data.contacts[0]!;
+    if (hunterResult.status === 'success' && hunterResult.contacts.length > 0) {
+      const contact = hunterResult.contacts[0]!;
       hunterContactJson = contact;
       resolvedContact = {
         firstName: contact.firstName ?? '',
@@ -340,7 +327,7 @@ export async function handleBusinessConvertJob(
     });
 
     logger.info(
-      { ...logCtx, hunterStatus: hunterResult.status, contactsFound: hunterResult.data?.contacts?.length ?? 0 },
+      { ...logCtx, hunterStatus: hunterResult.status, contactsFound: hunterResult.status === 'success' ? hunterResult.contacts.length : 0 },
       'Hunter domain search completed',
     );
   }
