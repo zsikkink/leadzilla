@@ -95,8 +95,12 @@ export interface DiscoverySeedConfig {
   seedBucket: string | null;
 }
 
+export type DiscoverySearchProvider = 'SERPAPI' | 'GOOGLE_PLACES';
+
 export interface DiscoveryRuntimeConfig extends DiscoverySeedConfig {
-  serpApiKey: string;
+  searchProvider: DiscoverySearchProvider;
+  serpApiKey: string | null;
+  googlePlacesApiKey: string | null;
   rps: number;
   concurrency: number;
   enableCache: boolean;
@@ -175,9 +179,31 @@ export function loadDiscoverySeedConfig(source: NodeJS.ProcessEnv): DiscoverySee
 }
 
 export function loadDiscoveryRuntimeConfig(source: NodeJS.ProcessEnv): DiscoveryRuntimeConfig {
-  const serpApiKey = source.SERPAPI_API_KEY?.trim() ?? '';
-  if (!serpApiKey) {
-    throw new Error('SERPAPI_API_KEY is required');
+  const serpApiKey = source.SERPAPI_API_KEY?.trim() || null;
+  const googlePlacesApiKey = source.GOOGLE_PLACES_API_KEY?.trim() || null;
+
+  const providerRaw = source.DISCOVERY_SEARCH_PROVIDER?.trim().toUpperCase();
+  let searchProvider: DiscoverySearchProvider;
+
+  if (providerRaw === 'SERPAPI') {
+    searchProvider = 'SERPAPI';
+  } else if (providerRaw === 'GOOGLE_PLACES') {
+    searchProvider = 'GOOGLE_PLACES';
+  } else {
+    searchProvider = googlePlacesApiKey ? 'GOOGLE_PLACES' : 'SERPAPI';
+  }
+
+  if (searchProvider === 'SERPAPI' && !serpApiKey) {
+    throw new Error(
+      'SERPAPI_API_KEY is required when DISCOVERY_SEARCH_PROVIDER=SERPAPI. ' +
+        'Set GOOGLE_PLACES_API_KEY and DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES to use Google Places instead.',
+    );
+  }
+
+  if (searchProvider === 'GOOGLE_PLACES' && !googlePlacesApiKey) {
+    throw new Error(
+      'GOOGLE_PLACES_API_KEY is required when DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES.',
+    );
   }
 
   const baseConfig = loadBaseSeedConfig(source);
@@ -196,7 +222,9 @@ export function loadDiscoveryRuntimeConfig(source: NodeJS.ProcessEnv): Discovery
 
   return {
     ...baseConfig,
+    searchProvider,
     serpApiKey,
+    googlePlacesApiKey,
     rps: parsePositiveInt(source.DISCOVERY_RPS, 1),
     concurrency: parsePositiveInt(source.DISCOVERY_CONCURRENCY, 3),
     enableCache: parseBoolean(source.DISCOVERY_ENABLE_CACHE, true),

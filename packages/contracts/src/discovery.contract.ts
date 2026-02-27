@@ -139,6 +139,7 @@ export const ListDiscoveryRecordsResponseSchema = z
 
 export const CostEventProviderSchema = z.enum([
   'SERPAPI',
+  'GOOGLE_PLACES',
   'APOLLO',
   'APIFY_WEBSITE',
   'APIFY_INSTAGRAM',

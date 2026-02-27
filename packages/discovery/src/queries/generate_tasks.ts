@@ -298,6 +298,8 @@ export interface GenerateTasksV2Input {
   cities?: string[] | undefined;
   maxPagesPerQuery?: number | undefined;
   taskTypes?: SearchTaskType[] | undefined;
+  /** When 'GOOGLE_PLACES', collapses to single task type and clamps maxPages to 1 */
+  searchProvider?: 'SERPAPI' | 'GOOGLE_PLACES' | undefined;
 }
 
 /**
@@ -330,10 +332,21 @@ export function generateTasksV2(
 ): GeneratedSearchTask[] {
   const now = options?.now ?? new Date();
   const timeBucket = buildTimeBucket(now, 'weekly', 'v2');
+  const isGooglePlaces = input.searchProvider === 'GOOGLE_PLACES';
 
-  const maxPages = input.maxPagesPerQuery ?? 1;
-  const taskTypes: SearchTaskType[] =
-    input.taskTypes ?? ['SERP_GOOGLE_LOCAL', 'SERP_MAPS_LOCAL'];
+  let maxPages = input.maxPagesPerQuery ?? 1;
+  if (isGooglePlaces && maxPages > 1) {
+    console.warn(
+      `[generate_tasks] maxPagesPerQuery=${maxPages} clamped to 1 for GOOGLE_PLACES provider ` +
+        '(token-based pagination is incompatible with task model)',
+    );
+    maxPages = 1;
+  }
+
+  const defaultTaskTypes: SearchTaskType[] = isGooglePlaces
+    ? ['SERP_GOOGLE_LOCAL']
+    : ['SERP_GOOGLE_LOCAL', 'SERP_MAPS_LOCAL'];
+  const taskTypes: SearchTaskType[] = input.taskTypes ?? defaultTaskTypes;
   const templates = queryTemplatesV2EN;
   const language: DiscoveryLanguageCode = 'en';
 

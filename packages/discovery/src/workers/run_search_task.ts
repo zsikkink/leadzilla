@@ -6,7 +6,7 @@ import type { DiscoveryRuntimeConfig } from '../config.js';
 import { normalizeQuery } from '../dedupe/normalize.js';
 import { incrementMetric } from '../metrics.js';
 import { normalizePhoneE164 } from '../normalization/phone.js';
-import { deriveRootDomainFromUrl } from '../providers/serpapi.client.js';
+import { deriveRootDomainFromUrl } from '../utils/url.js';
 import type {
   DiscoveryCountryCode,
   DiscoveryProvider,

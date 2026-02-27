@@ -208,17 +208,6 @@ function parseSerpApiError(body: string | null): string | null {
   }
 }
 
-function normalizeDomainFromUrl(url: string | null): string | null {
-  if (!url) {
-    return null;
-  }
-  try {
-    return new URL(url).hostname.toLowerCase().replace(/^www\./, '');
-  } catch {
-    return null;
-  }
-}
-
 function parseInstagramHandle(value: unknown): string | null {
   const input = normalizeString(value);
   if (!input) {
@@ -653,6 +642,16 @@ export class SerpApiDiscoveryProvider implements DiscoveryProvider {
             },
           );
 
+          if (response.status === 402) {
+            console.error(
+              '[serpapi] QUOTA EXHAUSTED — SerpAPI credits depleted. ' +
+                `status=402 ${formatRequestContext(requestContext)}` +
+                (serpApiError ? ` error=${serpApiError}` : '') +
+                '. Consider switching to GOOGLE_PLACES provider.',
+            );
+            throw error;
+          }
+
           if (isTransientStatus(response.status) && attempt < this.executionConfig.maxAttempts) {
             await this.waitBackoff(attempt);
             lastError = error;
@@ -757,6 +756,3 @@ export async function searchMapsLocal(
   return provider.searchMapsLocal(params);
 }
 
-export function deriveRootDomainFromUrl(url: string | null): string | null {
-  return normalizeDomainFromUrl(url);
-}
