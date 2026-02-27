@@ -2,6 +2,7 @@ import PgBoss, { type Job } from 'pg-boss';
 
 import { prisma } from '@lead-flood/db';
 import {
+  FallbackDiscoveryProvider,
   GooglePlacesDiscoveryProvider,
   loadDiscoveryRuntimeConfig,
   SerpApiDiscoveryProvider,
@@ -322,62 +323,81 @@ async function main(): Promise<void> {
       );
     }
 
-    if (discoveryRuntimeConfig.searchProvider === 'GOOGLE_PLACES' && discoveryRuntimeConfig.googlePlacesApiKey) {
-      v2SearchProvider = new GooglePlacesDiscoveryProvider({
-        apiKey: discoveryRuntimeConfig.googlePlacesApiKey,
-        rps: discoveryRuntimeConfig.rps,
-        maxAttempts: discoveryRuntimeConfig.maxTaskAttempts,
-        backoffBaseSeconds: discoveryRuntimeConfig.backoffBaseSeconds,
-      });
-      logger.info(
-        {
-          provider: 'GOOGLE_PLACES',
-          enabled: true,
+    const hasSerpApi = Boolean(discoveryRuntimeConfig.serpApiKey);
+    const hasGooglePlaces = Boolean(discoveryRuntimeConfig.googlePlacesApiKey);
+
+    const providerLogContext = {
+      enabled: true,
+      rps: discoveryRuntimeConfig.rps,
+      concurrency: discoveryRuntimeConfig.concurrency,
+      maxTaskAttempts: discoveryRuntimeConfig.maxTaskAttempts,
+      runMaxTasks: env.DISCOVERY_RUN_MAX_TASKS ?? null,
+      countries: discoveryRuntimeConfig.countries,
+      languages: discoveryRuntimeConfig.languages,
+      discoveryQueueWorkersEnabled,
+      jobRequestPollMs: env.JOB_REQUEST_POLL_MS,
+      jobRequestMaxPerTick: env.JOB_REQUEST_MAX_PER_TICK,
+      jobRequestWorkerId: env.JOB_REQUEST_WORKER_ID ?? buildDefaultWorkerId(),
+    };
+
+    // Build individual providers
+    const serpApiProvider = hasSerpApi
+      ? new SerpApiDiscoveryProvider({
+          apiKey: discoveryRuntimeConfig.serpApiKey!,
           rps: discoveryRuntimeConfig.rps,
-          concurrency: discoveryRuntimeConfig.concurrency,
-          maxTaskAttempts: discoveryRuntimeConfig.maxTaskAttempts,
-          runMaxTasks: env.DISCOVERY_RUN_MAX_TASKS ?? null,
-          countries: discoveryRuntimeConfig.countries,
-          languages: discoveryRuntimeConfig.languages,
-          discoveryQueueWorkersEnabled,
-          jobRequestPollMs: env.JOB_REQUEST_POLL_MS,
-          jobRequestMaxPerTick: env.JOB_REQUEST_MAX_PER_TICK,
-          jobRequestWorkerId: env.JOB_REQUEST_WORKER_ID ?? buildDefaultWorkerId(),
-        },
-        'Discovery search-task pipeline configured (Google Places)',
+          enableCache: discoveryRuntimeConfig.enableCache,
+          maxAttempts: discoveryRuntimeConfig.maxTaskAttempts,
+          backoffBaseSeconds: discoveryRuntimeConfig.backoffBaseSeconds,
+          mapsZoom: discoveryRuntimeConfig.mapsZoom,
+        })
+      : null;
+
+    const googlePlacesProvider = hasGooglePlaces
+      ? new GooglePlacesDiscoveryProvider({
+          apiKey: discoveryRuntimeConfig.googlePlacesApiKey!,
+          rps: discoveryRuntimeConfig.rps,
+          maxAttempts: discoveryRuntimeConfig.maxTaskAttempts,
+          backoffBaseSeconds: discoveryRuntimeConfig.backoffBaseSeconds,
+        })
+      : null;
+
+    // Wire with runtime fallback when both providers are available
+    if (discoveryRuntimeConfig.searchProvider === 'SERPAPI' && serpApiProvider) {
+      v2SearchProvider = googlePlacesProvider
+        ? new FallbackDiscoveryProvider({
+            primary: serpApiProvider,
+            fallback: googlePlacesProvider,
+            primaryName: 'SerpAPI',
+            fallbackName: 'Google Places',
+          })
+        : serpApiProvider;
+      logger.info(
+        { ...providerLogContext, provider: 'SERPAPI', fallback: hasGooglePlaces ? 'GOOGLE_PLACES' : null },
+        hasGooglePlaces
+          ? 'Discovery pipeline configured (SerpAPI primary, Google Places fallback)'
+          : 'Discovery pipeline configured (SerpAPI only)',
       );
-    } else if (discoveryRuntimeConfig.searchProvider === 'SERPAPI' && discoveryRuntimeConfig.serpApiKey) {
-      v2SearchProvider = new SerpApiDiscoveryProvider({
-        apiKey: discoveryRuntimeConfig.serpApiKey,
-        rps: discoveryRuntimeConfig.rps,
-        enableCache: discoveryRuntimeConfig.enableCache,
-        maxAttempts: discoveryRuntimeConfig.maxTaskAttempts,
-        backoffBaseSeconds: discoveryRuntimeConfig.backoffBaseSeconds,
-        mapsZoom: discoveryRuntimeConfig.mapsZoom,
-      });
+    } else if (discoveryRuntimeConfig.searchProvider === 'GOOGLE_PLACES' && googlePlacesProvider) {
+      v2SearchProvider = serpApiProvider
+        ? new FallbackDiscoveryProvider({
+            primary: googlePlacesProvider,
+            fallback: serpApiProvider,
+            primaryName: 'Google Places',
+            fallbackName: 'SerpAPI',
+          })
+        : googlePlacesProvider;
       logger.info(
-        {
-          provider: 'SERPAPI',
-          enabled: true,
-          rps: discoveryRuntimeConfig.rps,
-          concurrency: discoveryRuntimeConfig.concurrency,
-          maxTaskAttempts: discoveryRuntimeConfig.maxTaskAttempts,
-          runMaxTasks: env.DISCOVERY_RUN_MAX_TASKS ?? null,
-          countries: discoveryRuntimeConfig.countries,
-          languages: discoveryRuntimeConfig.languages,
-          discoveryQueueWorkersEnabled,
-          jobRequestPollMs: env.JOB_REQUEST_POLL_MS,
-          jobRequestMaxPerTick: env.JOB_REQUEST_MAX_PER_TICK,
-          jobRequestWorkerId: env.JOB_REQUEST_WORKER_ID ?? buildDefaultWorkerId(),
-        },
-        'Discovery search-task pipeline configured (SerpAPI)',
+        { ...providerLogContext, provider: 'GOOGLE_PLACES', fallback: hasSerpApi ? 'SERPAPI' : null },
+        hasSerpApi
+          ? 'Discovery pipeline configured (Google Places primary, SerpAPI fallback)'
+          : 'Discovery pipeline configured (Google Places only)',
       );
     } else {
       logger.warn(
         {
           searchProvider: discoveryRuntimeConfig.searchProvider,
-          hasGooglePlacesKey: Boolean(discoveryRuntimeConfig.googlePlacesApiKey),
-          hasSerpApiKey: Boolean(discoveryRuntimeConfig.serpApiKey),
+          hasGooglePlacesKey: hasGooglePlaces,
+          hasSerpApiKey: hasSerpApi,
         },
         'No discovery search provider configured — set GOOGLE_PLACES_API_KEY or SERPAPI_API_KEY',
       );

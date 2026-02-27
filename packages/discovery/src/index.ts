@@ -2,6 +2,7 @@ export * from './config.js';
 export * from './dedupe/normalize.js';
 export * from './dedupe/task_key.js';
 export * from './metrics.js';
+export * from './providers/fallback.provider.js';
 export * from './providers/google-places.client.js';
 export * from './providers/serpapi.client.js';
 export * from './providers/types.js';
