@@ -183,26 +183,34 @@ export function loadDiscoveryRuntimeConfig(source: NodeJS.ProcessEnv): Discovery
   const googlePlacesApiKey = source.GOOGLE_PLACES_API_KEY?.trim() || null;
 
   const providerRaw = source.DISCOVERY_SEARCH_PROVIDER?.trim().toUpperCase();
-  let searchProvider: DiscoverySearchProvider;
+  let preferredProvider: DiscoverySearchProvider;
 
   if (providerRaw === 'SERPAPI') {
-    searchProvider = 'SERPAPI';
+    preferredProvider = 'SERPAPI';
   } else if (providerRaw === 'GOOGLE_PLACES') {
-    searchProvider = 'GOOGLE_PLACES';
+    preferredProvider = 'GOOGLE_PLACES';
   } else {
-    searchProvider = googlePlacesApiKey ? 'GOOGLE_PLACES' : 'SERPAPI';
+    // Default priority: SERPAPI > GOOGLE_PLACES
+    preferredProvider = serpApiKey ? 'SERPAPI' : 'GOOGLE_PLACES';
   }
 
-  if (searchProvider === 'SERPAPI' && !serpApiKey) {
-    throw new Error(
-      'SERPAPI_API_KEY is required when DISCOVERY_SEARCH_PROVIDER=SERPAPI. ' +
-        'Set GOOGLE_PLACES_API_KEY and DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES to use Google Places instead.',
-    );
-  }
+  // Resolve with fallback: if preferred provider's key is missing, try the other
+  let searchProvider: DiscoverySearchProvider;
 
-  if (searchProvider === 'GOOGLE_PLACES' && !googlePlacesApiKey) {
+  if (preferredProvider === 'SERPAPI' && serpApiKey) {
+    searchProvider = 'SERPAPI';
+  } else if (preferredProvider === 'SERPAPI' && !serpApiKey && googlePlacesApiKey) {
+    // SERPAPI preferred but no key — fall back to Google Places
+    searchProvider = 'GOOGLE_PLACES';
+  } else if (preferredProvider === 'GOOGLE_PLACES' && googlePlacesApiKey) {
+    searchProvider = 'GOOGLE_PLACES';
+  } else if (preferredProvider === 'GOOGLE_PLACES' && !googlePlacesApiKey && serpApiKey) {
+    // Google Places preferred but no key — fall back to SERPAPI
+    searchProvider = 'SERPAPI';
+  } else {
     throw new Error(
-      'GOOGLE_PLACES_API_KEY is required when DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES.',
+      'No discovery search provider API key configured. ' +
+        'Set SERPAPI_API_KEY (preferred) or GOOGLE_PLACES_API_KEY.',
     );
   }
 

@@ -299,6 +299,7 @@ async function main(): Promise<void> {
   const instagramScraperAdapter = new InstagramScraperAdapter({
     ...(env.INSTAGRAM_USERNAME ? { username: env.INSTAGRAM_USERNAME } : {}),
     ...(env.INSTAGRAM_PASSWORD ? { password: env.INSTAGRAM_PASSWORD } : {}),
+    ...(env.INSTAGRAM_COOKIES ? { cookies: env.INSTAGRAM_COOKIES } : {}),
     ...(env.INSTAGRAM_RATE_LIMIT_PER_MIN !== undefined
       ? { rateLimitPerMinute: env.INSTAGRAM_RATE_LIMIT_PER_MIN }
       : {}),

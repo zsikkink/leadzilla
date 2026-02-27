@@ -4,6 +4,12 @@ export interface InstagramScraperConfig {
   fetchImpl?: typeof fetch | undefined;
   username?: string | undefined;
   password?: string | undefined;
+  /**
+   * Full browser cookie string — skips login entirely, avoids checkpoint challenges.
+   * Extract from browser: DevTools → Network → any instagram.com request → Cookie header.
+   * Must include: sessionid, csrftoken, ds_user_id, mid, datr, ig_did, rur.
+   */
+  cookies?: string | undefined;
   rateLimitPerMinute?: number | undefined;
 }
 
@@ -463,6 +469,7 @@ export class InstagramScraperAdapter {
   private readonly fetchImpl: typeof fetch;
   private readonly username: string | null;
   private readonly password: string | null;
+  private readonly preAuthCookies: string | null;
   private readonly rateLimitPerMinute: number;
 
   private sessionCookies: Map<string, string> = new Map();
@@ -475,6 +482,7 @@ export class InstagramScraperAdapter {
     this.fetchImpl = config.fetchImpl ?? fetch;
     this.username = config.username ?? null;
     this.password = config.password ?? null;
+    this.preAuthCookies = config.cookies ?? null;
     this.rateLimitPerMinute = config.rateLimitPerMinute ?? 10;
   }
 
@@ -486,12 +494,40 @@ export class InstagramScraperAdapter {
     return this.username !== null && this.password !== null;
   }
 
+  private get hasPreAuthCookies(): boolean {
+    return this.preAuthCookies !== null;
+  }
+
   private get hasValidSession(): boolean {
     return (
       this.sessionCookies.has('sessionid') &&
-      this.sessionCookies.has('csrftoken') &&
       Date.now() < this.sessionExpiresAt
     );
+  }
+
+  /**
+   * Initialize session from a pre-authenticated browser cookie string.
+   * Skips login entirely — no checkpoint/challenge risk.
+   * Requires full cookie string including: sessionid, csrftoken, ds_user_id, mid, datr, ig_did, rur.
+   * Session cookies from a real browser are trusted by Instagram (~90 day lifetime).
+   */
+  private initPreAuthSession(): void {
+    if (!this.preAuthCookies) return;
+
+    // Parse the raw cookie string into our cookie jar
+    const parts = this.preAuthCookies.split(';');
+    for (const part of parts) {
+      const trimmed = part.trim();
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx === -1) continue;
+      const name = trimmed.slice(0, eqIdx).trim();
+      const value = trimmed.slice(eqIdx + 1).trim();
+      if (name && value) {
+        this.sessionCookies.set(name, value);
+      }
+    }
+
+    this.sessionExpiresAt = Date.now() + SESSION_DURATION_MS;
   }
 
   /**
@@ -680,6 +716,9 @@ export class InstagramScraperAdapter {
           'X-CSRFToken': csrfToken,
           'X-IG-App-ID': IG_APP_ID,
           'X-Requested-With': 'XMLHttpRequest',
+          'Sec-Fetch-Dest': 'empty',
+          'Sec-Fetch-Mode': 'cors',
+          'Sec-Fetch-Site': 'same-origin',
           Referer: `https://www.instagram.com/${encodeURIComponent(handle)}/`,
           Cookie: formatCookieHeader(this.sessionCookies),
         },
@@ -768,9 +807,15 @@ export class InstagramScraperAdapter {
       }
 
       // Extract all fields from the authenticated response
-      const followerCount = safeNumber(user.follower_count);
-      const followingCount = safeNumber(user.following_count);
-      const mediaCount = safeNumber(user.media_count);
+      // API may return flat fields (follower_count) or nested (edge_followed_by.count)
+      const edgeFollowedBy = user.edge_followed_by as Record<string, unknown> | undefined;
+      const edgeFollow = user.edge_follow as Record<string, unknown> | undefined;
+
+      const followerCount = safeNumber(user.follower_count) || safeNumber(edgeFollowedBy?.count);
+      const followingCount = safeNumber(user.following_count) || safeNumber(edgeFollow?.count);
+      const mediaCount = safeNumber(user.media_count) || safeNumber(
+        (user.edge_owner_to_timeline_media as Record<string, unknown> | undefined)?.count,
+      );
       const highlightCount = safeNumber(user.highlight_reel_count);
 
       const isVerified = Boolean(user.is_verified);
@@ -994,7 +1039,28 @@ export class InstagramScraperAdapter {
     // Apply rate limiting for all requests
     await this.waitForRateLimit();
 
-    // ── Authenticated path ──────────────────────────────────────────────
+    // ── Pre-authenticated cookie path (preferred — no login, no challenges) ──
+    if (this.hasPreAuthCookies) {
+      if (!this.hasValidSession) {
+        this.initPreAuthSession();
+      }
+
+      const authenticatedResult = await this.fetchAuthenticatedProfile(cleanHandle);
+
+      if (authenticatedResult !== null) {
+        return authenticatedResult;
+      }
+
+      // Session expired or invalid — cannot re-login with cookies alone
+      console.warn(
+        '[InstagramScraper] Pre-authenticated cookies expired or invalid — refresh INSTAGRAM_COOKIES. Falling back to public scrape.',
+      );
+      this.sessionCookies.clear();
+      this.sessionExpiresAt = 0;
+      return this.scrapePublicProfile(cleanHandle);
+    }
+
+    // ── Username/password auth path (may trigger challenges) ────────────
     if (this.hasCredentials) {
       // Ensure we have a valid session
       if (!this.hasValidSession) {
@@ -1043,7 +1109,7 @@ export class InstagramScraperAdapter {
       return this.scrapePublicProfile(cleanHandle);
     }
 
-    // ── Public path (no credentials) ────────────────────────────────────
+    // ── Public path (no credentials, no session) ────────────────────────
     return this.scrapePublicProfile(cleanHandle);
   }
 }
