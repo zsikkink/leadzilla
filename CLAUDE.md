@@ -23,6 +23,9 @@ Quality: `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
 - **Zero file overlap in parallel sessions**: When running multiple sessions concurrently, each session MUST own exclusive files. No two sessions may touch the same file. Restructure task grouping to eliminate overlap entirely — the merge conflict risk is never worth the time saved. Plan file ownership before writing prompts.
 - **Discovery button is the core product**: The "Start Discovery" flow requires UI → API POST /v1/discovery/runs → pg-boss discovery.seed job. Verify it works end-to-end after any discovery-related changes
 - **Dual DB**: API uses Supabase Postgres at `:54322` (apps/api/.env.local), Prisma CLI uses Docker at `:5434` (packages/db/.env). New migrations must be applied to BOTH databases
+- **PATH for pnpm scripts** — Child processes need `/bin` in PATH. Use: `export PATH="/Users/os_architect/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"`. Without `/bin`, pnpm scripts fail with `spawn sh ENOENT`
+- **TypeScript `||` and `??` mixing** — `A || B ?? C` is a compile error (TS5076). Always wrap: `A || (B ?? C)`
+- **Always give maximum effort**: Don't build MVP when comprehensive is feasible. Ask "how can this be better?" before calling anything done. Half-measures cost more in rework than doing it right the first time.
 
 ## Battle-Tested API Gotchas (from Zbooni n8n project)
 - **Apollo**: Requires `User-Agent` header (Cloudflare 1010 without it). 403 returns HTML not JSON — check Content-Type. Empty `people: []` is valid, not error. Phone reveals cost credits — only for primary contact.
@@ -30,20 +33,27 @@ Quality: `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
 - **OpenAI**: Strip markdown fences even with structured output. Sanitize HTML: `JSON.stringify(html).slice(1,-1)`. Use `zodResponseFormat` with Zod schemas. GPT-4o-mini for extraction (cheap), GPT-4o for scoring (smart).
 - **Trengo**: Template message required for first WhatsApp contact. ~50/day limit. 24h session window after customer reply. Idempotency key per message.
 
-## Pipeline
+## Pipeline (v2)
 ```
 API → OutboxEvent → pg-boss
         ↓
-  discovery.run → enrichment.run → features.compute → scoring.compute
-        ↓                                                    ↓ (score >= 0.5)
-  [Apollo/Apify/     [PDL/Hunter/                    message.generate
-   LinkedIn/Google]   Apify/Apollo]                        ↓
-                                                     message.send → [Resend (email) / Trengo (WhatsApp)]
-                                                           ↓
-                                              followup.check (cron, 72h)
-                                              reply.classify → notify.sales  (triggered by Trengo webhook)
-                                              labels.generate (hourly cron) → model.train (≥50 new labels) → model.evaluate
+  discovery.seed → run_search_task → business.prequalify → business.convert
+        ↓               ↓                    ↓                    ↓
+    [generate      [SerpAPI →            [domain +         [Apollo/Hunter →
+     search         Business]            review check]      Apify website +
+     tasks]                                                 Instagram → Lead]
+                                                                  ↓
+                                              enrichment.run → features.compute → scoring.compute
+                                                                                       ↓ (score >= 0.3)
+                                                                                 message.generate
+                                                                                       ↓
+                                                                                 message.send → [Resend (email) / Trengo (WhatsApp)]
+                                                                                       ↓
+                                                                          followup.check (cron, 72h)
+                                                                          reply.classify → notify.sales  (Trengo webhook)
+                                                                          labels.generate → model.train → model.evaluate
 ```
+Legacy `discovery.run` still registered but deprecated — new runs go through v2 pipeline.
 
 ## Verify (run after every change)
 ```bash
@@ -58,6 +68,12 @@ IMPORTANT: Fix all errors before committing. Do not skip steps.
 - **Start of every session**: Read `~/.claude/projects/-Users-os-architect-Desktop-OS-Architect-Projects-lead-flood/memory/MEMORY.md` before doing anything
 - **End of every output that changes code or decisions**: Update MEMORY.md with what was done, what changed, and what's left
 - This ensures all sessions share the same context. No exceptions.
+
+## Loop Prevention (MANDATORY)
+- **3 attempts max per approach**: If the same action fails 3 times (e.g. screenshot, API call, build command), STOP. Do not retry — try a different approach.
+- **3 approaches max per goal**: If 3 different approaches all fail for the same goal, STOP entirely. Report to the user: what you tried, what failed, and why. Ask for guidance.
+- **Never silently retry**: Every failed attempt must be logged/acknowledged. No "let me just try one more time" without telling the user.
+- **Prefer asking the user**: If something requires external verification (screenshots, browser testing, visual QA) and tooling isn't cooperating, ask the user to do it instead of burning time on workarounds.
 
 ## Self-Improvement
 After any correction or mistake: update CLAUDE.md or module CLAUDE.md so the error doesn't recur. Ask "should I update CLAUDE.md?" after receiving corrections.
