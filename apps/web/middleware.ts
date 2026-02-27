@@ -23,12 +23,10 @@ export function middleware(request: NextRequest) {
   const hasAuthHeader = request.headers.get('authorization')?.startsWith('Bearer ');
 
   if (!hasAuthCookie && !hasAuthHeader) {
-    // In dev mode without Supabase, allow passthrough
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    if (
-      process.env.NODE_ENV !== 'production' &&
-      (!supabaseUrl || supabaseUrl === 'https://example.supabase.co')
-    ) {
+    // In dev mode, skip server-side redirect — the client-side AuthProvider
+    // handles auth via localStorage (Supabase JS stores tokens there, not in cookies).
+    // Without @supabase/ssr, there are no auth cookies for the middleware to check.
+    if (process.env.NODE_ENV !== 'production') {
       return NextResponse.next();
     }
 
