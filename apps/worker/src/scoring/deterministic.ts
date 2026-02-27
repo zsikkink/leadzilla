@@ -31,27 +31,27 @@ const FIELD_KEY_CATEGORY_MAP: Record<string, QualificationCategory> = {
   has_whatsapp: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
   has_instagram: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
   custom_order_signals: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
-  multi_staff_detected: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
+  has_executive_contact: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
+  decision_maker_count: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
+  instagram_has_business_email: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
 
   // Payment Complexity — "High ticket, deposits, irregular amounts, international"
-  high_ticket_signals: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
-  deposit_milestone_signals: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
-  variable_pricing_detected: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
-  international_customer_signals: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
-  accepts_online_payments: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
+  apify_payment_widget_count: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
+  apify_has_pricing_tiers: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
 
-  // Risk & Urgency — "Failed payment kills deal, timing matters, seasonal peaks"
+  // Risk & Urgency — "Failed payment kills deal, timing matters, reachability"
   recent_activity: QUALIFICATION_CATEGORIES.RISK_URGENCY,
   has_booking_or_contact_form: QUALIFICATION_CATEGORIES.RISK_URGENCY,
-  seasonal_signals: QUALIFICATION_CATEGORIES.RISK_URGENCY,
-
-  // Operational Pain — "Manual reconciliation, hard to track, bank transfer reliance"
-  bank_transfer_reliance: QUALIFICATION_CATEGORIES.OPERATIONAL_PAIN,
-  upsell_signals: QUALIFICATION_CATEGORIES.OPERATIONAL_PAIN,
+  website_email_count: QUALIFICATION_CATEGORIES.RISK_URGENCY,
+  website_phone_count: QUALIFICATION_CATEGORIES.RISK_URGENCY,
 
   // Switching Willingness — "Growing business, engagement-focused, open to tools"
   follower_growth_signal: QUALIFICATION_CATEGORIES.SWITCHING_WILLINGNESS,
   high_engagement_signal: QUALIFICATION_CATEGORIES.SWITCHING_WILLINGNESS,
+  social_link_count: QUALIFICATION_CATEGORIES.SWITCHING_WILLINGNESS,
+  has_linkedin: QUALIFICATION_CATEGORIES.SWITCHING_WILLINGNESS,
+  tech_stack_size: QUALIFICATION_CATEGORIES.SWITCHING_WILLINGNESS,
+  instagram_is_verified: QUALIFICATION_CATEGORIES.SWITCHING_WILLINGNESS,
 
   // Disqualification signals (negative weight rules) — GENERAL
   pure_self_serve_ecom: QUALIFICATION_CATEGORIES.GENERAL,
@@ -64,11 +64,9 @@ const FIELD_KEY_CATEGORY_MAP: Record<string, QualificationCategory> = {
   geo_match: QUALIFICATION_CATEGORIES.GENERAL,
   icp_segment_priority: QUALIFICATION_CATEGORIES.GENERAL,
 
-  // v2 — Apify structured features
-  apify_payment_widget_count: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
+  // v2 — Apify structured features (non-scored, for category tracking)
   apify_has_shopify: QUALIFICATION_CATEGORIES.GENERAL,
   apify_has_booking_form: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
-  apify_has_pricing_tiers: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
   apify_has_product_catalog: QUALIFICATION_CATEGORIES.GENERAL,
 
   // v2 — Instagram structured features

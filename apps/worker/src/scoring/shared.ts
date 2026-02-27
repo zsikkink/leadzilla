@@ -35,7 +35,7 @@ export async function getQualificationThreshold(): Promise<number> {
  * Feature keys consumed by the trained logistic regression model.
  * Must stay in sync with model.train NUMERIC_FEATURE_KEYS.
  *
- * 29 features: 20 original (noise removed) + 7 Wave-1 additions + 2 category-coverage additions.
+ * 48 features: 18 original + 7 Wave-1 + 2 category-coverage + 11 v2 + 10 v2.1 enhanced scraper.
  */
 export const TRAINED_MODEL_FEATURE_KEYS = [
   // ── Original (noise features physical_store_present + abandonment_signal_detected removed) ──
@@ -80,6 +80,17 @@ export const TRAINED_MODEL_FEATURE_KEYS = [
   'instagram_days_since_last_post',
   'instagram_has_bio_link',
   'has_decision_maker_phone',
+  // ── v2.1 additions (enhanced scraper features) ──
+  'decision_maker_count',
+  'has_executive_contact',
+  'website_email_count',
+  'website_phone_count',
+  'social_link_count',
+  'has_linkedin',
+  'tech_stack_size',
+  'estimated_employees',
+  'instagram_is_verified',
+  'instagram_has_business_email',
 ] as const;
 
 /**

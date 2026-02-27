@@ -54,7 +54,7 @@ describe('features.compute helpers', () => {
     expect(toEmployeeSizeBucket(5000)).toBe('enterprise');
   });
 
-  it('exposes the required feature keys', () => {
+  it('exposes the required feature keys (67 total)', () => {
     expect(FEATURE_KEYS).toEqual([
       'source_provider',
       'has_email',
@@ -83,10 +83,6 @@ describe('features.compute helpers', () => {
       'geo_match',
       'geo_match_reason',
       'employee_size_bucket',
-      'enrichment_success_rate',
-      'discovery_attempt_count',
-      'enrichment_attempt_count',
-      'days_since_discovery',
       'high_ticket_signals',
       'deposit_milestone_signals',
       'subscription_billing_detected',
@@ -98,8 +94,6 @@ describe('features.compute helpers', () => {
       'bank_transfer_reliance',
       'upsell_signals',
       'price_led_mindset',
-      'rule_match_count',
-      'hard_filter_passed',
       // v2 features
       'apify_payment_widget_count',
       'apify_has_shopify',
@@ -115,6 +109,23 @@ describe('features.compute helpers', () => {
       'has_decision_maker_phone',
       'decision_maker_seniority',
       'contact_source',
+      // v2.1 features (enhanced scrapers)
+      'decision_maker_count',
+      'has_executive_contact',
+      'website_email_count',
+      'website_phone_count',
+      'social_link_count',
+      'has_linkedin',
+      'tech_stack_size',
+      'has_crm',
+      'has_live_chat',
+      'has_analytics',
+      'estimated_employees',
+      'certification_count',
+      'instagram_is_verified',
+      'instagram_business_category',
+      'instagram_has_business_email',
     ]);
+    expect(FEATURE_KEYS.length).toBe(67);
   });
 });

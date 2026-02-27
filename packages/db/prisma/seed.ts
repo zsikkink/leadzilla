@@ -23,6 +23,29 @@ interface QualificationRuleDef {
   orderIndex: number;
 }
 
+// ── Universal Qualification Rules (identical for all 8 segments) ──────
+// Zero conversion data → no basis for segment-specific weights. Start uniform, let ML learn.
+const UNIVERSAL_RULES: QualificationRuleDef[] = [
+  // HARD_FILTERs (2)
+  { name: 'Country in supported MENA region', fieldKey: 'country', operator: 'IN', expectedValue: [...SUPPORTED_COUNTRIES], isRequired: true, weight: 0, orderIndex: 1 },
+  { name: 'Has email contact', fieldKey: 'has_email', operator: 'EQ', expectedValue: true, isRequired: true, weight: 0, orderIndex: 2 },
+  // Positive rules (11, total weight = 18)
+  { name: 'Has WhatsApp presence', fieldKey: 'has_whatsapp', operator: 'EQ', expectedValue: true, isRequired: false, weight: 3, orderIndex: 3 },
+  { name: 'Industry is supported', fieldKey: 'industry_supported', operator: 'EQ', expectedValue: true, isRequired: false, weight: 3, orderIndex: 4 },
+  { name: 'Has Instagram presence', fieldKey: 'has_instagram', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 5 },
+  { name: 'Review count above 10', fieldKey: 'review_count', operator: 'GT', expectedValue: 10, isRequired: false, weight: 2, orderIndex: 6 },
+  { name: 'Custom order signals', fieldKey: 'custom_order_signals', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 7 },
+  { name: 'Has booking or contact form', fieldKey: 'has_booking_or_contact_form', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 8 },
+  { name: 'Recent activity detected', fieldKey: 'recent_activity', operator: 'EQ', expectedValue: true, isRequired: false, weight: 1, orderIndex: 9 },
+  { name: 'Payment widgets detected', fieldKey: 'apify_payment_widget_count', operator: 'GT', expectedValue: 0, isRequired: false, weight: 1, orderIndex: 10 },
+  { name: 'Has pricing tiers', fieldKey: 'apify_has_pricing_tiers', operator: 'EQ', expectedValue: true, isRequired: false, weight: 1, orderIndex: 11 },
+  { name: 'Multiple social profiles', fieldKey: 'social_link_count', operator: 'GT', expectedValue: 2, isRequired: false, weight: 1, orderIndex: 12 },
+  { name: 'Instagram has business email', fieldKey: 'instagram_has_business_email', operator: 'EQ', expectedValue: true, isRequired: false, weight: 1, orderIndex: 13 },
+  // Anti-fit rules (2, total weight = -6)
+  { name: 'Pure self-serve ecom (anti-fit)', fieldKey: 'pure_self_serve_ecom', operator: 'EQ', expectedValue: true, isRequired: false, weight: -3, orderIndex: 14 },
+  { name: 'Price-led mindset (anti-fit)', fieldKey: 'price_led_mindset', operator: 'EQ', expectedValue: true, isRequired: false, weight: -3, orderIndex: 15 },
+];
+
 // ── 8 ICP Segments from Zbooni Sales Onboarding Deck ──────────
 const ICP_SEGMENTS = [
   {
@@ -44,19 +67,7 @@ Deal Structure: Average ticket AED 5,000–100,000. Short sales cycle. Medium op
     maxCompanySize: 200,
     featureList: ['Large one-off payments (up to AED 1M per link)', 'Multiple payment methods (Amex, Apple Pay, Google Pay, PayPal)', 'Multi-MID support for failed transaction retries (20+ MIDs)', 'Immediate live support via call or WhatsApp', 'Catalog (CShop) to pre-list services', 'CRM to track customer order history'],
     metadataJson: { priority: 'P1', avgTicket: 'Very High (AED 5,000–100,000)', volumePotential: 'Medium', salesCycle: 'Short', opsComplexity: 'Medium', revenuePotential: 'Very High', hook: 'Most of our customers use WhatsApp to close high-value deals but struggle when payments fail or clients are international.', angle: ['One payment link up to AED 1M', 'Multi-MID retries if a transaction fails', 'Live support when timing matters'] },
-    rules: [
-      { name: 'Country in supported MENA region', fieldKey: 'country', operator: 'IN' as const, expectedValue: [...SUPPORTED_COUNTRIES], isRequired: true, weight: 0, orderIndex: 1 },
-      { name: 'Has email contact', fieldKey: 'has_email', operator: 'EQ' as const, expectedValue: true, isRequired: true, weight: 0, orderIndex: 2 },
-      { name: 'Industry is luxury/high-ticket', fieldKey: 'industry_supported', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 3 },
-      { name: 'Has WhatsApp presence', fieldKey: 'has_whatsapp', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 3, orderIndex: 4 },
-      { name: 'High review count (premium reputation)', fieldKey: 'review_count', operator: 'GT' as const, expectedValue: 20, isRequired: false, weight: 2, orderIndex: 5 },
-      { name: 'Accepts online payments', fieldKey: 'accepts_online_payments', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 6 },
-      { name: 'Has international client signals', fieldKey: 'international_customer_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 3, orderIndex: 7 },
-      { name: 'High average deal size', fieldKey: 'high_ticket_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 3, orderIndex: 8 },
-      { name: 'Recent activity detected', fieldKey: 'recent_activity', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 1, orderIndex: 9 },
-      { name: 'Pure self-serve ecom (anti-fit)', fieldKey: 'pure_self_serve_ecom', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: -3, orderIndex: 10 },
-      { name: 'Price-led mindset (anti-fit)', fieldKey: 'price_led_mindset', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: -3, orderIndex: 11 },
-    ] as QualificationRuleDef[],
+    rules: UNIVERSAL_RULES,
   },
   {
     name: 'Gifting, Corporate & Bespoke Experiences',
@@ -77,18 +88,7 @@ Deal Structure: Average ticket Medium–High. High volume (seasonal). Short–Me
     maxCompanySize: 300,
     featureList: ['Catalog (CShop) for pre-listing services', 'Live payment link editing', 'In-app discount creation', 'Promo code management', 'WhatsApp marketing campaigns via Zbooni verified number', 'Multiple payment methods'],
     metadataJson: { priority: 'P1', avgTicket: 'Medium–High', volumePotential: 'High (seasonal)', salesCycle: 'Short–Medium', opsComplexity: 'Medium', revenuePotential: 'High', hook: 'We work with brands handling seasonal spikes, bulk orders, and multiple agents selling at once.', angle: ['Catalog + payment links inside WhatsApp', 'Promo codes & campaigns for peak periods', 'Centralized tracking across agents'] },
-    rules: [
-      { name: 'Country in supported MENA region', fieldKey: 'country', operator: 'IN' as const, expectedValue: [...SUPPORTED_COUNTRIES], isRequired: true, weight: 0, orderIndex: 1 },
-      { name: 'Has email contact', fieldKey: 'has_email', operator: 'EQ' as const, expectedValue: true, isRequired: true, weight: 0, orderIndex: 2 },
-      { name: 'Industry is gifting/bespoke', fieldKey: 'industry_supported', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 3 },
-      { name: 'Has WhatsApp presence', fieldKey: 'has_whatsapp', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 4 },
-      { name: 'Has Instagram presence', fieldKey: 'has_instagram', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 5 },
-      { name: 'Seasonal business signals', fieldKey: 'seasonal_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 3, orderIndex: 6 },
-      { name: 'Multiple agents/staff detected', fieldKey: 'multi_staff_detected', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 7 },
-      { name: 'Custom order signals', fieldKey: 'custom_order_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 8 },
-      { name: 'Review count above 10', fieldKey: 'review_count', operator: 'GT' as const, expectedValue: 10, isRequired: false, weight: 1, orderIndex: 9 },
-      { name: 'Pure self-serve ecom (anti-fit)', fieldKey: 'pure_self_serve_ecom', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: -3, orderIndex: 10 },
-    ] as QualificationRuleDef[],
+    rules: UNIVERSAL_RULES,
   },
   {
     name: 'Events, Weddings & Experiential Operators',
@@ -109,18 +109,7 @@ Deal Structure: Average ticket High. High volume (event-based). Medium sales cyc
     maxCompanySize: 500,
     featureList: ['End-to-end event marketing via WhatsApp', 'Ticketing solution', 'Catalog (CShop) for products/services', 'QR-based food ordering and payment', 'POS machine for in-person cards', 'Customer database for re-engagement', 'Master organizer dashboard', 'Promo codes'],
     metadataJson: { priority: 'P1', avgTicket: 'High', volumePotential: 'High (event-based)', salesCycle: 'Medium', opsComplexity: 'High', revenuePotential: 'Very High', hook: 'Events fail when payments are delayed or fragmented — especially with multiple vendors and stakeholders.', angle: ['Ticketing, QR payments, food ordering', 'Master dashboard for organizers', 'WhatsApp marketing + re-engagement'] },
-    rules: [
-      { name: 'Country in supported MENA region', fieldKey: 'country', operator: 'IN' as const, expectedValue: [...SUPPORTED_COUNTRIES], isRequired: true, weight: 0, orderIndex: 1 },
-      { name: 'Has email contact', fieldKey: 'has_email', operator: 'EQ' as const, expectedValue: true, isRequired: true, weight: 0, orderIndex: 2 },
-      { name: 'Industry is events/weddings', fieldKey: 'industry_supported', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 3 },
-      { name: 'Has WhatsApp presence', fieldKey: 'has_whatsapp', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 4 },
-      { name: 'Multiple staff/stakeholders detected', fieldKey: 'multi_staff_detected', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 3, orderIndex: 5 },
-      { name: 'Event/seasonal business signals', fieldKey: 'seasonal_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 3, orderIndex: 6 },
-      { name: 'Deposit/milestone payment signals', fieldKey: 'deposit_milestone_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 7 },
-      { name: 'High review count', fieldKey: 'review_count', operator: 'GT' as const, expectedValue: 15, isRequired: false, weight: 1, orderIndex: 8 },
-      { name: 'Recent activity detected', fieldKey: 'recent_activity', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 1, orderIndex: 9 },
-      { name: 'Pure self-serve ecom (anti-fit)', fieldKey: 'pure_self_serve_ecom', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: -3, orderIndex: 10 },
-    ] as QualificationRuleDef[],
+    rules: UNIVERSAL_RULES,
   },
   {
     name: 'Home, Design & High-Value Contracting',
@@ -141,18 +130,7 @@ Deal Structure: Average ticket High. Medium volume. Medium–Long sales cycle. M
     maxCompanySize: 500,
     featureList: ['Large one-off payments (up to AED 1M)', 'Customizable milestone-based payment links', 'Easy reconciliation with VAT tracking', 'Customizable instant receipts', 'Catalog (CShop)', 'CRM with order history and notes', 'In-app discount creation'],
     metadataJson: { priority: 'P1', avgTicket: 'High', volumePotential: 'Medium', salesCycle: 'Medium–Long', opsComplexity: 'Medium', revenuePotential: 'High', hook: 'We help firms replace bank transfers with clean, staged card payments.', angle: ['Milestone-based payment links', 'Easy reconciliation & VAT tracking', 'Partial payments + receipts'] },
-    rules: [
-      { name: 'Country in supported MENA region', fieldKey: 'country', operator: 'IN' as const, expectedValue: [...SUPPORTED_COUNTRIES], isRequired: true, weight: 0, orderIndex: 1 },
-      { name: 'Has email contact', fieldKey: 'has_email', operator: 'EQ' as const, expectedValue: true, isRequired: true, weight: 0, orderIndex: 2 },
-      { name: 'Industry is design/contracting', fieldKey: 'industry_supported', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 3 },
-      { name: 'Has WhatsApp presence', fieldKey: 'has_whatsapp', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 4 },
-      { name: 'Milestone/staged payment signals', fieldKey: 'deposit_milestone_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 3, orderIndex: 5 },
-      { name: 'Proposal/quote-based selling detected', fieldKey: 'custom_order_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 3, orderIndex: 6 },
-      { name: 'Bank transfer reliance', fieldKey: 'bank_transfer_reliance', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 7 },
-      { name: 'Has booking/contact form', fieldKey: 'has_booking_or_contact_form', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 1, orderIndex: 8 },
-      { name: 'Recent activity detected', fieldKey: 'recent_activity', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 1, orderIndex: 9 },
-      { name: 'Pure self-serve ecom (anti-fit)', fieldKey: 'pure_self_serve_ecom', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: -3, orderIndex: 10 },
-    ] as QualificationRuleDef[],
+    rules: UNIVERSAL_RULES,
   },
   {
     name: 'Boutique Hospitality & Short-Stay Operators',
@@ -173,18 +151,7 @@ Deal Structure: Average ticket Medium–High. High volume. Short sales cycle. Me
     maxCompanySize: 200,
     featureList: ['Large one-off payments (up to AED 1M)', 'Partial payments (deposit/balance/add-ons)', 'International card acceptance', 'Multiple payment methods', 'Instant receipts', 'Easy reconciliation with VAT', 'Catalog for upsells via chat/QR', 'CRM for guest history'],
     metadataJson: { priority: 'P1', avgTicket: 'Medium–High', volumePotential: 'High', salesCycle: 'Short', opsComplexity: 'Medium', revenuePotential: 'High', hook: 'Guests want to pay instantly, remotely, and securely before arrival.', angle: ['Deposits, balances, and upsells via WhatsApp', 'Multi-currency + international cards', 'Guest CRM & reconciliation'] },
-    rules: [
-      { name: 'Country in supported MENA region', fieldKey: 'country', operator: 'IN' as const, expectedValue: [...SUPPORTED_COUNTRIES], isRequired: true, weight: 0, orderIndex: 1 },
-      { name: 'Has email contact', fieldKey: 'has_email', operator: 'EQ' as const, expectedValue: true, isRequired: true, weight: 0, orderIndex: 2 },
-      { name: 'Industry is hospitality/short-stay', fieldKey: 'industry_supported', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 3 },
-      { name: 'Has WhatsApp presence', fieldKey: 'has_whatsapp', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 4 },
-      { name: 'International guest signals', fieldKey: 'international_customer_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 3, orderIndex: 5 },
-      { name: 'Deposit/booking payment model', fieldKey: 'deposit_milestone_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 3, orderIndex: 6 },
-      { name: 'Upsell/add-on services', fieldKey: 'upsell_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 7 },
-      { name: 'Review count above 10', fieldKey: 'review_count', operator: 'GT' as const, expectedValue: 10, isRequired: false, weight: 1, orderIndex: 8 },
-      { name: 'Recent activity detected', fieldKey: 'recent_activity', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 1, orderIndex: 9 },
-      { name: 'Pure self-serve ecom (anti-fit)', fieldKey: 'pure_self_serve_ecom', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: -3, orderIndex: 10 },
-    ] as QualificationRuleDef[],
+    rules: UNIVERSAL_RULES,
   },
   {
     name: 'Premium Wellness & Longevity Clinics',
@@ -205,18 +172,7 @@ Deal Structure: Average ticket High. Medium volume. Medium sales cycle. High ops
     maxCompanySize: 100,
     featureList: ['Staged or package-based payment links', 'Multiple payment methods (incl. Tabby, Tamara)', 'CRM for patient history and notes', 'Promo codes for campaigns/referrals', 'WhatsApp marketing campaigns', 'Instant receipts', 'International card acceptance'],
     metadataJson: { priority: 'P2', avgTicket: 'High', volumePotential: 'Medium', salesCycle: 'Medium', opsComplexity: 'High (compliance)', revenuePotential: 'Medium–High', hook: 'Clinics lose time when payments fail or confirmations aren\'t instant.', angle: ['High-ticket package payments', 'Multi-MID retry logic', 'Human support for urgent cases'] },
-    rules: [
-      { name: 'Country in supported MENA region', fieldKey: 'country', operator: 'IN' as const, expectedValue: [...SUPPORTED_COUNTRIES], isRequired: true, weight: 0, orderIndex: 1 },
-      { name: 'Has email contact', fieldKey: 'has_email', operator: 'EQ' as const, expectedValue: true, isRequired: true, weight: 0, orderIndex: 2 },
-      { name: 'Industry is wellness/medical', fieldKey: 'industry_supported', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 3 },
-      { name: 'Has WhatsApp presence', fieldKey: 'has_whatsapp', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 4 },
-      { name: 'Package/staged payment model', fieldKey: 'deposit_milestone_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 3, orderIndex: 5 },
-      { name: 'Medical tourism signals', fieldKey: 'international_customer_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 6 },
-      { name: 'Has booking/appointment form', fieldKey: 'has_booking_or_contact_form', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 7 },
-      { name: 'Accepts online payments', fieldKey: 'accepts_online_payments', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 1, orderIndex: 8 },
-      { name: 'Pure self-serve ecom (anti-fit)', fieldKey: 'pure_self_serve_ecom', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: -3, orderIndex: 9 },
-      { name: 'Subscription/recurring billing (anti-fit)', fieldKey: 'subscription_billing_detected', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: -2, orderIndex: 10 },
-    ] as QualificationRuleDef[],
+    rules: UNIVERSAL_RULES,
   },
   {
     name: 'High-Ticket Coaching & Advisory',
@@ -237,18 +193,7 @@ Deal Structure: Average ticket Medium–High. Medium volume. Short sales cycle. 
     maxCompanySize: 50,
     featureList: ['Partial or staged payment links', 'International card acceptance', 'Multiple payment methods (incl. Tabby, Tamara)', 'Instant receipts', 'CRM for client history and enrolment', 'Promo codes for cohorts/referrals', 'WhatsApp marketing for re-engagement'],
     metadataJson: { priority: 'P2', avgTicket: 'Medium–High', volumePotential: 'Medium', salesCycle: 'Short', opsComplexity: 'Low', revenuePotential: 'Medium', hook: 'High-ticket programs close in conversations, not on websites.', angle: ['Staged payments & cohorts', 'CRM + re-engagement campaigns', 'Simple reconciliation'] },
-    rules: [
-      { name: 'Country in supported MENA region', fieldKey: 'country', operator: 'IN' as const, expectedValue: [...SUPPORTED_COUNTRIES], isRequired: true, weight: 0, orderIndex: 1 },
-      { name: 'Has email contact', fieldKey: 'has_email', operator: 'EQ' as const, expectedValue: true, isRequired: true, weight: 0, orderIndex: 2 },
-      { name: 'Industry is coaching/advisory', fieldKey: 'industry_supported', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 3 },
-      { name: 'Has WhatsApp presence', fieldKey: 'has_whatsapp', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 3, orderIndex: 4 },
-      { name: 'High-ticket program signals', fieldKey: 'high_ticket_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 3, orderIndex: 5 },
-      { name: 'Consultation/relationship-driven sales', fieldKey: 'custom_order_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 6 },
-      { name: 'Has Instagram presence', fieldKey: 'has_instagram', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 1, orderIndex: 7 },
-      { name: 'Recent activity detected', fieldKey: 'recent_activity', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 1, orderIndex: 8 },
-      { name: 'Pure self-serve ecom (anti-fit)', fieldKey: 'pure_self_serve_ecom', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: -3, orderIndex: 9 },
-      { name: 'Subscription/recurring billing (anti-fit)', fieldKey: 'subscription_billing_detected', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: -2, orderIndex: 10 },
-    ] as QualificationRuleDef[],
+    rules: UNIVERSAL_RULES,
   },
   {
     name: 'Education & Training Providers',
@@ -269,18 +214,7 @@ Deal Structure: Average ticket Medium. High volume (cohorts). Medium sales cycle
     maxCompanySize: 300,
     featureList: ['Multiple payment methods (incl. Tabby, Tamara)', 'Inventory limits for attendance', 'Instant receipts', 'Reconciliation with student/VAT tracking', 'CRM for student enrolment and notes', 'Promo codes for early-bird/partner discounts', 'WhatsApp campaigns for new cohorts'],
     metadataJson: { priority: 'P2', avgTicket: 'Medium', volumePotential: 'High (cohorts)', salesCycle: 'Medium', opsComplexity: 'Medium', revenuePotential: 'Medium', hook: 'Managing deposits, cohorts, and tracking payments shouldn\'t be manual.', angle: ['Seat-based payments', 'Promo codes & intakes', 'Student tracking + reconciliation'] },
-    rules: [
-      { name: 'Country in supported MENA region', fieldKey: 'country', operator: 'IN' as const, expectedValue: [...SUPPORTED_COUNTRIES], isRequired: true, weight: 0, orderIndex: 1 },
-      { name: 'Has email contact', fieldKey: 'has_email', operator: 'EQ' as const, expectedValue: true, isRequired: true, weight: 0, orderIndex: 2 },
-      { name: 'Industry is education/training', fieldKey: 'industry_supported', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 3 },
-      { name: 'Has WhatsApp presence', fieldKey: 'has_whatsapp', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 4 },
-      { name: 'Has booking/enrollment form', fieldKey: 'has_booking_or_contact_form', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 3, orderIndex: 5 },
-      { name: 'Cohort/package pricing model', fieldKey: 'variable_pricing_detected', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 6 },
-      { name: 'Deposit/installment signals', fieldKey: 'deposit_milestone_signals', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 2, orderIndex: 7 },
-      { name: 'Review count above 10', fieldKey: 'review_count', operator: 'GT' as const, expectedValue: 10, isRequired: false, weight: 1, orderIndex: 8 },
-      { name: 'Recent activity detected', fieldKey: 'recent_activity', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: 1, orderIndex: 9 },
-      { name: 'Pure self-serve ecom (anti-fit)', fieldKey: 'pure_self_serve_ecom', operator: 'EQ' as const, expectedValue: true, isRequired: false, weight: -3, orderIndex: 10 },
-    ] as QualificationRuleDef[],
+    rules: UNIVERSAL_RULES,
   },
 ];
 

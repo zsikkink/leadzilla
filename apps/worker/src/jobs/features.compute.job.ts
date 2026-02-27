@@ -77,10 +77,6 @@ export const FEATURE_KEYS = [
   'geo_match',
   'geo_match_reason',
   'employee_size_bucket',
-  'enrichment_success_rate',
-  'discovery_attempt_count',
-  'enrichment_attempt_count',
-  'days_since_discovery',
   'high_ticket_signals',
   'deposit_milestone_signals',
   'subscription_billing_detected',
@@ -92,8 +88,6 @@ export const FEATURE_KEYS = [
   'bank_transfer_reliance',
   'upsell_signals',
   'price_led_mindset',
-  'rule_match_count',
-  'hard_filter_passed',
   // ── v2 features (Apify + Instagram + Apollo) ──
   'apify_payment_widget_count',
   'apify_has_shopify',
@@ -109,6 +103,22 @@ export const FEATURE_KEYS = [
   'has_decision_maker_phone',
   'decision_maker_seniority',
   'contact_source',
+  // ── v2.1 features (enhanced scrapers) ──
+  'decision_maker_count',
+  'has_executive_contact',
+  'website_email_count',
+  'website_phone_count',
+  'social_link_count',
+  'has_linkedin',
+  'tech_stack_size',
+  'has_crm',
+  'has_live_chat',
+  'has_analytics',
+  'estimated_employees',
+  'certification_count',
+  'instagram_is_verified',
+  'instagram_business_category',
+  'instagram_has_business_email',
 ] as const;
 
 function toInputJson(value: unknown): Prisma.InputJsonValue {
@@ -285,15 +295,6 @@ export function toEmployeeSizeBucket(companySize: number | null): string {
   return 'enterprise';
 }
 
-function calculateDaysSince(date: Date | null): number {
-  if (!date) {
-    return 0;
-  }
-
-  const diffMs = Date.now() - date.getTime();
-  return diffMs > 0 ? Math.floor(diffMs / 86_400_000) : 0;
-}
-
 function buildFeaturePayload(input: {
   sourceProvider: string;
   hasEmail: boolean;
@@ -322,10 +323,6 @@ function buildFeaturePayload(input: {
   geoMatch: boolean;
   geoMatchReason: string;
   employeeSizeBucket: string;
-  enrichmentSuccessRate: number;
-  discoveryAttemptCount: number;
-  enrichmentAttemptCount: number;
-  daysSinceDiscovery: number;
   highTicketSignals: boolean;
   depositMilestoneSignals: boolean;
   subscriptionBillingDetected: boolean;
@@ -337,8 +334,6 @@ function buildFeaturePayload(input: {
   bankTransferReliance: boolean;
   upsellSignals: boolean;
   priceLedMindset: boolean;
-  ruleMatchCount: number;
-  hardFilterPassed: boolean;
   // v2 features
   apifyPaymentWidgetCount: number;
   apifyHasShopify: boolean;
@@ -354,6 +349,22 @@ function buildFeaturePayload(input: {
   hasDecisionMakerPhone: boolean;
   decisionMakerSeniority: string;
   contactSource: string;
+  // v2.1 features (enhanced scrapers)
+  decisionMakerCount: number;
+  hasExecutiveContact: boolean;
+  websiteEmailCount: number;
+  websitePhoneCount: number;
+  socialLinkCount: number;
+  hasLinkedIn: boolean;
+  techStackSize: number;
+  hasCrm: boolean;
+  hasLiveChat: boolean;
+  hasAnalytics: boolean;
+  estimatedEmployees: number;
+  certificationCount: number;
+  instagramIsVerified: boolean;
+  instagramBusinessCategory: string;
+  instagramHasBusinessEmail: boolean;
 }): Record<(typeof FEATURE_KEYS)[number], unknown> {
   return {
     source_provider: input.sourceProvider,
@@ -383,10 +394,6 @@ function buildFeaturePayload(input: {
     geo_match: input.geoMatch,
     geo_match_reason: input.geoMatchReason,
     employee_size_bucket: input.employeeSizeBucket,
-    enrichment_success_rate: input.enrichmentSuccessRate,
-    discovery_attempt_count: input.discoveryAttemptCount,
-    enrichment_attempt_count: input.enrichmentAttemptCount,
-    days_since_discovery: input.daysSinceDiscovery,
     high_ticket_signals: input.highTicketSignals,
     deposit_milestone_signals: input.depositMilestoneSignals,
     subscription_billing_detected: input.subscriptionBillingDetected,
@@ -398,8 +405,6 @@ function buildFeaturePayload(input: {
     bank_transfer_reliance: input.bankTransferReliance,
     upsell_signals: input.upsellSignals,
     price_led_mindset: input.priceLedMindset,
-    rule_match_count: input.ruleMatchCount,
-    hard_filter_passed: input.hardFilterPassed,
     // v2 features
     apify_payment_widget_count: input.apifyPaymentWidgetCount,
     apify_has_shopify: input.apifyHasShopify,
@@ -415,6 +420,22 @@ function buildFeaturePayload(input: {
     has_decision_maker_phone: input.hasDecisionMakerPhone,
     decision_maker_seniority: input.decisionMakerSeniority,
     contact_source: input.contactSource,
+    // v2.1 features (enhanced scrapers)
+    decision_maker_count: input.decisionMakerCount,
+    has_executive_contact: input.hasExecutiveContact,
+    website_email_count: input.websiteEmailCount,
+    website_phone_count: input.websitePhoneCount,
+    social_link_count: input.socialLinkCount,
+    has_linkedin: input.hasLinkedIn,
+    tech_stack_size: input.techStackSize,
+    has_crm: input.hasCrm,
+    has_live_chat: input.hasLiveChat,
+    has_analytics: input.hasAnalytics,
+    estimated_employees: input.estimatedEmployees,
+    certification_count: input.certificationCount,
+    instagram_is_verified: input.instagramIsVerified,
+    instagram_business_category: input.instagramBusinessCategory,
+    instagram_has_business_email: input.instagramHasBusinessEmail,
   };
 }
 
@@ -544,7 +565,7 @@ export async function handleFeaturesComputeJob(
       return;
     }
 
-    const [latestDiscovery, latestEnrichment, discoveryAttemptCount, enrichmentAttemptCount, rules] =
+    const [latestDiscovery, latestEnrichment, rules] =
       await Promise.all([
         prisma.leadDiscoveryRecord.findFirst({
           where: {
@@ -557,12 +578,6 @@ export async function handleFeaturesComputeJob(
           where: { leadId },
           orderBy: [{ enrichedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         }),
-        prisma.leadDiscoveryRecord.count({
-          where: { leadId, icpProfileId },
-        }),
-        prisma.leadEnrichmentRecord.count({
-          where: { leadId },
-        }),
         prisma.qualificationRule.findMany({
           where: {
             icpProfileId,
@@ -571,28 +586,6 @@ export async function handleFeaturesComputeJob(
           orderBy: [{ orderIndex: 'asc' }, { priority: 'asc' }, { createdAt: 'asc' }],
         }),
       ]);
-
-    const enrichmentProvider = latestEnrichment?.provider ?? null;
-    let enrichmentSuccessRate = 0;
-    if (enrichmentProvider) {
-      const [successCount, totalCount] = await Promise.all([
-        prisma.leadEnrichmentRecord.count({
-          where: {
-            leadId,
-            provider: enrichmentProvider,
-            status: 'COMPLETED',
-          },
-        }),
-        prisma.leadEnrichmentRecord.count({
-          where: {
-            leadId,
-            provider: enrichmentProvider,
-          },
-        }),
-      ]);
-
-      enrichmentSuccessRate = totalCount > 0 ? successCount / totalCount : 0;
-    }
 
     // ── Load Business + BusinessConversion for Apify/Apollo structured data ──
     const business = lead.businessId
@@ -669,6 +662,7 @@ export async function handleFeaturesComputeJob(
     const apifyHasBookingForm = asBoolean(apifyWebsite?.hasBookingForm) ?? false;
     const apifyHasPricingTiers = asBoolean(apifyWebsite?.hasPricingTiers) ?? false;
     const apifyHasProductCatalog = asBoolean(apifyWebsite?.hasProductCatalog) ?? false;
+    const apifyHasWhatsApp = apifyWebsite?.hasWhatsApp === true;
     const apifyDetectedPlatforms = Array.isArray(apifyWebsite?.detectedPlatforms)
       ? (apifyWebsite.detectedPlatforms as string[])
       : [];
@@ -702,11 +696,71 @@ export async function handleFeaturesComputeJob(
       : decisionMakerTitle.length > 0 ? 'other'
       : 'unknown';
 
+    // ── v2.1 features from enhanced scrapers ──
+    const websiteDecisionMakers = Array.isArray(apifyWebsite?.decisionMakers)
+      ? (apifyWebsite.decisionMakers as Array<Record<string, unknown>>)
+      : [];
+    const decisionMakerCount = websiteDecisionMakers.length;
+    const hasExecutiveContact = websiteDecisionMakers.some(
+      (dm) => dm.seniority === 'executive',
+    );
+
+    const websiteContactInfo = apifyWebsite?.contactInfo && typeof apifyWebsite.contactInfo === 'object'
+      ? (apifyWebsite.contactInfo as Record<string, unknown>)
+      : null;
+    const websiteEmailCount = Array.isArray(websiteContactInfo?.emails)
+      ? (websiteContactInfo.emails as unknown[]).length
+      : 0;
+    const websitePhoneCount = Array.isArray(websiteContactInfo?.phones)
+      ? (websiteContactInfo.phones as unknown[]).length
+      : 0;
+
+    const websiteSocialLinks = Array.isArray(apifyWebsite?.socialLinks)
+      ? (apifyWebsite.socialLinks as Array<Record<string, unknown>>)
+      : [];
+    const socialLinkCount = websiteSocialLinks.length;
+    const hasLinkedIn = websiteSocialLinks.some((s) => s.platform === 'linkedin');
+
+    const websiteTechnologies = apifyWebsite?.technologies && typeof apifyWebsite.technologies === 'object'
+      ? (apifyWebsite.technologies as Record<string, unknown>)
+      : null;
+    const techStackSize = websiteTechnologies
+      ? Object.values(websiteTechnologies).reduce<number>(
+          (sum, val) => sum + (Array.isArray(val) ? val.length : 0),
+          0,
+        )
+      : 0;
+    const hasCrm = Array.isArray(websiteTechnologies?.crm)
+      ? (websiteTechnologies.crm as unknown[]).length > 0
+      : false;
+    const hasLiveChat = Array.isArray(websiteTechnologies?.liveChat)
+      ? (websiteTechnologies.liveChat as unknown[]).length > 0
+      : false;
+    const hasAnalytics = Array.isArray(websiteTechnologies?.analytics)
+      ? (websiteTechnologies.analytics as unknown[]).length > 0
+      : false;
+
+    const websiteBusinessSignals = apifyWebsite?.businessSignals && typeof apifyWebsite.businessSignals === 'object'
+      ? (apifyWebsite.businessSignals as Record<string, unknown>)
+      : null;
+    const estimatedEmployees = asNumber(websiteBusinessSignals?.estimatedEmployeeCount) ?? 0;
+    const certificationCount = Array.isArray(websiteBusinessSignals?.certifications)
+      ? (websiteBusinessSignals.certifications as unknown[]).length
+      : 0;
+
+    const instagramIsVerified = apifyInstagram?.isVerified === true;
+    const instagramBusinessCategory = typeof apifyInstagram?.businessCategory === 'string'
+      ? apifyInstagram.businessCategory
+      : 'unknown';
+    const instagramHasBusinessEmail = typeof apifyInstagram?.businessEmail === 'string'
+      && (apifyInstagram.businessEmail as string).length > 0;
+
     // Reconcile follower count: prefer Instagram structured data over enrichment/keyword fallback
     const followerCount = instagramFollowerCount > 0 ? instagramFollowerCount : baseFollowerCount;
 
     // ── Feature extraction: Tier 1 (Apify) → Tier 2 (enrichment) → Tier 3 (keyword) ──
     const hasWhatsapp =
+      apifyHasWhatsApp ||
       (apifyPaymentWidgets.some((w) => w.toLowerCase().includes('whatsapp'))) ||
       (extractBooleanFromSources(featureSources, ['hasWhatsapp', 'whatsapp']) ??
       includesAnyKeyword(featureSources, ['whatsapp', 'wa.me']));
@@ -897,10 +951,6 @@ export async function handleFeaturesComputeJob(
             ? 'MATCHED'
             : 'NOT_MATCHED',
       employeeSizeBucket: toEmployeeSizeBucket(companySize),
-      enrichmentSuccessRate: Number(enrichmentSuccessRate.toFixed(6)),
-      discoveryAttemptCount,
-      enrichmentAttemptCount,
-      daysSinceDiscovery: calculateDaysSince(latestDiscovery?.discoveredAt ?? null),
       highTicketSignals,
       depositMilestoneSignals,
       subscriptionBillingDetected,
@@ -912,8 +962,6 @@ export async function handleFeaturesComputeJob(
       bankTransferReliance,
       upsellSignals,
       priceLedMindset,
-      ruleMatchCount: 0,
-      hardFilterPassed: false,
       // v2 features
       apifyPaymentWidgetCount,
       apifyHasShopify,
@@ -929,6 +977,22 @@ export async function handleFeaturesComputeJob(
       hasDecisionMakerPhone,
       decisionMakerSeniority,
       contactSource,
+      // v2.1 features (enhanced scrapers)
+      decisionMakerCount,
+      hasExecutiveContact,
+      websiteEmailCount,
+      websitePhoneCount,
+      socialLinkCount,
+      hasLinkedIn,
+      techStackSize,
+      hasCrm,
+      hasLiveChat,
+      hasAnalytics,
+      estimatedEmployees,
+      certificationCount,
+      instagramIsVerified,
+      instagramBusinessCategory,
+      instagramHasBusinessEmail,
     });
 
     const deterministicPreview = evaluateDeterministicScore(asDeterministicRules(rules), {
@@ -936,8 +1000,6 @@ export async function handleFeaturesComputeJob(
       icp_profile_id: icpProfileId,
       lead_source: lead.source,
     });
-    featurePayload.rule_match_count = deterministicPreview.ruleMatchCount;
-    featurePayload.hard_filter_passed = deterministicPreview.hardFilterPassed;
 
     const sourceVersion = FEATURE_EXTRACTOR_VERSION;
     const featureVectorHash = computeFeatureVectorHash(featurePayload);
