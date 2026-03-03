@@ -1,6 +1,10 @@
 import { prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { formatErrorMessage } from '../errors.js';
+import { recordPipelineEvent } from '../utils/pipeline-events.js';
+import { getPipelineSettings } from '../utils/pipeline-settings.js';
+
 export const LEAD_RECOVERY_JOB_NAME = 'lead.recovery';
 
 export const LEAD_RECOVERY_RETRY_OPTIONS: Pick<
@@ -12,9 +16,6 @@ export const LEAD_RECOVERY_RETRY_OPTIONS: Pick<
   retryBackoff: true,
   deadLetter: 'lead.recovery.dead_letter',
 };
-
-/** Leads stuck in processing longer than this are considered stuck. */
-const STUCK_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
 
 /** Batch size for recovery to avoid long transactions. */
 const RECOVERY_BATCH_SIZE = 200;
@@ -33,11 +34,12 @@ export async function handleLeadRecoveryJob(
   logger: LeadRecoveryLogger,
   job: Job<LeadRecoveryJobPayload>,
 ): Promise<void> {
-  const cutoff = new Date(Date.now() - STUCK_THRESHOLD_MS);
+  const settings = await getPipelineSettings();
+  const cutoff = new Date(Date.now() - settings.stuckLeadThresholdMs);
   let totalRecovered = 0;
 
   logger.info(
-    { jobId: job.id, cutoff: cutoff.toISOString() },
+    { jobId: job.id, cutoff: cutoff.toISOString(), thresholdMs: settings.stuckLeadThresholdMs },
     'Starting stuck lead recovery',
   );
 
@@ -64,6 +66,14 @@ export async function handleLeadRecoveryJob(
 
         totalRecovered += 1;
 
+        await recordPipelineEvent({
+          leadId: lead.id,
+          stage: 'LEAD_RECOVERY',
+          status: 'RECOVERED',
+          jobId: job.id,
+          metadata: { previousStatus: 'processing', thresholdMs: settings.stuckLeadThresholdMs },
+        });
+
         logger.info(
           { jobId: job.id, leadId: lead.id, email: lead.email },
           'Recovered stuck lead',
@@ -73,7 +83,7 @@ export async function handleLeadRecoveryJob(
           {
             jobId: job.id,
             leadId: lead.id,
-            error: updateError instanceof Error ? updateError.message : String(updateError),
+            error: formatErrorMessage(updateError),
           },
           'Failed to recover stuck lead — skipping',
         );
@@ -90,7 +100,7 @@ export async function handleLeadRecoveryJob(
       {
         jobId: job.id,
         totalRecovered,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error),
       },
       'Stuck lead recovery failed',
     );

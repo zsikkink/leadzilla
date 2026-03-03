@@ -141,6 +141,51 @@ async function updateJobRunProgress(jobRunId: string, state: RunState): Promise<
   });
 }
 
+async function updateDiscoveryRunProgress(discoveryRunId: string, state: RunState): Promise<void> {
+  await prisma.jobExecution.update({
+    where: { id: discoveryRunId },
+    data: {
+      status: 'running',
+      result: toInputJson({
+        processedItems: state.processedTaskCount,
+        failedItems: state.failedCount,
+        newBusinesses: state.newBusinesses,
+        newSources: state.newSources,
+        serpapiRequests: state.serpapiRequests,
+      }),
+    },
+  });
+}
+
+async function finalizeDiscoveryRun(
+  discoveryRunId: string,
+  state: RunState,
+  status: 'completed' | 'failed',
+  errorMessage: string | null,
+): Promise<void> {
+  if (state.finalized) {
+    return;
+  }
+  state.finalized = true;
+
+  await prisma.jobExecution.update({
+    where: { id: discoveryRunId },
+    data: {
+      status,
+      finishedAt: new Date(),
+      ...(errorMessage ? { error: errorMessage } : {}),
+      result: toInputJson({
+        processedItems: state.processedTaskCount,
+        failedItems: state.failedCount,
+        newBusinesses: state.newBusinesses,
+        newSources: state.newSources,
+        serpapiRequests: state.serpapiRequests,
+        durationMs: Math.max(0, Date.now() - state.startedAtMs),
+      }),
+    },
+  });
+}
+
 async function finalizeJobRun(
   jobRunId: string,
   state: RunState,
@@ -197,6 +242,10 @@ export async function handleDiscoveryRunSearchTaskJob(
       await finalizeJobRun(job.data.jobRunId, runState, 'SUCCESS', null);
       runStates.delete(runKey);
     }
+    if (job.data.discoveryRunId) {
+      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'completed', null);
+      runStates.delete(runKey);
+    }
     logger.info(
       {
         jobId: job.id,
@@ -219,13 +268,30 @@ export async function handleDiscoveryRunSearchTaskJob(
   );
 
   // ── Enqueue business.prequalify for each newly created business ──
+  // B8: Cross-ICP dedup — skip businesses that already have leads from other ICPs
   if (
     runResult.newBusinessIds.length > 0 &&
     dependencies.enqueueBusinessPrequalify &&
     job.data.discoveryRunId &&
     job.data.icpProfileId
   ) {
+    // Check which new businesses already have leads (converted by another ICP run)
+    const existingConversions = runResult.newBusinessIds.length > 0
+      ? await prisma.businessConversion.findMany({
+          where: { businessId: { in: runResult.newBusinessIds } },
+          select: { businessId: true },
+        })
+      : [];
+    const alreadyConvertedIds = new Set(existingConversions.map((c) => c.businessId));
+
+    let enqueuedCount = 0;
+    let skippedCount = 0;
+
     for (const businessId of runResult.newBusinessIds) {
+      if (alreadyConvertedIds.has(businessId)) {
+        skippedCount += 1;
+        continue;
+      }
       await dependencies.enqueueBusinessPrequalify({
         businessId,
         discoveryRunId: job.data.discoveryRunId,
@@ -238,6 +304,7 @@ export async function handleDiscoveryRunSearchTaskJob(
           : {}),
         ...(correlationId ? { correlationId } : {}),
       });
+      enqueuedCount += 1;
     }
 
     logger.info(
@@ -245,7 +312,8 @@ export async function handleDiscoveryRunSearchTaskJob(
         jobId: job.id,
         queue: job.name,
         discoveryRunId: job.data.discoveryRunId,
-        enqueuedPrequalifyCount: runResult.newBusinessIds.length,
+        enqueuedPrequalifyCount: enqueuedCount,
+        skippedAlreadyConvertedCount: skippedCount,
       },
       'Enqueued business.prequalify for newly discovered businesses',
     );
@@ -273,6 +341,16 @@ export async function handleDiscoveryRunSearchTaskJob(
       runStates.delete(runKey);
     } else {
       await updateJobRunProgress(job.data.jobRunId, runState);
+    }
+  }
+
+  // Update discovery run progress counters
+  if (job.data.discoveryRunId) {
+    if (runResult.status === 'FAILED' && effectiveMaxTasks === undefined) {
+      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'failed', runResult.error ?? 'Task failed');
+      runStates.delete(runKey);
+    } else {
+      await updateDiscoveryRunProgress(job.data.discoveryRunId, runState);
     }
   }
 
@@ -326,6 +404,10 @@ export async function handleDiscoveryRunSearchTaskJob(
       await finalizeJobRun(job.data.jobRunId, runState, 'SUCCESS', null);
       runStates.delete(runKey);
     }
+    if (job.data.discoveryRunId) {
+      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'completed', null);
+      runStates.delete(runKey);
+    }
     logger.info(
       {
         slot,
@@ -343,6 +425,10 @@ export async function handleDiscoveryRunSearchTaskJob(
       await finalizeJobRun(job.data.jobRunId, runState, 'SUCCESS', null);
       runStates.delete(runKey);
     }
+    if (job.data.discoveryRunId) {
+      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'completed', null);
+      runStates.delete(runKey);
+    }
     logger.info(
       {
         slot,
@@ -356,6 +442,9 @@ export async function handleDiscoveryRunSearchTaskJob(
   }
 
   const startAfterSeconds = nextPollDelaySeconds(runResult.status);
+  // singletonKey prevents duplicate loops if pg-boss retries while self-enqueue is pending
+  const runId = job.data.discoveryRunId ?? job.data.jobRunId ?? correlationId;
+  const singletonKey = `discovery.run_search_task:${runId}:slot-${slot}`;
   await dependencies.boss.send(
     DISCOVERY_RUN_SEARCH_TASK_JOB_NAME,
     {
@@ -372,6 +461,7 @@ export async function handleDiscoveryRunSearchTaskJob(
     },
     {
       startAfter: startAfterSeconds,
+      singletonKey,
       ...DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,
     },
   );

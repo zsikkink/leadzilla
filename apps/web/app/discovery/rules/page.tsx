@@ -34,6 +34,7 @@ type RuleCategory = 'HARD_FILTER' | 'WEIGHTED' | 'ANTI_FIT';
 /* ------------------------------------------------------------------ */
 
 interface SimFormState {
+  // Core business info
   country: string;
   hasEmail: boolean;
   industry: string;
@@ -46,6 +47,22 @@ interface SimFormState {
   hasWebsite: boolean;
   recentActivity: boolean;
   avgRating: number;
+  // V2.1 scraper fields
+  decisionMakerCount: number;
+  hasExecutiveContact: boolean;
+  websiteEmailCount: number;
+  websitePhoneCount: number;
+  socialLinkCount: number;
+  hasLinkedin: boolean;
+  techStackSize: number;
+  hasCrm: boolean;
+  hasLiveChat: boolean;
+  hasAnalytics: boolean;
+  estimatedEmployees: number;
+  certificationCount: number;
+  instagramIsVerified: boolean;
+  instagramBusinessCategory: string;
+  instagramHasBusinessEmail: boolean;
 }
 
 const DEFAULT_SIM: SimFormState = {
@@ -61,11 +78,26 @@ const DEFAULT_SIM: SimFormState = {
   hasWebsite: true,
   recentActivity: true,
   avgRating: 4.3,
+  decisionMakerCount: 2,
+  hasExecutiveContact: true,
+  websiteEmailCount: 1,
+  websitePhoneCount: 1,
+  socialLinkCount: 4,
+  hasLinkedin: true,
+  techStackSize: 3,
+  hasCrm: false,
+  hasLiveChat: false,
+  hasAnalytics: true,
+  estimatedEmployees: 80,
+  certificationCount: 1,
+  instagramIsVerified: false,
+  instagramBusinessCategory: '',
+  instagramHasBusinessEmail: false,
 };
 
 const COUNTRY_OPTIONS = ['AE', 'SA', 'JO', 'EG', 'KW', 'BH', 'QA', 'OM', 'Other'];
 
-/* Field key → form field mapping for simulation */
+/* Field key → form field mapping for simulation (covers 67 feature keys) */
 const FIELD_KEY_MAP: Record<string, (form: SimFormState) => unknown> = {
   country_code: (f) => f.country,
   has_email: (f) => f.hasEmail,
@@ -79,6 +111,22 @@ const FIELD_KEY_MAP: Record<string, (form: SimFormState) => unknown> = {
   has_website: (f) => f.hasWebsite,
   recent_activity: (f) => f.recentActivity,
   avg_rating: (f) => f.avgRating,
+  // V2.1 scraper features
+  decision_maker_count: (f) => f.decisionMakerCount,
+  has_executive_contact: (f) => f.hasExecutiveContact,
+  website_email_count: (f) => f.websiteEmailCount,
+  website_phone_count: (f) => f.websitePhoneCount,
+  social_link_count: (f) => f.socialLinkCount,
+  has_linkedin: (f) => f.hasLinkedin,
+  tech_stack_size: (f) => f.techStackSize,
+  has_crm: (f) => f.hasCrm,
+  has_live_chat: (f) => f.hasLiveChat,
+  has_analytics: (f) => f.hasAnalytics,
+  estimated_employees: (f) => f.estimatedEmployees,
+  certification_count: (f) => f.certificationCount,
+  instagram_is_verified: (f) => f.instagramIsVerified,
+  instagram_business_category: (f) => f.instagramBusinessCategory,
+  instagram_has_business_email: (f) => f.instagramHasBusinessEmail,
 };
 
 /* ------------------------------------------------------------------ */
@@ -530,7 +578,34 @@ export default function ICPRulesPage() {
                 </div>
               </div>
 
-              <div className="form-grid mt-4">
+              {/* Scoring system info */}
+              <div className="mt-4 rounded-lg border border-border/30 bg-slate-800/60 px-4 py-3">
+                <div className="flex items-center gap-6 text-xs">
+                  <div>
+                    <span className="text-muted-foreground/60">Total Features:</span>{' '}
+                    <span className="font-bold text-foreground">67</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground/60">ML Features:</span>{' '}
+                    <span className="font-bold text-foreground">48</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground/60">Blend Ratio:</span>{' '}
+                    <span className="font-bold text-zbooni-teal">90/10</span>
+                    <span className="text-muted-foreground/40 mx-1">&rarr;</span>
+                    <span className="font-bold text-zbooni-green">70/30</span>
+                    <span className="text-muted-foreground/40 mx-1">&rarr;</span>
+                    <span className="font-bold text-purple-400">50/50</span>
+                  </div>
+                </div>
+                <p className="mt-1 text-[10px] text-muted-foreground/40">
+                  Deterministic/ML blend shifts as model improves: 90/10 (no model) &rarr; 70/30 (AUC&ge;0.70, 200+ samples) &rarr; 50/50 (AUC&ge;0.80, 500+ samples)
+                </p>
+              </div>
+
+              {/* Core business fields */}
+              <p className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">Core Business Info</p>
+              <div className="form-grid mt-2">
                 <label>
                   Country
                   <select
@@ -592,52 +667,96 @@ export default function ICPRulesPage() {
 
               <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input
-                    type="checkbox"
-                    checked={simForm.hasEmail}
-                    onChange={(e) => setSimForm((prev) => ({ ...prev, hasEmail: e.target.checked }))}
-                  />
+                  <input type="checkbox" checked={simForm.hasEmail} onChange={(e) => setSimForm((prev) => ({ ...prev, hasEmail: e.target.checked }))} />
                   Has Email
                 </label>
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input
-                    type="checkbox"
-                    checked={simForm.hasWhatsapp}
-                    onChange={(e) => setSimForm((prev) => ({ ...prev, hasWhatsapp: e.target.checked }))}
-                  />
+                  <input type="checkbox" checked={simForm.hasWhatsapp} onChange={(e) => setSimForm((prev) => ({ ...prev, hasWhatsapp: e.target.checked }))} />
                   Has WhatsApp
                 </label>
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input
-                    type="checkbox"
-                    checked={simForm.hasInstagram}
-                    onChange={(e) => setSimForm((prev) => ({ ...prev, hasInstagram: e.target.checked }))}
-                  />
+                  <input type="checkbox" checked={simForm.hasInstagram} onChange={(e) => setSimForm((prev) => ({ ...prev, hasInstagram: e.target.checked }))} />
                   Has Instagram
                 </label>
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input
-                    type="checkbox"
-                    checked={simForm.acceptsOnlinePayments}
-                    onChange={(e) => setSimForm((prev) => ({ ...prev, acceptsOnlinePayments: e.target.checked }))}
-                  />
+                  <input type="checkbox" checked={simForm.acceptsOnlinePayments} onChange={(e) => setSimForm((prev) => ({ ...prev, acceptsOnlinePayments: e.target.checked }))} />
                   Online Payments
                 </label>
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input
-                    type="checkbox"
-                    checked={simForm.hasWebsite}
-                    onChange={(e) => setSimForm((prev) => ({ ...prev, hasWebsite: e.target.checked }))}
-                  />
+                  <input type="checkbox" checked={simForm.hasWebsite} onChange={(e) => setSimForm((prev) => ({ ...prev, hasWebsite: e.target.checked }))} />
                   Has Website
                 </label>
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input
-                    type="checkbox"
-                    checked={simForm.recentActivity}
-                    onChange={(e) => setSimForm((prev) => ({ ...prev, recentActivity: e.target.checked }))}
-                  />
+                  <input type="checkbox" checked={simForm.recentActivity} onChange={(e) => setSimForm((prev) => ({ ...prev, recentActivity: e.target.checked }))} />
                   Recent Activity
+                </label>
+              </div>
+
+              {/* V2.1 scraper intelligence fields */}
+              <p className="mt-5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">Website &amp; Social Intelligence (v2.1)</p>
+              <div className="form-grid mt-2">
+                <label>
+                  Decision Makers
+                  <input type="number" min={0} value={simForm.decisionMakerCount} onChange={(e) => setSimForm((prev) => ({ ...prev, decisionMakerCount: Number(e.target.value) || 0 }))} />
+                </label>
+                <label>
+                  Website Emails
+                  <input type="number" min={0} value={simForm.websiteEmailCount} onChange={(e) => setSimForm((prev) => ({ ...prev, websiteEmailCount: Number(e.target.value) || 0 }))} />
+                </label>
+                <label>
+                  Website Phones
+                  <input type="number" min={0} value={simForm.websitePhoneCount} onChange={(e) => setSimForm((prev) => ({ ...prev, websitePhoneCount: Number(e.target.value) || 0 }))} />
+                </label>
+                <label>
+                  Social Links
+                  <input type="number" min={0} value={simForm.socialLinkCount} onChange={(e) => setSimForm((prev) => ({ ...prev, socialLinkCount: Number(e.target.value) || 0 }))} />
+                </label>
+                <label>
+                  Tech Stack Size
+                  <input type="number" min={0} value={simForm.techStackSize} onChange={(e) => setSimForm((prev) => ({ ...prev, techStackSize: Number(e.target.value) || 0 }))} />
+                </label>
+                <label>
+                  Est. Employees
+                  <input type="number" min={0} value={simForm.estimatedEmployees} onChange={(e) => setSimForm((prev) => ({ ...prev, estimatedEmployees: Number(e.target.value) || 0 }))} />
+                </label>
+                <label>
+                  Certifications
+                  <input type="number" min={0} value={simForm.certificationCount} onChange={(e) => setSimForm((prev) => ({ ...prev, certificationCount: Number(e.target.value) || 0 }))} />
+                </label>
+                <label>
+                  IG Business Category
+                  <input value={simForm.instagramBusinessCategory} onChange={(e) => setSimForm((prev) => ({ ...prev, instagramBusinessCategory: e.target.value }))} placeholder="e.g. Shopping & Retail" />
+                </label>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.hasExecutiveContact} onChange={(e) => setSimForm((prev) => ({ ...prev, hasExecutiveContact: e.target.checked }))} />
+                  Has Executive Contact
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.hasLinkedin} onChange={(e) => setSimForm((prev) => ({ ...prev, hasLinkedin: e.target.checked }))} />
+                  Has LinkedIn
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.hasCrm} onChange={(e) => setSimForm((prev) => ({ ...prev, hasCrm: e.target.checked }))} />
+                  Has CRM
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.hasLiveChat} onChange={(e) => setSimForm((prev) => ({ ...prev, hasLiveChat: e.target.checked }))} />
+                  Has Live Chat
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.hasAnalytics} onChange={(e) => setSimForm((prev) => ({ ...prev, hasAnalytics: e.target.checked }))} />
+                  Has Analytics
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.instagramIsVerified} onChange={(e) => setSimForm((prev) => ({ ...prev, instagramIsVerified: e.target.checked }))} />
+                  IG Verified
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.instagramHasBusinessEmail} onChange={(e) => setSimForm((prev) => ({ ...prev, instagramHasBusinessEmail: e.target.checked }))} />
+                  IG Business Email
                 </label>
               </div>
 

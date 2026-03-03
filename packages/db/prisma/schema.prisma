@@ -238,6 +238,7 @@ model Lead {
   feedbackEvents      FeedbackEvent[]
   trainingLabels      TrainingLabel[]
   businessConversions BusinessConversion[]
+  pipelineEvents      LeadPipelineEvent[]
 
   @@index([status])
   @@index([source])
@@ -711,6 +712,7 @@ model Business {
   id                       String              @id @default(uuid())
   name                     String
   countryCode              String              @map("country_code")
+  country                  String?
   city                     String?
   address                  String?
   phoneE164                String?             @map("phone_e164")
@@ -857,4 +859,22 @@ model PipelineSetting {
   createdAt DateTime @default(now())
 
   @@map("pipeline_settings")
+}
+
+model LeadPipelineEvent {
+  id         String   @id @default(cuid())
+  leadId     String   @map("lead_id")
+  lead       Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  stage      String
+  status     String
+  jobId      String?  @map("job_id")
+  durationMs Int?     @map("duration_ms")
+  metadata   Json?
+  occurredAt DateTime @default(now()) @map("occurred_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([leadId, occurredAt])
+  @@index([stage, status])
+  @@index([jobId])
+  @@map("lead_pipeline_events")
 }

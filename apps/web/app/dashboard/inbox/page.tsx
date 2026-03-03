@@ -1,5 +1,13 @@
 'use client';
 
+/**
+ * INBOX DATA: All data is REAL from the API.
+ * - Conversation list: fetched via apiClient.listSends() — actual MessageSend records
+ * - Lead names: resolved via apiClient.getLead() for each unique leadId
+ * - Conversation threads: fetched via apiClient.getConversation(leadId)
+ * - No fake/seed data is hardcoded here. If the inbox appears empty, there are no sends in the DB.
+ */
+
 import type { ConversationEntry, ConversationResponse, GetLeadResponse, MessageSendResponse } from '@lead-flood/contracts';
 import {
   Inbox as InboxIcon,

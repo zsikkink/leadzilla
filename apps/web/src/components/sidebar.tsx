@@ -6,7 +6,8 @@ import { usePathname } from 'next/navigation';
 import {
   Activity,
   BarChart3,
-  Brain,
+  Bug,
+  Building2,
   ChevronsLeft,
   ChevronsRight,
   Inbox,
@@ -14,7 +15,6 @@ import {
   Lightbulb,
   MessageSquare,
   Rocket,
-  Search,
   Settings,
   Target,
   TerminalSquare,
@@ -27,6 +27,7 @@ const DASHBOARD_NAV_ITEMS = [
   { href: '/dashboard', label: 'Pipeline', icon: LayoutDashboard },
   { href: '/dashboard/discover', label: 'Discover', icon: Rocket },
   { href: '/dashboard/leads', label: 'Leads', icon: Users },
+  { href: '/dashboard/leads/businesses', label: 'Business Intel', icon: Building2 },
   { href: '/dashboard/messages', label: 'Messages', icon: MessageSquare },
   { href: '/dashboard/inbox', label: 'Inbox', icon: Inbox },
   { href: '/dashboard/icps', label: 'ICP Profiles', icon: Target },
@@ -37,9 +38,7 @@ const DASHBOARD_NAV_ITEMS = [
 
 const DEV_CONSOLE_NAV_ITEMS = [
   { href: '/discovery', label: 'Controls & Settings', icon: Settings },
-  { href: '/discovery/lifecycle', label: 'Lead Lifecycle', icon: Search },
-  { href: '/discovery/model', label: 'Model Inspector', icon: Brain },
-  { href: '/discovery/feedback', label: 'Feedback & Replies', icon: MessageSquare },
+  { href: '/discovery/debug', label: 'Pipeline Debug', icon: Bug },
   { href: '/discovery/rules', label: 'ICP & Rules', icon: TerminalSquare },
 ] as const;
 

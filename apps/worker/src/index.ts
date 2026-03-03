@@ -148,6 +148,16 @@ import {
   type LeadRecoveryJobPayload,
 } from './jobs/lead.recovery.job.js';
 import {
+  DATA_RETENTION_JOB_NAME,
+  handleDataRetentionJob,
+  type DataRetentionJobPayload,
+} from './jobs/data.retention.job.js';
+import {
+  MODEL_DRIFT_JOB_NAME,
+  handleModelDriftJob,
+  type ModelDriftJobPayload,
+} from './jobs/model.drift.job.js';
+import {
   OUTBOX_CLEANUP_JOB_NAME,
   handleOutboxCleanupJob,
   type OutboxCleanupJobPayload,
@@ -443,8 +453,10 @@ async function main(): Promise<void> {
     dailySendLimit: env.WHATSAPP_DAILY_SEND_LIMIT,
   });
 
+  const warmupStartDate = await EmailRateLimiter.loadWarmupStartDate(prisma);
   const emailRateLimiter = new EmailRateLimiter(prisma, {
-    dailySendLimit: env.EMAIL_DAILY_SEND_LIMIT,
+    warmupStartDate,
+    maxDaily: env.EMAIL_DAILY_SEND_LIMIT,
   });
 
   const providerBudgetTracker = new ProviderBudgetTracker();
@@ -812,6 +824,8 @@ async function main(): Promise<void> {
         trengoApiKey: env.TRENGO_API_KEY,
         trengoBaseUrl: env.TRENGO_BASE_URL,
         trengoInternalConversationId: env.TRENGO_INTERNAL_CONVERSATION_ID,
+        resendAdapter,
+        salesNotificationEmail: env.SALES_NOTIFICATION_EMAIL,
       }),
   );
   await registerWorker<DlqProcessJobPayload>(
@@ -855,6 +869,23 @@ async function main(): Promise<void> {
     logger,
     LEAD_RECOVERY_JOB_NAME,
     handleLeadRecoveryJob,
+  );
+
+  await registerWorker<DataRetentionJobPayload>(
+    boss,
+    logger,
+    DATA_RETENTION_JOB_NAME,
+    handleDataRetentionJob,
+  );
+
+  await registerWorker<ModelDriftJobPayload>(
+    boss,
+    logger,
+    MODEL_DRIFT_JOB_NAME,
+    (driftLogger, driftJob) =>
+      handleModelDriftJob(driftLogger, driftJob, {
+        slackWebhookUrl: env.SLACK_WEBHOOK_URL,
+      }),
   );
 
   const shutdown = async (signal: string): Promise<void> => {

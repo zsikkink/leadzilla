@@ -4,6 +4,7 @@ import { type Prisma, prisma } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { formatErrorMessage } from '../errors.js';
 import { adjustDeterministicWeights, computeFactorLift } from '../scoring/lift-analysis.js';
 import { splitDataset, trainLogisticRegression } from '../scoring/logistic.js';
 import { TRAINED_MODEL_FEATURE_KEYS } from '../scoring/shared.js';
@@ -337,7 +338,7 @@ export async function handleModelTrainJob(
         data: {
           status: 'FAILED',
           endedAt: new Date(),
-          errorMessage: error instanceof Error ? error.message : String(error),
+          errorMessage: formatErrorMessage(error),
         },
       });
     } catch {

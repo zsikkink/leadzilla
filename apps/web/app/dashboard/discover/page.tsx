@@ -21,6 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
+import { countryName } from '../../../src/lib/countries.js';
 import { cn } from '../../../src/lib/utils.js';
 
 // ── City mapping by country ──────────────────────────────
@@ -84,70 +85,6 @@ function ProgressBar({ processed, total }: { processed: number; total: number })
   );
 }
 
-function IcpPreviewCard({ icp }: { icp: IcpProfileResponse }) {
-  return (
-    <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-zbooni-teal/10">
-          <Target className="h-5 w-5 text-zbooni-teal" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <p className="font-bold">{icp.name}</p>
-          </div>
-          {icp.description ? (
-            <p className="mt-0.5 text-sm text-muted-foreground line-clamp-2">{icp.description}</p>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Industries</p>
-          <div className="mt-1 flex flex-wrap gap-1">
-            {icp.targetIndustries.length > 0 ? (
-              icp.targetIndustries.map((i) => (
-                <span key={i} className="rounded-full bg-zbooni-dark/60 px-2 py-0.5 text-xs text-muted-foreground">{i}</span>
-              ))
-            ) : (
-              <span className="text-xs text-muted-foreground/40">Any</span>
-            )}
-          </div>
-        </div>
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Countries</p>
-          <div className="mt-1 flex flex-wrap gap-1">
-            {icp.targetCountries.length > 0 ? (
-              icp.targetCountries.map((c) => (
-                <span key={c} className="rounded-full bg-zbooni-teal/10 px-2 py-0.5 text-xs text-zbooni-teal">{c}</span>
-              ))
-            ) : (
-              <span className="text-xs text-muted-foreground/40">Any</span>
-            )}
-          </div>
-        </div>
-        {icp.minCompanySize !== null || icp.maxCompanySize !== null ? (
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Company Size</p>
-            <p className="mt-1 text-xs font-medium">
-              {icp.minCompanySize ?? 0} - {icp.maxCompanySize ?? '10,000+'}
-            </p>
-          </div>
-        ) : null}
-        {icp.requiredTechnologies.length > 0 ? (
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Technologies</p>
-            <div className="mt-1 flex flex-wrap gap-1">
-              {icp.requiredTechnologies.map((t) => (
-                <span key={t} className="rounded-full bg-purple-500/10 px-2 py-0.5 text-xs text-purple-400">{t}</span>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
 
 // ── Pill selector components ──────────────────────────────
 
@@ -298,12 +235,6 @@ export default function DiscoverPage() {
   const icps = useApiQuery(
     useCallback(() => apiClient.listIcps({ page: 1, pageSize: 50, isActive: true }), [apiClient]),
   );
-
-  // For the preview: show first selected ICP
-  const firstSelectedIcpId = selectedIcpIds.size > 0 ? Array.from(selectedIcpIds)[0] : null;
-  const selectedIcp = firstSelectedIcpId
-    ? (icps.data?.items.find((i) => i.id === firstSelectedIcpId) ?? null)
-    : null;
 
   // Derive countries from selected ICPs
   const derivedCountries = useMemo(() => {
@@ -477,9 +408,6 @@ export default function DiscoverPage() {
             ) : null}
           </div>
 
-          {/* ICP Preview */}
-          {selectedIcp ? <IcpPreviewCard icp={selectedIcp} /> : null}
-
           {/* Step 2: Search Settings — countries, cities, analysis toggles */}
           <div>
             <div className="mb-3 flex items-center gap-2">
@@ -500,7 +428,7 @@ export default function DiscoverPage() {
                   <div className="flex flex-wrap gap-1.5">
                     {derivedCountries.map((c) => (
                       <span key={c} className="rounded-full bg-zbooni-teal/10 px-2.5 py-1 text-xs font-medium text-zbooni-teal">
-                        {c}
+                        {countryName(c)}
                       </span>
                     ))}
                   </div>
@@ -703,10 +631,13 @@ export default function DiscoverPage() {
                 FAILED: 'bg-red-500/15 text-red-400',
                 PARTIAL: 'bg-yellow-500/15 text-yellow-400',
               };
+              const isTerminal = run.status === 'SUCCEEDED' || run.status === 'FAILED' || run.status === 'PARTIAL';
               const duration = run.startedAt
                 ? run.finishedAt
                   ? `${Math.round((new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime()) / 1000)}s`
-                  : 'Running...'
+                  : isTerminal
+                    ? 'Completed'
+                    : 'Running...'
                 : 'Queued';
               const icpName = run.icpProfileId
                 ? (icps.data?.items.find((i) => i.id === run.icpProfileId)?.name ?? 'ICP')
@@ -745,7 +676,7 @@ export default function DiscoverPage() {
                       <div className="flex flex-wrap gap-1">
                         {run.countries.map((c) => (
                           <span key={c} className="rounded bg-zbooni-teal/10 px-1.5 py-0.5 text-[10px] text-zbooni-teal">
-                            {c}
+                            {countryName(c)}
                           </span>
                         ))}
                         {run.limit > 0 ? (
@@ -757,11 +688,11 @@ export default function DiscoverPage() {
                     ) : null}
                   </div>
 
-                  {/* Progress bar */}
-                  {run.totalItems > 0 || run.status === 'RUNNING' ? (
+                  {/* Progress bar — use limit as target (totalItems counts search tasks, not leads) */}
+                  {run.limit > 0 || run.status === 'RUNNING' ? (
                     <ProgressBar
                       processed={run.processedItems}
-                      total={run.totalItems || run.limit || 1}
+                      total={run.limit || 1}
                     />
                   ) : null}
 

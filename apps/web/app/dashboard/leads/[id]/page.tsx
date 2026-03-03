@@ -26,12 +26,14 @@ import {
 } from 'lucide-react';
 import type { GetLeadResponse, MessageSendResponse } from '@lead-flood/contracts';
 import { useParams, useRouter } from 'next/navigation';
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { LeadStatusBadge } from '../../../../src/components/lead-status-badge.js';
 import { ScoreBandBadge } from '../../../../src/components/score-band-badge.js';
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
+import { countryName } from '../../../../src/lib/countries.js';
+import { getSupabaseBrowserClient } from '../../../../src/lib/supabase-client.js';
 
 interface EnrichmentField {
   label: string;
@@ -63,7 +65,7 @@ function extractEnrichmentFields(data: unknown): EnrichmentField[] {
   if (d.title || d.job_title || d.position)
     fields.push({ label: 'Position', value: String(d.title ?? d.job_title ?? d.position), icon: User });
   if (d.country)
-    fields.push({ label: 'Country', value: String(d.country), icon: MapPin });
+    fields.push({ label: 'Country', value: countryName(String(d.country)), icon: MapPin });
   if (d.city)
     fields.push({ label: 'City', value: String(d.city), icon: MapPin });
   if (d.employeeCount || d.employee_count || d.company_size)
@@ -108,6 +110,168 @@ function extractRawDetails(data: unknown): Array<{ key: string; value: string }>
       key: key.replace(/_/g, ' ').replace(/([A-Z])/g, ' $1').trim(),
       value: typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val),
     }));
+}
+
+// ── Company Intelligence (from Business scraper data) ─────────
+
+interface BusinessScrapeData {
+  name: string;
+  websiteScrape: Record<string, unknown> | null;
+  instagramScrape: Record<string, unknown> | null;
+  websiteDomain: string | null;
+  instagramHandle: string | null;
+  rating: number | null;
+  reviewCount: number | null;
+  followerCount: number | null;
+  category: string | null;
+}
+
+function extractBusinessDecisionMakers(scrape: Record<string, unknown>): Array<{ name: string; title: string }> {
+  const raw = scrape.decisionMakers;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((dm): dm is { name: string; title: string } => dm && typeof dm.name === 'string').slice(0, 5);
+}
+
+function extractBusinessTechStack(scrape: Record<string, unknown>): Array<{ category: string; technologies: string[] }> {
+  const raw = scrape.techStack;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((ts): ts is { category: string; technologies: string[] } => ts && typeof ts.category === 'string').slice(0, 8);
+}
+
+function extractBusinessSocialLinks(scrape: Record<string, unknown>): Array<{ platform: string; url: string }> {
+  const raw = scrape.socialLinks;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((sl): sl is { platform: string; url: string } => sl && typeof sl.platform === 'string').slice(0, 8);
+}
+
+function extractBusinessCertifications(scrape: Record<string, unknown>): string[] {
+  const raw = scrape.certifications;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((c): c is string => typeof c === 'string').slice(0, 8);
+}
+
+function CompanyIntelligence({ data }: { data: BusinessScrapeData }) {
+  const ws = data.websiteScrape;
+  const ig = data.instagramScrape;
+
+  const decisionMakers = ws ? extractBusinessDecisionMakers(ws) : [];
+  const techStack = ws ? extractBusinessTechStack(ws) : [];
+  const socialLinks = ws ? extractBusinessSocialLinks(ws) : [];
+  const certs = ws ? extractBusinessCertifications(ws) : [];
+  const igVerified = ig ? Boolean(ig.isVerified) : false;
+  const igCategory = ig ? (ig.businessCategory as string) ?? null : null;
+  const igMediaCount = ig && typeof ig.mediaCount === 'number' ? ig.mediaCount : null;
+
+  const hasAnyData = decisionMakers.length > 0 || techStack.length > 0 || socialLinks.length > 0 || certs.length > 0 || igVerified || igCategory;
+
+  if (!hasAnyData) {
+    return (
+      <div className="text-sm text-muted-foreground/50">
+        No detailed intelligence data available. Business has not been fully scraped yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Quick stats row */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {data.rating !== null && (
+          <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Rating</p>
+            <p className="mt-0.5 text-sm font-bold">{data.rating}/5</p>
+          </div>
+        )}
+        {data.reviewCount !== null && (
+          <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Reviews</p>
+            <p className="mt-0.5 text-sm font-bold">{data.reviewCount}</p>
+          </div>
+        )}
+        {data.followerCount !== null && (
+          <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Followers</p>
+            <p className="mt-0.5 text-sm font-bold">{data.followerCount.toLocaleString()}</p>
+          </div>
+        )}
+        {igMediaCount !== null && (
+          <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">IG Media</p>
+            <p className="mt-0.5 text-sm font-bold">{igMediaCount}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Instagram badges */}
+      {(igVerified || igCategory) && (
+        <div className="flex flex-wrap gap-2">
+          {igVerified && <span className="rounded-full bg-blue-500/10 px-2.5 py-1 text-[11px] font-semibold text-blue-400">Verified</span>}
+          {igCategory && <span className="rounded-full bg-pink-500/10 px-2.5 py-1 text-[11px] font-semibold text-pink-400">{igCategory}</span>}
+        </div>
+      )}
+
+      {/* Decision Makers */}
+      {decisionMakers.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">Decision Makers ({decisionMakers.length})</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {decisionMakers.map((dm, i) => (
+              <div key={i} className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2">
+                <div className="flex h-7 w-7 items-center justify-center rounded-md bg-amber-500/10 text-[10px] font-bold text-amber-400">{dm.name.charAt(0)}</div>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold truncate">{dm.name}</p>
+                  <p className="text-[10px] text-muted-foreground/50 truncate">{dm.title}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Tech Stack */}
+      {techStack.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">Technology Stack</p>
+          <div className="space-y-2">
+            {techStack.map((cat) => (
+              <div key={cat.category}>
+                <p className="text-[10px] font-semibold text-muted-foreground/50">{cat.category}</p>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {cat.technologies.map((tech) => (
+                    <span key={tech} className="rounded-full bg-purple-500/10 px-2 py-0.5 text-[10px] font-semibold text-purple-300">{tech}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Social Links */}
+      {socialLinks.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">Social Presence</p>
+          <div className="flex flex-wrap gap-2">
+            {socialLinks.map((sl, i) => (
+              <span key={i} className="rounded-full border border-border/30 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">{sl.platform}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Certifications */}
+      {certs.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">Certifications</p>
+          <div className="flex flex-wrap gap-1.5">
+            {certs.map((cert) => (
+              <span key={cert} className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">{cert}</span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── Activity Timeline ──────────────────────────────────────────
@@ -356,6 +520,50 @@ export default function LeadDetailPage() {
     [id],
   );
 
+  // Fetch linked Business scraper data via business_conversions → businesses
+  const [businessData, setBusinessData] = useState<BusinessScrapeData | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchBusiness() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        // Find business linked to this lead
+        const { data: conversions } = await supabase
+          .from('business_conversions')
+          .select('business_id')
+          .eq('lead_id', id)
+          .limit(1);
+
+        const businessId = conversions?.[0]?.business_id;
+        if (!businessId || cancelled) return;
+
+        const { data: biz } = await supabase
+          .from('businesses')
+          .select('name, website_domain, instagram_handle, rating, review_count, follower_count, category, apify_website_scrape_json, apify_instagram_scrape_json')
+          .eq('id', businessId)
+          .single();
+
+        if (!biz || cancelled) return;
+
+        setBusinessData({
+          name: biz.name ?? '',
+          websiteScrape: biz.apify_website_scrape_json as Record<string, unknown> | null,
+          instagramScrape: biz.apify_instagram_scrape_json as Record<string, unknown> | null,
+          websiteDomain: biz.website_domain,
+          instagramHandle: biz.instagram_handle,
+          rating: biz.rating,
+          reviewCount: biz.review_count,
+          followerCount: biz.follower_count,
+          category: biz.category,
+        });
+      } catch {
+        // Silently fail — business intel is supplementary
+      }
+    }
+    void fetchBusiness();
+    return () => { cancelled = true; };
+  }, [id]);
+
   if (lead.error) {
     return <p className="text-sm text-destructive">{lead.error}</p>;
   }
@@ -544,6 +752,30 @@ export default function LeadDetailPage() {
             <AlertCircle className="h-5 w-5" />
             <p className="text-sm">No enrichment data available yet. This lead may still be processing.</p>
           </div>
+        </div>
+      ) : null}
+
+      {/* Company Intelligence (from Business scraper data) */}
+      {businessData ? (
+        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+          <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
+            <Building2 className="h-4 w-4 text-zbooni-teal" />
+            Company Intelligence
+            {businessData.name ? (
+              <span className="ml-2 text-sm font-normal text-muted-foreground/60">— {businessData.name}</span>
+            ) : null}
+            {businessData.websiteDomain ? (
+              <a
+                href={`https://${businessData.websiteDomain}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="ml-auto text-xs text-zbooni-teal hover:text-zbooni-green transition-colors flex items-center gap-1"
+              >
+                {businessData.websiteDomain} <ExternalLink className="h-3 w-3" />
+              </a>
+            ) : null}
+          </h2>
+          <CompanyIntelligence data={businessData} />
         </div>
       ) : null}
 

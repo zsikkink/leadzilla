@@ -1,11 +1,26 @@
 import { prisma } from '@lead-flood/db';
 
 import type { DiscoverySeedConfig } from './config.js';
-import { generateTasks } from './queries/generate_tasks.js';
+import { generateTasks, generateTasksV2 } from './queries/generate_tasks.js';
+import type { GenerateTasksV2Input } from './queries/generate_tasks.js';
+import { mapIcpIndustriesToCategories } from './queries/icp-category-map.js';
 
 export interface SeedTasksResult {
   generated: number;
   inserted: number;
+}
+
+/**
+ * V2 seed config for ICP-driven task generation.
+ * When provided, uses generateTasksV2 with ICP target industries
+ * instead of hardcoded profile-based categories.
+ */
+export interface IcpSeedConfig {
+  targetIndustries: string[];
+  targetCountries: string[];
+  cities?: string[] | undefined;
+  maxPagesPerQuery?: number | undefined;
+  searchProvider?: 'SERPAPI' | 'GOOGLE_PLACES' | undefined;
 }
 
 export async function seedSearchTasks(
@@ -21,8 +36,25 @@ export async function seedSearchTasks(
     | 'seedBucket'
   >,
   now: Date = new Date(),
+  icpConfig?: IcpSeedConfig | undefined,
 ): Promise<SeedTasksResult> {
-  const generatedTasks = generateTasks(config, { now });
+  // Use v2 generation if ICP config is provided with target industries
+  const generatedTasks = icpConfig
+    ? generateTasksV2(
+        {
+          categories: mapIcpIndustriesToCategories(icpConfig.targetIndustries),
+          countries: icpConfig.targetCountries.length > 0
+            ? icpConfig.targetCountries
+            : config.countries,
+          cities: icpConfig.cities,
+          maxPagesPerQuery: icpConfig.maxPagesPerQuery ?? config.maxPagesPerQuery,
+          taskTypes: config.taskTypes,
+          searchProvider: icpConfig.searchProvider,
+        } satisfies GenerateTasksV2Input,
+        { now },
+      )
+    : generateTasks(config, { now });
+
   if (config.seedProfile === 'small' && generatedTasks.length > config.maxTasks) {
     throw new Error(
       `Discovery seed generated ${generatedTasks.length} tasks, which exceeds DISCOVERY_SEED_MAX_TASKS=${config.maxTasks}. Reduce seed scope or increase the cap.`,

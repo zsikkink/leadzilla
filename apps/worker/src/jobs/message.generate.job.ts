@@ -10,7 +10,7 @@ import {
   checkNegativeKeywords,
   buildNegativeKeywordPromptSuffix,
 } from '../messaging/validate-message.js';
-import { getFallbackForChannel } from '../messaging/fallback-templates.js';
+import { getFallbackForChannel, type MessageContext } from '../messaging/fallback-templates.js';
 import { MESSAGE_SEND_JOB_NAME, MESSAGE_SEND_RETRY_OPTIONS, type MessageSendJobPayload } from './message.send.job.js';
 
 export const MESSAGE_GENERATE_JOB_NAME = 'message.generate';
@@ -68,6 +68,154 @@ export function assignAbVariant(leadId: string): 'variant_a' | 'variant_b' {
   return (hash & 1) === 0 ? 'variant_a' : 'variant_b';
 }
 
+/**
+ * Convert raw scrape JSON blobs (apifyWebsiteScrapeJson, apifyInstagramScrapeJson)
+ * into structured, human-readable intelligence for message personalization.
+ *
+ * This replaces sending raw featuresJson (67 numbers) to OpenAI.
+ * Instead, the AI gets actionable observations like:
+ *   "Dubai Coffee Lounge uses Shopify but has no integrated payment solution"
+ */
+function buildMessageContext(
+  websiteScrape: Record<string, unknown> | null,
+  instagramScrape: Record<string, unknown> | null,
+  companyName: string | null,
+): MessageContext {
+  let companyInsight: string | null = null;
+  let socialPresence: string | null = null;
+  let techGap: string | null = null;
+  let teamSignal: string | null = null;
+
+  const company = companyName ?? 'the business';
+
+  // ── Company Insight: tech stack gaps, payment setup, ordering method ──
+  if (websiteScrape) {
+    const insights: string[] = [];
+    const technologies = websiteScrape.technologies as Record<string, unknown> | undefined;
+    const hasShopify = websiteScrape.hasShopify === true;
+    const hasWhatsApp = websiteScrape.hasWhatsApp === true;
+    const paymentWidgets = Array.isArray(websiteScrape.paymentWidgets) ? websiteScrape.paymentWidgets as string[] : [];
+    const hasPricingTiers = websiteScrape.hasPricingTiers === true;
+    const hasProductCatalog = websiteScrape.hasProductCatalog === true;
+    const detectedPlatforms = Array.isArray(websiteScrape.detectedPlatforms) ? websiteScrape.detectedPlatforms as string[] : [];
+
+    if (hasShopify) {
+      insights.push(`${company} uses Shopify for ecommerce`);
+    } else if (detectedPlatforms.length > 0) {
+      insights.push(`${company} runs on ${detectedPlatforms.slice(0, 2).join(' and ')}`);
+    }
+
+    if (hasWhatsApp && paymentWidgets.length === 0) {
+      insights.push('takes WhatsApp orders but has no integrated payment solution');
+    } else if (hasWhatsApp) {
+      insights.push(`uses WhatsApp for sales with ${paymentWidgets.length} payment widget${paymentWidgets.length !== 1 ? 's' : ''}`);
+    }
+
+    if (hasPricingTiers) {
+      insights.push('has tiered pricing (variable deal sizes)');
+    }
+
+    if (hasProductCatalog) {
+      insights.push('has an online product catalog');
+    }
+
+    // Check for contact methods
+    const contactInfo = websiteScrape.contactInfo as Record<string, unknown> | undefined;
+    const emails = Array.isArray(contactInfo?.emails) ? contactInfo.emails as string[] : [];
+    const phones = Array.isArray(contactInfo?.phones) ? contactInfo.phones as string[] : [];
+    if (emails.length > 0 || phones.length > 0) {
+      const contactParts: string[] = [];
+      if (emails.length > 0) contactParts.push(`${emails.length} email${emails.length !== 1 ? 's' : ''}`);
+      if (phones.length > 0) contactParts.push(`${phones.length} phone${phones.length !== 1 ? 's' : ''}`);
+      insights.push(`${contactParts.join(' and ')} listed on the website`);
+    }
+
+    if (insights.length > 0) {
+      companyInsight = insights.join('. ') + '.';
+    }
+
+    // ── Tech Gap: missing CRM, no live chat, basic analytics ──
+    const gaps: string[] = [];
+    const hasCrm = Array.isArray(technologies?.crm) && (technologies.crm as unknown[]).length > 0;
+    const hasLiveChat = Array.isArray(technologies?.liveChat) && (technologies.liveChat as unknown[]).length > 0;
+    const hasAnalytics = Array.isArray(technologies?.analytics) && (technologies.analytics as unknown[]).length > 0;
+
+    if (!hasCrm) gaps.push('no CRM detected');
+    if (!hasLiveChat) gaps.push('no live chat');
+    if (!hasAnalytics) gaps.push('using basic or no analytics');
+    else {
+      const analyticsTools = technologies?.analytics as string[] | undefined;
+      if (analyticsTools && analyticsTools.length === 1 && analyticsTools[0]?.toLowerCase().includes('google')) {
+        gaps.push('basic Google Analytics only');
+      }
+    }
+
+    if (gaps.length > 0) {
+      techGap = gaps.join(', ') + '.';
+    }
+
+    // ── Team Signal: decision makers found on team page ──
+    const decisionMakers = Array.isArray(websiteScrape.decisionMakers)
+      ? websiteScrape.decisionMakers as Array<Record<string, unknown>>
+      : [];
+    if (decisionMakers.length > 0) {
+      const names = decisionMakers
+        .slice(0, 3)
+        .map((dm) => {
+          const name = typeof dm.name === 'string' ? dm.name : null;
+          const title = typeof dm.title === 'string' ? dm.title : null;
+          return name && title ? `${name} (${title})` : name ?? title;
+        })
+        .filter(Boolean);
+      if (names.length > 0) {
+        teamSignal = `Found on team page: ${names.join(', ')}.`;
+      }
+    }
+  }
+
+  // ── Social Presence: follower count, category, posting frequency ──
+  if (instagramScrape) {
+    const parts: string[] = [];
+    const followerCount = typeof instagramScrape.followerCount === 'number' ? instagramScrape.followerCount : null;
+    // Also check edge_followed_by format
+    const edgeFollowedBy = instagramScrape.edge_followed_by as Record<string, unknown> | undefined;
+    const effectiveFollowers = followerCount ?? (typeof edgeFollowedBy?.count === 'number' ? edgeFollowedBy.count : null);
+
+    if (effectiveFollowers !== null) {
+      const formatted = effectiveFollowers >= 1000
+        ? `${(effectiveFollowers / 1000).toFixed(1)}K`
+        : String(effectiveFollowers);
+      parts.push(`${formatted} followers`);
+    }
+
+    const isVerified = instagramScrape.isVerified === true;
+    if (isVerified) parts.push('verified account');
+
+    const isBusinessAccount = instagramScrape.isBusinessAccount === true || instagramScrape.isProfessionalAccount === true;
+    if (isBusinessAccount) parts.push('business account');
+
+    const businessCategory = typeof instagramScrape.businessCategory === 'string' ? instagramScrape.businessCategory : null;
+    if (businessCategory && businessCategory !== 'unknown') parts.push(businessCategory);
+
+    const mediaCount = typeof instagramScrape.mediaCount === 'number' ? instagramScrape.mediaCount : null;
+    if (mediaCount !== null) {
+      // Rough estimate: posts per week based on account age (assume ~2 years if unknown)
+      parts.push(`${mediaCount} posts`);
+    }
+
+    const engagementRate = typeof instagramScrape.engagementRate === 'number' ? instagramScrape.engagementRate : null;
+    if (engagementRate !== null && engagementRate > 0) {
+      parts.push(`${(engagementRate * 100).toFixed(1)}% engagement`);
+    }
+
+    if (parts.length > 0) {
+      socialPresence = parts.join(', ') + '.';
+    }
+  }
+
+  return { companyInsight, socialPresence, techGap, teamSignal };
+}
+
 export async function handleMessageGenerateJob(
   logger: MessageGenerateLogger,
   job: Job<MessageGenerateJobPayload>,
@@ -91,7 +239,7 @@ export async function handleMessageGenerateJob(
   try {
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
-      select: { id: true, firstName: true, lastName: true, email: true, phone: true, decisionMakerPhone: true, deletedAt: true },
+      select: { id: true, firstName: true, lastName: true, email: true, phone: true, decisionMakerPhone: true, businessId: true, deletedAt: true },
     });
 
     if (!lead) {
@@ -166,6 +314,14 @@ export async function handleMessageGenerateJob(
       select: { normalizedPayload: true },
     });
 
+    // Load Business record for scrape intelligence (message personalization)
+    const business = lead.businessId
+      ? await prisma.business.findUnique({
+          where: { id: lead.businessId },
+          select: { name: true, apifyWebsiteScrapeJson: true, apifyInstagramScrapeJson: true },
+        })
+      : null;
+
     const latestScore = scorePredictionId
       ? await prisma.leadScorePrediction.findUnique({
           where: { id: scorePredictionId },
@@ -187,7 +343,25 @@ export async function handleMessageGenerateJob(
 
     const companyName =
       (typeof enrichmentPayload?.companyName === 'string' ? enrichmentPayload.companyName : null) ??
-      (typeof enrichmentPayload?.company_name === 'string' ? enrichmentPayload.company_name : null);
+      (typeof enrichmentPayload?.company_name === 'string' ? enrichmentPayload.company_name : null) ??
+      (business?.name ?? null);
+
+    // Build structured business intelligence from scrape data
+    const websiteScrape = business?.apifyWebsiteScrapeJson && typeof business.apifyWebsiteScrapeJson === 'object'
+      ? business.apifyWebsiteScrapeJson as Record<string, unknown>
+      : null;
+    const instagramScrape = business?.apifyInstagramScrapeJson && typeof business.apifyInstagramScrapeJson === 'object'
+      ? business.apifyInstagramScrapeJson as Record<string, unknown>
+      : null;
+    const messageContext = buildMessageContext(websiteScrape, instagramScrape, companyName);
+
+    // Format for AI prompt — structured intelligence replaces raw feature numbers
+    const intelligenceParts: string[] = [];
+    if (messageContext.companyInsight) intelligenceParts.push(`Company: ${messageContext.companyInsight}`);
+    if (messageContext.techGap) intelligenceParts.push(`Tech gaps: ${messageContext.techGap}`);
+    if (messageContext.socialPresence) intelligenceParts.push(`Social: ${messageContext.socialPresence}`);
+    if (messageContext.teamSignal) intelligenceParts.push(`Team: ${messageContext.teamSignal}`);
+    const businessIntelligence = intelligenceParts.length > 0 ? intelligenceParts.join('\n') : null;
 
     const groundingContext = {
       leadName: `${lead.firstName} ${lead.lastName}`,
@@ -199,6 +373,7 @@ export async function handleMessageGenerateJob(
       scoreBand: latestScore?.scoreBand ?? 'MEDIUM',
       blendedScore: latestScore?.blendedScore ?? 0,
       icpDescription: icpProfile?.description ?? 'No ICP description available',
+      businessIntelligence,
     };
 
     const previouslyPitchedFeatures = job.data.previouslyPitchedFeatures ?? [];
@@ -338,6 +513,7 @@ export async function handleMessageGenerateJob(
               resolvedChannel,
               lead.firstName,
               companyName,
+              messageContext,
             );
             generatedByModel = 'fallback-template';
             if (retryA.hardReject) {
@@ -350,7 +526,7 @@ export async function handleMessageGenerateJob(
         } else {
           // Retry OpenAI call itself failed — use fallback for both
           logger.warn({ jobId: job.id, leadId }, 'Retry OpenAI failed, using fallback templates');
-          const fallback = getFallbackForChannel(resolvedChannel, lead.firstName, companyName);
+          const fallback = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
           generatedByModel = 'fallback-template';
           variantAContent = fallback;
           variantBContent = fallback;
@@ -363,7 +539,7 @@ export async function handleMessageGenerateJob(
     } else {
       // OpenAI not configured — use fallback
       logger.warn({ jobId: job.id, leadId }, 'OpenAI not configured, using fallback templates');
-      const fallback = getFallbackForChannel(resolvedChannel, lead.firstName, companyName);
+      const fallback = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
       generatedByModel = 'fallback-template';
       variantAContent = fallback;
       variantBContent = fallback;

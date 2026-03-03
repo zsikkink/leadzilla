@@ -190,7 +190,7 @@ export async function handleMessageSendJob(
 
       if (result.status === 'success') {
         const followUpNumber = job.data.followUpNumber ?? 0;
-        const nextFollowUpAfter = followUpNumber < 3 ? computeNextFollowUpAfter() : null;
+        const nextFollowUpAfter = computeNextFollowUpAfter(followUpNumber);
 
         await prisma.$transaction([
           prisma.messageSend.update({
@@ -296,7 +296,7 @@ export async function handleMessageSendJob(
 
       if (result.status === 'success') {
         const followUpNumber = job.data.followUpNumber ?? 0;
-        const nextFollowUpAfter = followUpNumber < 3 ? computeNextFollowUpAfter() : null;
+        const nextFollowUpAfter = computeNextFollowUpAfter(followUpNumber);
         const ticketId = result.ticketId ?? existingTicketId;
 
         await prisma.$transaction([

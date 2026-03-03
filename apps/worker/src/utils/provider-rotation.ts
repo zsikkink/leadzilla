@@ -12,12 +12,14 @@ const CIRCUIT_BREAKER_THRESHOLD = 5;
 const CIRCUIT_BREAKER_WINDOW_MS = 60 * 60 * 1000;
 
 /**
- * Default rotation priority: PDL first (highest quality), then Hunter, then PublicWeb.
+ * Default rotation priority: cheapest first (OTHER_FREE → HUNTER → PDL).
+ * Escalation is handled by the completeness check — if the free provider
+ * returns sparse data (missing industry OR employee count), we escalate.
  */
 const DEFAULT_PRIORITY: readonly EnrichmentProvider[] = [
-  'PEOPLE_DATA_LABS',
-  'HUNTER',
   'OTHER_FREE',
+  'HUNTER',
+  'PEOPLE_DATA_LABS',
 ] as const;
 
 interface ProviderFailureRecord {
@@ -39,7 +41,7 @@ export interface ProviderStatus {
  * last hour, it is temporarily marked unavailable and skipped
  * during rotation.
  *
- * Priority order: PEOPLE_DATA_LABS → HUNTER → OTHER_FREE
+ * Priority order: OTHER_FREE → HUNTER → PEOPLE_DATA_LABS (cheapest first)
  */
 export class EnrichmentProviderRotator {
   private readonly priority: readonly EnrichmentProvider[];

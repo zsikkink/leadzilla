@@ -9,6 +9,9 @@ import type {
 import { type Prisma, prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { formatErrorMessage } from '../errors.js';
+import { chiSquaredTest } from '../utils/chi-squared.js';
+
 export const MANAGER_ANALYZE_JOB_NAME = 'manager.analyze';
 
 export const MANAGER_ANALYZE_RETRY_OPTIONS: Pick<
@@ -55,57 +58,67 @@ async function computeIcpBreakdown(
     select: { id: true, name: true },
   });
 
-  const results: IcpBreakdownItem[] = [];
-
-  for (const icp of icpProfiles) {
-    const sends = await prisma.messageSend.count({
-      where: {
-        sentAt: { gte: weekStart, lt: weekEnd },
-        status: { in: ['SENT', 'DELIVERED', 'REPLIED'] },
-        messageDraft: { icpProfileId: icp.id },
-      },
-    });
-
-    if (sends === 0) continue;
-
-    const [replies, positiveOutcomes, bounced] = await Promise.all([
-      prisma.feedbackEvent.count({
+  // Batch: count sends per ICP in parallel (was sequential)
+  const sendCounts = await Promise.all(
+    icpProfiles.map((icp) =>
+      prisma.messageSend.count({
         where: {
-          occurredAt: { gte: weekStart, lt: weekEnd },
-          eventType: 'REPLIED',
-          messageSend: { messageDraft: { icpProfileId: icp.id } },
+          sentAt: { gte: weekStart, lt: weekEnd },
+          status: { in: ['SENT', 'DELIVERED', 'REPLIED'] },
+          messageDraft: { icpProfileId: icp.id },
         },
       }),
-      prisma.feedbackEvent.count({
-        where: {
-          occurredAt: { gte: weekStart, lt: weekEnd },
-          eventType: { in: ['MEETING_BOOKED', 'DEAL_WON'] },
-          messageSend: { messageDraft: { icpProfileId: icp.id } },
-        },
-      }),
-      prisma.feedbackEvent.count({
-        where: {
-          occurredAt: { gte: weekStart, lt: weekEnd },
-          eventType: { in: ['BOUNCED', 'UNSUBSCRIBED'] },
-          messageSend: { messageDraft: { icpProfileId: icp.id } },
-        },
-      }),
-    ]);
+    ),
+  );
 
-    results.push({
+  // Only fetch feedback for ICPs with sends
+  const activeIcps = icpProfiles
+    .map((icp, i) => ({ ...icp, sends: sendCounts[i]! }))
+    .filter((icp) => icp.sends > 0);
+
+  // Batch: count feedback events per ICP in parallel
+  const feedbackCounts = await Promise.all(
+    activeIcps.map((icp) =>
+      Promise.all([
+        prisma.feedbackEvent.count({
+          where: {
+            occurredAt: { gte: weekStart, lt: weekEnd },
+            eventType: 'REPLIED',
+            messageSend: { messageDraft: { icpProfileId: icp.id } },
+          },
+        }),
+        prisma.feedbackEvent.count({
+          where: {
+            occurredAt: { gte: weekStart, lt: weekEnd },
+            eventType: { in: ['MEETING_BOOKED', 'DEAL_WON'] },
+            messageSend: { messageDraft: { icpProfileId: icp.id } },
+          },
+        }),
+        prisma.feedbackEvent.count({
+          where: {
+            occurredAt: { gte: weekStart, lt: weekEnd },
+            eventType: { in: ['BOUNCED', 'UNSUBSCRIBED'] },
+            messageSend: { messageDraft: { icpProfileId: icp.id } },
+          },
+        }),
+      ]),
+    ),
+  );
+
+  return activeIcps.map((icp, i) => {
+    const [replies, positiveOutcomes, bounced] = feedbackCounts[i]!;
+    return {
       icpProfileId: icp.id,
       icpName: icp.name,
-      sends,
+      sends: icp.sends,
       replies,
       positiveOutcomes,
       bounced,
-      replyRate: safeRate(replies, sends),
-      positiveRate: safeRate(positiveOutcomes, sends),
-      bounceRate: safeRate(bounced, sends),
-    });
-  }
-
-  return results;
+      replyRate: safeRate(replies, icp.sends),
+      positiveRate: safeRate(positiveOutcomes, icp.sends),
+      bounceRate: safeRate(bounced, icp.sends),
+    };
+  });
 }
 
 async function computeVariantBreakdown(
@@ -301,67 +314,65 @@ async function computeScoreBandBreakdown(
   weekEnd: Date,
 ): Promise<ScoreBandBreakdownItem[]> {
   const bands = ['HIGH', 'MEDIUM', 'LOW'] as const;
-  const results: ScoreBandBreakdownItem[] = [];
 
-  for (const band of bands) {
-    const sends = await prisma.messageSend.count({
-      where: {
-        sentAt: { gte: weekStart, lt: weekEnd },
-        status: { in: ['SENT', 'DELIVERED', 'REPLIED'] },
-        messageDraft: {
-          scorePrediction: { scoreBand: band },
-        },
-      },
-    });
-
-    if (sends === 0) {
-      results.push({
-        scoreBand: band,
-        sends: 0,
-        replies: 0,
-        replyRate: 0,
-        positiveOutcomes: 0,
-        positiveRate: 0,
-      });
-      continue;
-    }
-
-    const [replies, positiveOutcomes] = await Promise.all([
-      prisma.feedbackEvent.count({
+  // Batch: count sends per band in parallel (was sequential)
+  const sendCounts = await Promise.all(
+    bands.map((band) =>
+      prisma.messageSend.count({
         where: {
-          occurredAt: { gte: weekStart, lt: weekEnd },
-          eventType: 'REPLIED',
-          messageSend: {
-            messageDraft: {
-              scorePrediction: { scoreBand: band },
-            },
+          sentAt: { gte: weekStart, lt: weekEnd },
+          status: { in: ['SENT', 'DELIVERED', 'REPLIED'] },
+          messageDraft: {
+            scorePrediction: { scoreBand: band },
           },
         },
       }),
-      prisma.feedbackEvent.count({
-        where: {
-          occurredAt: { gte: weekStart, lt: weekEnd },
-          eventType: { in: ['MEETING_BOOKED', 'DEAL_WON'] },
-          messageSend: {
-            messageDraft: {
-              scorePrediction: { scoreBand: band },
+    ),
+  );
+
+  // Batch: count feedback per band in parallel (only for bands with sends)
+  const feedbackCounts = await Promise.all(
+    bands.map((band, i) => {
+      if (sendCounts[i] === 0) return Promise.resolve([0, 0] as const);
+      return Promise.all([
+        prisma.feedbackEvent.count({
+          where: {
+            occurredAt: { gte: weekStart, lt: weekEnd },
+            eventType: 'REPLIED',
+            messageSend: {
+              messageDraft: {
+                scorePrediction: { scoreBand: band },
+              },
             },
           },
-        },
-      }),
-    ]);
+        }),
+        prisma.feedbackEvent.count({
+          where: {
+            occurredAt: { gte: weekStart, lt: weekEnd },
+            eventType: { in: ['MEETING_BOOKED', 'DEAL_WON'] },
+            messageSend: {
+              messageDraft: {
+                scorePrediction: { scoreBand: band },
+              },
+            },
+          },
+        }),
+      ]);
+    }),
+  );
 
-    results.push({
+  return bands.map((band, i) => {
+    const sends = sendCounts[i]!;
+    const [replies, positiveOutcomes] = feedbackCounts[i]!;
+    return {
       scoreBand: band,
       sends,
       replies,
       replyRate: safeRate(replies, sends),
       positiveOutcomes,
       positiveRate: safeRate(positiveOutcomes, sends),
-    });
-  }
-
-  return results;
+    };
+  });
 }
 
 async function computeWeekMetrics(
@@ -437,21 +448,26 @@ function generateRecommendations(
     }
   }
 
-  // 3. Compare HIGH vs MEDIUM score band performance
+  // 3. Compare HIGH vs MEDIUM score band performance (chi-squared gated)
   const highBand = scoreBandBreakdown.find((b) => b.scoreBand === 'HIGH');
   const mediumBand = scoreBandBreakdown.find((b) => b.scoreBand === 'MEDIUM');
 
   if (highBand && mediumBand && highBand.sends >= 5 && mediumBand.sends >= 5) {
     // If MEDIUM actually performs better than HIGH, threshold may be wrong
     if (mediumBand.replyRate > highBand.replyRate && mediumBand.replyRate > 0) {
+      const bandTest = chiSquaredTest(mediumBand.replies, mediumBand.sends, highBand.replies, highBand.sends);
+      const significanceNote = bandTest.significant
+        ? ` (statistically significant: p=${bandTest.pValue}, χ²=${bandTest.chiSquared})`
+        : ` (not yet statistically significant: p=${bandTest.pValue}, needs more data)`;
+
       recommendations.push({
         type: 'ADJUST_THRESHOLD',
         icpProfileId: null,
         field: 'scoringThreshold',
         currentValue: 0.5,
         recommendedValue: 0.4,
-        confidence: 0.6,
-        reasoning: `MEDIUM band reply rate (${(mediumBand.replyRate * 100).toFixed(1)}%) exceeds HIGH band (${(highBand.replyRate * 100).toFixed(1)}%). The scoring threshold may be miscalibrated — consider lowering it to capture these responsive leads.`,
+        confidence: bandTest.significant ? 0.7 : 0.4,
+        reasoning: `MEDIUM band reply rate (${(mediumBand.replyRate * 100).toFixed(1)}%) exceeds HIGH band (${(highBand.replyRate * 100).toFixed(1)}%)${significanceNote}. The scoring threshold may be miscalibrated — consider lowering it to capture these responsive leads.`,
       });
     }
 
@@ -499,7 +515,7 @@ function generateRecommendations(
     });
   }
 
-  // 6. Variant A/B insights — flag underperforming variants
+  // 6. Variant A/B insights — flag underperforming variants (chi-squared gated)
   if (variantBreakdown.length >= 2) {
     const sorted = [...variantBreakdown].sort((a, b) => b.replyRate - a.replyRate);
     const best = sorted[0]!;
@@ -510,15 +526,19 @@ function generateRecommendations(
       worst.sends >= 5 &&
       best.replyRate - worst.replyRate > 0.05
     ) {
-      recommendations.push({
-        type: 'ADJUST_WEIGHT',
-        icpProfileId: null,
-        field: `variant:${worst.variantKey}`,
-        currentValue: worst.replyRate,
-        recommendedValue: null,
-        confidence: Math.min(0.8, 0.4 + (best.sends + worst.sends) * 0.01),
-        reasoning: `Variant "${best.variantKey}" outperforms "${worst.variantKey}" by ${((best.replyRate - worst.replyRate) * 100).toFixed(1)} percentage points (${(best.replyRate * 100).toFixed(1)}% vs ${(worst.replyRate * 100).toFixed(1)}%). Consider retiring the underperforming variant.`,
-      });
+      const abTest = chiSquaredTest(best.replies, best.sends, worst.replies, worst.sends);
+
+      if (abTest.significant) {
+        recommendations.push({
+          type: 'ADJUST_WEIGHT',
+          icpProfileId: null,
+          field: `variant:${worst.variantKey}`,
+          currentValue: worst.replyRate,
+          recommendedValue: null,
+          confidence: Math.min(0.9, 0.5 + (best.sends + worst.sends) * 0.01),
+          reasoning: `Variant "${best.variantKey}" outperforms "${worst.variantKey}" by ${((best.replyRate - worst.replyRate) * 100).toFixed(1)} percentage points (${(best.replyRate * 100).toFixed(1)}% vs ${(worst.replyRate * 100).toFixed(1)}%, p=${abTest.pValue}, χ²=${abTest.chiSquared}). Consider retiring the underperforming variant.`,
+        });
+      }
     }
   }
 
@@ -540,21 +560,25 @@ function generateRecommendations(
     const best = sorted[0]!;
     const worst = sorted[sorted.length - 1]!;
 
-    // Only recommend if both have meaningful volume and significant difference
+    // Only recommend if both have meaningful volume and chi-squared significant
     if (
       best.sends >= 3 &&
       worst.sends >= 3 &&
       best.replyRate - worst.replyRate > 0.03
     ) {
-      recommendations.push({
-        type: 'PREFER_VARIANT',
-        icpProfileId: icpId,
-        field: `ab:${best.variantKey}`,
-        currentValue: worst.replyRate,
-        recommendedValue: best.replyRate,
-        confidence: Math.min(0.85, 0.35 + (best.sends + worst.sends) * 0.015),
-        reasoning: `For ICP "${best.icpName}", variant "${best.variantKey}" has ${(best.replyRate * 100).toFixed(1)}% reply rate vs "${worst.variantKey}" at ${(worst.replyRate * 100).toFixed(1)}% (${best.sends + worst.sends} total sends). Consider preferring "${best.variantKey}" for this segment.`,
-      });
+      const abTest = chiSquaredTest(best.replies, best.sends, worst.replies, worst.sends);
+
+      if (abTest.significant) {
+        recommendations.push({
+          type: 'PREFER_VARIANT',
+          icpProfileId: icpId,
+          field: `ab:${best.variantKey}`,
+          currentValue: worst.replyRate,
+          recommendedValue: best.replyRate,
+          confidence: Math.min(0.9, 0.4 + (best.sends + worst.sends) * 0.015),
+          reasoning: `For ICP "${best.icpName}", variant "${best.variantKey}" has ${(best.replyRate * 100).toFixed(1)}% reply rate vs "${worst.variantKey}" at ${(worst.replyRate * 100).toFixed(1)}% (${best.sends + worst.sends} total sends, p=${abTest.pValue}, χ²=${abTest.chiSquared}). Consider preferring "${best.variantKey}" for this segment.`,
+        });
+      }
     }
   }
 
@@ -720,7 +744,7 @@ export async function handleManagerAnalyzeJob(
         queue: job.name,
         runId,
         correlationId: effectiveCorrelationId,
-        error,
+        error: formatErrorMessage(error),
       },
       'Failed manager.analyze job',
     );

@@ -1,6 +1,9 @@
 import { prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { isPrismaUniqueConstraintError } from '../errors.js';
+import { recordPipelineEvent } from '../utils/pipeline-events.js';
+import { getPipelineSettings } from '../utils/pipeline-settings.js';
 import type { ModelTrainJobPayload } from './model.train.job.js';
 
 export const LABELS_GENERATE_JOB_NAME = 'labels.generate';
@@ -40,10 +43,6 @@ const POSITIVE_EVENT_TYPES = new Set(['MEETING_BOOKED', 'DEAL_WON']);
 /** Feedback event types that indicate negative outcomes. */
 const NEGATIVE_EVENT_TYPES = new Set(['DEAL_LOST', 'UNSUBSCRIBED']);
 
-/** Days after which a lead with no feedback is considered cold. */
-const COLD_LEAD_TIMEOUT_DAYS = 30;
-/** Minimum new labels before auto-enqueuing model.train. */
-const RETRAIN_THRESHOLD = 50;
 
 export async function handleLabelsGenerateJob(
   logger: LabelsGenerateLogger,
@@ -51,6 +50,7 @@ export async function handleLabelsGenerateJob(
   deps?: LabelsGenerateJobDependencies,
 ): Promise<void> {
   const { runId, correlationId, from: rawFrom, to: rawTo, leadId, feedbackEventId } = job.data;
+  const settings = await getPipelineSettings();
 
   // Compute the time window at runtime to avoid stale schedule payloads.
   // Schedule bakes from/to at boot time; by computing here we always get a fresh 24h window.
@@ -112,6 +112,14 @@ export async function handleLabelsGenerateJob(
           },
         });
         newLabelCount++;
+
+        await recordPipelineEvent({
+          leadId: event.leadId,
+          stage: 'LABEL_GENERATE',
+          status: label === 1 ? 'POSITIVE' : 'NEGATIVE',
+          jobId: job.id,
+          metadata: { source: 'FEEDBACK_EVENT', feedbackEventId: event.id, eventType: event.eventType },
+        });
       } catch (error: unknown) {
         // Skip unique constraint violations (duplicate labels)
         if (isPrismaUniqueConstraintError(error)) continue;
@@ -121,7 +129,7 @@ export async function handleLabelsGenerateJob(
 
     // ── 2. Generate negative labels for cold leads ───────────────────────
     const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - COLD_LEAD_TIMEOUT_DAYS);
+    cutoffDate.setDate(cutoffDate.getDate() - settings.coldLeadTimeoutDays);
 
     const coldLeads = await prisma.messageSend.findMany({
       where: {
@@ -150,20 +158,28 @@ export async function handleLabelsGenerateJob(
           },
         });
         newLabelCount++;
+
+        await recordPipelineEvent({
+          leadId: cold.leadId,
+          stage: 'LABEL_GENERATE',
+          status: 'COLD_TIMEOUT',
+          jobId: job.id,
+          metadata: { source: 'COLD_LEAD_TIMEOUT', timeoutDays: settings.coldLeadTimeoutDays },
+        });
       } catch (error: unknown) {
         if (isPrismaUniqueConstraintError(error)) continue;
         throw error;
       }
     }
 
-    if (newLabelCount >= RETRAIN_THRESHOLD) {
+    if (newLabelCount >= settings.retrainThreshold) {
       logger.info(
         {
           jobId: job.id,
           queue: job.name,
           runId,
           newLabelCount,
-          threshold: RETRAIN_THRESHOLD,
+          threshold: settings.retrainThreshold,
         },
         'Retrain threshold reached, enqueuing model.train',
       );
@@ -243,11 +259,3 @@ export async function handleLabelsGenerateJob(
   }
 }
 
-function isPrismaUniqueConstraintError(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code: string }).code === 'P2002'
-  );
-}

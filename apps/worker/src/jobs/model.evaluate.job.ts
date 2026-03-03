@@ -3,6 +3,7 @@ import { Prisma, prisma } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { formatErrorMessage } from '../errors.js';
 import {
   evaluateModel,
   predictLogistic,
@@ -301,6 +302,17 @@ export async function handleModelEvaluateJob(
       'Completed model.evaluate job',
     );
   } catch (error: unknown) {
+    // Compensating write: mark ModelVersion as ARCHIVED on failure
+    // so it doesn't remain stuck in SHADOW stage indefinitely
+    try {
+      await prisma.modelVersion.update({
+        where: { id: modelVersionId },
+        data: { stage: 'ARCHIVED' },
+      });
+    } catch {
+      // Swallow — we want to rethrow the original error
+    }
+
     logger.error(
       {
         jobId: job.id,
@@ -309,7 +321,7 @@ export async function handleModelEvaluateJob(
         trainingRunId,
         modelVersionId,
         correlationId: correlationId ?? job.id,
-        error,
+        error: formatErrorMessage(error),
       },
       'Failed model.evaluate job',
     );

@@ -221,8 +221,17 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         });
       }
 
-      const result = await options.listLeads(parsedQuery.data);
-      return ListLeadsResponseSchema.parse(result);
+      try {
+        const result = await options.listLeads(parsedQuery.data);
+        return ListLeadsResponseSchema.parse(result);
+      } catch (error: unknown) {
+        request.log.error({ error }, 'Failed to list leads');
+        reply.status(500);
+        return ErrorResponseSchema.parse({
+          error: 'Failed to list leads',
+          requestId: request.id,
+        });
+      }
     });
 
     api.get('/v1/leads/:id', async (request, reply) => {

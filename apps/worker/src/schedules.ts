@@ -50,6 +50,16 @@ import {
   LEAD_RECOVERY_RETRY_OPTIONS,
 } from './jobs/lead.recovery.job.js';
 import {
+  DATA_RETENTION_JOB_NAME,
+  type DataRetentionJobPayload,
+  DATA_RETENTION_RETRY_OPTIONS,
+} from './jobs/data.retention.job.js';
+import {
+  MODEL_DRIFT_JOB_NAME,
+  type ModelDriftJobPayload,
+  MODEL_DRIFT_RETRY_OPTIONS,
+} from './jobs/model.drift.job.js';
+import {
   OUTBOX_CLEANUP_JOB_NAME,
   type OutboxCleanupJobPayload,
   OUTBOX_CLEANUP_RETRY_OPTIONS,
@@ -239,6 +249,32 @@ export async function registerWorkerSchedules(boss: Pick<PgBoss, 'schedule'>): P
     {
       singletonKey: 'schedule:lead.recovery',
       ...LEAD_RECOVERY_RETRY_OPTIONS,
+    },
+  );
+
+  // Daily at 2:30 AM — data retention sweep (90-day default)
+  await boss.schedule(
+    DATA_RETENTION_JOB_NAME,
+    '30 2 * * *',
+    {
+      correlationId: 'scheduler:data.retention',
+    } satisfies DataRetentionJobPayload,
+    {
+      singletonKey: 'schedule:data.retention',
+      ...DATA_RETENTION_RETRY_OPTIONS,
+    },
+  );
+
+  // Daily at 6 AM — model drift detection
+  await boss.schedule(
+    MODEL_DRIFT_JOB_NAME,
+    '0 6 * * *',
+    {
+      correlationId: 'scheduler:model.drift',
+    } satisfies ModelDriftJobPayload,
+    {
+      singletonKey: 'schedule:model.drift',
+      ...MODEL_DRIFT_RETRY_OPTIONS,
     },
   );
 }

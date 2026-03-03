@@ -122,9 +122,10 @@ describe('features.compute helpers', () => {
       'has_analytics',
       'estimated_employees',
       'certification_count',
-      'instagram_is_verified',
       'instagram_business_category',
       'instagram_has_business_email',
+      // v2.2 data quality
+      'data_alignment_score',
     ]);
     expect(FEATURE_KEYS.length).toBe(67);
   });

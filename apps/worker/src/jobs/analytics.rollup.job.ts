@@ -2,6 +2,8 @@ import type { RecomputeRollupRequest } from '@lead-flood/contracts';
 import { prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { formatErrorMessage } from '../errors.js';
+
 export const ANALYTICS_ROLLUP_JOB_NAME = 'analytics.rollup';
 export const ANALYTICS_ROLLUP_IDEMPOTENCY_KEY_PATTERN = 'analytics.rollup:${day}:${icpProfileId || "all"}';
 
@@ -288,7 +290,7 @@ export async function handleAnalyticsRollupJob(
         runId,
         correlationId: correlationId ?? job.id,
         day,
-        error,
+        error: formatErrorMessage(error),
       },
       'Failed analytics.rollup job',
     );

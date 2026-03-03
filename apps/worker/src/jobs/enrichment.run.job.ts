@@ -15,6 +15,11 @@ import type {
   PdlEnrichmentRequest,
   PublicWebLookupEnrichmentRequest,
 } from '@lead-flood/providers';
+import {
+  consolidateCompanyProfile,
+  isProfileSufficientForEnrichment,
+  profileToEnrichmentPayload,
+} from '@lead-flood/providers';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
@@ -312,8 +317,11 @@ interface RotationResult {
  * Execute enrichment with provider rotation.
  *
  * When a `providerRotator` is configured in dependencies, terminal errors
- * trigger automatic fallback to the next provider in priority order:
- *   PEOPLE_DATA_LABS → HUNTER → OTHER_FREE
+ * or sparse data trigger automatic escalation to the next provider:
+ *   OTHER_FREE → HUNTER → PEOPLE_DATA_LABS (cheapest first)
+ *
+ * Completeness check: if a provider returns data missing industry OR employee
+ * count, we escalate to the next tier for richer data.
  *
  * Without a rotator, behavior is identical to the original single-provider call.
  */
@@ -326,6 +334,7 @@ async function executeWithRotation(
   jobId: string,
   runId: string,
   leadId: string,
+  skipProviders?: string[] | undefined,
 ): Promise<RotationResult> {
   const rotator = dependencies.providerRotator;
 
@@ -340,7 +349,8 @@ async function executeWithRotation(
     return { provider: initialProvider, result };
   }
 
-  const failedProviders: string[] = [];
+  // Pre-populate failed list with providers to skip (e.g. Hunter already called during conversion)
+  const failedProviders: string[] = skipProviders ? [...skipProviders] : [];
   let currentProvider: EnrichmentProvider | null = initialProvider;
 
   while (currentProvider) {
@@ -352,6 +362,31 @@ async function executeWithRotation(
     );
 
     if (result.status === 'success') {
+      // Completeness check: if data is sparse (missing industry OR employee count),
+      // escalate to next tier for richer data
+      const normalized = result.normalized;
+      const isSparse = !normalized.industry || normalized.employeeCount === null;
+      if (isSparse && currentProvider !== 'PEOPLE_DATA_LABS') {
+        logger.info(
+          {
+            jobId,
+            runId,
+            leadId,
+            provider: currentProvider,
+            missingIndustry: !normalized.industry,
+            missingEmployeeCount: normalized.employeeCount === null,
+          },
+          `Provider ${currentProvider} returned sparse data — escalating to next tier`,
+        );
+        // Still record this as a success but try the next provider for more complete data
+        failedProviders.push(currentProvider);
+        const nextProvider = rotator.getNextProvider(leadId, failedProviders);
+        if (nextProvider) {
+          currentProvider = nextProvider;
+          continue;
+        }
+        // No more providers — use what we have
+      }
       rotator.recordSuccess(currentProvider);
       return { provider: currentProvider, result };
     }
@@ -429,6 +464,9 @@ export async function handleEnrichmentRunJob(
     return;
   }
 
+  // ── B4: Hunter dedup flag — set during B10 profile consolidation below ──
+  let hunterAlreadyRanInConversion = false;
+
   const lead = await prisma.lead.findUnique({
     where: { id: leadId },
   });
@@ -451,9 +489,176 @@ export async function handleEnrichmentRunJob(
     await markEnrichmentJobRunning(jobExecutionId);
   }
 
+  // ── B10: Company profile consolidation — skip PDL if scraped data is sufficient ──
+  // Load the source business (via BusinessConversion) and check if the consolidated
+  // profile already has industry + employeeCount + companyName from scraping.
+  const conversion = await prisma.businessConversion.findFirst({
+    where: { leadId },
+    select: { businessId: true, hunterContactJson: true },
+  });
+
+  if (conversion) {
+    const sourceBusiness = await prisma.business.findUnique({
+      where: { id: conversion.businessId },
+      select: {
+        name: true,
+        websiteDomain: true,
+        category: true,
+        countryCode: true,
+        city: true,
+        phoneE164: true,
+        rating: true,
+        reviewCount: true,
+        apifyWebsiteScrapeJson: true,
+        apifyInstagramScrapeJson: true,
+      },
+    });
+
+    if (sourceBusiness) {
+      const profile = consolidateCompanyProfile(sourceBusiness);
+
+      if (isProfileSufficientForEnrichment(profile)) {
+        const scrapedPayload = profileToEnrichmentPayload(profile);
+        logger.info(
+          {
+            jobId: job.id,
+            runId,
+            leadId,
+            completenessScore: profile.completenessScore,
+            industry: profile.industry,
+            employeeCount: profile.employeeCount,
+            companyName: profile.companyName,
+          },
+          'Consolidated profile is sufficient — skipping paid enrichment providers',
+        );
+
+        // Use scraped data as enrichment result directly
+        const normalizedFromProfile: NormalizedEnrichmentPayload = {
+          email: scrapedPayload.email ?? lead.email,
+          phone: scrapedPayload.phone,
+          domain: scrapedPayload.domain,
+          companyName: scrapedPayload.companyName,
+          industry: scrapedPayload.industry,
+          employeeCount: scrapedPayload.employeeCount,
+          country: scrapedPayload.country,
+          city: scrapedPayload.city,
+          linkedinUrl: scrapedPayload.linkedinUrl,
+          website: scrapedPayload.website,
+        };
+
+        // Record enrichment as "SCRAPE_PROFILE" source
+        const requestKey = `${runId}:${leadId}:SCRAPE_PROFILE:${job.id}`;
+        const enrichmentRecord = await prisma.leadEnrichmentRecord.upsert({
+          where: { requestKey },
+          create: {
+            leadId,
+            provider: 'OTHER_FREE',
+            status: 'COMPLETED',
+            attempt: 1,
+            providerRecordId: lead.email,
+            normalizedPayload: toInputJson(normalizedFromProfile),
+            rawPayload: toInputJson({ source: 'consolidated_profile', profile }),
+            errorCode: null,
+            errorMessage: null,
+            enrichedAt: new Date(),
+            requestKey,
+          },
+          update: {
+            status: 'COMPLETED',
+            providerRecordId: lead.email,
+            normalizedPayload: toInputJson(normalizedFromProfile),
+            rawPayload: toInputJson({ source: 'consolidated_profile', profile }),
+            errorCode: null,
+            errorMessage: null,
+            enrichedAt: new Date(),
+          },
+        });
+
+        const phoneFromProfile = normalizedFromProfile.phone ?? undefined;
+        await prisma.lead.update({
+          where: { id: leadId },
+          data: {
+            status: 'enriched',
+            enrichmentData: toInputJson(normalizedFromProfile),
+            error: null,
+            ...(phoneFromProfile ? { phone: phoneFromProfile } : {}),
+          },
+        });
+
+        if (jobExecutionId) {
+          await markEnrichmentJobCompleted(jobExecutionId, normalizedFromProfile);
+        }
+
+        if (!icpProfileId) {
+          logger.warn(
+            { jobId: job.id, runId, leadId },
+            'Missing icpProfileId — cannot proceed to features after profile enrichment',
+          );
+          await prisma.lead.update({
+            where: { id: leadId },
+            data: { status: 'failed', error: 'Missing icpProfileId in enrichment payload' },
+          });
+          return;
+        }
+
+        // Chain to features.compute
+        const featuresPayload: FeaturesComputeJobPayload = {
+          runId,
+          leadId,
+          icpProfileId,
+          snapshotVersion: 1,
+          sourceVersion: 'features_v1',
+          enrichmentRecordId: enrichmentRecord.id,
+          correlationId: effectiveCorrelationId,
+        };
+
+        await prisma.jobExecution.create({
+          data: {
+            type: FEATURES_COMPUTE_JOB_NAME,
+            status: 'queued',
+            payload: toInputJson(featuresPayload),
+            leadId,
+          },
+        });
+
+        await dependencies.boss.send(FEATURES_COMPUTE_JOB_NAME, featuresPayload, {
+          singletonKey: `features.compute:${leadId}:${featuresPayload.snapshotVersion}`,
+          ...FEATURES_COMPUTE_RETRY_OPTIONS,
+        });
+
+        logger.info(
+          {
+            jobId: job.id,
+            runId,
+            leadId,
+            enrichmentRecordId: enrichmentRecord.id,
+            source: 'consolidated_profile',
+          },
+          'Completed enrichment via consolidated profile — chained to features.compute',
+        );
+        return;
+      }
+    }
+  }
+
+  // Also use the conversion query result for the Hunter dedup check (avoid redundant query)
+  if (!conversion) {
+    // No conversion record — Hunter dedup not applicable
+  } else if (conversion.hunterContactJson && conversion.hunterContactJson !== null) {
+    hunterAlreadyRanInConversion = true;
+    // (Already logged above if the earlier check ran)
+  }
+
   try {
+    // If Hunter already ran during conversion, adjust provider selection:
+    // - If selectedProvider IS Hunter, start with OTHER_FREE instead
+    // - If using rotation, pre-skip Hunter in the rotation
+    const effectiveStartProvider = (hunterAlreadyRanInConversion && selectedProvider === 'HUNTER')
+      ? 'OTHER_FREE' as EnrichmentProvider
+      : selectedProvider;
+
     const enrichmentResult = await executeWithRotation(
-      selectedProvider,
+      effectiveStartProvider,
       lead.email,
       effectiveCorrelationId,
       dependencies,
@@ -461,6 +666,7 @@ export async function handleEnrichmentRunJob(
       job.id,
       runId,
       leadId,
+      hunterAlreadyRanInConversion ? ['HUNTER'] : undefined,
     );
 
     const effectiveProvider = enrichmentResult.provider;

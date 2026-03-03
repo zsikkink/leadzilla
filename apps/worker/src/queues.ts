@@ -53,6 +53,14 @@ import {
   PIPELINE_HEALTH_JOB_NAME,
   PIPELINE_HEALTH_RETRY_OPTIONS,
 } from './jobs/pipeline.health.job.js';
+import {
+  DATA_RETENTION_JOB_NAME,
+  DATA_RETENTION_RETRY_OPTIONS,
+} from './jobs/data.retention.job.js';
+import {
+  MODEL_DRIFT_JOB_NAME,
+  MODEL_DRIFT_RETRY_OPTIONS,
+} from './jobs/model.drift.job.js';
 // DLQ constants inlined to break circular dependency (dlq.process.job.ts imports WORKER_QUEUE_DEFINITIONS from here)
 const DLQ_JOB_NAME = 'dlq.process';
 const DLQ_PROCESS_RETRY_OPTIONS: Pick<SendOptions, 'retryLimit' | 'retryDelay' | 'retryBackoff' | 'deadLetter'> = {
@@ -208,6 +216,14 @@ export const WORKER_QUEUE_DEFINITIONS: readonly WorkerQueueDefinition[] = [
   {
     name: LEAD_RECOVERY_JOB_NAME,
     retryOptions: normalizeRetryOptions(LEAD_RECOVERY_JOB_NAME, LEAD_RECOVERY_RETRY_OPTIONS),
+  },
+  {
+    name: DATA_RETENTION_JOB_NAME,
+    retryOptions: normalizeRetryOptions(DATA_RETENTION_JOB_NAME, DATA_RETENTION_RETRY_OPTIONS),
+  },
+  {
+    name: MODEL_DRIFT_JOB_NAME,
+    retryOptions: normalizeRetryOptions(MODEL_DRIFT_JOB_NAME, MODEL_DRIFT_RETRY_OPTIONS),
   },
 ] as const;
 

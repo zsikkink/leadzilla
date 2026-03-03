@@ -21,6 +21,8 @@ export interface MessageGenerationContext {
   scoreBand: string;
   blendedScore: number;
   icpDescription: string;
+  /** Structured business intelligence from scrape data. Replaces raw featuresJson when present. */
+  businessIntelligence?: string | null | undefined;
 }
 
 export interface MessageVariantContent {
@@ -162,10 +164,23 @@ export class OpenAiAdapter {
     const systemPrompt = [
       'You are an expert B2B sales copywriter for Zbooni, a UAE fintech company.',
       'Generate two message variants (variant_a and variant_b) for outreach.',
-      'Each variant must have: subject (email subject line or null for WhatsApp), bodyText (plain text), bodyHtml (HTML version or null), ctaText (call-to-action text or null).',
-      'Make messages personalized, professional, and concise.',
+      '',
+      'RESEARCH-BACKED STRUCTURE (follow this exactly):',
+      '- 40-80 words total, single CTA',
+      '- Line 1: Timeline or numbers hook (e.g. "In the last 6 months, 47 UAE businesses...")',
+      '- Lines 2-3: Specific observation from their business (use the business intelligence provided)',
+      '- Line 4: Social proof with a number (e.g. "We helped 3 similar brands recover 30% of lost repeat customers")',
+      '- Line 5: Interest-gate CTA (e.g. "Would this be worth a 3-minute look?")',
+      '',
+      'CRITICAL RULES:',
+      '- NEVER ask to schedule a call in the CTA — this kills reply rate by 44%',
+      '- NEVER mention competitor names',
+      '- NEVER use generic phrases like "I hope this finds you well"',
+      '- Use the business intelligence to make observations specific to their business',
+      '',
+      'Each variant must have: subject (email subject line, 2-4 words question format; null for WhatsApp), bodyText (plain text), bodyHtml (null), ctaText (the CTA text or null).',
       'variant_a should be more formal/direct; variant_b should be more conversational/casual.',
-    ].join(' ');
+    ].join('\n');
 
     const userPrompt = [
       `Lead: ${context.leadName} (${context.leadEmail})`,
@@ -174,7 +189,9 @@ export class OpenAiAdapter {
       context.country ? `Country: ${context.country}` : null,
       `Score band: ${context.scoreBand} (${context.blendedScore.toFixed(2)})`,
       `ICP description: ${context.icpDescription}`,
-      `Features: ${JSON.stringify(context.featuresJson)}`,
+      context.businessIntelligence
+        ? `\nBusiness Intelligence:\n${context.businessIntelligence}`
+        : `Features: ${JSON.stringify(context.featuresJson)}`,
     ]
       .filter(Boolean)
       .join('\n');

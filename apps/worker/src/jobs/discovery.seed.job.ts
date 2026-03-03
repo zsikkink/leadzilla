@@ -1,5 +1,5 @@
 import { seedSearchTasks } from '@lead-flood/discovery';
-import type { DiscoveryRuntimeConfig } from '@lead-flood/discovery';
+import type { IcpSeedConfig, DiscoveryRuntimeConfig } from '@lead-flood/discovery';
 import type {
   DiscoveryCountryCode,
   DiscoveryLanguageCode,
@@ -125,7 +125,34 @@ export async function handleDiscoverySeedJob(
   const shouldEnqueueRunTasks = job.data.enqueueRunTasks ?? job.data.reason !== 'api';
 
   try {
-    const seedResult = await seedSearchTasks(seedConfig);
+    // B9: If ICP profile is provided, load its target industries for v2 task generation
+    let icpSeedConfig: IcpSeedConfig | undefined;
+    if (job.data.icpProfileId) {
+      const icpProfile = await prisma.icpProfile.findUnique({
+        where: { id: job.data.icpProfileId },
+        select: { targetIndustries: true, targetCountries: true },
+      });
+
+      if (icpProfile && icpProfile.targetIndustries.length > 0) {
+        icpSeedConfig = {
+          targetIndustries: icpProfile.targetIndustries,
+          targetCountries: icpProfile.targetCountries,
+        };
+        logger.info(
+          {
+            jobId: job.id,
+            queue: job.name,
+            correlationId,
+            icpProfileId: job.data.icpProfileId,
+            targetIndustries: icpProfile.targetIndustries,
+            targetCountries: icpProfile.targetCountries,
+          },
+          'Using ICP v2 category mapping for task generation',
+        );
+      }
+    }
+
+    const seedResult = await seedSearchTasks(seedConfig, new Date(), icpSeedConfig);
 
     logger.info(
       {
@@ -139,6 +166,7 @@ export async function handleDiscoverySeedJob(
         maxPagesPerQuery: seedConfig.maxPagesPerQuery,
         refreshBucket: seedConfig.refreshBucket,
         seedProfile: seedConfig.seedProfile,
+        useV2: Boolean(icpSeedConfig),
       },
       'Completed discovery frontier seed job',
     );

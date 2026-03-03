@@ -1,7 +1,7 @@
 # Lead-Flood: Zbooni Sales OS
 
 Enterprise AI-powered sales OS. First client: Zbooni (UAE fintech).
-Pipeline: discovery → enrichment → scoring → WhatsApp messaging → follow-ups → learning.
+Pipeline: discovery → enrichment → scoring → messaging → follow-ups → learning.
 
 ## Dev Commands
 ```bash
@@ -27,34 +27,6 @@ Quality: `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
 - **TypeScript `||` and `??` mixing** — `A || B ?? C` is a compile error (TS5076). Always wrap: `A || (B ?? C)`
 - **Always give maximum effort**: Don't build MVP when comprehensive is feasible. Ask "how can this be better?" before calling anything done. Half-measures cost more in rework than doing it right the first time.
 
-## Battle-Tested API Gotchas (from Zbooni n8n project)
-- **Apollo**: Requires `User-Agent` header (Cloudflare 1010 without it). 403 returns HTML not JSON — check Content-Type. Empty `people: []` is valid, not error. Phone reveals cost credits — only for primary contact.
-- **Apify**: 0 scraper items is valid (all-404 URLs). Set `timeoutSecs`. Cache results 7 days. Aggregate multi-page results before downstream processing.
-- **OpenAI**: Strip markdown fences even with structured output. Sanitize HTML: `JSON.stringify(html).slice(1,-1)`. Use `zodResponseFormat` with Zod schemas. GPT-4o-mini for extraction (cheap), GPT-4o for scoring (smart).
-- **Trengo**: Template message required for first WhatsApp contact. ~50/day limit. 24h session window after customer reply. Idempotency key per message.
-
-## Pipeline (v2)
-```
-API → OutboxEvent → pg-boss
-        ↓
-  discovery.seed → run_search_task → business.prequalify → business.convert
-        ↓               ↓                    ↓                    ↓
-    [generate      [SerpAPI →            [domain +         [Apollo/Hunter →
-     search         Business]            review check]      Apify website +
-     tasks]                                                 Instagram → Lead]
-                                                                  ↓
-                                              enrichment.run → features.compute → scoring.compute
-                                                                                       ↓ (score >= 0.3)
-                                                                                 message.generate
-                                                                                       ↓
-                                                                                 message.send → [Resend (email) / Trengo (WhatsApp)]
-                                                                                       ↓
-                                                                          followup.check (cron, 72h)
-                                                                          reply.classify → notify.sales  (Trengo webhook)
-                                                                          labels.generate → model.train → model.evaluate
-```
-Legacy `discovery.run` still registered but deprecated — new runs go through v2 pipeline.
-
 ## Verify (run after every change)
 ```bash
 pnpm typecheck       # 1. Types first — catches most issues
@@ -75,12 +47,23 @@ IMPORTANT: Fix all errors before committing. Do not skip steps.
 - **Never silently retry**: Every failed attempt must be logged/acknowledged. No "let me just try one more time" without telling the user.
 - **Prefer asking the user**: If something requires external verification (screenshots, browser testing, visual QA) and tooling isn't cooperating, ask the user to do it instead of burning time on workarounds.
 
+## Intellectual Honesty (MANDATORY)
+- **No claims without evidence**: Before saying "X is better than Y", READ BOTH X AND Y. Comparing by file size, word count, or feature list is not analysis — it's guessing. If you haven't read the actual content, say "I haven't read this yet" instead of making a claim.
+- **Confidence gate**: If you're not >90% confident in a statement, either (1) say so explicitly with your actual confidence level, or (2) go get the evidence that would make you confident. Never present uncertain conclusions as facts.
+- **No sycophancy**: Do not change your position just because the user presents a new argument, quotes an authority, or seems to want a particular answer. If new information genuinely changes your view, explain SPECIFICALLY what changed and why — "you're right because X" not just "you're right." If your previous position was actually correct, defend it.
+- **No argument from authority**: "Person X said Y" is not evidence. Evaluate Y on its merits. The creator of a tool can be wrong about how it's best used in a specific context.
+- **Read before comparing**: Never compare two tools, libraries, skills, or approaches without reading the actual implementation/content of BOTH. Metadata (star count, file count, description) is not a substitute for reading the code.
+- **Say "I don't know"**: If you don't have enough information to answer, say so. Fabricating a plausible-sounding answer is worse than admitting ignorance. "I'd need to read X before I can answer that" is always acceptable.
+- **Hold your position or explain the change**: If you held position A, and the user challenges it, do not immediately switch to position B. Either (1) defend A with reasoning, or (2) explicitly acknowledge "I was wrong about A because [specific reason], and B is correct because [specific evidence]." The phrase "you're right" must always be followed by WHY.
+
 ## Self-Improvement
 After any correction or mistake: update CLAUDE.md or module CLAUDE.md so the error doesn't recur. Ask "should I update CLAUDE.md?" after receiving corrections.
 
 ## References
-- **PRD.md** — Product requirements, feature blocks, pipeline logic
-- **ICP and Offerings.pdf** — Zbooni scoring criteria, segments A-H, business rules
+- **PRD.md** — Product requirements, feature blocks, pipeline architecture
+- **ICP and Offerings.pdf** — Zbooni scoring criteria, segments A-H
+- **docs/api-gotchas.md** — Provider-specific API gotchas (Apollo, Apify, OpenAI, Trengo, Hunter, Instagram, SerpAPI)
+- **docs/audits/** — Previous audit findings and remediation
 - **apps/api/CLAUDE.md** — API route, auth, outbox conventions
 - **apps/worker/CLAUDE.md** — Job structure, error classification, chaining
 - **packages/providers/CLAUDE.md** — Adapter pattern, return types, testing

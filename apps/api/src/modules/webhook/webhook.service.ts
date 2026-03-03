@@ -69,7 +69,22 @@ export async function processTrengoWebhook(
     };
   }
 
-  // Atomic: upsert feedback event + mark replied + cancel follow-ups
+  // Check for duplicate delivery before doing any writes
+  const existingEvent = await prisma.feedbackEvent.findUnique({
+    where: { dedupeKey },
+    select: { id: true, dedupeKey: true },
+  });
+
+  if (existingEvent) {
+    return {
+      feedbackEventId: existingEvent.id,
+      dedupeKey: existingEvent.dedupeKey,
+      skipped: true,
+      reason: 'DUPLICATE_WEBHOOK',
+    };
+  }
+
+  // Atomic: create feedback event + mark replied + cancel follow-ups
   const event = await prisma.$transaction(async (tx) => {
     const feedbackEvent = await tx.feedbackEvent.upsert({
       where: { dedupeKey },
@@ -220,8 +235,22 @@ export async function processResendWebhook(
     };
   }
 
-  // Handle delivered — just update status, no feedback event
+  // Handle delivered — idempotent: skip if already delivered or in a terminal state
   if (eventType === 'DELIVERED') {
+    const currentSend = await prisma.messageSend.findUnique({
+      where: { id: messageSend.id },
+      select: { status: true },
+    });
+
+    if (currentSend?.status === 'DELIVERED' || currentSend?.status === 'REPLIED') {
+      return {
+        feedbackEventId: null,
+        dedupeKey,
+        skipped: true,
+        reason: 'ALREADY_DELIVERED',
+      };
+    }
+
     await prisma.messageSend.update({
       where: { id: messageSend.id },
       data: {
@@ -237,7 +266,21 @@ export async function processResendWebhook(
     };
   }
 
-  // Handle bounced/complained — create feedback event, update status, cancel follow-ups
+  // Handle bounced/complained — check for duplicate delivery first
+  const existingResendEvent = await prisma.feedbackEvent.findUnique({
+    where: { dedupeKey },
+    select: { id: true, dedupeKey: true },
+  });
+
+  if (existingResendEvent) {
+    return {
+      feedbackEventId: existingResendEvent.id,
+      dedupeKey: existingResendEvent.dedupeKey,
+      skipped: true,
+      reason: 'DUPLICATE_WEBHOOK',
+    };
+  }
+
   const bounceDomain = extractDomain(recipientEmail);
 
   const event = await prisma.$transaction(async (tx) => {

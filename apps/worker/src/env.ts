@@ -114,6 +114,7 @@ const WorkerEnvSchema = z.object({
   SCORING_DETERMINISTIC_WEIGHT: z.coerce.number().min(0).max(1).default(0.6),
   SCORING_AI_WEIGHT: z.coerce.number().min(0).max(1).default(0.4),
   SLACK_WEBHOOK_URL: z.string().url().optional(),
+  SALES_NOTIFICATION_EMAIL: z.string().email().optional(),
   TRENGO_INTERNAL_CONVERSATION_ID: z.string().min(1).optional(),
   SERPAPI_API_KEY: z.string().min(1).optional(),
   DISCOVERY_COUNTRIES: z.string().default('JO,SA,AE,EG'),

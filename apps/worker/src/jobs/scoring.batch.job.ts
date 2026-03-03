@@ -10,11 +10,11 @@ import {
 import { predictLogistic } from '../scoring/logistic.js';
 import {
   BASELINE_MODEL_VERSION_TAG,
-  QUALIFICATION_THRESHOLD,
   TRAINED_MODEL_FEATURE_KEYS,
   extractFeatureVectorForModel,
   findActiveTrainedModel,
   computeBlendRatio,
+  getQualificationThreshold,
 } from '../scoring/shared.js';
 
 export const SCORING_BATCH_JOB_NAME = 'scoring.batch';
@@ -245,6 +245,7 @@ export async function handleScoringBatchJob(
     const effectiveModelVersionId = await ensureBaselineModelVersion();
     const trainedModel = await findActiveTrainedModel();
     const blendRatio = await computeBlendRatio();
+    const qualificationThreshold = await getQualificationThreshold();
 
     let scored = 0;
     let qualified = 0;
@@ -345,14 +346,14 @@ export async function handleScoringBatchJob(
         scored += 1;
 
         // Enqueue message generation for qualified leads
-        if (blendedScore >= QUALIFICATION_THRESHOLD && deps?.enqueueMessageGenerate) {
+        if (blendedScore >= qualificationThreshold && deps?.enqueueMessageGenerate) {
           await deps.enqueueMessageGenerate({
             leadId: lead.id,
             icpProfileId: targetIcpId,
             scorePredictionId: prediction.id,
           });
           qualified += 1;
-        } else if (blendedScore >= QUALIFICATION_THRESHOLD) {
+        } else if (blendedScore >= qualificationThreshold) {
           qualified += 1;
         }
       }

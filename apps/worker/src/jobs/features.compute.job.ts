@@ -116,9 +116,10 @@ export const FEATURE_KEYS = [
   'has_analytics',
   'estimated_employees',
   'certification_count',
-  'instagram_is_verified',
   'instagram_business_category',
   'instagram_has_business_email',
+  // ── v3 features (data alignment) ──
+  'data_alignment_score',
 ] as const;
 
 function toInputJson(value: unknown): Prisma.InputJsonValue {
@@ -362,9 +363,10 @@ function buildFeaturePayload(input: {
   hasAnalytics: boolean;
   estimatedEmployees: number;
   certificationCount: number;
-  instagramIsVerified: boolean;
   instagramBusinessCategory: string;
   instagramHasBusinessEmail: boolean;
+  // v3 features (data alignment)
+  dataAlignmentScore: number;
 }): Record<(typeof FEATURE_KEYS)[number], unknown> {
   return {
     source_provider: input.sourceProvider,
@@ -433,9 +435,10 @@ function buildFeaturePayload(input: {
     has_analytics: input.hasAnalytics,
     estimated_employees: input.estimatedEmployees,
     certification_count: input.certificationCount,
-    instagram_is_verified: input.instagramIsVerified,
     instagram_business_category: input.instagramBusinessCategory,
     instagram_has_business_email: input.instagramHasBusinessEmail,
+    // v3 features (data alignment)
+    data_alignment_score: input.dataAlignmentScore,
   };
 }
 
@@ -505,6 +508,125 @@ function classifyIcpSegmentPriority(industry: string | null, targetIndustries: S
   if (targetIndustries.size > 0 && targetIndustries.has(lower)) return 1;
 
   return 0;
+}
+
+// ── Data Alignment Score ─────────────────────────────────────────────────────
+// Cross-source consistency checks to detect data mismatches across SerpAPI,
+// website scrape, Instagram, and enrichment sources.
+
+/**
+ * Tokenize a string into lowercase alphanumeric words.
+ */
+function tokenize(text: string): Set<string> {
+  return new Set(
+    text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 1),
+  );
+}
+
+/**
+ * Dice coefficient: 2 * |intersection| / (|A| + |B|).
+ * Returns 0-1, where 1 = perfect overlap, 0 = no overlap.
+ */
+function diceCoefficient(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1; // both empty = match
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const token of a) {
+    if (b.has(token)) intersection++;
+  }
+  return (2 * intersection) / (a.size + b.size);
+}
+
+/**
+ * Simple domain extraction from a URL string (strips www., protocol, path).
+ */
+function extractDomain(url: string): string {
+  return url
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .split('/')[0]!
+    .split(':')[0]!
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * Compute a weighted cross-source data alignment score.
+ *
+ * Checks:
+ *  1. Domain consistency: SerpAPI business name vs website <title> (weight: 0.30)
+ *  2. Brand consistency: website domain vs Instagram username (weight: 0.25)
+ *  3. Geographic consistency: SerpAPI/enrichment country vs website detected country (weight: 0.25)
+ *  4. Contact consistency: decision maker email domain == business domain (weight: 0.20)
+ *
+ * Thresholds:
+ *  - < 0.3: flag as hard filter (data sources likely describe different entities)
+ *  - 0.3-0.5: low confidence, stored as weighted feature
+ *  - > 0.5: proceed normally
+ */
+function computeDataAlignmentScore(params: {
+  serpApiName: string | null;
+  websiteTitle: string | null;
+  websiteDomain: string | null;
+  instagramUsername: string | null;
+  serpApiCountry: string | null;
+  websiteCountry: string | null;
+  leadEmailDomain: string | null;
+}): { score: number; checks: Record<string, number> } {
+  const checks: Record<string, number> = {};
+  let totalWeight = 0;
+  let weightedSum = 0;
+
+  // 1. Domain consistency: SerpAPI business name vs website <title> tag
+  if (params.serpApiName && params.websiteTitle) {
+    const serpTokens = tokenize(params.serpApiName);
+    const titleTokens = tokenize(params.websiteTitle);
+    checks.domain_consistency = diceCoefficient(serpTokens, titleTokens);
+    weightedSum += checks.domain_consistency * 0.30;
+    totalWeight += 0.30;
+  }
+
+  // 2. Brand consistency: website domain vs Instagram username
+  if (params.websiteDomain && params.instagramUsername) {
+    const domainBase = params.websiteDomain.split('.')[0]!.toLowerCase();
+    const igUsername = params.instagramUsername.toLowerCase().replace(/[._-]/g, '');
+    const domainClean = domainBase.replace(/[._-]/g, '');
+    // Check substring containment (e.g., "dubailuxury" domain, "dubai_luxury_co" IG)
+    const containsMatch = igUsername.includes(domainClean) || domainClean.includes(igUsername);
+    const tokenMatch = diceCoefficient(tokenize(domainBase), tokenize(params.instagramUsername));
+    checks.brand_consistency = containsMatch ? Math.max(0.8, tokenMatch) : tokenMatch;
+    weightedSum += checks.brand_consistency * 0.25;
+    totalWeight += 0.25;
+  }
+
+  // 3. Geographic consistency: SerpAPI/enrichment country vs website detected country
+  if (params.serpApiCountry && params.websiteCountry) {
+    const serpCountry = params.serpApiCountry.toLowerCase().trim();
+    const webCountry = params.websiteCountry.toLowerCase().trim();
+    checks.geo_consistency = serpCountry === webCountry ? 1.0 : 0.0;
+    weightedSum += checks.geo_consistency * 0.25;
+    totalWeight += 0.25;
+  }
+
+  // 4. Contact consistency: lead email domain == business website domain
+  if (params.leadEmailDomain && params.websiteDomain) {
+    const emailDomain = params.leadEmailDomain.toLowerCase();
+    const siteDomain = params.websiteDomain.toLowerCase();
+    // Exact match or subdomain match
+    const match = emailDomain === siteDomain || emailDomain.endsWith(`.${siteDomain}`) || siteDomain.endsWith(`.${emailDomain}`);
+    checks.contact_consistency = match ? 1.0 : 0.0;
+    weightedSum += checks.contact_consistency * 0.20;
+    totalWeight += 0.20;
+  }
+
+  // If no checks could be performed, return neutral score (0.5)
+  if (totalWeight === 0) {
+    return { score: 0.5, checks };
+  }
+
+  // Normalize by total contributing weight
+  const score = Math.max(0, Math.min(1, weightedSum / totalWeight));
+  return { score: Number(score.toFixed(4)), checks };
 }
 
 export async function handleFeaturesComputeJob(
@@ -592,6 +714,8 @@ export async function handleFeaturesComputeJob(
       ? await prisma.business.findUnique({
           where: { id: lead.businessId },
           select: {
+            name: true,
+            websiteDomain: true,
             apifyWebsiteScrapeJson: true,
             apifyInstagramScrapeJson: true,
             websiteScrapedAt: true,
@@ -760,12 +884,27 @@ export async function handleFeaturesComputeJob(
       ? (websiteBusinessSignals.certifications as unknown[]).length
       : 0;
 
-    const instagramIsVerified = apifyInstagram?.isVerified === true;
     const instagramBusinessCategory = typeof apifyInstagram?.businessCategory === 'string'
       ? apifyInstagram.businessCategory
       : 'unknown';
     const instagramHasBusinessEmail = typeof apifyInstagram?.businessEmail === 'string'
       && (apifyInstagram.businessEmail as string).length > 0;
+
+    // ── Cross-source data alignment score ──
+    const websiteTitle = typeof apifyWebsite?.title === 'string' ? apifyWebsite.title : null;
+    const websiteDetectedCountry = typeof apifyWebsite?.detectedCountry === 'string'
+      ? apifyWebsite.detectedCountry
+      : null;
+    const alignmentResult = computeDataAlignmentScore({
+      serpApiName: business?.name ?? companyName ?? null,
+      websiteTitle,
+      websiteDomain: business?.websiteDomain ? extractDomain(business.websiteDomain) : (domain ? domain : null),
+      instagramUsername: business?.instagramHandle ?? null,
+      serpApiCountry: country,
+      websiteCountry: normalizeCountry(websiteDetectedCountry) ?? null,
+      leadEmailDomain: domain,
+    });
+    const dataAlignmentScore = alignmentResult.score;
 
     // Reconcile follower count: prefer Instagram structured data over enrichment/keyword fallback
     const followerCount = instagramFollowerCount > 0 ? instagramFollowerCount : baseFollowerCount;
@@ -1007,9 +1146,10 @@ export async function handleFeaturesComputeJob(
       hasAnalytics,
       estimatedEmployees,
       certificationCount,
-      instagramIsVerified,
       instagramBusinessCategory,
       instagramHasBusinessEmail,
+      // v3 features (data alignment)
+      dataAlignmentScore,
     });
 
     const deterministicPreview = evaluateDeterministicScore(asDeterministicRules(rules), {
@@ -1017,6 +1157,36 @@ export async function handleFeaturesComputeJob(
       icp_profile_id: icpProfileId,
       lead_source: lead.source,
     });
+
+    // Data alignment hard filter: override hardFilterPassed if alignment < 0.3
+    const alignmentHardFilter = dataAlignmentScore < 0.3;
+    if (alignmentHardFilter) {
+      deterministicPreview.hardFilterPassed = false;
+      deterministicPreview.reasonCodes.push('DATA_ALIGNMENT_HARD_FILTER');
+      deterministicPreview.qualificationPath = 'HARD_FILTERED';
+      deterministicPreview.qualificationScore = 0;
+      logger.warn(
+        {
+          jobId: job.id,
+          runId,
+          leadId,
+          dataAlignmentScore,
+          alignmentChecks: alignmentResult.checks,
+        },
+        'Data alignment score below 0.3 — hard filter applied (cross-source data mismatch)',
+      );
+    } else if (dataAlignmentScore < 0.5) {
+      logger.info(
+        {
+          jobId: job.id,
+          runId,
+          leadId,
+          dataAlignmentScore,
+          alignmentChecks: alignmentResult.checks,
+        },
+        'Data alignment score in caution range (0.3-0.5), stored as weighted feature',
+      );
+    }
 
     const sourceVersion = FEATURE_EXTRACTOR_VERSION;
     const featureVectorHash = computeFeatureVectorHash(featurePayload);

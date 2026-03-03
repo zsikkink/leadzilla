@@ -18,8 +18,8 @@ export const CreateLeadResponseSchema = z.object({
 
 export const GetLeadResponseSchema = z.object({
   id: z.string().min(1),
-  firstName: z.string().min(1),
-  lastName: z.string().min(1),
+  firstName: z.string(),
+  lastName: z.string(),
   email: z.string().email(),
   source: z.string().min(1),
   status: LeadStatusSchema,
@@ -68,8 +68,8 @@ export const LeadInspectionQualityMetricsSchema = z
 export const LeadInspectionResponseSchema = z
   .object({
     id: z.string().min(1),
-    firstName: z.string().min(1),
-    lastName: z.string().min(1),
+    firstName: z.string(),
+    lastName: z.string(),
     email: z.string().email(),
     source: z.string().min(1),
     status: LeadStatusSchema,

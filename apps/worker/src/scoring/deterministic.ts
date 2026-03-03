@@ -51,7 +51,6 @@ const FIELD_KEY_CATEGORY_MAP: Record<string, QualificationCategory> = {
   social_link_count: QUALIFICATION_CATEGORIES.SWITCHING_WILLINGNESS,
   has_linkedin: QUALIFICATION_CATEGORIES.SWITCHING_WILLINGNESS,
   tech_stack_size: QUALIFICATION_CATEGORIES.SWITCHING_WILLINGNESS,
-  instagram_is_verified: QUALIFICATION_CATEGORIES.SWITCHING_WILLINGNESS,
 
   // Disqualification signals (negative weight rules) — GENERAL
   pure_self_serve_ecom: QUALIFICATION_CATEGORIES.GENERAL,

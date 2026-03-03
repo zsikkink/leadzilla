@@ -2,9 +2,6 @@
 
 import {
   BarChart3,
-  Brain,
-  MessageSquare,
-  TrendingUp,
   Users,
 } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
@@ -72,17 +69,8 @@ export default function AnalyticsPage() {
     [dateFilter],
   );
 
-  const retrainStatus = useApiQuery(
-    useCallback(() => apiClient.getRetrainStatus(), [apiClient]),
-  );
-
   const scoreDistribution = useApiQuery(
     useCallback(() => apiClient.getScoreDistribution(dateFilter), [apiClient, dateFilter]),
-    [dateFilter],
-  );
-
-  const modelMetrics = useApiQuery(
-    useCallback(() => apiClient.getModelMetrics(dateFilter), [apiClient, dateFilter]),
     [dateFilter],
   );
 
@@ -93,9 +81,6 @@ export default function AnalyticsPage() {
   const meetingRate = totalReplied > 0 ? Math.round((totalMeetings / totalReplied) * 100) : 0;
 
   const distributionMax = Math.max(...(scoreDistribution.data?.bands.map((band) => band.count) ?? [0]), 1);
-  const metricsItems = [...(modelMetrics.data?.items ?? [])]
-    .sort((a, b) => new Date(b.evaluatedAt).getTime() - new Date(a.evaluatedAt).getTime())
-    .slice(0, 6);
 
   return (
     <div className="space-y-6">
@@ -126,9 +111,9 @@ export default function AnalyticsPage() {
       </div>
 
       {/* ── Error banner ──────────────────────────────────────────── */}
-      {funnel.error || feedback.error || retrainStatus.error || scoreDistribution.error || modelMetrics.error ? (
+      {funnel.error || feedback.error || scoreDistribution.error ? (
         <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {funnel.error ?? feedback.error ?? retrainStatus.error ?? scoreDistribution.error ?? modelMetrics.error}
+          {funnel.error ?? feedback.error ?? scoreDistribution.error}
         </div>
       ) : null}
 
@@ -185,127 +170,6 @@ export default function AnalyticsPage() {
           </div>
         ) : (
           <p className="text-sm text-muted-foreground/60">No score distribution rows yet.</p>
-        )}
-      </div>
-
-      {/* ── Model Status + Feedback side-by-side ──────────────────── */}
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <div className="mb-3 flex items-center gap-2">
-            <Brain className="h-4 w-4 text-purple-400" />
-            <h2 className="text-sm font-bold tracking-tight">Scoring Model Status</h2>
-          </div>
-          {retrainStatus.data ? (
-            <div className="space-y-3 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground/60">Active model</span>
-                <span className="font-mono text-xs">
-                  {retrainStatus.data.activeModelVersionId
-                    ? `${retrainStatus.data.activeModelVersionId.slice(0, 12)}...`
-                    : 'Deterministic only'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground/60">Current run</span>
-                <span className="font-medium">
-                  {retrainStatus.data.currentRun ? retrainStatus.data.currentRun.status : 'Idle'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground/60">Last successful run</span>
-                <span>
-                  {retrainStatus.data.lastSuccessfulRun
-                    ? new Date(retrainStatus.data.lastSuccessfulRun.endedAt).toLocaleString()
-                    : 'Not yet'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground/60">Next scheduled</span>
-                <span>
-                  {retrainStatus.data.nextScheduledAt
-                    ? new Date(retrainStatus.data.nextScheduledAt).toLocaleString()
-                    : 'Not scheduled'}
-                </span>
-              </div>
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground/60">Loading model status...</p>
-          )}
-        </div>
-
-        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <div className="mb-3 flex items-center gap-2">
-            <MessageSquare className="h-4 w-4 text-zbooni-green" />
-            <h2 className="text-sm font-bold tracking-tight">Feedback Signals</h2>
-          </div>
-          {feedback.data ? (
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div>
-                <p className="text-[11px] text-muted-foreground/60">Replied</p>
-                <p className="text-lg font-bold text-zbooni-green">{feedback.data.repliedCount}</p>
-              </div>
-              <div>
-                <p className="text-[11px] text-muted-foreground/60">Meetings</p>
-                <p className="text-lg font-bold text-zbooni-teal">{feedback.data.meetingBookedCount}</p>
-              </div>
-              <div>
-                <p className="text-[11px] text-muted-foreground/60">Deals Won</p>
-                <p className="text-lg font-bold text-purple-400">{feedback.data.dealWonCount}</p>
-              </div>
-              <div>
-                <p className="text-[11px] text-muted-foreground/60">Deals Lost</p>
-                <p className="text-lg font-bold text-red-400">{feedback.data.dealLostCount}</p>
-              </div>
-              <div>
-                <p className="text-[11px] text-muted-foreground/60">Unsubscribed</p>
-                <p className="text-lg font-bold text-yellow-400">{feedback.data.unsubscribedCount}</p>
-              </div>
-              <div>
-                <p className="text-[11px] text-muted-foreground/60">Bounced</p>
-                <p className="text-lg font-bold text-muted-foreground">{feedback.data.bouncedCount}</p>
-              </div>
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground/60">Loading feedback summary...</p>
-          )}
-        </div>
-      </div>
-
-      {/* ── Raw Model Metrics Table ───────────────────────────────── */}
-      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
-          <TrendingUp className="h-4 w-4 text-zbooni-teal" />
-          <h2 className="text-base font-bold tracking-tight">Recent Model Evaluations</h2>
-        </div>
-        {metricsItems.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border/50 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  <th className="py-2 pr-4">Version</th>
-                  <th className="py-2 pr-4">Split</th>
-                  <th className="py-2 pr-4">AUC</th>
-                  <th className="py-2 pr-4">PR AUC</th>
-                  <th className="py-2 pr-4">F1</th>
-                  <th className="py-2 pr-0">Evaluated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {metricsItems.map((item) => (
-                  <tr key={`${item.modelVersionId}:${item.split}:${item.evaluatedAt}`} className="border-b border-border/30 last:border-0">
-                    <td className="py-2 pr-4">{item.versionTag}</td>
-                    <td className="py-2 pr-4">{item.split}</td>
-                    <td className="py-2 pr-4">{item.auc.toFixed(3)}</td>
-                    <td className="py-2 pr-4">{item.prAuc.toFixed(3)}</td>
-                    <td className="py-2 pr-4">{item.f1.toFixed(3)}</td>
-                    <td className="py-2 pr-0">{new Date(item.evaluatedAt).toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="text-sm text-muted-foreground/60">No model evaluation rows found yet.</p>
         )}
       </div>
 

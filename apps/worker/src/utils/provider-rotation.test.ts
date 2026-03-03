@@ -12,31 +12,33 @@ describe('EnrichmentProviderRotator', () => {
     vi.useRealTimers();
   });
 
+  // Default priority: OTHER_FREE → HUNTER → PEOPLE_DATA_LABS (cheapest first)
+
   describe('getNextProvider', () => {
     it('returns first provider when none have failed', () => {
       const rotator = new EnrichmentProviderRotator();
-      expect(rotator.getNextProvider('lead-1', [])).toBe('PEOPLE_DATA_LABS');
+      expect(rotator.getNextProvider('lead-1', [])).toBe('OTHER_FREE');
     });
 
     it('skips previously failed providers', () => {
       const rotator = new EnrichmentProviderRotator();
-      expect(rotator.getNextProvider('lead-1', ['PEOPLE_DATA_LABS'])).toBe('HUNTER');
+      expect(rotator.getNextProvider('lead-1', ['OTHER_FREE'])).toBe('HUNTER');
     });
 
     it('falls through to third provider when first two failed', () => {
       const rotator = new EnrichmentProviderRotator();
       expect(
-        rotator.getNextProvider('lead-1', ['PEOPLE_DATA_LABS', 'HUNTER']),
-      ).toBe('OTHER_FREE');
+        rotator.getNextProvider('lead-1', ['OTHER_FREE', 'HUNTER']),
+      ).toBe('PEOPLE_DATA_LABS');
     });
 
     it('returns null when all providers have failed', () => {
       const rotator = new EnrichmentProviderRotator();
       expect(
         rotator.getNextProvider('lead-1', [
-          'PEOPLE_DATA_LABS',
-          'HUNTER',
           'OTHER_FREE',
+          'HUNTER',
+          'PEOPLE_DATA_LABS',
         ]),
       ).toBeNull();
     });
@@ -56,7 +58,7 @@ describe('EnrichmentProviderRotator', () => {
       const rotator = new EnrichmentProviderRotator();
 
       for (let i = 0; i < 5; i++) {
-        rotator.recordFailure('PEOPLE_DATA_LABS');
+        rotator.recordFailure('OTHER_FREE');
       }
 
       expect(rotator.getNextProvider('lead-1', [])).toBe('HUNTER');
@@ -66,17 +68,17 @@ describe('EnrichmentProviderRotator', () => {
       const rotator = new EnrichmentProviderRotator();
 
       for (let i = 0; i < 4; i++) {
-        rotator.recordFailure('PEOPLE_DATA_LABS');
+        rotator.recordFailure('OTHER_FREE');
       }
 
-      expect(rotator.getNextProvider('lead-1', [])).toBe('PEOPLE_DATA_LABS');
+      expect(rotator.getNextProvider('lead-1', [])).toBe('OTHER_FREE');
     });
 
     it('resets circuit breaker after 1 hour window', () => {
       const rotator = new EnrichmentProviderRotator();
 
       for (let i = 0; i < 5; i++) {
-        rotator.recordFailure('PEOPLE_DATA_LABS');
+        rotator.recordFailure('OTHER_FREE');
       }
 
       // Verify tripped
@@ -86,7 +88,7 @@ describe('EnrichmentProviderRotator', () => {
       vi.advanceTimersByTime(60 * 60 * 1000 + 1);
 
       // Should be available again
-      expect(rotator.getNextProvider('lead-1', [])).toBe('PEOPLE_DATA_LABS');
+      expect(rotator.getNextProvider('lead-1', [])).toBe('OTHER_FREE');
     });
 
     it('resets failure count when failures span across windows', () => {
@@ -94,16 +96,16 @@ describe('EnrichmentProviderRotator', () => {
 
       // Record 4 failures
       for (let i = 0; i < 4; i++) {
-        rotator.recordFailure('PEOPLE_DATA_LABS');
+        rotator.recordFailure('OTHER_FREE');
       }
 
       // Advance past the window
       vi.advanceTimersByTime(60 * 60 * 1000 + 1);
 
       // Record 1 more failure — should reset count to 1, not accumulate to 5
-      rotator.recordFailure('PEOPLE_DATA_LABS');
+      rotator.recordFailure('OTHER_FREE');
 
-      expect(rotator.getNextProvider('lead-1', [])).toBe('PEOPLE_DATA_LABS');
+      expect(rotator.getNextProvider('lead-1', [])).toBe('OTHER_FREE');
     });
   });
 
@@ -112,15 +114,15 @@ describe('EnrichmentProviderRotator', () => {
       const rotator = new EnrichmentProviderRotator();
 
       for (let i = 0; i < 5; i++) {
-        rotator.recordFailure('PEOPLE_DATA_LABS');
+        rotator.recordFailure('OTHER_FREE');
       }
 
       // Circuit is open
       expect(rotator.getNextProvider('lead-1', [])).toBe('HUNTER');
 
       // Success resets it
-      rotator.recordSuccess('PEOPLE_DATA_LABS');
-      expect(rotator.getNextProvider('lead-1', [])).toBe('PEOPLE_DATA_LABS');
+      rotator.recordSuccess('OTHER_FREE');
+      expect(rotator.getNextProvider('lead-1', [])).toBe('OTHER_FREE');
     });
   });
 
@@ -129,9 +131,9 @@ describe('EnrichmentProviderRotator', () => {
       const rotator = new EnrichmentProviderRotator();
 
       expect(rotator.getProviderStatus()).toEqual([
-        { provider: 'PEOPLE_DATA_LABS', available: true, failCount: 0 },
-        { provider: 'HUNTER', available: true, failCount: 0 },
         { provider: 'OTHER_FREE', available: true, failCount: 0 },
+        { provider: 'HUNTER', available: true, failCount: 0 },
+        { provider: 'PEOPLE_DATA_LABS', available: true, failCount: 0 },
       ]);
     });
 
@@ -139,15 +141,15 @@ describe('EnrichmentProviderRotator', () => {
       const rotator = new EnrichmentProviderRotator();
 
       for (let i = 0; i < 5; i++) {
-        rotator.recordFailure('PEOPLE_DATA_LABS');
+        rotator.recordFailure('OTHER_FREE');
       }
       rotator.recordFailure('HUNTER');
       rotator.recordFailure('HUNTER');
 
       expect(rotator.getProviderStatus()).toEqual([
-        { provider: 'PEOPLE_DATA_LABS', available: false, failCount: 5 },
+        { provider: 'OTHER_FREE', available: false, failCount: 5 },
         { provider: 'HUNTER', available: true, failCount: 2 },
-        { provider: 'OTHER_FREE', available: true, failCount: 0 },
+        { provider: 'PEOPLE_DATA_LABS', available: true, failCount: 0 },
       ]);
     });
   });

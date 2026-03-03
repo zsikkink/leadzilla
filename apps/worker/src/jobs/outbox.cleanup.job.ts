@@ -1,6 +1,9 @@
 import { prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { formatErrorMessage } from '../errors.js';
+import { getPipelineSettings } from '../utils/pipeline-settings.js';
+
 export const OUTBOX_CLEANUP_JOB_NAME = 'outbox.cleanup';
 
 export const OUTBOX_CLEANUP_RETRY_OPTIONS: Pick<
@@ -12,9 +15,6 @@ export const OUTBOX_CLEANUP_RETRY_OPTIONS: Pick<
   retryBackoff: true,
   deadLetter: 'outbox.cleanup.dead_letter',
 };
-
-/** Delete completed/dead-lettered outbox events older than this many days. */
-const RETENTION_DAYS = 30;
 
 /** Batch size for deletion to avoid long transactions. */
 const DELETE_BATCH_SIZE = 500;
@@ -33,11 +33,13 @@ export async function handleOutboxCleanupJob(
   logger: OutboxCleanupLogger,
   job: Job<OutboxCleanupJobPayload>,
 ): Promise<void> {
-  const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  const settings = await getPipelineSettings();
+  const retentionDays = settings.outboxRetentionDays;
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
   let totalDeleted = 0;
 
   logger.info(
-    { jobId: job.id, cutoff: cutoff.toISOString(), retentionDays: RETENTION_DAYS },
+    { jobId: job.id, cutoff: cutoff.toISOString(), retentionDays },
     'Starting outbox cleanup',
   );
 
@@ -79,7 +81,7 @@ export async function handleOutboxCleanupJob(
       {
         jobId: job.id,
         totalDeleted,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error),
       },
       'Outbox cleanup failed — partial progress saved',
     );
