@@ -26,9 +26,10 @@ interface QualificationRuleDef {
 // ── Universal Qualification Rules (identical for all 8 segments) ──────
 // Zero conversion data → no basis for segment-specific weights. Start uniform, let ML learn.
 const UNIVERSAL_RULES: QualificationRuleDef[] = [
-  // HARD_FILTERs (2)
+  // HARD_FILTERs (3)
   { name: 'Country in supported MENA region', fieldKey: 'country', operator: 'IN', expectedValue: [...SUPPORTED_COUNTRIES], isRequired: true, weight: 0, orderIndex: 1 },
   { name: 'Has email contact', fieldKey: 'has_email', operator: 'EQ', expectedValue: true, isRequired: true, weight: 0, orderIndex: 2 },
+  { name: 'Data alignment score above threshold', fieldKey: 'data_alignment_score', operator: 'GTE', expectedValue: 0.3, isRequired: true, weight: 0, orderIndex: 3 },
   // Positive rules (11, total weight = 18)
   { name: 'Has WhatsApp presence', fieldKey: 'has_whatsapp', operator: 'EQ', expectedValue: true, isRequired: false, weight: 3, orderIndex: 3 },
   { name: 'Industry is supported', fieldKey: 'industry_supported', operator: 'EQ', expectedValue: true, isRequired: false, weight: 3, orderIndex: 4 },

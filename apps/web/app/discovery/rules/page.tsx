@@ -60,7 +60,6 @@ interface SimFormState {
   hasAnalytics: boolean;
   estimatedEmployees: number;
   certificationCount: number;
-  instagramIsVerified: boolean;
   instagramBusinessCategory: string;
   instagramHasBusinessEmail: boolean;
 }
@@ -90,7 +89,6 @@ const DEFAULT_SIM: SimFormState = {
   hasAnalytics: true,
   estimatedEmployees: 80,
   certificationCount: 1,
-  instagramIsVerified: false,
   instagramBusinessCategory: '',
   instagramHasBusinessEmail: false,
 };
@@ -124,7 +122,7 @@ const FIELD_KEY_MAP: Record<string, (form: SimFormState) => unknown> = {
   has_analytics: (f) => f.hasAnalytics,
   estimated_employees: (f) => f.estimatedEmployees,
   certification_count: (f) => f.certificationCount,
-  instagram_is_verified: (f) => f.instagramIsVerified,
+
   instagram_business_category: (f) => f.instagramBusinessCategory,
   instagram_has_business_email: (f) => f.instagramHasBusinessEmail,
 };
@@ -749,10 +747,6 @@ export default function ICPRulesPage() {
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
                   <input type="checkbox" checked={simForm.hasAnalytics} onChange={(e) => setSimForm((prev) => ({ ...prev, hasAnalytics: e.target.checked }))} />
                   Has Analytics
-                </label>
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.instagramIsVerified} onChange={(e) => setSimForm((prev) => ({ ...prev, instagramIsVerified: e.target.checked }))} />
-                  IG Verified
                 </label>
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
                   <input type="checkbox" checked={simForm.instagramHasBusinessEmail} onChange={(e) => setSimForm((prev) => ({ ...prev, instagramHasBusinessEmail: e.target.checked }))} />

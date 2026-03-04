@@ -9,22 +9,18 @@ import {
   type DiscoveryRuntimeConfig,
   type DiscoveryProvider as V2DiscoveryProvider,
 } from '@lead-flood/discovery';
-import type { DiscoveryProvider } from '@lead-flood/contracts';
 import { createLogger } from '@lead-flood/observability';
 import {
   ApolloDiscoveryAdapter,
-  BraveSearchAdapter,
-  CompanySearchAdapter,
-  GooglePlacesAdapter,
   HunterEnrichmentAdapter,
   InstagramScraperAdapter,
-  LinkedInScrapeAdapter,
   PdlEnrichmentAdapter,
   PublicWebLookupAdapter,
   OpenAiAdapter,
   ResendAdapter,
   TrengoAdapter,
   WebsiteScraperAdapter,
+  SmtpVerifier,
 } from '@lead-flood/providers';
 
 import { loadWorkerEnv } from './env.js';
@@ -45,11 +41,6 @@ import {
   handleBusinessPrequalifyJob,
   type BusinessPrequalifyJobPayload,
 } from './jobs/business.prequalify.job.js';
-import {
-  DISCOVERY_RUN_JOB_NAME,
-  handleDiscoveryRunJob,
-  type DiscoveryRunJobPayload,
-} from './jobs/discovery.run.job.js';
 import {
   DISCOVERY_RUN_SEARCH_TASK_JOB_NAME,
   DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,
@@ -260,31 +251,6 @@ async function main(): Promise<void> {
     minRequestIntervalMs: env.APOLLO_RATE_LIMIT_MS,
   });
 
-  const braveSearchAdapter = new BraveSearchAdapter({
-    enabled: env.BRAVE_SEARCH_ENABLED,
-    apiKey: env.BRAVE_SEARCH_API_KEY,
-    baseUrl: env.BRAVE_SEARCH_BASE_URL,
-    minRequestIntervalMs: env.BRAVE_SEARCH_RATE_LIMIT_MS,
-  });
-
-  const googlePlacesAdapter = new GooglePlacesAdapter({
-    enabled: env.GOOGLE_PLACES_ENABLED,
-    apiKey: env.GOOGLE_PLACES_API_KEY,
-    baseUrl: env.GOOGLE_PLACES_BASE_URL,
-    minRequestIntervalMs: env.GOOGLE_PLACES_RATE_LIMIT_MS,
-  });
-
-  const linkedInScrapeAdapter = new LinkedInScrapeAdapter({
-    enabled: env.LINKEDIN_SCRAPE_ENABLED,
-    scrapeEndpoint: env.LINKEDIN_SCRAPE_ENDPOINT,
-    apiKey: env.LINKEDIN_SCRAPE_API_KEY,
-  });
-
-  const companySearchAdapter = new CompanySearchAdapter({
-    enabled: env.COMPANY_SEARCH_ENABLED,
-    baseUrl: env.COMPANY_SEARCH_BASE_URL,
-  });
-
   const pdlAdapter = new PdlEnrichmentAdapter({
     apiKey: env.PDL_API_KEY ?? '',
     baseUrl: env.PDL_BASE_URL,
@@ -315,13 +281,6 @@ async function main(): Promise<void> {
       ? { rateLimitPerMinute: env.INSTAGRAM_RATE_LIMIT_PER_MIN }
       : {}),
   });
-  const discoveryProviderOrder: DiscoveryProvider[] = [];
-  if (env.COMPANY_SEARCH_ENABLED) discoveryProviderOrder.push('COMPANY_SEARCH_FREE');
-  if (env.APOLLO_ENABLED) discoveryProviderOrder.push('APOLLO');
-  if (env.BRAVE_SEARCH_ENABLED) discoveryProviderOrder.push('BRAVE_SEARCH');
-  if (env.GOOGLE_PLACES_ENABLED) discoveryProviderOrder.push('GOOGLE_PLACES');
-  if (env.LINKEDIN_SCRAPE_ENABLED) discoveryProviderOrder.push('LINKEDIN_SCRAPE');
-
   let discoveryRuntimeConfig: DiscoveryRuntimeConfig | null = null;
   let v2SearchProvider: V2DiscoveryProvider | null = null;
   try {
@@ -421,15 +380,6 @@ async function main(): Promise<void> {
     );
   }
 
-  logger.info(
-    {
-      legacyDiscoveryRunEnabled: env.DISCOVERY_ENABLED,
-      legacyDefaultProvider: discoveryProviderOrder[0] ?? 'COMPANY_SEARCH_FREE',
-      legacyProviderOrder: discoveryProviderOrder,
-    },
-    'Legacy discovery.run provider pipeline configuration',
-  );
-
   const openAiAdapter = new OpenAiAdapter({
     apiKey: env.OPENAI_API_KEY,
     generationModel: env.OPENAI_GENERATION_MODEL,
@@ -487,37 +437,6 @@ async function main(): Promise<void> {
   }, 5000);
 
   await registerWorker<HeartbeatJobPayload>(boss, logger, HEARTBEAT_QUEUE_NAME, handleHeartbeatJob);
-  if (discoveryQueueWorkersEnabled) {
-    // [DEPRECATED] Legacy discovery.run — kept registered for in-flight jobs only.
-    // New pipeline uses: discovery.seed → run_search_task → business.prequalify → business.convert
-    await registerWorker<DiscoveryRunJobPayload>(boss, logger, DISCOVERY_RUN_JOB_NAME, (jobLogger, job) =>
-      handleDiscoveryRunJob(jobLogger, job, {
-        boss,
-        apolloAdapter,
-        braveSearchAdapter,
-        googlePlacesAdapter,
-        linkedInScrapeAdapter,
-        companySearchAdapter,
-        discoveryEnabled: env.DISCOVERY_ENABLED,
-        apolloEnabled: env.APOLLO_ENABLED,
-        braveSearchEnabled: env.BRAVE_SEARCH_ENABLED,
-        googlePlacesEnabled: env.GOOGLE_PLACES_ENABLED,
-        linkedInScrapeEnabled: env.LINKEDIN_SCRAPE_ENABLED,
-        companySearchEnabled: env.COMPANY_SEARCH_ENABLED,
-        defaultProvider: discoveryProviderOrder[0] ?? 'COMPANY_SEARCH_FREE',
-        providerOrder: discoveryProviderOrder,
-        defaultEnrichmentProvider: env.ENRICHMENT_DEFAULT_PROVIDER,
-        budgetTracker: providerBudgetTracker,
-      }),
-    );
-  } else {
-    logger.info(
-      {
-        discoveryQueueWorkersEnabled,
-      },
-      'Legacy discovery queue consumers disabled for this environment',
-    );
-  }
 
   if (discoveryRuntimeConfig && v2SearchProvider) {
     if (discoveryQueueWorkersEnabled) {
@@ -650,6 +569,7 @@ async function main(): Promise<void> {
         },
         websiteScraperAdapter,
         instagramScraperAdapter,
+        smtpVerifier: new SmtpVerifier(),
         enqueueEnrichmentRun: async (payload) => {
           const enrichmentPayload: EnrichmentRunJobPayload = {
             runId: payload.runId,
@@ -743,7 +663,6 @@ async function main(): Promise<void> {
               icpProfileId: payload.icpProfileId,
               scorePredictionId: payload.scorePredictionId,
               knowledgeEntryIds: [],
-              channel: 'WHATSAPP',
               promptVersion: 'v1',
               correlationId: job.data.correlationId ?? job.id,
             } satisfies MessageGenerateJobPayload,

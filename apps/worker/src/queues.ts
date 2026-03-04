@@ -5,7 +5,6 @@ import {
   ANALYTICS_ROLLUP_JOB_NAME,
   ANALYTICS_ROLLUP_RETRY_OPTIONS,
 } from './jobs/analytics.rollup.job.js';
-import { DISCOVERY_RUN_JOB_NAME, DISCOVERY_RUN_RETRY_OPTIONS } from './jobs/discovery.run.job.js';
 import { ENRICHMENT_RUN_JOB_NAME, ENRICHMENT_RUN_RETRY_OPTIONS } from './jobs/enrichment.run.job.js';
 import { FOLLOWUP_CHECK_JOB_NAME, FOLLOWUP_CHECK_RETRY_OPTIONS } from './jobs/followup.check.job.js';
 import {
@@ -121,10 +120,6 @@ export const WORKER_QUEUE_DEFINITIONS: readonly WorkerQueueDefinition[] = [
   {
     name: HEARTBEAT_QUEUE_NAME,
     retryOptions: normalizeRetryOptions(HEARTBEAT_QUEUE_NAME, HEARTBEAT_RETRY_OPTIONS),
-  },
-  {
-    name: DISCOVERY_RUN_JOB_NAME,
-    retryOptions: normalizeRetryOptions(DISCOVERY_RUN_JOB_NAME, DISCOVERY_RUN_RETRY_OPTIONS),
   },
   {
     name: DISCOVERY_SEED_JOB_NAME,

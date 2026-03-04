@@ -220,7 +220,15 @@ export async function processResendWebhook(
     };
   }
 
-  const messageSend = await prisma.messageSend.findFirst({
+  // Correlate by providerMessageId (= Resend email_id) for exact match,
+  // falling back to latest send for the lead if email_id is missing
+  const exactMatch = emailId
+    ? await prisma.messageSend.findFirst({
+        where: { leadId: lead.id, channel: 'EMAIL', provider: 'RESEND', providerMessageId: emailId },
+        select: { id: true, leadId: true },
+      })
+    : null;
+  const messageSend = exactMatch ?? await prisma.messageSend.findFirst({
     where: { leadId: lead.id, channel: 'EMAIL', provider: 'RESEND' },
     select: { id: true, leadId: true },
     orderBy: { createdAt: 'desc' },

@@ -107,6 +107,35 @@ export class EnrichmentProviderRotator {
   }
 
   /**
+   * Get the index of a provider in the priority list.
+   * Returns -1 if not found.
+   */
+  getPriorityIndex(provider: EnrichmentProvider): number {
+    return this.priority.indexOf(provider);
+  }
+
+  /**
+   * Get the next provider to try that comes AFTER `afterIndex` in the priority list.
+   * Used for forward-only escalation (cheaper → richer).
+   */
+  getNextProviderAfter(
+    afterIndex: number,
+    previouslyFailed: string[],
+  ): EnrichmentProvider | null {
+    const failedSet = new Set(previouslyFailed);
+
+    for (let i = afterIndex + 1; i < this.priority.length; i++) {
+      const provider = this.priority[i];
+      if (!provider) continue;
+      if (failedSet.has(provider)) continue;
+      if (this.isCircuitOpen(provider)) continue;
+      return provider;
+    }
+
+    return null;
+  }
+
+  /**
    * Get the current status of all providers in the rotation.
    */
   getProviderStatus(): ProviderStatus[] {

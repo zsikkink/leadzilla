@@ -16,12 +16,10 @@ export interface DiscoveryRunJobPayload
   extends Pick<
     CreateDiscoveryRunRequest,
     | 'icpProfileId'
-    | 'provider'
     | 'countries'
     | 'includeWebsiteAnalysis'
     | 'includeSocialMediaAnalysis'
     | 'limit'
-    | 'cursor'
     | 'requestedByUserId'
   > {
   runId: string;
@@ -50,12 +48,10 @@ export function buildDiscoveryService(
       const payload: DiscoveryRunJobPayload = {
         runId,
         icpProfileId: input.icpProfileId,
-        provider: input.provider,
         countries: input.countries,
         includeWebsiteAnalysis: input.includeWebsiteAnalysis,
         includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
         limit: input.limit,
-        cursor: input.cursor,
         requestedByUserId: input.requestedByUserId,
       };
 

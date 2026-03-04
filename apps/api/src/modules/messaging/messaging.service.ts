@@ -37,9 +37,14 @@ export interface MessageGenerateJobPayload {
   correlationId?: string | undefined;
 }
 
+export interface MessagingServiceLogger {
+  error: (obj: Record<string, unknown>, msg?: string) => void;
+}
+
 export interface MessagingServiceDependencies {
   enqueueMessageSend: (payload: MessagingSendJobPayload) => Promise<void>;
   enqueueMessageGenerate?: ((payload: MessageGenerateJobPayload) => Promise<void>) | undefined;
+  logger?: MessagingServiceLogger | undefined;
 }
 
 export interface MessagingService {
@@ -118,10 +123,7 @@ export function buildMessagingService(
           } catch (error: unknown) {
             // Idempotency: if MessageSend already exists (unique constraint on idempotencyKey),
             // or enqueue fails, the send record is already QUEUED and pg-boss retry will handle it
-            console.error('[messaging] Failed to create/enqueue send after approval', {
-              error,
-              draftId,
-            });
+            dependencies.logger?.error({ err: error, draftId }, 'Failed to create/enqueue send after approval');
           }
         }
       }
@@ -146,7 +148,7 @@ export function buildMessagingService(
         });
       } catch (error: unknown) {
         // Send record already created with QUEUED status — pg-boss retry will handle it
-        console.error('[messaging] Failed to enqueue message send', { error, sendId: send.id });
+        dependencies.logger?.error({ err: error, sendId: send.id }, 'Failed to enqueue message send');
       }
 
       return send;

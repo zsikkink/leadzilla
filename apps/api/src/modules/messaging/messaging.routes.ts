@@ -65,6 +65,7 @@ export function registerMessagingRoutes(
           throw new MessagingNotImplementedError('Messaging queue publisher is not configured');
         },
     enqueueMessageGenerate: dependencies?.enqueueMessageGenerate,
+    logger: app.log,
   });
 
   app.post('/v1/messaging/drafts/generate', async (request, reply) => {

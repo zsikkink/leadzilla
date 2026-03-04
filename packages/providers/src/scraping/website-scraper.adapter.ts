@@ -76,6 +76,10 @@ export interface WebsiteScraperData {
   technologies: TechnologyStack;
   businessSignals: BusinessSignals;
 
+  // Page-level intelligence
+  pageTitle: string | null;
+  detectedCountry: string | null;
+
   // Crawl metadata
   pagesCrawled: number;
   crawlDurationMs: number;
@@ -307,6 +311,49 @@ const PLATFORM_EMAIL_DOMAINS = new Set([
   'twitter.com',
   'github.com',
 ]);
+
+// ── Country detection ──────────────────────────────────────────────────────
+
+const COUNTRY_NAMES: Record<string, string> = {
+  'united arab emirates': 'AE', uae: 'AE', dubai: 'AE', 'abu dhabi': 'AE',
+  'saudi arabia': 'SA', ksa: 'SA', riyadh: 'SA', jeddah: 'SA',
+  bahrain: 'BH', qatar: 'QA', kuwait: 'KW', oman: 'OM',
+  jordan: 'JO', lebanon: 'LB', egypt: 'EG', morocco: 'MA',
+  'united states': 'US', usa: 'US', 'united kingdom': 'GB', uk: 'GB',
+  canada: 'CA', australia: 'AU', germany: 'DE', france: 'FR',
+  india: 'IN', pakistan: 'PK', turkey: 'TR', singapore: 'SG',
+  malaysia: 'MY', indonesia: 'ID', philippines: 'PH', nigeria: 'NG',
+};
+
+function detectCountryFromPage($: cheerio.CheerioAPI): string | null {
+  // 1. JSON-LD addressCountry
+  let ldCountry: string | null = null;
+  $('script[type="application/ld+json"]').each((_, el) => {
+    if (ldCountry) return false; // stop iteration
+    try {
+      const ld = JSON.parse($(el).text());
+      const country = ld?.address?.addressCountry ?? ld?.addressCountry;
+      if (typeof country === 'string' && country.length >= 2) {
+        ldCountry = country.length === 2 ? country.toUpperCase() : (COUNTRY_NAMES[country.toLowerCase()] ?? null);
+      }
+    } catch { /* ignore */ }
+  });
+  if (ldCountry) return ldCountry;
+
+  // 2. Meta geo.country tag
+  const geoCountry = $('meta[name="geo.country"]').attr('content')?.trim();
+  if (geoCountry && geoCountry.length >= 2) {
+    return geoCountry.length === 2 ? geoCountry.toUpperCase() : (COUNTRY_NAMES[geoCountry.toLowerCase()] ?? null);
+  }
+
+  // 3. Address text containing known country names
+  const addressText = $('address').text().toLowerCase() + ' ' + $('[itemtype*="PostalAddress"]').text().toLowerCase();
+  for (const [name, code] of Object.entries(COUNTRY_NAMES)) {
+    if (addressText.includes(name)) return code;
+  }
+
+  return null;
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -1513,6 +1560,8 @@ export class WebsiteScraperAdapter {
     let hasPricingTiers = false;
     let hasProductCatalog = false;
     let hasWhatsApp = false;
+    let pageTitle: string | null = null;
+    let detectedCountry: string | null = null;
 
     // New signals
     const allDecisionMakers: DecisionMaker[] = [];
@@ -1563,6 +1612,17 @@ export class WebsiteScraperAdapter {
       if (!hasPricingTiers && detectPricingTiers($)) hasPricingTiers = true;
       if (!hasProductCatalog && detectProductCatalog($)) hasProductCatalog = true;
       if (!hasWhatsApp && detectWhatsApp($)) hasWhatsApp = true;
+
+      // Page title (from homepage only)
+      if (!pageTitle) {
+        const titleText = $('title').first().text().trim();
+        if (titleText.length > 0) pageTitle = titleText;
+      }
+
+      // Country detection (first match wins)
+      if (!detectedCountry) {
+        detectedCountry = detectCountryFromPage($);
+      }
 
       // Decision makers
       for (const dm of extractDecisionMakers($, pageUrl)) {
@@ -1671,6 +1731,10 @@ export class WebsiteScraperAdapter {
         hasTestimonials: mergedHasTestimonials,
         hasCaseStudies: mergedHasCaseStudies,
       },
+
+      // Page-level intelligence
+      pageTitle,
+      detectedCountry,
 
       // Crawl metadata
       pagesCrawled: pages.length,

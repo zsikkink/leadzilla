@@ -126,6 +126,54 @@ describe('EnrichmentProviderRotator', () => {
     });
   });
 
+  describe('getPriorityIndex', () => {
+    it('returns index for known provider', () => {
+      const rotator = new EnrichmentProviderRotator();
+      expect(rotator.getPriorityIndex('OTHER_FREE')).toBe(0);
+      expect(rotator.getPriorityIndex('HUNTER')).toBe(1);
+      expect(rotator.getPriorityIndex('PEOPLE_DATA_LABS')).toBe(2);
+    });
+
+    it('returns -1 for unknown provider', () => {
+      const rotator = new EnrichmentProviderRotator();
+      expect(rotator.getPriorityIndex('UNKNOWN' as never)).toBe(-1);
+    });
+  });
+
+  describe('getNextProviderAfter', () => {
+    it('returns next provider after given index', () => {
+      const rotator = new EnrichmentProviderRotator();
+      expect(rotator.getNextProviderAfter(0, [])).toBe('HUNTER');
+      expect(rotator.getNextProviderAfter(1, [])).toBe('PEOPLE_DATA_LABS');
+    });
+
+    it('returns null when no providers after given index', () => {
+      const rotator = new EnrichmentProviderRotator();
+      expect(rotator.getNextProviderAfter(2, [])).toBeNull();
+    });
+
+    it('skips failed providers', () => {
+      const rotator = new EnrichmentProviderRotator();
+      expect(rotator.getNextProviderAfter(0, ['HUNTER'])).toBe('PEOPLE_DATA_LABS');
+    });
+
+    it('ensures forward-only escalation from HUNTER', () => {
+      const rotator = new EnrichmentProviderRotator();
+      // When HUNTER is current (index 1), should NOT return OTHER_FREE (index 0)
+      const next = rotator.getNextProviderAfter(1, ['HUNTER']);
+      expect(next).toBe('PEOPLE_DATA_LABS');
+    });
+
+    it('respects circuit breaker', () => {
+      const rotator = new EnrichmentProviderRotator();
+      for (let i = 0; i < 5; i++) {
+        rotator.recordFailure('HUNTER');
+      }
+      // HUNTER is tripped, should skip to PDL
+      expect(rotator.getNextProviderAfter(0, [])).toBe('PEOPLE_DATA_LABS');
+    });
+  });
+
   describe('getProviderStatus', () => {
     it('returns status for all providers', () => {
       const rotator = new EnrichmentProviderRotator();

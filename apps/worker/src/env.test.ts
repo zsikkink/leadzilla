@@ -27,7 +27,7 @@ describe('loadWorkerEnv', () => {
     expect(env.DISCOVERY_ENABLED).toBe(false);
     expect(env.SERPAPI_DISCOVERY_ENABLED).toBe(true);
     expect(env.ENRICHMENT_ENABLED).toBe(true);
-    expect(env.ENRICHMENT_DEFAULT_PROVIDER).toBe('HUNTER');
+    expect(env.ENRICHMENT_DEFAULT_PROVIDER).toBe('OTHER_FREE');
   });
 
   it('throws on missing DATABASE_URL', () => {

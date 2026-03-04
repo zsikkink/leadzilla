@@ -4,6 +4,7 @@ import type { ResendAdapter, TrengoAdapter } from '@lead-flood/providers';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { RetryableError, classifyError } from '../errors.js';
 import type { EmailRateLimiter } from '../messaging/email-rate-limiter.js';
 import type { WhatsAppRateLimiter } from '../messaging/rate-limiter.js';
 import { computeNextFollowUpAfter } from '../utils/jitter.js';
@@ -213,7 +214,7 @@ export async function handleMessageSendJob(
           `Email sent successfully via Resend (variant=${variantKey})`,
         );
       } else if (result.status === 'retryable_error') {
-        throw new Error(`Resend retryable error: ${result.failure.message}`);
+        throw new RetryableError(`Resend retryable error: ${result.failure.message}`);
       } else {
         await markFailed(sendId, result.failure.statusCode?.toString() ?? 'TERMINAL', result.failure.message);
         logger.error({ jobId: job.id, sendId, failure: result.failure }, 'Email send failed permanently');
@@ -321,7 +322,7 @@ export async function handleMessageSendJob(
           `WhatsApp message sent via Trengo (variant=${variantKey})`,
         );
       } else if (result.status === 'retryable_error') {
-        throw new Error(`Trengo retryable error: ${result.failure.message}`);
+        throw new RetryableError(`Trengo retryable error: ${result.failure.message}`);
       } else {
         await markFailed(sendId, result.failure.statusCode?.toString() ?? 'TERMINAL', result.failure.message);
         logger.error({ jobId: job.id, sendId, failure: result.failure }, 'WhatsApp send failed permanently');
@@ -358,7 +359,7 @@ export async function handleMessageSendJob(
       'Failed message.send job',
     );
 
-    throw error;
+    throw classifyError(error);
   }
 }
 

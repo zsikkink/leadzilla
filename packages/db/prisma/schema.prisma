@@ -842,6 +842,7 @@ model BusinessConversion {
   lead              Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
   apolloContactJson Json?
   hunterContactJson Json?
+  metadata          Json?
   convertedAt       DateTime @default(now())
   createdAt         DateTime @default(now())
 

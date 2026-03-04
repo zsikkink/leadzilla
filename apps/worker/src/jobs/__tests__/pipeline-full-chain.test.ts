@@ -1,11 +1,11 @@
 /**
  * Full pipeline chain E2E integration test
  *
- * Tests the COMPLETE chain from discovery through message.send against a real
+ * Tests the pipeline chain from enrichment through message.send against a real
  * PostgreSQL database with ALL external adapters mocked at the fetch level.
  *
  * Pipeline under test:
- *   discovery.run (Apollo) → enrichment.run (PDL) → features.compute
+ *   [pre-seeded lead] → enrichment.run (PDL) → features.compute
  *   → scoring.compute → message.generate (PENDING approval)
  *   → manual approval → message.send (Resend for email, Trengo for WhatsApp)
  */
@@ -13,11 +13,6 @@ import { randomUUID } from 'node:crypto';
 
 import { type Prisma, prisma } from '@lead-flood/db';
 import {
-  ApolloDiscoveryAdapter,
-  BraveSearchAdapter,
-  CompanySearchAdapter,
-  GooglePlacesAdapter,
-  LinkedInScrapeAdapter,
   PdlEnrichmentAdapter,
   OpenAiAdapter,
   ResendAdapter,
@@ -26,11 +21,6 @@ import {
 import type { Job } from 'pg-boss';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import {
-  handleDiscoveryRunJob,
-  type DiscoveryRunJobPayload,
-  type DiscoveryRunDependencies,
-} from '../discovery.run.job.js';
 import {
   handleEnrichmentRunJob,
   type EnrichmentRunJobPayload,
@@ -105,40 +95,6 @@ const APOLLO_PERSON_ID = `apollo-${randomUUID()}`;
 const DISCOVERED_EMAIL = `${TEST_PREFIX}@zbooni-fullchain.test`;
 const DISCOVERED_FIRST_NAME = 'Khalid';
 const DISCOVERED_LAST_NAME = 'Al-Rashidi';
-
-function makeApolloFetch(): typeof fetch {
-  return vi.fn().mockImplementation(() =>
-    Promise.resolve(
-      new Response(
-        JSON.stringify({
-          people: [
-            {
-              id: APOLLO_PERSON_ID,
-              first_name: DISCOVERED_FIRST_NAME,
-              last_name: DISCOVERED_LAST_NAME,
-              email: DISCOVERED_EMAIL,
-              title: 'Head of Commerce',
-              // Must use ISO code matching ICP targetCountries for matchesIcpFilters
-              country: 'AE',
-              organization: {
-                name: 'FullChain Test Corp',
-                primary_domain: 'fullchain-test.com',
-                estimated_num_employees: 200,
-                industry: 'Financial Services',
-                website_url: 'https://fullchain-test.com',
-              },
-            },
-          ],
-          pagination: {
-            page: 1,
-            total_pages: 1,
-          },
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
-    ),
-  ) as unknown as typeof fetch;
-}
 
 function makePdlFetch(): typeof fetch {
   return vi.fn().mockResolvedValue(
@@ -260,46 +216,6 @@ function makeTrengoFetch(): typeof fetch {
 // Adapter factories
 // ---------------------------------------------------------------------------
 
-function makeApolloAdapter(): ApolloDiscoveryAdapter {
-  return new ApolloDiscoveryAdapter({
-    apiKey: 'test-apollo-key',
-    baseUrl: 'https://api.apollo.test',
-    minRequestIntervalMs: 0,
-    fetchImpl: makeApolloFetch(),
-  });
-}
-
-function makeDisabledBraveSearch(): BraveSearchAdapter {
-  return new BraveSearchAdapter({
-    enabled: false,
-    apiKey: '',
-    baseUrl: 'https://brave.test',
-  });
-}
-
-function makeDisabledGooglePlaces(): GooglePlacesAdapter {
-  return new GooglePlacesAdapter({
-    enabled: false,
-    apiKey: '',
-    baseUrl: 'https://places.test',
-  });
-}
-
-function makeDisabledLinkedIn(): LinkedInScrapeAdapter {
-  return new LinkedInScrapeAdapter({
-    enabled: false,
-    scrapeEndpoint: 'https://linkedin.test',
-    apiKey: '',
-  });
-}
-
-function makeDisabledCompanySearch(): CompanySearchAdapter {
-  return new CompanySearchAdapter({
-    enabled: false,
-    baseUrl: 'https://companysearch.test',
-  });
-}
-
 function makePdlAdapter(): PdlEnrichmentAdapter {
   return new PdlEnrichmentAdapter({
     apiKey: 'test-pdl-key',
@@ -368,9 +284,9 @@ function extractBossPayload<T>(queueName: string): T {
 // Test suite
 // ---------------------------------------------------------------------------
 
-describe('pipeline full chain: discovery → message.send', () => {
+describe('pipeline full chain: enrichment → message.send', () => {
   beforeAll(async () => {
-    // Seed IcpProfile — the only prerequisite for discovery.run
+    // Seed IcpProfile
     await prisma.icpProfile.create({
       data: {
         id: ICP_ID,
@@ -380,6 +296,46 @@ describe('pipeline full chain: discovery → message.send', () => {
         targetCountries: ['AE', 'SA'],
         isActive: true,
         featureList: JSON.parse(JSON.stringify(ICP_FEATURES)) as Prisma.InputJsonValue,
+      },
+    });
+
+    // Seed lead + discovery record (replaces legacy discovery.run stage)
+    const lead = await prisma.lead.create({
+      data: {
+        firstName: DISCOVERED_FIRST_NAME,
+        lastName: DISCOVERED_LAST_NAME,
+        email: DISCOVERED_EMAIL,
+        source: 'apollo',
+        status: 'new',
+      },
+    });
+    discoveredLeadId = lead.id;
+
+    await prisma.leadDiscoveryRecord.create({
+      data: {
+        leadId: discoveredLeadId,
+        icpProfileId: ICP_ID,
+        provider: 'APOLLO',
+        providerRecordId: APOLLO_PERSON_ID,
+        queryHash: `test-hash-${RUN_ID}`,
+        status: 'DISCOVERED',
+        rawPayload: {
+          first_name: DISCOVERED_FIRST_NAME,
+          last_name: DISCOVERED_LAST_NAME,
+          email: DISCOVERED_EMAIL,
+          organization: { name: 'FullChain Test Corp', primary_domain: 'fullchain-test.com' },
+        } as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    await prisma.jobExecution.create({
+      data: {
+        id: RUN_ID,
+        type: 'discovery.run',
+        status: 'completed',
+        attempts: 1,
+        payload: { icpProfileId: ICP_ID } as Prisma.InputJsonValue,
+        result: { totalItems: 1, processedItems: 1, failedItems: 0 } as Prisma.InputJsonValue,
       },
     });
   });
@@ -405,77 +361,6 @@ describe('pipeline full chain: discovery → message.send', () => {
     // shared across test files and CASCADE-deleting it removes LeadScorePrediction
     // rows from other tests running in parallel.
     await prisma.icpProfile.deleteMany({ where: { id: ICP_ID } });
-  });
-
-  // -----------------------------------------------------------------------
-  // Stage 1: Discovery — Apollo discovers a lead
-  // -----------------------------------------------------------------------
-  it('stage 1: discovery.run discovers a lead via Apollo and enqueues enrichment', async () => {
-    bossSendSpy.mockClear();
-
-    const payload: DiscoveryRunJobPayload = {
-      runId: RUN_ID,
-      icpProfileId: ICP_ID,
-      provider: 'APOLLO',
-      limit: 10,
-      correlationId: `corr-${RUN_ID}`,
-    };
-
-    const deps: DiscoveryRunDependencies = {
-      boss: mockBoss,
-      apolloAdapter: makeApolloAdapter(),
-      braveSearchAdapter: makeDisabledBraveSearch(),
-      googlePlacesAdapter: makeDisabledGooglePlaces(),
-      linkedInScrapeAdapter: makeDisabledLinkedIn(),
-      companySearchAdapter: makeDisabledCompanySearch(),
-      discoveryEnabled: true,
-      apolloEnabled: true,
-      braveSearchEnabled: false,
-      googlePlacesEnabled: false,
-      linkedInScrapeEnabled: false,
-      companySearchEnabled: false,
-      defaultProvider: 'APOLLO',
-      defaultEnrichmentProvider: 'PEOPLE_DATA_LABS',
-    };
-
-    await handleDiscoveryRunJob(noopLogger, makeJob(payload, 'discovery.run'), deps);
-
-    // Verify lead was created
-    const lead = await prisma.lead.findUnique({ where: { email: DISCOVERED_EMAIL } });
-    expect(lead).toBeTruthy();
-    expect(lead!.firstName).toBe(DISCOVERED_FIRST_NAME);
-    expect(lead!.lastName).toBe(DISCOVERED_LAST_NAME);
-    expect(lead!.status).toBe('new');
-    expect(lead!.source).toBe('apollo');
-    discoveredLeadId = lead!.id;
-
-    // Verify discovery record
-    const discoveryRecords = await prisma.leadDiscoveryRecord.findMany({
-      where: { leadId: discoveredLeadId },
-    });
-    expect(discoveryRecords.length).toBeGreaterThanOrEqual(1);
-    const record = discoveryRecords[0]!;
-    expect(record.provider).toBe('APOLLO');
-    expect(record.status).toBe('DISCOVERED');
-    expect(record.icpProfileId).toBe(ICP_ID);
-    expect(record.providerRecordId).toBe(APOLLO_PERSON_ID);
-
-    // Verify enrichment was enqueued via boss.send
-    const enrichmentPayload = extractBossPayload<EnrichmentRunJobPayload>('enrichment.run');
-    expect(enrichmentPayload.leadId).toBe(discoveredLeadId);
-    expect(enrichmentPayload.provider).toBe('PEOPLE_DATA_LABS');
-    expect(enrichmentPayload.icpProfileId).toBe(ICP_ID);
-
-    // Verify JobExecution records were created
-    const jobExecutions = await prisma.jobExecution.findMany({
-      where: { leadId: discoveredLeadId },
-    });
-    const discoveryExec = jobExecutions.find((je) => je.type === 'lead.discovery');
-    const enrichmentExec = jobExecutions.find((je) => je.type === 'enrichment.run');
-    expect(discoveryExec).toBeTruthy();
-    expect(discoveryExec!.status).toBe('completed');
-    expect(enrichmentExec).toBeTruthy();
-    expect(enrichmentExec!.status).toBe('queued');
   });
 
   // -----------------------------------------------------------------------
@@ -827,7 +712,7 @@ describe('pipeline full chain: discovery → message.send', () => {
     expect(lead.email).toBe(DISCOVERED_EMAIL);
     expect(lead.phone).toBe('+971509876543');
 
-    // Discovery record — created by discovery.run
+    // Discovery record — pre-seeded
     const discovery = await prisma.leadDiscoveryRecord.findMany({
       where: { leadId: discoveredLeadId },
     });

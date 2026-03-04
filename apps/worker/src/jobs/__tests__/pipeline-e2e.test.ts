@@ -292,7 +292,7 @@ describe('pipeline full lifecycle', () => {
       },
     });
 
-    // Seed LeadDiscoveryRecord (simulates discovery.run output)
+    // Seed LeadDiscoveryRecord (simulates discovery pipeline output)
     await prisma.leadDiscoveryRecord.create({
       data: {
         id: DISCOVERY_RECORD_ID,

@@ -54,10 +54,6 @@ export const CreateDiscoveryRunRequestSchema = z
     limit: z.coerce.number().int().min(1).max(1000).optional(),
     advancedSettings: DiscoveryAdvancedSettingsSchema.optional(),
     requestedByUserId: z.string().min(1).optional(),
-    /** @deprecated Use countries/cities instead */
-    provider: DiscoveryProviderSchema.optional(),
-    /** @deprecated No longer used in v2 pipeline */
-    cursor: z.string().min(1).optional(),
   })
   .strict();
 

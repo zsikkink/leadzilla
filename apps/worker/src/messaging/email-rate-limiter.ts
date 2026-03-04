@@ -80,7 +80,7 @@ export class EmailRateLimiter {
       this.prisma.messageSend.count({
         where: {
           channel: 'EMAIL',
-          status: 'SENT',
+          status: { in: ['SENT', 'DELIVERED', 'REPLIED', 'BOUNCED'] },
           createdAt: { gte: since24h },
         },
       }),
@@ -106,12 +106,12 @@ export class EmailRateLimiter {
   async canSend(): Promise<RateLimitResult> {
     const { limit, week, throttled } = await this.computeDailyLimit();
 
-    // Count today's email sends (UTC day boundary, only SENT status)
+    // Count today's email sends (UTC day boundary, all terminal statuses)
     const dayStartUtc = getStartOfDayUtc();
     const todayCount = await this.prisma.messageSend.count({
       where: {
         channel: 'EMAIL',
-        status: 'SENT',
+        status: { in: ['SENT', 'DELIVERED', 'REPLIED', 'BOUNCED'] },
         createdAt: { gte: dayStartUtc },
       },
     });
