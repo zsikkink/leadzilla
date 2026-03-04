@@ -1,9 +1,9 @@
-import { prisma } from '@lead-flood/db';
+import { createHash } from 'node:crypto';
+import { Prisma, prisma } from '@lead-flood/db';
+import type { DeterministicRule } from './deterministic.js';
 import type { LogisticModel } from './logistic.js';
 
 export const BASELINE_MODEL_VERSION_TAG = 'deterministic-baseline-v1';
-/** @deprecated Use getQualificationThreshold() for dynamic threshold from PipelineSetting */
-export const QUALIFICATION_THRESHOLD = 0.3;
 
 const DEFAULT_QUALIFICATION_THRESHOLD = 0.3;
 
@@ -209,4 +209,103 @@ export async function computeBlendRatio(
   }
 
   return { deterministicWeight: 0.9, aiWeight: 0.1 };
+}
+
+// ── Consolidated scoring helpers ──
+
+const BASELINE_FEATURE_EXTRACTOR_VERSION = 'features_v1';
+const BASELINE_TRAINING_RUN_TRIGGER = 'MANUAL';
+
+export function deterministicChecksum(input: string): string {
+  return createHash('sha256').update(input).digest('hex');
+}
+
+export function asDeterministicRules(
+  value: Awaited<ReturnType<typeof prisma.qualificationRule.findMany>>,
+): DeterministicRule[] {
+  return value.map((rule) => ({
+    id: rule.id,
+    name: rule.name,
+    ruleType: rule.ruleType,
+    isRequired: rule.isRequired,
+    fieldKey: rule.fieldKey,
+    operator: rule.operator,
+    valueJson: rule.valueJson,
+    weight: rule.weight,
+    isActive: rule.isActive,
+    orderIndex: rule.orderIndex,
+    priority: rule.priority,
+  }));
+}
+
+export async function ensureBaselineModelVersion(): Promise<string> {
+  const existing = await prisma.modelVersion.findUnique({
+    where: { versionTag: BASELINE_MODEL_VERSION_TAG },
+    select: { id: true },
+  });
+  if (existing) {
+    return existing.id;
+  }
+
+  const now = new Date();
+  const checksumSource = JSON.stringify({
+    versionTag: BASELINE_MODEL_VERSION_TAG,
+    sourceVersion: BASELINE_FEATURE_EXTRACTOR_VERSION,
+    featureKeys: TRAINED_MODEL_FEATURE_KEYS,
+  });
+
+  try {
+    const created = await prisma.$transaction(async (tx) => {
+      const trainingRun = await tx.trainingRun.create({
+        data: {
+          modelType: 'LOGISTIC_REGRESSION',
+          status: 'SUCCEEDED',
+          trigger: BASELINE_TRAINING_RUN_TRIGGER,
+          configJson: {
+            baseline: true,
+            sourceVersion: BASELINE_FEATURE_EXTRACTOR_VERSION,
+          },
+          trainingWindowStart: new Date(now.getTime() - 86_400_000),
+          trainingWindowEnd: now,
+          datasetSize: 0,
+          positiveCount: 0,
+          negativeCount: 0,
+          startedAt: now,
+          endedAt: now,
+        },
+      });
+
+      return tx.modelVersion.create({
+        data: {
+          trainingRunId: trainingRun.id,
+          modelType: 'LOGISTIC_REGRESSION',
+          versionTag: BASELINE_MODEL_VERSION_TAG,
+          stage: 'ACTIVE',
+          featureSchemaJson: {
+            sourceVersion: BASELINE_FEATURE_EXTRACTOR_VERSION,
+            keys: TRAINED_MODEL_FEATURE_KEYS,
+          },
+          coefficientsJson: Prisma.JsonNull,
+          intercept: 0,
+          deterministicWeightsJson: {},
+          checksum: deterministicChecksum(checksumSource),
+          trainedAt: now,
+          activatedAt: now,
+        },
+      });
+    });
+
+    return created.id;
+  } catch (error: unknown) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      const fallback = await prisma.modelVersion.findUnique({
+        where: { versionTag: BASELINE_MODEL_VERSION_TAG },
+        select: { id: true },
+      });
+      if (fallback) {
+        return fallback.id;
+      }
+    }
+    throw error;
+  }
 }
