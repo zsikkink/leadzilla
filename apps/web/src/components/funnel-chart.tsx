@@ -63,6 +63,14 @@ function generateTimeSeriesData(data: FunnelResponse, range: DateRange) {
   const messagedDays = distributeCount(data.messagesSentCount, days, 4);
   const repliedDays = distributeCount(data.repliesCount, days, 5);
 
+  // Enforce funnel ordering: discovered >= enriched >= scored >= messaged >= replied
+  const funnelLayers = [discoveredDays, enrichedDays, scoredDays, messagedDays, repliedDays];
+  for (let i = 0; i < days; i++) {
+    for (let layer = 1; layer < funnelLayers.length; layer++) {
+      funnelLayers[layer]![i] = Math.min(funnelLayers[layer]![i]!, funnelLayers[layer - 1]![i]!);
+    }
+  }
+
   const series: Record<string, string | number>[] = [];
 
   for (let i = days - 1; i >= 0; i--) {
