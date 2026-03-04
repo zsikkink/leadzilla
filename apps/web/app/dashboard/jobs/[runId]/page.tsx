@@ -73,81 +73,41 @@ function StatusBadge({ status }: { status: PipelineRunStatus }) {
   );
 }
 
-// ── Mock data types for drill-down (Contract 5 — endpoint pending) ───────
-interface MockSearchTask {
+// ── Types for real API data ──────────────────────────────────────────────
+interface SearchTaskData {
   id: string;
-  query: string;
-  country: string;
+  queryText: string;
+  countryCode: string;
   city: string | null;
-  provider: string;
-  status: 'completed' | 'failed' | 'running';
+  status: string;
   resultsCount: number;
-  businesses: MockBusiness[];
-  errorMessage: string | null;
+  provider: string;
 }
 
-interface MockBusiness {
+interface BusinessData {
   id: string;
   name: string;
-  domain: string | null;
-  score: number | null;
+  websiteDomain: string | null;
+  deterministicScore: number | null;
+  scoreBand: string | null;
   preQualified: boolean;
-  convertedToLead: boolean;
-  leadId: string | null;
   disqualificationReason: string | null;
 }
 
-interface MockCostEntry {
+interface CostEventData {
+  id: string;
   provider: string;
-  calls: number;
-  costCents: number;
+  action: string;
+  creditCost: number;
+  createdAt: string;
 }
 
-// ── Generate mock data based on run info ─────────────────────────────────
-function generateMockData(run: DiscoveryRunStatusResponse) {
-  const tasks: MockSearchTask[] = [];
-  const taskCount = Math.min(run.totalItems, 5);
-
-  for (let i = 0; i < taskCount; i++) {
-    const isCompleted = i < run.processedItems;
-    const isFailed = !isCompleted && i < run.processedItems + run.failedItems;
-    const bizCount = isCompleted ? Math.floor(Math.random() * 8) + 2 : 0;
-
-    const businesses: MockBusiness[] = [];
-    for (let j = 0; j < bizCount; j++) {
-      const converted = Math.random() > 0.4;
-      businesses.push({
-        id: `biz-${i}-${j}`,
-        name: `Business ${i + 1}.${j + 1}`,
-        domain: `example-${i}-${j}.com`,
-        score: converted ? Math.round(Math.random() * 70 + 20) / 100 : null,
-        preQualified: Math.random() > 0.2,
-        convertedToLead: converted,
-        leadId: converted ? `lead-${i}-${j}` : null,
-        disqualificationReason: !converted && Math.random() > 0.5 ? 'No valid email found' : null,
-      });
-    }
-
-    tasks.push({
-      id: `task-${i}`,
-      query: `"payment solutions" OR "fintech" in UAE region ${i + 1}`,
-      country: 'AE',
-      city: i % 2 === 0 ? 'Dubai' : 'Abu Dhabi',
-      provider: i % 3 === 0 ? 'SERPAPI' : 'GOOGLE_PLACES',
-      status: isCompleted ? 'completed' : isFailed ? 'failed' : 'running',
-      resultsCount: bizCount,
-      businesses,
-      errorMessage: isFailed ? 'Provider rate limit exceeded' : null,
-    });
-  }
-
-  const costs: MockCostEntry[] = [
-    { provider: 'SerpAPI', calls: Math.max(1, taskCount), costCents: taskCount * 50 },
-    { provider: 'Hunter', calls: Math.floor(taskCount * 0.6), costCents: Math.floor(taskCount * 0.6) * 20 },
-    { provider: 'Apify (Website)', calls: Math.floor(taskCount * 0.8), costCents: Math.floor(taskCount * 0.8) * 10 },
-  ];
-
-  return { tasks, costs };
+interface RunDetailsResponse {
+  run: Record<string, unknown>;
+  searchTasks: SearchTaskData[];
+  businesses: BusinessData[];
+  leads: Array<Record<string, unknown>>;
+  costEvents: CostEventData[];
 }
 
 // ── Metric card ──────────────────────────────────────────────────────────
@@ -182,13 +142,20 @@ function MetricCard({
 }
 
 // ── Search task accordion item ───────────────────────────────────────────
-function SearchTaskItem({ task }: { task: MockSearchTask }) {
+function SearchTaskItem({
+  task,
+  businesses,
+}: {
+  task: SearchTaskData;
+  businesses: BusinessData[];
+}) {
   const [isExpanded, setIsExpanded] = useState(false);
 
+  const normalizedStatus = task.status === 'DONE' ? 'completed' : task.status === 'FAILED' ? 'failed' : 'running';
   const statusColor =
-    task.status === 'completed'
+    normalizedStatus === 'completed'
       ? 'text-zbooni-green'
-      : task.status === 'failed'
+      : normalizedStatus === 'failed'
         ? 'text-red-400'
         : 'text-blue-400';
 
@@ -207,10 +174,10 @@ function SearchTaskItem({ task }: { task: MockSearchTask }) {
         )}
 
         <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-semibold">{task.query}</p>
+          <p className="truncate text-xs font-semibold">{task.queryText}</p>
           <div className="mt-0.5 flex items-center gap-2">
             <span className="text-[10px] text-muted-foreground/40">
-              {task.country}
+              {task.countryCode}
               {task.city ? ` / ${task.city}` : ''}
             </span>
             <span className="text-[10px] text-muted-foreground/25">|</span>
@@ -222,7 +189,7 @@ function SearchTaskItem({ task }: { task: MockSearchTask }) {
 
         <div className="flex items-center gap-3 shrink-0">
           <span className={`text-xs font-bold capitalize ${statusColor}`}>
-            {task.status}
+            {normalizedStatus}
           </span>
           <span className="rounded-md bg-white/[0.04] px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums">
             {task.resultsCount}
@@ -233,38 +200,38 @@ function SearchTaskItem({ task }: { task: MockSearchTask }) {
       {/* Expanded: business list */}
       {isExpanded && (
         <div className="border-t border-border/15 bg-zbooni-dark/10 px-4 py-3">
-          {task.businesses.length > 0 ? (
+          {businesses.length > 0 ? (
             <div className="space-y-2">
-              {task.businesses.map((biz) => (
+              {businesses.map((biz) => (
                 <div
                   key={biz.id}
                   className="flex items-center gap-3 rounded-lg bg-white/[0.02] px-3 py-2"
                 >
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-xs font-semibold">{biz.name}</p>
-                    {biz.domain && (
+                    {biz.websiteDomain && (
                       <p className="text-[10px] text-muted-foreground/40">
-                        {biz.domain}
+                        {biz.websiteDomain}
                       </p>
                     )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    {biz.score !== null && (
+                    {biz.deterministicScore !== null && (
                       <span
                         className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
-                          biz.score >= 0.67
+                          biz.deterministicScore >= 0.67
                             ? 'bg-zbooni-green/10 text-zbooni-green'
-                            : biz.score >= 0.34
+                            : biz.deterministicScore >= 0.34
                               ? 'bg-yellow-500/10 text-yellow-400'
                               : 'bg-red-500/10 text-red-400'
                         }`}
                       >
-                        {biz.score.toFixed(2)}
+                        {biz.deterministicScore.toFixed(2)}
                       </span>
                     )}
-                    {biz.convertedToLead && biz.leadId ? (
+                    {biz.scoreBand ? (
                       <span className="rounded-md bg-zbooni-teal/10 px-2 py-0.5 text-[10px] font-bold text-zbooni-teal">
-                        Converted
+                        {biz.scoreBand}
                       </span>
                     ) : biz.disqualificationReason ? (
                       <span className="rounded-md bg-red-500/10 px-2 py-0.5 text-[10px] font-bold text-red-400/60">
@@ -279,8 +246,6 @@ function SearchTaskItem({ task }: { task: MockSearchTask }) {
                 </div>
               ))}
             </div>
-          ) : task.errorMessage ? (
-            <p className="text-xs text-red-400/70">{task.errorMessage}</p>
           ) : (
             <p className="text-xs text-muted-foreground/40">
               No businesses discovered yet.
@@ -309,6 +274,21 @@ function formatDuration(startIso: string | null, endIso: string | null): string 
   return `${hrs}h ${remMins}m`;
 }
 
+// ── Aggregate cost events by provider ────────────────────────────────────
+function aggregateCosts(events: CostEventData[]) {
+  const map = new Map<string, { calls: number; costCents: number }>();
+  for (const e of events) {
+    const existing = map.get(e.provider) ?? { calls: 0, costCents: 0 };
+    existing.calls += 1;
+    existing.costCents += e.creditCost;
+    map.set(e.provider, existing);
+  }
+  return Array.from(map.entries()).map(([provider, data]) => ({
+    provider,
+    ...data,
+  }));
+}
+
 // ── Main page ────────────────────────────────────────────────────────────
 export default function DiscoveryRunDetailPage() {
   const { apiClient } = useAuth();
@@ -322,6 +302,15 @@ export default function DiscoveryRunDetailPage() {
   const run = useApiQuery<DiscoveryRunStatusResponse>(
     useCallback(
       () => apiClient.getDiscoveryRunStatus(runId),
+      [apiClient, runId],
+    ),
+    [runId],
+  );
+
+  // Fetch run details (real data from API)
+  const details = useApiQuery<RunDetailsResponse>(
+    useCallback(
+      () => apiClient.getDiscoveryRunDetails(runId),
       [apiClient, runId],
     ),
     [runId],
@@ -347,6 +336,7 @@ export default function DiscoveryRunDetailPage() {
     if (isActive) {
       intervalRef.current = setInterval(() => {
         run.refetch();
+        details.refetch();
       }, 10_000);
     }
     return () => {
@@ -355,23 +345,17 @@ export default function DiscoveryRunDetailPage() {
         intervalRef.current = null;
       }
     };
-  }, [isActive, run.refetch]);
+  }, [isActive, run.refetch, details.refetch]);
 
-  // Generate mock drill-down data
-  const mockData = useMemo(() => {
-    if (!run.data) return null;
-    return generateMockData(run.data);
-  }, [run.data]);
+  // Derived data from real API response
+  const searchTasks = (details.data?.searchTasks ?? []) as SearchTaskData[];
+  const businesses = (details.data?.businesses ?? []) as BusinessData[];
+  const costEvents = (details.data?.costEvents ?? []) as CostEventData[];
+  const leads = details.data?.leads ?? [];
 
-  const failedTasks = mockData?.tasks.filter((t) => t.status === 'failed') ?? [];
-  const totalBizCount = mockData?.tasks.reduce((sum, t) => sum + t.businesses.length, 0) ?? 0;
-  const totalLeadCount =
-    mockData?.tasks.reduce(
-      (sum, t) => sum + t.businesses.filter((b) => b.convertedToLead).length,
-      0,
-    ) ?? 0;
-  const totalCostCents =
-    mockData?.costs.reduce((sum, c) => sum + c.costCents, 0) ?? 0;
+  const failedTasks = searchTasks.filter((t) => t.status === 'FAILED');
+  const aggregatedCosts = useMemo(() => aggregateCosts(costEvents), [costEvents]);
+  const totalCostCents = aggregatedCosts.reduce((sum, c) => sum + c.costCents, 0);
 
   // Not found state
   if (run.error && !run.isLoading) {
@@ -500,21 +484,21 @@ export default function DiscoveryRunDetailPage() {
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <MetricCard
           label="Search Tasks"
-          value={run.data.totalItems}
+          value={searchTasks.length || run.data.totalItems}
           icon={Search}
           iconColor="text-blue-400"
           bgColor="bg-blue-500/10"
         />
         <MetricCard
           label="Businesses Found"
-          value={totalBizCount}
+          value={businesses.length}
           icon={Globe}
           iconColor="text-zbooni-teal"
           bgColor="bg-zbooni-teal/10"
         />
         <MetricCard
           label="Leads Converted"
-          value={totalLeadCount}
+          value={leads.length}
           icon={Users}
           iconColor="text-zbooni-green"
           bgColor="bg-zbooni-green/10"
@@ -528,27 +512,39 @@ export default function DiscoveryRunDetailPage() {
         />
       </div>
 
-      {/* Mock data notice */}
-      <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-4 py-2.5">
-        <p className="text-[11px] text-yellow-400/70">
-          Detailed drill-down data is simulated. The details API (Contract 5) will
-          provide real search task and business data post-integration.
-        </p>
-      </div>
+      {/* Details loading indicator */}
+      {details.isLoading && !details.data && (
+        <div className="rounded-lg border border-border/20 bg-zbooni-dark/20 px-4 py-3">
+          <p className="text-[11px] text-muted-foreground/50">Loading run details...</p>
+        </div>
+      )}
+
+      {/* Details error */}
+      {details.error && (
+        <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-2.5">
+          <p className="text-[11px] text-red-400/70">
+            Failed to load run details: {details.error}
+          </p>
+        </div>
+      )}
 
       {/* Search Tasks accordion */}
-      {mockData && mockData.tasks.length > 0 && (
+      {searchTasks.length > 0 && (
         <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
           <div className="mb-4 flex items-center gap-2">
             <Search className="h-4 w-4 text-blue-400" />
             <h2 className="text-base font-bold tracking-tight">Search Tasks</h2>
             <span className="ml-auto rounded-md bg-white/[0.04] px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums text-muted-foreground/60">
-              {mockData.tasks.length}
+              {searchTasks.length}
             </span>
           </div>
           <div className="space-y-2">
-            {mockData.tasks.map((task) => (
-              <SearchTaskItem key={task.id} task={task} />
+            {searchTasks.map((task) => (
+              <SearchTaskItem
+                key={task.id}
+                task={task}
+                businesses={businesses}
+              />
             ))}
           </div>
         </div>
@@ -581,10 +577,10 @@ export default function DiscoveryRunDetailPage() {
                   className="rounded-lg bg-red-500/5 px-3 py-2"
                 >
                   <p className="text-xs font-semibold text-foreground/80">
-                    {task.query}
+                    {task.queryText}
                   </p>
                   <p className="mt-0.5 text-[11px] text-red-400/70">
-                    {task.errorMessage ?? 'Unknown error'}
+                    Task failed
                   </p>
                 </div>
               ))}
@@ -594,7 +590,7 @@ export default function DiscoveryRunDetailPage() {
       )}
 
       {/* Cost breakdown */}
-      {mockData && mockData.costs.length > 0 && (
+      {aggregatedCosts.length > 0 && (
         <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
           <div className="mb-4 flex items-center gap-2">
             <DollarSign className="h-4 w-4 text-yellow-400" />
@@ -618,7 +614,7 @@ export default function DiscoveryRunDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {mockData.costs.map((cost) => (
+                {aggregatedCosts.map((cost) => (
                   <tr
                     key={cost.provider}
                     className="border-b border-border/10 last:border-0"
@@ -637,7 +633,7 @@ export default function DiscoveryRunDetailPage() {
                 <tr className="bg-zbooni-dark/10">
                   <td className="px-4 py-2.5 text-xs font-bold">Total</td>
                   <td className="px-4 py-2.5 text-right font-mono text-xs tabular-nums text-muted-foreground">
-                    {mockData.costs.reduce((s, c) => s + c.calls, 0)}
+                    {aggregatedCosts.reduce((s, c) => s + c.calls, 0)}
                   </td>
                   <td className="px-4 py-2.5 text-right font-mono text-xs font-extrabold tabular-nums text-yellow-400">
                     ${(totalCostCents / 100).toFixed(2)}

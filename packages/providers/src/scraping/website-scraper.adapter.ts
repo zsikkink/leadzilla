@@ -324,6 +324,10 @@ const GENERIC_EMAIL_PREFIXES = new Set([
   'careers',
   'jobs',
   'recruitment',
+  'booking',
+  'bookings',
+  'inquiries',
+  'reservations',
 ]);
 
 const PLATFORM_EMAIL_DOMAINS = new Set([

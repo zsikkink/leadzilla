@@ -27,6 +27,7 @@ const GENERIC_EMAIL_PREFIXES = new Set([
   'hr', 'finance', 'billing', 'accounts', 'reception', 'feedback',
   'appointments', 'events', 'press', 'media', 'partnerships',
   'careers', 'jobs', 'recruitment',
+  'booking', 'bookings', 'inquiries', 'reservations',
 ]);
 
 // ── Payload & Dependencies ─────────────────────────────────────────────
@@ -740,16 +741,17 @@ export async function handleBusinessConvertJob(
 
   // ── 7. Derive lead source from actual provider ───────────────────────────
   let leadSource = 'SERPAPI_DISCOVERY';
-  if (job.data.correlationId) {
-    // Try to derive from BusinessEvidence
-    const evidence = await prisma.businessEvidence.findFirst({
-      where: { businessId },
-      select: { sourceType: true },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (evidence?.sourceType) {
-      leadSource = evidence.sourceType;
-    }
+  const evidence = await prisma.businessEvidence.findFirst({
+    where: { businessId },
+    select: { sourceType: true },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (evidence?.sourceType) {
+    leadSource = evidence.sourceType.includes('GOOGLE_PLACES')
+      ? 'GOOGLE_PLACES_DISCOVERY'
+      : evidence.sourceType.includes('SERP')
+        ? 'SERPAPI_DISCOVERY'
+        : evidence.sourceType;
   }
 
   // ── 8. Create Lead + BusinessConversion + BusinessContacts + CostEvents in ONE tx ─

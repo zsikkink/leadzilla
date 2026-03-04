@@ -39,13 +39,6 @@ export interface MessageGenerationResult {
   message: MessageVariantContent;
 }
 
-/** @deprecated Use MessageGenerationResult — kept for backward-compat during migration */
-export interface MessageVariantPair {
-  model: string;
-  variant_a: MessageVariantContent;
-  variant_b: MessageVariantContent;
-}
-
 export interface LeadScoringContext {
   featuresJson: Record<string, unknown>;
   icpDescription: string;

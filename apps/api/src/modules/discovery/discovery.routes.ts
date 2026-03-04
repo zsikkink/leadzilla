@@ -300,6 +300,7 @@ export function registerDiscoveryRoutes(
               countryCode: true,
               city: true,
               status: true,
+              taskType: true,
               _count: { select: { businessEvidence: true } },
             },
             orderBy: { createdAt: 'asc' },
@@ -333,7 +334,7 @@ export function registerDiscoveryRoutes(
           city: t.city,
           status: t.status,
           resultsCount: t._count.businessEvidence,
-          provider: 'SERPAPI',
+          provider: t.taskType.startsWith('SERP_') ? 'SERPAPI' : t.taskType,
         })),
         businesses: businesses.map((b) => ({
           id: b.id,

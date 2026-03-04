@@ -257,6 +257,16 @@ export class ApiClient {
     return this.request(`/v1/discovery/runs${qs}`);
   }
 
+  getDiscoveryRunDetails(runId: string): Promise<{
+    run: Record<string, unknown>;
+    searchTasks: Array<{ id: string; queryText: string; countryCode: string; city: string | null; status: string; resultsCount: number; provider: string }>;
+    businesses: Array<{ id: string; name: string; websiteDomain: string | null; deterministicScore: number | null; scoreBand: string | null; preQualified: boolean; disqualificationReason: string | null }>;
+    leads: Array<Record<string, unknown>>;
+    costEvents: Array<{ id: string; provider: string; action: string; creditCost: number; createdAt: string }>;
+  }> {
+    return this.request(`/v1/discovery/runs/${runId}/details`);
+  }
+
   getPipelineStats(): Promise<PipelineStatsResponse> {
     return this.request('/v1/stats/pipeline');
   }

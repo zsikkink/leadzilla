@@ -240,12 +240,6 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
               bodyText: 'TODO: LLM generation',
               isSelected: false,
             },
-            {
-              variantKey: 'variant_b',
-              channel: input.channel,
-              bodyText: 'TODO: LLM generation',
-              isSelected: false,
-            },
           ],
         },
       },

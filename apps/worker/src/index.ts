@@ -586,7 +586,7 @@ async function main(): Promise<void> {
             ENRICHMENT_RUN_JOB_NAME,
             enrichmentPayload,
             {
-              singletonKey: `enrichment.run:${payload.leadId}:convert`,
+              singletonKey: `enrichment.run:${payload.leadId}`,
               ...ENRICHMENT_RUN_RETRY_OPTIONS,
             },
           );

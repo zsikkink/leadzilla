@@ -386,7 +386,8 @@ export async function handleMessageGenerateJob(
     const instrSetting = await prisma.pipelineSetting.findUnique({
       where: { key: 'messagingInstructions' },
     });
-    const messagingInstructions = instrSetting?.valueJson as string | null;
+    const rawInstr = instrSetting?.valueJson;
+    const messagingInstructions = typeof rawInstr === 'string' ? rawInstr : null;
 
     const groundingContext = {
       leadName: `${lead.firstName} ${lead.lastName}`,

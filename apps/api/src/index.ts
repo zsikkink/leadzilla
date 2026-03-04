@@ -294,7 +294,7 @@ async function main(): Promise<void> {
               icpProfileId,
             },
             {
-              singletonKey: `outbox:${outboxEvent.id}`,
+              singletonKey: `enrichment.run:${lead.id}`,
               retryLimit: 3,
               retryDelay: 5,
               retryBackoff: true,

@@ -505,19 +505,34 @@ export default function LeadDetailPage() {
         // Fetch team members from business_contacts table
         const { data: contacts } = await supabase
           .from('business_contacts')
-          .select('id, full_name, job_title, email, linkedin_url')
-          .eq('business_id', bizId)
-          .order('created_at', { ascending: false })
+          .select('id, name, title, email, phone, linkedinUrl, seniority, positionRank, source')
+          .eq('businessId', bizId)
+          .order('createdAt', { ascending: false })
           .limit(10);
 
-        if (contacts && !cancelled) {
-          setTeamMembers(contacts.map((c: { id: string; full_name: string; job_title: string | null; email: string | null; linkedin_url: string | null }) => ({
+        if (contacts && contacts.length > 0 && !cancelled) {
+          setTeamMembers(contacts.map((c: { id: string; name: string; title: string | null; email: string | null; linkedinUrl: string | null }) => ({
             id: c.id,
-            fullName: c.full_name,
-            jobTitle: c.job_title,
+            fullName: c.name,
+            jobTitle: c.title,
             email: c.email,
-            linkedinUrl: c.linkedin_url,
+            linkedinUrl: c.linkedinUrl,
           })));
+        } else if (!cancelled) {
+          // Fallback: extract decision makers from website scrape data
+          const websiteScrape = biz.apify_website_scrape_json as Record<string, unknown> | null;
+          if (websiteScrape) {
+            const dms = websiteScrape.decisionMakers as Array<Record<string, unknown>> | undefined;
+            if (Array.isArray(dms) && dms.length > 0) {
+              setTeamMembers(dms.slice(0, 10).map((dm, idx) => ({
+                id: `dm-${idx}`,
+                fullName: typeof dm.name === 'string' ? dm.name : 'Unknown',
+                jobTitle: typeof dm.title === 'string' ? dm.title : null,
+                email: typeof dm.email === 'string' ? dm.email : null,
+                linkedinUrl: typeof dm.linkedinUrl === 'string' ? dm.linkedinUrl : null,
+              })));
+            }
+          }
         }
 
         // Extract Instagram recent posts from scrape data

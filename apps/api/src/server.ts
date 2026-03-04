@@ -45,6 +45,22 @@ import { registerSettingsRoutes } from './modules/settings/settings.routes.js';
 import { registerStatsRoutes } from './modules/stats/stats.routes.js';
 import { registerWebhookRoutes } from './modules/webhook/webhook.routes.js';
 
+// ── Generic email filter (inline — API can't import @lead-flood/providers) ──
+const GENERIC_PREFIXES = new Set([
+  'info', 'contact', 'hello', 'support', 'admin', 'sales', 'office',
+  'help', 'service', 'enquiry', 'inquiry', 'inquiries', 'general', 'team',
+  'mail', 'noreply', 'no-reply', 'webmaster', 'postmaster', 'marketing',
+  'hr', 'finance', 'billing', 'accounts', 'reception', 'feedback',
+  'appointments', 'events', 'press', 'media', 'partnerships',
+  'careers', 'jobs', 'recruitment', 'booking', 'bookings', 'reservations',
+]);
+
+function isGenericEmail(email: string): boolean {
+  const prefix = email.split('@')[0]?.toLowerCase();
+  if (!prefix) return true;
+  return GENERIC_PREFIXES.has(prefix);
+}
+
 export class LeadAlreadyExistsError extends Error {
   constructor(message = 'Lead already exists') {
     super(message);
@@ -190,6 +206,15 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         reply.status(400);
         return ErrorResponseSchema.parse({
           error: 'Invalid lead payload',
+          requestId: request.id,
+        });
+      }
+
+      // Reject generic emails (info@, contact@, etc.)
+      if (isGenericEmail(parsedRequest.data.email)) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'Generic email addresses (info@, contact@, etc.) are not accepted. Please provide a personal email.',
           requestId: request.id,
         });
       }
