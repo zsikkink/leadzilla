@@ -54,7 +54,7 @@ function VariantEditor({
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-            {variant.variantKey}
+            Message
           </span>
           <span
             className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${

@@ -39,32 +39,6 @@ const PAGE_SIZE_OPTIONS = [
   { value: '50', label: '50 per page' },
 ];
 
-// ── Source name formatting ──────────────────────────────
-const SOURCE_DISPLAY_MAP: Record<string, string> = {
-  apollo: 'Apollo',
-  linkedin_scrape: 'LinkedIn',
-  linkedin: 'LinkedIn',
-  google_search: 'Google',
-  google_places: 'Google Places',
-  brave_search: 'Brave',
-  company_search_free: 'Company Search',
-  manual: 'Manual',
-  import: 'Import',
-  csv: 'CSV',
-  api: 'API',
-};
-
-function formatSource(source: string): string {
-  const lower = source.toLowerCase();
-  if (SOURCE_DISPLAY_MAP[lower]) {
-    return SOURCE_DISPLAY_MAP[lower];
-  }
-  // Capitalize each word, replace underscores with spaces
-  return source
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
 // ── Extract blended score from enrichment data ──────────
 function extractBlendedScore(enrichmentData: unknown): number | null {
   if (!enrichmentData || typeof enrichmentData !== 'object') return null;
@@ -234,7 +208,6 @@ export default function LeadsPage() {
                     Phone
                   </span>
                 </th>
-                <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Source</th>
                 <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
                 <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Band</th>
                 <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Score</th>
@@ -271,11 +244,6 @@ export default function LeadsPage() {
                       ) : (
                         <span className="text-muted-foreground/30">&mdash;</span>
                       )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="inline-flex rounded-full bg-zbooni-dark/40 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                        {formatSource(lead.source)}
-                      </span>
                     </td>
                     <td className="px-4 py-3">
                       <LeadStatusBadge status={lead.status} />
@@ -345,7 +313,7 @@ export default function LeadsPage() {
               })}
               {leads.isLoading ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
+                  <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
                     <div className="flex items-center justify-center gap-2">
                       <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
                       Loading leads...
@@ -355,7 +323,7 @@ export default function LeadsPage() {
               ) : null}
               {!leads.isLoading && displayedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
+                  <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
                     No leads found.
                   </td>
                 </tr>

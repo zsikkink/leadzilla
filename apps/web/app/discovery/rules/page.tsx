@@ -62,6 +62,15 @@ interface SimFormState {
   certificationCount: number;
   instagramBusinessCategory: string;
   instagramHasBusinessEmail: boolean;
+  // Data alignment & business signals
+  dataAlignmentScore: number;
+  industrySupported: boolean;
+  customOrderSignals: boolean;
+  hasBookingOrContactForm: boolean;
+  paymentWidgetCount: number;
+  hasPricingTiers: boolean;
+  pureSelfServeEcom: boolean;
+  priceLedMindset: boolean;
 }
 
 const DEFAULT_SIM: SimFormState = {
@@ -91,14 +100,28 @@ const DEFAULT_SIM: SimFormState = {
   certificationCount: 1,
   instagramBusinessCategory: '',
   instagramHasBusinessEmail: false,
+  // Data alignment & business signals
+  dataAlignmentScore: 0.7,
+  industrySupported: true,
+  customOrderSignals: false,
+  hasBookingOrContactForm: true,
+  paymentWidgetCount: 1,
+  hasPricingTiers: false,
+  pureSelfServeEcom: false,
+  priceLedMindset: false,
 };
 
 const COUNTRY_OPTIONS = ['AE', 'SA', 'JO', 'EG', 'KW', 'BH', 'QA', 'OM', 'Other'];
 
-/* Field key → form field mapping for simulation (covers 67 feature keys) */
+/* Field key → form field mapping for simulation.
+ * MUST cover every fieldKey used in UNIVERSAL_RULES (seed.ts) or evaluateRule() returns false → score=0 */
 const FIELD_KEY_MAP: Record<string, (form: SimFormState) => unknown> = {
-  country_code: (f) => f.country,
+  // HARD_FILTER keys (3) — country, has_email, data_alignment_score
+  country: (f) => f.country,
+  country_code: (f) => f.country, // alias
   has_email: (f) => f.hasEmail,
+  data_alignment_score: (f) => f.dataAlignmentScore,
+  // Core business fields
   industry: (f) => f.industry,
   employee_count: (f) => f.companySize,
   review_count: (f) => f.reviewCount,
@@ -122,9 +145,16 @@ const FIELD_KEY_MAP: Record<string, (form: SimFormState) => unknown> = {
   has_analytics: (f) => f.hasAnalytics,
   estimated_employees: (f) => f.estimatedEmployees,
   certification_count: (f) => f.certificationCount,
-
   instagram_business_category: (f) => f.instagramBusinessCategory,
   instagram_has_business_email: (f) => f.instagramHasBusinessEmail,
+  // Business signal fields from UNIVERSAL_RULES
+  industry_supported: (f) => f.industrySupported,
+  custom_order_signals: (f) => f.customOrderSignals,
+  has_booking_or_contact_form: (f) => f.hasBookingOrContactForm,
+  apify_payment_widget_count: (f) => f.paymentWidgetCount,
+  apify_has_pricing_tiers: (f) => f.hasPricingTiers,
+  pure_self_serve_ecom: (f) => f.pureSelfServeEcom,
+  price_led_mindset: (f) => f.priceLedMindset,
 };
 
 /* ------------------------------------------------------------------ */
@@ -716,6 +746,57 @@ export default function ICPRulesPage() {
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
                   <input type="checkbox" checked={simForm.instagramHasBusinessEmail} onChange={(e) => setSimForm((prev) => ({ ...prev, instagramHasBusinessEmail: e.target.checked }))} />
                   IG Business Email
+                </label>
+              </div>
+
+              {/* Data alignment & business signals */}
+              <p className="mt-5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">Data Alignment &amp; Business Signals</p>
+              <div className="form-grid mt-2">
+                <label>
+                  Data Alignment Score
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={simForm.dataAlignmentScore}
+                      onChange={(e) => setSimForm((prev) => ({ ...prev, dataAlignmentScore: Number(e.target.value) }))}
+                      className="flex-1"
+                    />
+                    <span className="font-mono text-xs tabular-nums w-8 text-right">{simForm.dataAlignmentScore.toFixed(2)}</span>
+                  </div>
+                </label>
+                <label>
+                  Payment Widgets
+                  <input type="number" min={0} value={simForm.paymentWidgetCount} onChange={(e) => setSimForm((prev) => ({ ...prev, paymentWidgetCount: Number(e.target.value) || 0 }))} />
+                </label>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.industrySupported} onChange={(e) => setSimForm((prev) => ({ ...prev, industrySupported: e.target.checked }))} />
+                  Industry Supported
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.customOrderSignals} onChange={(e) => setSimForm((prev) => ({ ...prev, customOrderSignals: e.target.checked }))} />
+                  Custom Order Signals
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.hasBookingOrContactForm} onChange={(e) => setSimForm((prev) => ({ ...prev, hasBookingOrContactForm: e.target.checked }))} />
+                  Booking/Contact Form
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.hasPricingTiers} onChange={(e) => setSimForm((prev) => ({ ...prev, hasPricingTiers: e.target.checked }))} />
+                  Has Pricing Tiers
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.pureSelfServeEcom} onChange={(e) => setSimForm((prev) => ({ ...prev, pureSelfServeEcom: e.target.checked }))} />
+                  Pure Self-Serve Ecom
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.priceLedMindset} onChange={(e) => setSimForm((prev) => ({ ...prev, priceLedMindset: e.target.checked }))} />
+                  Price-Led Mindset
                 </label>
               </div>
 

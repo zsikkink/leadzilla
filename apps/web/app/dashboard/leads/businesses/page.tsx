@@ -74,6 +74,15 @@ function extractSocialLinks(scrape: Record<string, unknown>): Array<{ platform: 
 }
 
 function extractTechStack(scrape: Record<string, unknown>): Array<{ category: string; technologies: string[] }> {
+  // New adapter format: technologies is an object { analytics: [], crm: [], ... }
+  const techObj = scrape.technologies;
+  if (techObj && typeof techObj === 'object' && !Array.isArray(techObj)) {
+    return Object.entries(techObj as Record<string, unknown>)
+      .filter(([, techs]) => Array.isArray(techs) && techs.length > 0)
+      .map(([category, techs]) => ({ category, technologies: techs as string[] }))
+      .slice(0, 10);
+  }
+  // Legacy format: techStack is an array of { category, technologies[] }
   const raw = scrape.techStack;
   if (!Array.isArray(raw)) return [];
   return raw.filter((ts): ts is { category: string; technologies: string[] } => ts && typeof ts.category === 'string').slice(0, 10);
@@ -86,6 +95,24 @@ function extractCertifications(scrape: Record<string, unknown>): string[] {
 }
 
 function extractContactInfo(scrape: Record<string, unknown>): { emails: string[]; phones: string[]; addresses: string[] } {
+  // New format: contactInfo.emails[{email}] / contactInfo.phones[{number}] / contactInfo.addresses[{text}]
+  const ci = scrape.contactInfo;
+  if (ci && typeof ci === 'object') {
+    const c = ci as Record<string, unknown>;
+    const emails = Array.isArray(c.emails)
+      ? c.emails.map((e: unknown) => (e && typeof e === 'object' && 'email' in (e as Record<string, unknown>)) ? String((e as Record<string, unknown>).email) : typeof e === 'string' ? e : null).filter((e): e is string => e !== null)
+      : [];
+    const phones = Array.isArray(c.phones)
+      ? c.phones.map((p: unknown) => (p && typeof p === 'object' && 'number' in (p as Record<string, unknown>)) ? String((p as Record<string, unknown>).number) : typeof p === 'string' ? p : null).filter((p): p is string => p !== null)
+      : [];
+    const addresses = Array.isArray(c.addresses)
+      ? c.addresses.map((a: unknown) => (a && typeof a === 'object' && 'text' in (a as Record<string, unknown>)) ? String((a as Record<string, unknown>).text) : typeof a === 'string' ? a : null).filter((a): a is string => a !== null)
+      : [];
+    if (emails.length > 0 || phones.length > 0 || addresses.length > 0) {
+      return { emails, phones, addresses };
+    }
+  }
+  // Legacy format: flat arrays of strings at top level
   const emails = Array.isArray(scrape.emails) ? scrape.emails.filter((e): e is string => typeof e === 'string') : [];
   const phones = Array.isArray(scrape.phones) ? scrape.phones.filter((p): p is string => typeof p === 'string') : [];
   const addresses = Array.isArray(scrape.addresses) ? scrape.addresses.filter((a): a is string => typeof a === 'string') : [];
@@ -110,6 +137,29 @@ function extractInstagramData(scrape: Record<string, unknown>): {
     isProfessional: Boolean(scrape.isProfessionalAccount),
     bio: (scrape.biography as string) ?? (scrape.bio as string) ?? null,
   };
+}
+
+function extractInstagramPosts(scrape: Record<string, unknown>): Array<{ caption: string; likes: number; comments: number; timestamp: string; url: string | null }> {
+  const raw = scrape.recentPosts;
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 6).map((p: unknown) => {
+    const post = p as Record<string, unknown>;
+    return {
+      caption: typeof post.caption === 'string' ? post.caption : '',
+      likes: typeof post.likes === 'number' ? post.likes : (typeof post.likesCount === 'number' ? post.likesCount : 0),
+      comments: typeof post.comments === 'number' ? post.comments : (typeof post.commentsCount === 'number' ? post.commentsCount : 0),
+      timestamp: typeof post.timestamp === 'string' ? post.timestamp : (typeof post.takenAtTimestamp === 'string' ? post.takenAtTimestamp : ''),
+      url: typeof post.url === 'string' ? post.url : (typeof post.shortCode === 'string' ? `https://instagram.com/p/${post.shortCode}` : null),
+    };
+  });
+}
+
+interface BusinessContact {
+  id: string;
+  fullName: string;
+  jobTitle: string | null;
+  email: string | null;
+  linkedinUrl: string | null;
 }
 
 // ── Score badge ──────────────────────────────────────────────────────────────
@@ -201,7 +251,7 @@ function Section({ title, icon: Icon, iconColor, count, children, defaultOpen }:
 
 // ── Detail panel ─────────────────────────────────────────────────────────────
 
-function BusinessDetailPanel({ biz, onClose }: { biz: BusinessRow; onClose: () => void }) {
+function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; contacts: BusinessContact[]; onClose: () => void }) {
   const websiteScrape = biz.apify_website_scrape_json;
   const instagramScrape = biz.apify_instagram_scrape_json;
 
@@ -211,6 +261,7 @@ function BusinessDetailPanel({ biz, onClose }: { biz: BusinessRow; onClose: () =
   const certifications = websiteScrape ? extractCertifications(websiteScrape) : [];
   const contactInfo = websiteScrape ? extractContactInfo(websiteScrape) : { emails: [], phones: [], addresses: [] };
   const igData = instagramScrape ? extractInstagramData(instagramScrape) : null;
+  const igPosts = instagramScrape ? extractInstagramPosts(instagramScrape) : [];
 
   return (
     <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
@@ -428,6 +479,58 @@ function BusinessDetailPanel({ biz, onClose }: { biz: BusinessRow; onClose: () =
           </Section>
         )}
 
+        {/* Instagram Recent Posts */}
+        {igPosts.length > 0 && (
+          <Section title="Recent Instagram Posts" icon={Instagram} iconColor="text-pink-400" count={igPosts.length}>
+            <div className="space-y-2">
+              {igPosts.map((post, i) => (
+                <div key={i} className="rounded-lg border border-border/20 bg-slate-800 px-3 py-2">
+                  <p className="text-xs text-foreground/70 line-clamp-2">{post.caption || 'No caption'}</p>
+                  <div className="mt-1.5 flex items-center gap-3 text-[10px] text-muted-foreground/40">
+                    <span>{post.likes.toLocaleString()} likes</span>
+                    <span>{post.comments.toLocaleString()} comments</span>
+                    {post.timestamp ? <span>{new Date(post.timestamp).toLocaleDateString()}</span> : null}
+                    {post.url ? (
+                      <a href={post.url} target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-0.5 text-pink-400 hover:text-pink-300 transition-colors">
+                        View <ExternalLink className="h-2.5 w-2.5" />
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {/* Team Members (from business_contacts) */}
+        {contacts.length > 0 && (
+          <Section title="Team Members" icon={Users} iconColor="text-amber-400" count={contacts.length} defaultOpen>
+            <div className="space-y-2">
+              {contacts.map((tm) => (
+                <div key={tm.id} className="flex items-center gap-3 rounded-lg border border-border/20 bg-slate-800 px-3 py-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-md bg-amber-500/10 text-[10px] font-bold text-amber-400">{tm.fullName.charAt(0)}</div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold truncate">{tm.fullName}</p>
+                    {tm.jobTitle ? <p className="text-[10px] text-muted-foreground/50 truncate">{tm.jobTitle}</p> : null}
+                  </div>
+                  <div className="flex shrink-0 gap-1.5">
+                    {tm.email ? (
+                      <a href={`mailto:${tm.email}`} title={tm.email} className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
+                        <Mail className="h-3 w-3" />
+                      </a>
+                    ) : null}
+                    {tm.linkedinUrl ? (
+                      <a href={tm.linkedinUrl} target="_blank" rel="noopener noreferrer" title="LinkedIn" className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
+
         {/* Scraped timestamps */}
         <div className="flex gap-4 text-[10px] text-muted-foreground/30">
           {biz.website_scraped_at && <span>Website scraped: {new Date(biz.website_scraped_at).toLocaleDateString()}</span>}
@@ -457,6 +560,7 @@ export default function BusinessIntelligencePage() {
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('selected'));
+  const [selectedContacts, setSelectedContacts] = useState<BusinessContact[]>([]);
   const [page, setPage] = useState(1);
   const pageSize = 30;
 
@@ -542,6 +646,40 @@ export default function BusinessIntelligencePage() {
   useEffect(() => {
     void fetchBusinesses(page);
   }, [page, fetchBusinesses]);
+
+  // Fetch business_contacts when a business is selected
+  useEffect(() => {
+    if (!selectedId) {
+      setSelectedContacts([]);
+      return;
+    }
+    let cancelled = false;
+    async function fetchContacts() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data: contacts } = await supabase
+          .from('business_contacts')
+          .select('id, full_name, job_title, email, linkedin_url')
+          .eq('business_id', selectedId)
+          .order('created_at', { ascending: false })
+          .limit(10);
+
+        if (contacts && !cancelled) {
+          setSelectedContacts(contacts.map((c: { id: string; full_name: string; job_title: string | null; email: string | null; linkedin_url: string | null }) => ({
+            id: c.id,
+            fullName: c.full_name,
+            jobTitle: c.job_title,
+            email: c.email,
+            linkedinUrl: c.linkedin_url,
+          })));
+        }
+      } catch {
+        // Silently fail — supplementary data
+      }
+    }
+    void fetchContacts();
+    return () => { cancelled = true; };
+  }, [selectedId]);
 
   const filtered = useMemo(() => {
     if (!searchQuery.trim()) return businesses;
@@ -630,7 +768,7 @@ export default function BusinessIntelligencePage() {
 
         {/* Right: detail panel */}
         {selected ? (
-          <BusinessDetailPanel biz={selected} onClose={() => setSelectedId(null)} />
+          <BusinessDetailPanel biz={selected} contacts={selectedContacts} onClose={() => setSelectedId(null)} />
         ) : (
           <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
             <div className="flex flex-col items-center justify-center py-20">

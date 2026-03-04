@@ -463,6 +463,8 @@ export default function LeadDetailPage() {
   // Fetch linked Business scraper data via business_conversions → businesses
   const [businessData, setBusinessData] = useState<BusinessScrapeData | null>(null);
   const [businessId, setBusinessId] = useState<string | null>(null);
+  const [teamMembers, setTeamMembers] = useState<Array<{ id: string; fullName: string; jobTitle: string | null; email: string | null; linkedinUrl: string | null }>>([]);
+  const [instagramPosts, setInstagramPosts] = useState<Array<{ caption: string; likes: number; comments: number; timestamp: string; url: string | null }>>([]);
   useEffect(() => {
     let cancelled = false;
     async function fetchBusiness() {
@@ -499,6 +501,39 @@ export default function LeadDetailPage() {
           followerCount: biz.follower_count,
           category: biz.category,
         });
+
+        // Fetch team members from business_contacts table
+        const { data: contacts } = await supabase
+          .from('business_contacts')
+          .select('id, full_name, job_title, email, linkedin_url')
+          .eq('business_id', bizId)
+          .order('created_at', { ascending: false })
+          .limit(10);
+
+        if (contacts && !cancelled) {
+          setTeamMembers(contacts.map((c: { id: string; full_name: string; job_title: string | null; email: string | null; linkedin_url: string | null }) => ({
+            id: c.id,
+            fullName: c.full_name,
+            jobTitle: c.job_title,
+            email: c.email,
+            linkedinUrl: c.linkedin_url,
+          })));
+        }
+
+        // Extract Instagram recent posts from scrape data
+        const igScrape = biz.apify_instagram_scrape_json as Record<string, unknown> | null;
+        if (igScrape && Array.isArray(igScrape.recentPosts) && !cancelled) {
+          const posts = (igScrape.recentPosts as Array<Record<string, unknown>>)
+            .slice(0, 6)
+            .map((p) => ({
+              caption: typeof p.caption === 'string' ? p.caption : '',
+              likes: typeof p.likes === 'number' ? p.likes : (typeof p.likesCount === 'number' ? p.likesCount : 0),
+              comments: typeof p.comments === 'number' ? p.comments : (typeof p.commentsCount === 'number' ? p.commentsCount : 0),
+              timestamp: typeof p.timestamp === 'string' ? p.timestamp : (typeof p.takenAtTimestamp === 'string' ? p.takenAtTimestamp : ''),
+              url: typeof p.url === 'string' ? p.url : (typeof p.shortCode === 'string' ? `https://instagram.com/p/${p.shortCode}` : null),
+            }));
+          setInstagramPosts(posts);
+        }
       } catch {
         // Silently fail — business intel is supplementary
       }
@@ -730,6 +765,70 @@ export default function LeadDetailPage() {
             ) : null}
           </h2>
           <IntelligenceGathered data={businessData} />
+        </div>
+      ) : null}
+
+      {/* Team Members (from business_contacts table) */}
+      {teamMembers.length > 0 ? (
+        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+          <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
+            <Users className="h-4 w-4 text-amber-400" />
+            Team Members
+            <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">{teamMembers.length}</span>
+          </h2>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {teamMembers.map((tm) => (
+              <div key={tm.id} className="flex items-center gap-3 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2.5">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-[11px] font-bold text-amber-400">
+                  {tm.fullName.charAt(0)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold truncate">{tm.fullName}</p>
+                  {tm.jobTitle ? <p className="text-[11px] text-muted-foreground/50 truncate">{tm.jobTitle}</p> : null}
+                </div>
+                <div className="flex shrink-0 gap-1.5">
+                  {tm.email ? (
+                    <a href={`mailto:${tm.email}`} title={tm.email} className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
+                      <Mail className="h-3.5 w-3.5" />
+                    </a>
+                  ) : null}
+                  {tm.linkedinUrl ? (
+                    <a href={tm.linkedinUrl} target="_blank" rel="noopener noreferrer" title="LinkedIn" className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
+                      <Linkedin className="h-3.5 w-3.5" />
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Instagram Recent Posts */}
+      {instagramPosts.length > 0 ? (
+        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+          <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
+            <Instagram className="h-4 w-4 text-pink-400" />
+            Recent Instagram Posts
+            <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">{instagramPosts.length}</span>
+          </h2>
+          <div className="space-y-3">
+            {instagramPosts.map((post, i) => (
+              <div key={i} className="rounded-lg border border-border/20 bg-zbooni-dark/30 px-4 py-3">
+                <p className="text-sm text-muted-foreground/80 line-clamp-3">{post.caption || 'No caption'}</p>
+                <div className="mt-2 flex items-center gap-4 text-[11px] text-muted-foreground/50">
+                  <span>{post.likes.toLocaleString()} likes</span>
+                  <span>{post.comments.toLocaleString()} comments</span>
+                  {post.timestamp ? <span>{new Date(post.timestamp).toLocaleDateString()}</span> : null}
+                  {post.url ? (
+                    <a href={post.url} target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 text-pink-400 hover:text-pink-300 transition-colors">
+                      View <ExternalLink className="h-2.5 w-2.5" />
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
 
