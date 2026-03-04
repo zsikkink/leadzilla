@@ -121,31 +121,102 @@ interface BusinessScrapeData {
   category: string | null;
 }
 
-function extractBusinessDecisionMakers(scrape: Record<string, unknown>): Array<{ name: string; title: string }> {
+interface DecisionMaker { name: string; title: string; email?: string | undefined; linkedinUrl?: string | undefined }
+interface ContactEmail { email: string; context?: string | undefined }
+interface ContactPhone { number: string; type?: string | undefined }
+interface ContactAddress { text: string }
+interface SocialLink { platform: string; url: string; handle?: string | undefined }
+
+function extractBusinessDecisionMakers(scrape: Record<string, unknown>): DecisionMaker[] {
   const raw = scrape.decisionMakers;
   if (!Array.isArray(raw)) return [];
-  return raw.filter((dm): dm is { name: string; title: string } => dm && typeof dm.name === 'string').slice(0, 5);
+  return raw
+    .filter((dm): dm is DecisionMaker => dm && typeof dm.name === 'string')
+    .slice(0, 5);
 }
 
 function extractBusinessTechStack(scrape: Record<string, unknown>): Array<{ category: string; technologies: string[] }> {
+  // New adapter format: technologies is an object { analytics: [], crm: [], ... }
+  const techObj = scrape.technologies;
+  if (techObj && typeof techObj === 'object' && !Array.isArray(techObj)) {
+    return Object.entries(techObj as Record<string, unknown>)
+      .filter(([, techs]) => Array.isArray(techs) && techs.length > 0)
+      .map(([category, techs]) => ({ category, technologies: (techs as string[]) }))
+      .slice(0, 8);
+  }
+  // Legacy format: techStack is an array of { category, technologies[] }
   const raw = scrape.techStack;
   if (!Array.isArray(raw)) return [];
-  return raw.filter((ts): ts is { category: string; technologies: string[] } => ts && typeof ts.category === 'string').slice(0, 8);
+  return raw
+    .filter((ts): ts is { category: string; technologies: string[] } => ts && typeof ts.category === 'string')
+    .slice(0, 8);
 }
 
-function extractBusinessSocialLinks(scrape: Record<string, unknown>): Array<{ platform: string; url: string }> {
+function extractBusinessSocialLinks(scrape: Record<string, unknown>): SocialLink[] {
   const raw = scrape.socialLinks;
   if (!Array.isArray(raw)) return [];
-  return raw.filter((sl): sl is { platform: string; url: string } => sl && typeof sl.platform === 'string').slice(0, 8);
+  return raw
+    .filter((sl): sl is SocialLink => sl && typeof sl.platform === 'string')
+    .slice(0, 8);
 }
 
 function extractBusinessCertifications(scrape: Record<string, unknown>): string[] {
+  // New adapter format: businessSignals.certifications
+  const signals = scrape.businessSignals;
+  if (signals && typeof signals === 'object') {
+    const s = signals as Record<string, unknown>;
+    if (Array.isArray(s.certifications) && s.certifications.length > 0) {
+      return s.certifications.filter((c): c is string => typeof c === 'string').slice(0, 8);
+    }
+  }
+  // Legacy format: certifications at top level
   const raw = scrape.certifications;
   if (!Array.isArray(raw)) return [];
   return raw.filter((c): c is string => typeof c === 'string').slice(0, 8);
 }
 
-function CompanyIntelligence({ data }: { data: BusinessScrapeData }) {
+function extractContactEmails(scrape: Record<string, unknown>): ContactEmail[] {
+  // New format: contactInfo.emails
+  const ci = scrape.contactInfo;
+  if (ci && typeof ci === 'object') {
+    const c = ci as Record<string, unknown>;
+    if (Array.isArray(c.emails)) {
+      return c.emails.filter((e): e is ContactEmail => e && typeof e.email === 'string').slice(0, 5);
+    }
+  }
+  // Legacy: emails at top level
+  if (Array.isArray(scrape.emails)) {
+    return scrape.emails.filter((e): e is ContactEmail => e && typeof e.email === 'string').slice(0, 5);
+  }
+  return [];
+}
+
+function extractContactPhones(scrape: Record<string, unknown>): ContactPhone[] {
+  const ci = scrape.contactInfo;
+  if (ci && typeof ci === 'object') {
+    const c = ci as Record<string, unknown>;
+    if (Array.isArray(c.phones)) {
+      return c.phones.filter((p): p is ContactPhone => p && typeof p.number === 'string').slice(0, 5);
+    }
+  }
+  if (Array.isArray(scrape.phones)) {
+    return scrape.phones.filter((p): p is ContactPhone => p && typeof p.number === 'string').slice(0, 5);
+  }
+  return [];
+}
+
+function extractContactAddresses(scrape: Record<string, unknown>): ContactAddress[] {
+  const ci = scrape.contactInfo;
+  if (ci && typeof ci === 'object') {
+    const c = ci as Record<string, unknown>;
+    if (Array.isArray(c.addresses)) {
+      return c.addresses.filter((a): a is ContactAddress => a && typeof a.text === 'string').slice(0, 3);
+    }
+  }
+  return [];
+}
+
+function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
   const ws = data.websiteScrape;
   const ig = data.instagramScrape;
 
@@ -153,11 +224,21 @@ function CompanyIntelligence({ data }: { data: BusinessScrapeData }) {
   const techStack = ws ? extractBusinessTechStack(ws) : [];
   const socialLinks = ws ? extractBusinessSocialLinks(ws) : [];
   const certs = ws ? extractBusinessCertifications(ws) : [];
+  const emails = ws ? extractContactEmails(ws) : [];
+  const phones = ws ? extractContactPhones(ws) : [];
+  const addresses = ws ? extractContactAddresses(ws) : [];
+
   const igVerified = ig ? Boolean(ig.isVerified) : false;
   const igCategory = ig ? (ig.businessCategory as string) ?? null : null;
   const igMediaCount = ig && typeof ig.mediaCount === 'number' ? ig.mediaCount : null;
+  const igBio = ig && typeof ig.biography === 'string' ? ig.biography : null;
+  const igBusinessEmail = ig && typeof ig.businessEmail === 'string' ? ig.businessEmail : null;
+  const igBusinessPhone = ig && typeof ig.businessPhone === 'string' ? ig.businessPhone : null;
 
-  const hasAnyData = decisionMakers.length > 0 || techStack.length > 0 || socialLinks.length > 0 || certs.length > 0 || igVerified || igCategory;
+  const hasAnyData =
+    decisionMakers.length > 0 || techStack.length > 0 || socialLinks.length > 0 ||
+    certs.length > 0 || emails.length > 0 || phones.length > 0 || addresses.length > 0 ||
+    igVerified || igCategory || igBio;
 
   if (!hasAnyData) {
     return (
@@ -168,7 +249,7 @@ function CompanyIntelligence({ data }: { data: BusinessScrapeData }) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* Quick stats row */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {data.rating !== null && (
@@ -197,25 +278,73 @@ function CompanyIntelligence({ data }: { data: BusinessScrapeData }) {
         )}
       </div>
 
-      {/* Instagram badges */}
-      {(igVerified || igCategory) && (
-        <div className="flex flex-wrap gap-2">
-          {igVerified && <span className="rounded-full bg-blue-500/10 px-2.5 py-1 text-[11px] font-semibold text-blue-400">Verified</span>}
-          {igCategory && <span className="rounded-full bg-pink-500/10 px-2.5 py-1 text-[11px] font-semibold text-pink-400">{igCategory}</span>}
+      {/* Contact Information */}
+      {(emails.length > 0 || phones.length > 0 || addresses.length > 0) && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">
+            <Mail className="mr-1 inline h-3 w-3" />Contact Information
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {emails.map((e, i) => (
+              <a
+                key={i}
+                href={`mailto:${e.email}`}
+                className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2 text-xs text-zbooni-teal transition-colors hover:text-zbooni-green hover:border-border/40"
+              >
+                <Mail className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{e.email}</span>
+                {e.context && <span className="ml-auto text-[10px] text-muted-foreground/40">{e.context}</span>}
+              </a>
+            ))}
+            {phones.map((p, i) => (
+              <a
+                key={i}
+                href={`tel:${p.number}`}
+                className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2 text-xs text-zbooni-teal transition-colors hover:text-zbooni-green hover:border-border/40"
+              >
+                <Phone className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{p.number}</span>
+                {p.type && <span className="ml-auto text-[10px] text-muted-foreground/40">{p.type}</span>}
+              </a>
+            ))}
+            {addresses.map((a, i) => (
+              <div
+                key={i}
+                className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2 text-xs text-muted-foreground"
+              >
+                <MapPin className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
+                <span className="truncate">{a.text}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
       {/* Decision Makers */}
       {decisionMakers.length > 0 && (
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">Decision Makers ({decisionMakers.length})</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">
+            <Users className="mr-1 inline h-3 w-3" />Decision Makers ({decisionMakers.length})
+          </p>
           <div className="grid gap-2 sm:grid-cols-2">
             {decisionMakers.map((dm, i) => (
               <div key={i} className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2">
                 <div className="flex h-7 w-7 items-center justify-center rounded-md bg-amber-500/10 text-[10px] font-bold text-amber-400">{dm.name.charAt(0)}</div>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="text-xs font-semibold truncate">{dm.name}</p>
                   <p className="text-[10px] text-muted-foreground/50 truncate">{dm.title}</p>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  {dm.email && (
+                    <a href={`mailto:${dm.email}`} title={dm.email} className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
+                      <Mail className="h-3 w-3" />
+                    </a>
+                  )}
+                  {dm.linkedinUrl && (
+                    <a href={dm.linkedinUrl} target="_blank" rel="noopener noreferrer" title="LinkedIn" className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
+                      <Linkedin className="h-3 w-3" />
+                    </a>
+                  )}
                 </div>
               </div>
             ))}
@@ -223,10 +352,67 @@ function CompanyIntelligence({ data }: { data: BusinessScrapeData }) {
         </div>
       )}
 
-      {/* Tech Stack */}
+      {/* Social Presence */}
+      {socialLinks.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">
+            <Globe className="mr-1 inline h-3 w-3" />Social Presence
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {socialLinks.map((sl, i) => (
+              <a
+                key={i}
+                href={sl.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-full border border-border/30 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground transition-colors hover:text-zbooni-teal hover:border-zbooni-teal/30"
+              >
+                {sl.platform}
+                <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Instagram Analytics */}
+      {(igBio || igVerified || igCategory || igBusinessEmail || igBusinessPhone) && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">
+            <Instagram className="mr-1 inline h-3 w-3" />Instagram
+          </p>
+          <div className="space-y-2">
+            {(igVerified || igCategory) && (
+              <div className="flex flex-wrap gap-2">
+                {igVerified && <span className="rounded-full bg-blue-500/10 px-2.5 py-1 text-[11px] font-semibold text-blue-400">Verified</span>}
+                {igCategory && <span className="rounded-full bg-pink-500/10 px-2.5 py-1 text-[11px] font-semibold text-pink-400">{igCategory}</span>}
+              </div>
+            )}
+            {igBio && (
+              <p className="text-xs text-muted-foreground/70 italic leading-relaxed">&ldquo;{igBio}&rdquo;</p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              {igBusinessEmail && (
+                <a href={`mailto:${igBusinessEmail}`} className="inline-flex items-center gap-1 text-[11px] text-zbooni-teal hover:text-zbooni-green transition-colors">
+                  <Mail className="h-3 w-3" />{igBusinessEmail}
+                </a>
+              )}
+              {igBusinessPhone && (
+                <a href={`tel:${igBusinessPhone}`} className="inline-flex items-center gap-1 text-[11px] text-zbooni-teal hover:text-zbooni-green transition-colors">
+                  <Phone className="h-3 w-3" />{igBusinessPhone}
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Technology Stack */}
       {techStack.length > 0 && (
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">Technology Stack</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">
+            <Monitor className="mr-1 inline h-3 w-3" />Technology Stack
+          </p>
           <div className="space-y-2">
             {techStack.map((cat) => (
               <div key={cat.category}>
@@ -242,22 +428,12 @@ function CompanyIntelligence({ data }: { data: BusinessScrapeData }) {
         </div>
       )}
 
-      {/* Social Links */}
-      {socialLinks.length > 0 && (
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">Social Presence</p>
-          <div className="flex flex-wrap gap-2">
-            {socialLinks.map((sl, i) => (
-              <span key={i} className="rounded-full border border-border/30 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">{sl.platform}</span>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Certifications */}
       {certs.length > 0 && (
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">Certifications</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">
+            <Shield className="mr-1 inline h-3 w-3" />Certifications
+          </p>
           <div className="flex flex-wrap gap-1.5">
             {certs.map((cert) => (
               <span key={cert} className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">{cert}</span>
@@ -265,237 +441,6 @@ function CompanyIntelligence({ data }: { data: BusinessScrapeData }) {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// ── Activity Timeline ──────────────────────────────────────────
-
-/** Status progression for determining which pipeline stages are reached. */
-const STATUS_ORDER = ['new', 'processing', 'enriched', 'failed', 'messaged', 'replied', 'cold'] as const;
-
-function statusReached(current: string, target: string): boolean {
-  // "failed" and "cold" are terminal — they don't imply later stages
-  if (current === 'failed' || current === 'cold') {
-    const ci = STATUS_ORDER.indexOf(current as (typeof STATUS_ORDER)[number]);
-    const ti = STATUS_ORDER.indexOf(target as (typeof STATUS_ORDER)[number]);
-    return ti >= 0 && ci >= 0 && ti <= ci;
-  }
-  const ci = STATUS_ORDER.indexOf(current as (typeof STATUS_ORDER)[number]);
-  const ti = STATUS_ORDER.indexOf(target as (typeof STATUS_ORDER)[number]);
-  if (ci < 0 || ti < 0) return false;
-  return ci >= ti;
-}
-
-interface TimelineEvent {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  detail: string;
-  time: string;
-  timestamp: number;
-  /** Tailwind classes for the icon node: text color + background. */
-  color: string;
-  /** Optional score badge to render inline. */
-  scoreBadge?: { value: number; band: string } | undefined;
-}
-
-function buildTimeline(
-  lead: GetLeadResponse,
-  sends: MessageSendResponse[],
-  scoreInfo: ScoreInfo | null,
-): TimelineEvent[] {
-  const events: TimelineEvent[] = [];
-  const createdTs = new Date(lead.createdAt).getTime();
-
-  // 1. Created — always present
-  events.push({
-    icon: Search,
-    label: 'Lead Created',
-    detail: `Discovered via ${lead.source.replace(/_/g, ' ')}`,
-    time: new Date(lead.createdAt).toLocaleString(),
-    timestamp: createdTs,
-    color: 'text-blue-400 bg-blue-500/15 ring-blue-500/25',
-  });
-
-  // 2. Enriched — when status is enriched or later
-  if (statusReached(lead.status, 'enriched')) {
-    // Enrichment happens shortly after creation; offset timestamp so it sorts after
-    const enrichedTs = createdTs + 1000;
-    events.push({
-      icon: Database,
-      label: 'Data Enriched',
-      detail: 'Contact and company data enriched from external sources',
-      time: new Date(lead.updatedAt).toLocaleString(),
-      timestamp: enrichedTs,
-      color: 'text-teal-400 bg-teal-500/15 ring-teal-500/25',
-    });
-  }
-
-  // 3. Features Computed — when status reached enriched (features are part of enrichment pipeline)
-  if (statusReached(lead.status, 'enriched') && lead.enrichmentData) {
-    const featuresTs = createdTs + 2000;
-    events.push({
-      icon: Cpu,
-      label: 'Features Computed',
-      detail: 'Lead signals extracted and feature vectors calculated',
-      time: new Date(lead.updatedAt).toLocaleString(),
-      timestamp: featuresTs,
-      color: 'text-purple-400 bg-purple-500/15 ring-purple-500/25',
-    });
-  }
-
-  // 4. Scored — when scoreInfo exists
-  if (scoreInfo?.blendedScore !== undefined) {
-    const scoreVal = Math.round(scoreInfo.blendedScore * 100);
-    const scoredTs = createdTs + 3000;
-    const band = scoreInfo.scoreBand ?? 'LOW';
-    const bandColor =
-      band === 'HIGH'
-        ? 'text-zbooni-green bg-zbooni-green/15 ring-zbooni-green/25'
-        : band === 'MEDIUM'
-          ? 'text-yellow-400 bg-yellow-500/15 ring-yellow-500/25'
-          : 'text-orange-400 bg-orange-500/15 ring-orange-500/25';
-
-    events.push({
-      icon: TrendingUp,
-      label: 'Lead Scored',
-      detail: `Score band: ${band}`,
-      time: new Date(lead.updatedAt).toLocaleString(),
-      timestamp: scoredTs,
-      color: bandColor,
-      scoreBadge: { value: scoreVal, band },
-    });
-  }
-
-  // 5. Message Generated — inferred when sends exist (draft was generated before sending)
-  if (sends.length > 0) {
-    const firstSendTs = new Date(sends[sends.length - 1]?.sentAt ?? sends[sends.length - 1]?.createdAt ?? lead.updatedAt).getTime();
-    events.push({
-      icon: Pencil,
-      label: 'Message Drafted',
-      detail: 'AI-generated outreach message prepared for review',
-      time: new Date(firstSendTs - 1000).toLocaleString(),
-      timestamp: firstSendTs - 1000,
-      color: 'text-indigo-400 bg-indigo-500/15 ring-indigo-500/25',
-    });
-  }
-
-  // 6. Message Sent events — from sends
-  for (const send of sends) {
-    const sendTs = new Date(send.sentAt ?? send.createdAt).getTime();
-    const isFailed = send.status === 'FAILED' || send.status === 'BOUNCED';
-    const followUp = send.followUpNumber && send.followUpNumber > 0 ? ` (follow-up #${send.followUpNumber})` : '';
-    events.push({
-      icon: isFailed ? AlertCircle : Send,
-      label: isFailed
-        ? `${send.channel} Send Failed`
-        : `${send.channel} ${send.status === 'QUEUED' ? 'Queued' : 'Sent'}`,
-      detail: `Via ${send.provider}${followUp}${send.failureReason ? ` — ${send.failureReason}` : ''}`,
-      time: new Date(send.sentAt ?? send.createdAt).toLocaleString(),
-      timestamp: sendTs,
-      color: isFailed
-        ? 'text-red-400 bg-red-500/15 ring-red-500/25'
-        : 'text-zbooni-green bg-zbooni-green/15 ring-zbooni-green/25',
-    });
-
-    // 7. Reply Received
-    if (send.status === 'REPLIED' && send.repliedAt) {
-      const repliedTs = new Date(send.repliedAt).getTime();
-      events.push({
-        icon: MessageSquare,
-        label: 'Reply Received',
-        detail: 'Prospect responded — view full conversation in Inbox',
-        time: new Date(send.repliedAt).toLocaleString(),
-        timestamp: repliedTs,
-        color: 'text-emerald-400 bg-emerald-500/15 ring-emerald-500/25',
-      });
-    }
-  }
-
-  // 8. Error — if lead has error
-  if (lead.error) {
-    const errorTs = new Date(lead.updatedAt).getTime();
-    events.push({
-      icon: AlertCircle,
-      label: 'Pipeline Error',
-      detail: lead.error,
-      time: new Date(lead.updatedAt).toLocaleString(),
-      timestamp: errorTs,
-      color: 'text-red-400 bg-red-500/15 ring-red-500/25',
-    });
-  }
-
-  return events.sort((a, b) => a.timestamp - b.timestamp);
-}
-
-function ActivityTimeline({
-  lead,
-  sends,
-  scoreInfo,
-}: {
-  lead: GetLeadResponse;
-  sends: MessageSendResponse[];
-  scoreInfo: ScoreInfo | null;
-}) {
-  const events = buildTimeline(lead, sends, scoreInfo);
-
-  if (events.length === 0) {
-    return (
-      <div className="flex flex-col items-center gap-3 py-8 text-muted-foreground/40">
-        <Clock className="h-8 w-8" />
-        <p className="text-sm">No activity recorded yet.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="relative ml-2">
-      {/* Vertical connecting line */}
-      <div className="absolute left-[17px] top-5 bottom-5 w-px bg-gradient-to-b from-border/60 via-border/30 to-transparent" />
-
-      <div className="space-y-1">
-        {events.map((event, i) => {
-          const Icon = event.icon;
-          return (
-            <div
-              key={`${event.label}:${event.timestamp}:${i}`}
-              className="timeline-entry relative flex items-start gap-4 py-2"
-              style={{ animationDelay: `${i * 80}ms` }}
-            >
-              {/* Node */}
-              <div
-                className={`relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ring-1 ${event.color}`}
-              >
-                <Icon className="h-4 w-4" />
-              </div>
-
-              {/* Event card */}
-              <div className="min-w-0 flex-1 rounded-xl border border-border/30 bg-zbooni-dark/30 p-3 transition-colors hover:border-border/50 hover:bg-zbooni-dark/50">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm font-medium">{event.label}</p>
-                  <span className="shrink-0 text-[11px] text-muted-foreground/50">{event.time}</span>
-                </div>
-                <div className="mt-1 flex items-center gap-2">
-                  <p className="text-xs text-muted-foreground/70">{event.detail}</p>
-                  {event.scoreBadge ? (
-                    <span
-                      className={`ml-auto inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-bold tabular-nums ${
-                        event.scoreBadge.band === 'HIGH'
-                          ? 'bg-zbooni-green/20 text-zbooni-green'
-                          : event.scoreBadge.band === 'MEDIUM'
-                            ? 'bg-yellow-500/20 text-yellow-400'
-                            : 'bg-orange-500/20 text-orange-400'
-                      }`}
-                    >
-                      {event.scoreBadge.value}%
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }
@@ -764,12 +709,12 @@ export default function LeadDetailPage() {
         </div>
       ) : null}
 
-      {/* Company Intelligence (from Business scraper data) */}
+      {/* Intelligence Gathered (from Business scraper data) */}
       {businessData ? (
         <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
           <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
             <Building2 className="h-4 w-4 text-zbooni-teal" />
-            Company Intelligence
+            Intelligence Gathered
             {businessData.name ? (
               <span className="ml-2 text-sm font-normal text-muted-foreground/60">— {businessData.name}</span>
             ) : null}
@@ -784,22 +729,9 @@ export default function LeadDetailPage() {
               </a>
             ) : null}
           </h2>
-          <CompanyIntelligence data={businessData} />
+          <IntelligenceGathered data={businessData} />
         </div>
       ) : null}
-
-      {/* Activity Timeline */}
-      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-          <Clock className="h-4 w-4 text-zbooni-teal" />
-          Activity Timeline
-        </h2>
-        <ActivityTimeline
-          lead={l}
-          sends={sends.data?.items ?? []}
-          scoreInfo={scoreInfo}
-        />
-      </div>
 
       {/* Message History */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
