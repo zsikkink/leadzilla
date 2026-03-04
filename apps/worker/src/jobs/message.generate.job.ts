@@ -55,39 +55,6 @@ export interface MessageGenerateJobDependencies {
 }
 
 /**
- * Normalize text for comparison: lowercase, collapse whitespace, strip punctuation.
- * Used to detect when variant_a and variant_b are effectively identical.
- */
-function normalizeForComparison(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^\w\s]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/**
- * Check if two message variants are meaningfully different.
- * Returns true if they differ in body text after normalization.
- */
-function areVariantsDifferent(a: { bodyText: string }, b: { bodyText: string }): boolean {
-  return normalizeForComparison(a.bodyText) !== normalizeForComparison(b.bodyText);
-}
-
-/**
- * Deterministically assign A/B variant based on leadId hash.
- * Uses a simple string hash to split leads ~50/50 between variant_a and variant_b.
- */
-export function assignAbVariant(leadId: string): 'variant_a' | 'variant_b' {
-  let hash = 0;
-  for (let i = 0; i < leadId.length; i++) {
-    const char = leadId.charCodeAt(i);
-    hash = ((hash << 5) - hash + char) | 0;
-  }
-  return (hash & 1) === 0 ? 'variant_a' : 'variant_b';
-}
-
-/**
  * Convert raw scrape JSON blobs (apifyWebsiteScrapeJson, apifyInstagramScrapeJson)
  * into structured, human-readable intelligence for message personalization.
  *
@@ -415,6 +382,12 @@ export async function handleMessageGenerateJob(
     if (messageContext.teamSignal) intelligenceParts.push(`Team: ${messageContext.teamSignal}`);
     const businessIntelligence = intelligenceParts.length > 0 ? intelligenceParts.join('\n') : null;
 
+    // Load custom messaging instructions from PipelineSetting (CONTRACT 4)
+    const instrSetting = await prisma.pipelineSetting.findUnique({
+      where: { key: 'messagingInstructions' },
+    });
+    const messagingInstructions = instrSetting?.valueJson as string | null;
+
     const groundingContext = {
       leadName: `${lead.firstName} ${lead.lastName}`,
       leadEmail: lead.email,
@@ -426,6 +399,7 @@ export async function handleMessageGenerateJob(
       blendedScore: latestScore?.blendedScore ?? 0,
       icpDescription: icpProfile?.description ?? 'No ICP description available',
       businessIntelligence,
+      messagingInstructions,
     };
 
     const previouslyPitchedFeatures = job.data.previouslyPitchedFeatures ?? [];
@@ -475,8 +449,7 @@ export async function handleMessageGenerateJob(
     }
 
     let generatedByModel = 'stub';
-    let variantAContent = { subject: null as string | null, bodyText: 'Message generation pending', bodyHtml: null as string | null, ctaText: null as string | null };
-    let variantBContent = { ...variantAContent };
+    let messageContent = { subject: null as string | null, bodyText: 'Message generation pending', bodyHtml: null as string | null, ctaText: null as string | null };
 
     // Build generateContext outside the if-block so NK retry can reference it
     let generateContext = groundingContext;
@@ -494,8 +467,7 @@ export async function handleMessageGenerateJob(
             : '',
           'Write a natural, conversational follow-up. Do not mention this is automated.',
           'Reference the previous outreach naturally ("I wanted to follow up..." / "One more thing I thought might interest you...").',
-          'Generate two variants: variant_a (more direct) and variant_b (more casual).',
-          'Each variant must have: subject (null for WhatsApp), bodyText, bodyHtml (null ok), ctaText (null ok).',
+          'Generate a single message with: subject (null for WhatsApp), bodyText, bodyHtml (null ok), ctaText (null ok).',
         ].filter(Boolean).join(' ');
       }
 
@@ -508,36 +480,12 @@ export async function handleMessageGenerateJob(
 
       if (result.status === 'success') {
         generatedByModel = result.data.model;
-        variantAContent = result.data.variant_a;
-        variantBContent = result.data.variant_b;
+        messageContent = result.data.message;
 
         logger.info(
           { jobId: job.id, leadId, model: result.data.model },
           'OpenAI message generation succeeded',
         );
-
-        // Check if variants are meaningfully different
-        if (!areVariantsDifferent(variantAContent, variantBContent)) {
-          logger.warn(
-            { jobId: job.id, leadId },
-            'Variants are identical after normalization — retrying with explicit differentiation instruction',
-          );
-
-          const diffRetryContext = {
-            ...generateContext,
-            icpDescription: `${generateContext.icpDescription}\n\nCRITICAL: variant_a and variant_b MUST be meaningfully different. Use a different hook, different observation, and different CTA for each. If variant_a leads with a compliment, variant_b should lead with a question or insight. Do NOT generate two versions of the same message.`,
-          };
-
-          const diffRetryResult = await deps.openAiAdapter.generateMessageVariants(diffRetryContext);
-          if (diffRetryResult.status === 'success' && areVariantsDifferent(diffRetryResult.data.variant_a, diffRetryResult.data.variant_b)) {
-            generatedByModel = diffRetryResult.data.model;
-            variantAContent = diffRetryResult.data.variant_a;
-            variantBContent = diffRetryResult.data.variant_b;
-            logger.info({ jobId: job.id, leadId }, 'Differentiation retry succeeded — variants are now different');
-          } else {
-            logger.warn({ jobId: job.id, leadId }, 'Differentiation retry did not produce different variants — proceeding with originals');
-          }
-        }
       } else {
         logger.warn(
           { jobId: job.id, leadId, status: result.status },
@@ -545,21 +493,20 @@ export async function handleMessageGenerateJob(
         );
       }
 
-      // Validate both variants
-      const validationA = validateMessageVariant(resolvedChannel, variantAContent);
-      const validationB = validateMessageVariant(resolvedChannel, variantBContent);
+      // Validate the message
+      const validation = validateMessageVariant(resolvedChannel, messageContent);
 
-      if (validationA.reasons.length > 0 || validationB.reasons.length > 0) {
+      if (validation.reasons.length > 0) {
         logger.info(
-          { jobId: job.id, leadId, reasonsA: validationA.reasons, reasonsB: validationB.reasons },
+          { jobId: job.id, leadId, reasons: validation.reasons },
           'Message validation findings',
         );
       }
 
-      // If either has a hard rejection, retry once with stricter prompt
-      if (validationA.hardReject || validationB.hardReject) {
+      // If hard rejection, retry once with stricter prompt
+      if (validation.hardReject) {
         logger.warn(
-          { jobId: job.id, leadId, hardRejectA: validationA.hardReject, hardRejectB: validationB.hardReject },
+          { jobId: job.id, leadId },
           'Hard rejection detected, retrying with stricter prompt',
         );
 
@@ -573,56 +520,34 @@ export async function handleMessageGenerateJob(
 
         if (retryResult.status === 'success') {
           generatedByModel = retryResult.data.model;
-          const retryA = validateMessageVariant(resolvedChannel, retryResult.data.variant_a);
-          const retryB = validateMessageVariant(resolvedChannel, retryResult.data.variant_b);
+          const retryValidation = validateMessageVariant(resolvedChannel, retryResult.data.message);
 
-          if (!retryA.hardReject) {
-            variantAContent = retryA.cleaned;
-          }
-          if (!retryB.hardReject) {
-            variantBContent = retryB.cleaned;
-          }
-
-          // If still hard rejecting after retry, use fallback
-          if (retryA.hardReject || retryB.hardReject) {
+          if (!retryValidation.hardReject) {
+            messageContent = retryValidation.cleaned;
+          } else {
+            // Still hard rejecting after retry — use fallback
             logger.warn(
               { jobId: job.id, leadId },
-              'Retry still has hard rejections, using fallback templates',
+              'Retry still has hard rejection, using fallback template',
             );
-            const fallback = getFallbackForChannel(
-              resolvedChannel,
-              lead.firstName,
-              companyName,
-              messageContext,
-            );
+            messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
             generatedByModel = 'fallback-template';
-            if (retryA.hardReject) {
-              variantAContent = fallback;
-            }
-            if (retryB.hardReject) {
-              variantBContent = fallback;
-            }
           }
         } else {
-          // Retry OpenAI call itself failed — use fallback for both
-          logger.warn({ jobId: job.id, leadId }, 'Retry OpenAI failed, using fallback templates');
-          const fallback = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
+          // Retry OpenAI call itself failed — use fallback
+          logger.warn({ jobId: job.id, leadId }, 'Retry OpenAI failed, using fallback template');
+          messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
           generatedByModel = 'fallback-template';
-          variantAContent = fallback;
-          variantBContent = fallback;
         }
       } else {
-        // No hard rejections — apply soft cleaning
-        variantAContent = validationA.cleaned;
-        variantBContent = validationB.cleaned;
+        // No hard rejection — apply soft cleaning
+        messageContent = validation.cleaned;
       }
     } else {
       // OpenAI not configured — use fallback
-      logger.warn({ jobId: job.id, leadId }, 'OpenAI not configured, using fallback templates');
-      const fallback = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
+      logger.warn({ jobId: job.id, leadId }, 'OpenAI not configured, using fallback template');
+      messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
       generatedByModel = 'fallback-template';
-      variantAContent = fallback;
-      variantBContent = fallback;
     }
 
     // -----------------------------------------------------------------------
@@ -630,23 +555,15 @@ export async function handleMessageGenerateJob(
     // Runs after validation/cleaning, before persisting to DB.
     // -----------------------------------------------------------------------
     if (deps?.openAiAdapter?.isConfigured && generatedByModel !== 'fallback-template') {
-      const nkCheckA = checkNegativeKeywords(variantAContent.bodyText);
-      const nkCheckB = checkNegativeKeywords(variantBContent.bodyText);
+      const nkCheck = checkNegativeKeywords(messageContent.bodyText);
 
-      const allFoundKeywords = [...new Set([...nkCheckA.matches, ...nkCheckB.matches])];
-
-      if (allFoundKeywords.length > 0) {
+      if (nkCheck.found) {
         logger.warn(
-          {
-            jobId: job.id,
-            leadId,
-            variantAKeywords: nkCheckA.matches,
-            variantBKeywords: nkCheckB.matches,
-          },
-          'Negative keywords detected in generated variants, attempting regeneration',
+          { jobId: job.id, leadId, keywords: nkCheck.matches },
+          'Negative keywords detected in generated message, attempting regeneration',
         );
 
-        const nkPromptSuffix = buildNegativeKeywordPromptSuffix(allFoundKeywords);
+        const nkPromptSuffix = buildNegativeKeywordPromptSuffix(nkCheck.matches);
         const nkRetryContext = {
           ...generateContext,
           icpDescription: `${generateContext.icpDescription}\n\n${nkPromptSuffix}`,
@@ -656,40 +573,24 @@ export async function handleMessageGenerateJob(
 
         if (nkRetryResult.status === 'success') {
           generatedByModel = nkRetryResult.data.model;
-          const retryVarA = nkRetryResult.data.variant_a;
-          const retryVarB = nkRetryResult.data.variant_b;
+          const nkRecheck = checkNegativeKeywords(nkRetryResult.data.message.bodyText);
 
-          const nkRecheckA = checkNegativeKeywords(retryVarA.bodyText);
-          const nkRecheckB = checkNegativeKeywords(retryVarB.bodyText);
-
-          if (!nkRecheckA.found) {
-            variantAContent = retryVarA;
+          if (!nkRecheck.found) {
+            messageContent = nkRetryResult.data.message;
           } else {
             logger.warn(
-              { jobId: job.id, leadId, keywords: nkRecheckA.matches },
-              'Variant A still contains negative keywords after regeneration, proceeding anyway',
-            );
-          }
-
-          if (!nkRecheckB.found) {
-            variantBContent = retryVarB;
-          } else {
-            logger.warn(
-              { jobId: job.id, leadId, keywords: nkRecheckB.matches },
-              'Variant B still contains negative keywords after regeneration, proceeding anyway',
+              { jobId: job.id, leadId, keywords: nkRecheck.matches },
+              'Message still contains negative keywords after regeneration, proceeding anyway',
             );
           }
         } else {
           logger.warn(
             { jobId: job.id, leadId, status: nkRetryResult.status },
-            'Negative keyword regeneration failed, proceeding with original variants',
+            'Negative keyword regeneration failed, proceeding with original message',
           );
         }
       }
     }
-
-    // Deterministically select A/B variant for this lead
-    const selectedVariantKey = assignAbVariant(leadId);
 
     // Idempotent draft creation: if a draft already exists for this lead+ICP+followUp
     // combination (e.g. from a retry), reuse it instead of creating a duplicate.
@@ -717,20 +618,11 @@ export async function handleMessageGenerateJob(
             {
               variantKey: 'variant_a',
               channel: resolvedChannel,
-              subject: variantAContent.subject,
-              bodyText: variantAContent.bodyText,
-              bodyHtml: variantAContent.bodyHtml,
-              ctaText: variantAContent.ctaText,
-              isSelected: autoApprove && selectedVariantKey === 'variant_a',
-            },
-            {
-              variantKey: 'variant_b',
-              channel: resolvedChannel,
-              subject: variantBContent.subject,
-              bodyText: variantBContent.bodyText,
-              bodyHtml: variantBContent.bodyHtml,
-              ctaText: variantBContent.ctaText,
-              isSelected: autoApprove && selectedVariantKey === 'variant_b',
+              subject: messageContent.subject,
+              bodyText: messageContent.bodyText,
+              bodyHtml: messageContent.bodyHtml,
+              ctaText: messageContent.ctaText,
+              isSelected: autoApprove,
             },
           ],
         },
@@ -740,7 +632,7 @@ export async function handleMessageGenerateJob(
 
     // Auto-send for follow-ups
     if (autoApprove && deps?.boss) {
-      const selectedVariant = draft.variants.find((v) => v.variantKey === selectedVariantKey);
+      const selectedVariant = draft.variants[0];
       if (selectedVariant) {
         // Idempotent: skip if MessageSend already exists for this draft (crash-retry safety)
         const existingSendForDraft = await prisma.messageSend.findFirst({

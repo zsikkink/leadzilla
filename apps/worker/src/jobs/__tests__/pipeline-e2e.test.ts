@@ -105,7 +105,6 @@ function makeOpenAiGenerateFetch(): typeof fetch {
   // when message validation triggers a retry with stricter prompt.
   // Bodies must be >= 100 chars to pass EMAIL channel minimum length validation.
   const bodyA = 'Thank you for your interest in our payment solutions. We help businesses like yours streamline transactions and boost conversion rates across the UAE market.';
-  const bodyB = 'We noticed your company could benefit from our commerce platform. Our clients typically see a significant improvement in checkout completion within weeks.';
   return vi.fn().mockImplementation(() =>
     Promise.resolve(
       new Response(
@@ -118,17 +117,11 @@ function makeOpenAiGenerateFetch(): typeof fetch {
               message: {
                 role: 'assistant',
                 content: JSON.stringify({
-                  variant_a: {
+                  message: {
                     subject: 'Test Email Subject A',
                     bodyText: bodyA,
                     bodyHtml: `<p>${bodyA}</p>`,
                     ctaText: 'Learn More',
-                  },
-                  variant_b: {
-                    subject: 'Test Email Subject B',
-                    bodyText: bodyB,
-                    bodyHtml: `<p>${bodyB}</p>`,
-                    ctaText: null,
                   },
                 }),
               },
@@ -491,7 +484,7 @@ describe('pipeline full lifecycle', () => {
     });
     expect(draft).toBeTruthy();
     expect(draft!.approvalStatus).toBe('AUTO_APPROVED');
-    expect(draft!.variants.length).toBe(2);
+    expect(draft!.variants.length).toBe(1);
     expect(draft!.pitchedFeature).toBe(ICP_FEATURES[0]); // 'Payment Links'
 
     // Auto-approve creates a QUEUED MessageSend + enqueues message.send

@@ -23,6 +23,8 @@ export interface MessageGenerationContext {
   icpDescription: string;
   /** Structured business intelligence from scrape data. Replaces raw featuresJson when present. */
   businessIntelligence?: string | null | undefined;
+  /** Custom instructions from sales team via PipelineSetting. */
+  messagingInstructions?: string | null | undefined;
 }
 
 export interface MessageVariantContent {
@@ -32,6 +34,12 @@ export interface MessageVariantContent {
   ctaText: string | null;
 }
 
+export interface MessageGenerationResult {
+  model: string;
+  message: MessageVariantContent;
+}
+
+/** @deprecated Use MessageGenerationResult — kept for backward-compat during migration */
 export interface MessageVariantPair {
   model: string;
   variant_a: MessageVariantContent;
@@ -67,7 +75,7 @@ export interface OpenAiFailure {
 }
 
 export type OpenAiGenerationResult =
-  | { status: 'success'; data: MessageVariantPair }
+  | { status: 'success'; data: MessageGenerationResult }
   | { status: 'retryable_error'; failure: OpenAiFailure }
   | { status: 'terminal_error'; failure: OpenAiFailure };
 
@@ -86,8 +94,7 @@ const MessageVariantSchema = z.object({
 });
 
 const GenerationResponseSchema = z.object({
-  variant_a: MessageVariantSchema,
-  variant_b: MessageVariantSchema,
+  message: MessageVariantSchema,
 });
 
 const ScoringResponseSchema = z.object({
@@ -161,9 +168,9 @@ export class OpenAiAdapter {
       };
     }
 
-    const systemPrompt = [
+    const systemPromptParts = [
       'You are an expert B2B sales copywriter for Zbooni, a UAE fintech company.',
-      'Generate two message variants (variant_a and variant_b) for outreach.',
+      'Generate a single outreach message.',
       '',
       'RESEARCH-BACKED STRUCTURE (follow this exactly):',
       '- 40-80 words total, single CTA',
@@ -177,16 +184,22 @@ export class OpenAiAdapter {
       '- NEVER mention competitor names',
       '- NEVER use generic phrases like "I hope this finds you well"',
       '- If business intelligence is provided, you MUST reference at least one specific detail from it',
+    ];
+
+    if (context.messagingInstructions) {
+      systemPromptParts.push(
+        '',
+        'ADDITIONAL INSTRUCTIONS FROM SALES TEAM:',
+        context.messagingInstructions,
+      );
+    }
+
+    systemPromptParts.push(
       '',
-      'VARIANT DIFFERENTIATION (mandatory):',
-      '- variant_a: formal/direct tone, lead with a data-driven hook or industry observation',
-      '- variant_b: conversational/casual tone, lead with a question or personal insight about their business',
-      '- variant_b MUST take a completely different angle — different hook, different observation, different CTA',
-      '- If variant_a leads with a compliment, variant_b must lead with a question or challenge',
-      '- The two variants must NOT be paraphrases of each other',
-      '',
-      'Each variant must have: subject (email subject line, 2-4 words question format; null for WhatsApp), bodyText (plain text), bodyHtml (null), ctaText (the CTA text or null).',
-    ].join('\n');
+      'Output JSON with a single "message" object containing: subject (email subject line, 2-4 words question format; null for WhatsApp), bodyText (plain text), bodyHtml (null), ctaText (the CTA text or null).',
+    );
+
+    const systemPrompt = systemPromptParts.join('\n');
 
     const userPrompt = [
       `Lead: ${context.leadName} (${context.leadEmail})`,
@@ -202,15 +215,14 @@ export class OpenAiAdapter {
       .filter(Boolean)
       .join('\n');
 
-    return this.callChatCompletion<MessageVariantPair>(
+    return this.callChatCompletion<MessageGenerationResult>(
       this.generationModel,
       systemPrompt,
       userPrompt,
       GenerationResponseSchema,
       (parsed) => ({
         model: this.generationModel,
-        variant_a: parsed.variant_a,
-        variant_b: parsed.variant_b,
+        message: parsed.message,
       }),
     );
   }

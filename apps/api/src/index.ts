@@ -439,6 +439,7 @@ async function main(): Promise<void> {
               OR: [
                 { discoveryRecords: { some: { icpProfileId: query.icpProfileId } } },
                 { scorePredictions: { some: { icpProfileId: query.icpProfileId } } },
+                { businessConversions: { some: { icpProfileId: query.icpProfileId } } },
               ],
             }
           : {}),
@@ -479,7 +480,7 @@ async function main(): Promise<void> {
             businessConversions: {
               orderBy: [{ convertedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
               take: 1,
-              select: { id: true, convertedAt: true },
+              select: { id: true, convertedAt: true, icpProfileId: true },
             },
             enrichmentRecords: {
               orderBy: [{ enrichedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
@@ -560,7 +561,7 @@ async function main(): Promise<void> {
             error: lead.error,
             createdAt: lead.createdAt.toISOString(),
             updatedAt: lead.updatedAt.toISOString(),
-            latestIcpProfileId: lead.discoveryRecords[0]?.icpProfileId ?? lead.scorePredictions[0]?.icpProfileId ?? null,
+            latestIcpProfileId: lead.discoveryRecords[0]?.icpProfileId ?? lead.scorePredictions[0]?.icpProfileId ?? lead.businessConversions[0]?.icpProfileId ?? null,
             latestScoreBand: lead.scorePredictions[0]?.scoreBand
               ?? (scoreInfoFallback?.scoreBand === 'HIGH' || scoreInfoFallback?.scoreBand === 'MEDIUM' || scoreInfoFallback?.scoreBand === 'LOW'
                 ? scoreInfoFallback.scoreBand : null),

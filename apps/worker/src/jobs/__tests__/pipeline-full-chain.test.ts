@@ -154,8 +154,6 @@ function makeOpenAiScoringFetch(): typeof fetch {
 function makeOpenAiGenerateFetch(): typeof fetch {
   const emailBodyA =
     'Thank you for your interest in our payment solutions. We help businesses like yours streamline transactions and boost conversion rates across the UAE market.';
-  const emailBodyB =
-    'We noticed your company could benefit from our commerce platform. Our clients typically see a significant improvement in checkout completion within weeks.';
 
   return vi.fn().mockImplementation(() =>
     Promise.resolve(
@@ -169,17 +167,11 @@ function makeOpenAiGenerateFetch(): typeof fetch {
               message: {
                 role: 'assistant',
                 content: JSON.stringify({
-                  variant_a: {
+                  message: {
                     subject: 'Partnership Opportunity — Zbooni',
                     bodyText: emailBodyA,
                     bodyHtml: `<p>${emailBodyA}</p>`,
                     ctaText: 'Book a Demo',
-                  },
-                  variant_b: {
-                    subject: 'Boost Your Commerce — Zbooni',
-                    bodyText: emailBodyB,
-                    bodyHtml: `<p>${emailBodyB}</p>`,
-                    ctaText: null,
                   },
                 }),
               },
@@ -516,19 +508,15 @@ describe('pipeline full chain: enrichment → message.send', () => {
     });
     expect(draft).toBeTruthy();
     expect(draft!.approvalStatus).toBe('PENDING');
-    expect(draft!.variants.length).toBe(2);
+    expect(draft!.variants.length).toBe(1);
     expect(draft!.followUpNumber).toBe(0);
     expect(draft!.pitchedFeature).toBe(ICP_FEATURES[0]); // 'Payment Links'
 
     // Verify variants exist with realistic content
     const variantA = draft!.variants.find((v) => v.variantKey === 'variant_a');
-    const variantB = draft!.variants.find((v) => v.variantKey === 'variant_b');
     expect(variantA).toBeTruthy();
-    expect(variantB).toBeTruthy();
     expect(variantA!.channel).toBe('EMAIL');
-    expect(variantB!.channel).toBe('EMAIL');
     expect(variantA!.bodyText).toBeTruthy();
-    expect(variantB!.bodyText).toBeTruthy();
 
     // No MessageSend should be created (autoApprove=false)
     const sends = await prisma.messageSend.findMany({
