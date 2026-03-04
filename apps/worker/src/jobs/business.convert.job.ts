@@ -25,6 +25,8 @@ const GENERIC_EMAIL_PREFIXES = new Set([
   'help', 'service', 'enquiry', 'inquiry', 'general', 'team', 'mail',
   'noreply', 'no-reply', 'webmaster', 'postmaster', 'marketing',
   'hr', 'finance', 'billing', 'accounts', 'reception', 'feedback',
+  'appointments', 'events', 'press', 'media', 'partnerships',
+  'careers', 'jobs', 'recruitment',
 ]);
 
 // ── Payload & Dependencies ─────────────────────────────────────────────
@@ -81,8 +83,10 @@ interface WebsiteScraperResult {
       name: string;
       title: string | null;
       email: string | null;
+      phone: string | null;
       linkedinUrl: string | null;
       seniority: 'executive' | 'director' | 'manager' | 'other';
+      positionRank: number;
       source: string;
     }>;
     contactInfo: {
@@ -200,18 +204,6 @@ export interface BusinessConvertLogger {
   error: (object: Record<string, unknown>, message: string) => void;
 }
 
-// ── Resolved contact ────────────────────────────────────────────────────
-interface ResolvedContact {
-  firstName: string;
-  lastName: string;
-  email: string;
-  phone: string | null;
-  title: string | null;
-  linkedinUrl: string | null;
-  source: 'WEBSITE_SCRAPE' | 'INSTAGRAM' | 'APOLLO' | 'HUNTER';
-  rawJson: unknown;
-}
-
 // ── Helpers ─────────────────────────────────────────────────────────────
 function isCacheValid(scrapedAt: Date | null): boolean {
   if (!scrapedAt) return false;
@@ -224,6 +216,34 @@ function isGenericEmail(email: string): boolean {
   return GENERIC_EMAIL_PREFIXES.has(prefix);
 }
 
+/**
+ * Determine if a phone number is a generic business line (not a DM's personal line).
+ * - If associated with a named person (from team page scrape), it's personal → false
+ * - If from a /contact page with no person context, it's a business line → true
+ * - If it's the only phone and business is small (≤2 employees), likely owner → false
+ */
+function isGenericPhone(
+  phone: string,
+  hasPersonContext: boolean,
+  estimatedEmployees: number | null,
+  pageUrl: string | null,
+): boolean {
+  // Phone associated with a named decision maker = personal
+  if (hasPersonContext) return false;
+
+  // Small business (≤2 employees) — only phone is likely the owner's
+  if (estimatedEmployees !== null && estimatedEmployees <= 2) return false;
+
+  // Phone from /contact or /contact-us page with no person context = business line
+  if (pageUrl) {
+    const path = pageUrl.toLowerCase();
+    if (path.includes('/contact')) return true;
+  }
+
+  // Default: if no person context, assume business line
+  return true;
+}
+
 /** Seniority rank for sorting decision makers (lower = more senior). */
 function seniorityRank(seniority: string | null): number {
   switch (seniority) {
@@ -232,6 +252,21 @@ function seniorityRank(seniority: string | null): number {
     case 'manager': return 2;
     default: return 3;
   }
+}
+
+/** Classify seniority from a title string (local version for Hunter/Apollo contacts). */
+function classifySeniorityLocal(title: string): 'executive' | 'director' | 'manager' | 'other' {
+  const lower = title.toLowerCase();
+  if (/\b(ceo|cto|cfo|coo|cmo|cpo|cio|founder|co-founder|cofounder|owner|president|chairm)/i.test(lower)) {
+    return 'executive';
+  }
+  if (/\b(director|vp|vice\s*president|head\s+of|svp|evp)/i.test(lower)) {
+    return 'director';
+  }
+  if (/\b(manager|lead|supervisor|coordinator)/i.test(lower)) {
+    return 'manager';
+  }
+  return 'other';
 }
 
 /**
@@ -514,209 +549,143 @@ export async function handleBusinessConvertJob(
     }
   }
 
-  // ── 5. Extract best contact from scrape data ──────────────────────────
-  let resolvedContact: ResolvedContact | null = null;
+  // ── 5. Collect ALL contacts as BusinessContact candidates ──────────────
+  interface ContactCandidate {
+    name: string;
+    title: string | null;
+    email: string | null;
+    phone: string | null;
+    linkedinUrl: string | null;
+    seniority: 'executive' | 'director' | 'manager' | 'other';
+    positionRank: number;
+    source: 'website_scrape' | 'instagram' | 'hunter' | 'apollo';
+    rawJson: unknown;
+  }
+
+  const allCandidates: ContactCandidate[] = [];
   let apolloContactJson: unknown = null;
   let hunterContactJson: unknown = null;
   const costEvents: Array<{ provider: 'APOLLO' | 'HUNTER' | 'SERPAPI'; costCents: number; apiCallType: string }> = [];
+  const estimatedEmployees = websiteScrapeData?.businessSignals?.estimatedEmployeeCount ?? null;
 
-  // 5a. Try decision makers from website scrape (sorted by seniority)
+  // 5a. Website scrape decision makers (max 5, already ranked by positionRank)
   if (websiteScrapeData?.decisionMakers && websiteScrapeData.decisionMakers.length > 0) {
-    const sortedDMs = [...websiteScrapeData.decisionMakers]
-      .filter((dm) => dm.email && !isGenericEmail(dm.email))
-      .sort((a, b) => seniorityRank(a.seniority) - seniorityRank(b.seniority));
-
-    for (const dm of sortedDMs) {
-      if (!dm.email) continue;
-
-      // SMTP verify if verifier is available
-      if (deps.smtpVerifier?.isConfigured) {
-        const verification = await deps.smtpVerifier.verify(dm.email);
-        if (verification.status === 'valid' || verification.status === 'catch_all') {
-          const { firstName, lastName } = parseName(dm.name);
-          resolvedContact = {
-            firstName,
-            lastName,
-            email: dm.email,
-            phone: null,
-            title: dm.title,
-            linkedinUrl: dm.linkedinUrl,
-            source: 'WEBSITE_SCRAPE',
-            rawJson: dm,
-          };
+    for (const dm of websiteScrapeData.decisionMakers) {
+      // Filter generic emails
+      const email = dm.email && !isGenericEmail(dm.email) ? dm.email : null;
+      // Filter generic phones using context-aware heuristic
+      const phone = dm.phone && !isGenericPhone(dm.phone, true, estimatedEmployees, dm.source)
+        ? dm.phone : null;
+      const { firstName, lastName } = parseName(dm.name);
+      allCandidates.push({
+        name: dm.name,
+        title: dm.title,
+        email,
+        phone,
+        linkedinUrl: dm.linkedinUrl,
+        seniority: dm.seniority,
+        positionRank: dm.positionRank,
+        source: 'website_scrape',
+        rawJson: dm,
+      });
+      // SMTP verify the email eagerly for the first valid candidate
+      if (email && deps.smtpVerifier?.isConfigured) {
+        const verification = await deps.smtpVerifier.verify(email);
+        if (verification.status !== 'valid' && verification.status !== 'catch_all') {
+          // Mark email as invalid — null it out so it won't be selected as lead
+          allCandidates[allCandidates.length - 1]!.email = null;
           logger.info(
-            { ...logCtx, email: dm.email, smtpStatus: verification.status, seniority: dm.seniority },
-            'SMTP-verified decision maker contact from website scrape',
+            { ...logCtx, email, smtpStatus: verification.status, name: `${firstName} ${lastName}` },
+            'Decision maker email failed SMTP verification',
           );
-          break;
         }
-        logger.info(
-          { ...logCtx, email: dm.email, smtpStatus: verification.status },
-          'Decision maker email failed SMTP verification — trying next',
-        );
-      } else {
-        // No SMTP verifier — use the email directly (best effort)
-        const { firstName, lastName } = parseName(dm.name);
-        resolvedContact = {
-          firstName,
-          lastName,
-          email: dm.email,
-          phone: null,
-          title: dm.title,
-          linkedinUrl: dm.linkedinUrl,
-          source: 'WEBSITE_SCRAPE',
-          rawJson: dm,
-        };
-        break;
       }
     }
   }
 
-  // 5b. Try personal emails from contactInfo (non-generic, non-decision-maker)
-  if (!resolvedContact && websiteScrapeData?.contactInfo?.emails) {
-    const personalEmails = websiteScrapeData.contactInfo.emails
-      .filter((e) => !isGenericEmail(e.email));
-
-    for (const emailEntry of personalEmails) {
-      if (deps.smtpVerifier?.isConfigured) {
-        const verification = await deps.smtpVerifier.verify(emailEntry.email);
-        if (verification.status === 'valid' || verification.status === 'catch_all') {
-          resolvedContact = {
-            firstName: business.name,
-            lastName: '',
-            email: emailEntry.email,
-            phone: null,
-            title: null,
-            linkedinUrl: null,
-            source: 'WEBSITE_SCRAPE',
-            rawJson: emailEntry,
-          };
-          logger.info(
-            { ...logCtx, email: emailEntry.email, smtpStatus: verification.status },
-            'SMTP-verified personal email from website contactInfo',
-          );
-          break;
-        }
-      } else {
-        resolvedContact = {
-          firstName: business.name,
-          lastName: '',
-          email: emailEntry.email,
-          phone: null,
-          title: null,
-          linkedinUrl: null,
-          source: 'WEBSITE_SCRAPE',
-          rawJson: emailEntry,
-        };
-        break;
-      }
-    }
-  }
-
-  // 5c. Try Instagram business email
-  if (!resolvedContact && instagramData?.businessEmail && !isGenericEmail(instagramData.businessEmail)) {
+  // 5b. Instagram business email as a contact
+  if (instagramData?.businessEmail && !isGenericEmail(instagramData.businessEmail)) {
+    let igEmailValid = true;
     if (deps.smtpVerifier?.isConfigured) {
       const verification = await deps.smtpVerifier.verify(instagramData.businessEmail);
-      if (verification.status === 'valid' || verification.status === 'catch_all') {
-        resolvedContact = {
-          firstName: business.name,
-          lastName: '',
-          email: instagramData.businessEmail,
-          phone: instagramData.businessPhone ?? null,
-          title: null,
-          linkedinUrl: null,
-          source: 'INSTAGRAM',
-          rawJson: instagramData,
-        };
-        logger.info(
-          { ...logCtx, email: instagramData.businessEmail, smtpStatus: verification.status },
-          'SMTP-verified Instagram business email',
-        );
+      if (verification.status !== 'valid' && verification.status !== 'catch_all') {
+        igEmailValid = false;
       }
-    } else {
-      resolvedContact = {
-        firstName: business.name,
-        lastName: '',
-        email: instagramData.businessEmail,
-        phone: instagramData.businessPhone ?? null,
-        title: null,
-        linkedinUrl: null,
-        source: 'INSTAGRAM',
-        rawJson: instagramData,
-      };
     }
+    allCandidates.push({
+      name: business.name,
+      title: null,
+      email: igEmailValid ? instagramData.businessEmail : null,
+      phone: instagramData.businessPhone ?? null,
+      linkedinUrl: null,
+      seniority: 'other',
+      positionRank: 99,
+      source: 'instagram',
+      rawJson: instagramData,
+    });
   }
 
-  // Enrich phone from website scrape if contact has no phone
-  if (resolvedContact && !resolvedContact.phone && websiteScrapeData?.contactInfo?.phones) {
-    const bestPhone = websiteScrapeData.contactInfo.phones[0];
-    if (bestPhone) {
-      resolvedContact.phone = bestPhone.number;
-    }
-  }
-
-  // ── 6. Fallback to paid providers (Hunter → Apollo) ────────────────────
+  // 5c. Fallback to paid providers if no candidate has a valid email yet
+  const hasValidEmail = allCandidates.some((c) => c.email !== null);
   let hunterRetryable = false;
   let apolloRetryable = false;
 
-  if (!resolvedContact) {
-    logger.info(
-      logCtx,
-      'No valid contact from scrape data — falling back to paid providers',
-    );
+  if (!hasValidEmail) {
+    logger.info(logCtx, 'No valid email from scrape data — falling back to paid providers');
 
-    // 6a. Hunter (cheaper, better for domain-search)
+    // Hunter (cheaper)
     if (deps.hunterAdapter.isConfigured) {
       const hunterResult = await deps.hunterAdapter.searchDomainContacts(domain);
-
       if (hunterResult.status === 'success' && hunterResult.contacts.length > 0) {
-        const contact = hunterResult.contacts[0]!;
         hunterContactJson = hunterResult.contacts;
-        resolvedContact = {
-          firstName: contact.firstName ?? '',
-          lastName: contact.lastName ?? '',
-          email: contact.email,
-          phone: null,
-          title: contact.position,
-          linkedinUrl: null,
-          source: 'HUNTER',
-          rawJson: contact,
-        };
+        for (const hc of hunterResult.contacts) {
+          if (isGenericEmail(hc.email)) continue;
+          allCandidates.push({
+            name: [hc.firstName ?? '', hc.lastName ?? ''].filter(Boolean).join(' ') || business.name,
+            title: hc.position,
+            email: hc.email,
+            phone: null,
+            linkedinUrl: null,
+            seniority: hc.position ? classifySeniorityLocal(hc.position) : 'other',
+            positionRank: 50,
+            source: 'hunter',
+            rawJson: hc,
+          });
+        }
       } else if (hunterResult.status === 'retryable_error') {
         hunterRetryable = true;
       }
-
       costEvents.push({ provider: 'HUNTER', costCents: 1, apiCallType: 'domain_search' });
-
       logger.info(
         { ...logCtx, hunterStatus: hunterResult.status, contactsFound: hunterResult.status === 'success' ? hunterResult.contacts.length : 0 },
         'Hunter domain search completed (fallback)',
       );
     }
 
-    // 6b. Apollo (more expensive, may have phone numbers)
-    if (!resolvedContact && deps.apolloAdapter.isConfigured) {
+    // Apollo (more expensive)
+    const hasEmailAfterHunter = allCandidates.some((c) => c.email !== null);
+    if (!hasEmailAfterHunter && deps.apolloAdapter.isConfigured) {
       const apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
-
       if (apolloResult.status === 'success' && apolloResult.contacts.length > 0) {
-        const contact = apolloResult.contacts[0]!;
-        apolloContactJson = contact;
-        resolvedContact = {
-          firstName: contact.firstName,
-          lastName: contact.lastName,
-          email: contact.email,
-          phone: contact.phone,
-          title: contact.title,
-          linkedinUrl: null,
-          source: 'APOLLO',
-          rawJson: contact,
-        };
+        for (const ac of apolloResult.contacts) {
+          if (isGenericEmail(ac.email)) continue;
+          apolloContactJson = ac;
+          allCandidates.push({
+            name: [ac.firstName, ac.lastName].filter(Boolean).join(' ') || business.name,
+            title: ac.title,
+            email: ac.email,
+            phone: ac.phone,
+            linkedinUrl: null,
+            seniority: ac.title ? classifySeniorityLocal(ac.title) : 'other',
+            positionRank: 50,
+            source: 'apollo',
+            rawJson: ac,
+          });
+        }
       } else if (apolloResult.status === 'retryable_error') {
         apolloRetryable = true;
       }
-
       costEvents.push({ provider: 'APOLLO', costCents: 1, apiCallType: 'contact_search' });
-
       logger.info(
         { ...logCtx, apolloStatus: apolloResult.status, contactsFound: apolloResult.status === 'success' ? apolloResult.contacts.length : 0 },
         'Apollo contact search completed (fallback)',
@@ -724,9 +693,33 @@ export async function handleBusinessConvertJob(
     }
   } else {
     logger.info(
-      { ...logCtx, contactSource: resolvedContact.source, email: resolvedContact.email },
-      'Contact resolved from scrape data — skipping paid providers',
+      { ...logCtx, candidateCount: allCandidates.length },
+      'Valid email found from scrape data — skipping paid providers',
     );
+  }
+
+  // ── 6. Select highest-authority contact as Lead ─────────────────────────
+  // Sort: seniority (executive=0, director=1, manager=2, other=3), then positionRank (lower=better)
+  // Only candidates with a valid (non-generic) email can become the lead
+  const leadCandidates = [...allCandidates]
+    .filter((c) => c.email !== null)
+    .sort((a, b) => {
+      const senDiff = seniorityRank(a.seniority) - seniorityRank(b.seniority);
+      if (senDiff !== 0) return senDiff;
+      return a.positionRank - b.positionRank;
+    });
+
+  const resolvedContact = leadCandidates[0] ?? null;
+
+  // Enrich phone from website scrape if selected contact has no phone
+  if (resolvedContact && !resolvedContact.phone && websiteScrapeData?.contactInfo?.phones) {
+    // Only use phones associated with a DM or from small businesses
+    const dmPhone = websiteScrapeData.contactInfo.phones.find(
+      (p) => !isGenericPhone(p.number, false, estimatedEmployees, p.pageUrl),
+    );
+    if (dmPhone) {
+      resolvedContact.phone = dmPhone.number;
+    }
   }
 
   // 6c. Both paid providers retryable → throw to trigger pg-boss retry
@@ -739,14 +732,30 @@ export async function handleBusinessConvertJob(
   // 6d. No contact from any source → terminal, can't create lead
   if (!resolvedContact) {
     logger.warn(
-      { ...logCtx, reason: 'NO_CONTACTS_FOUND' },
-      'No decision-maker contacts found from any source — cannot create lead',
+      { ...logCtx, reason: 'NO_CONTACTS_FOUND', candidateCount: allCandidates.length },
+      'No decision-maker contacts with valid email found — cannot create lead',
     );
     return;
   }
 
-  // ── 7. Create Lead + BusinessConversion + CostEvents in ONE transaction ─
-  const contactEmail = resolvedContact.email;
+  // ── 7. Derive lead source from actual provider ───────────────────────────
+  let leadSource = 'SERPAPI_DISCOVERY';
+  if (job.data.correlationId) {
+    // Try to derive from BusinessEvidence
+    const evidence = await prisma.businessEvidence.findFirst({
+      where: { businessId },
+      select: { sourceType: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (evidence?.sourceType) {
+      leadSource = evidence.sourceType;
+    }
+  }
+
+  // ── 8. Create Lead + BusinessConversion + BusinessContacts + CostEvents in ONE tx ─
+  const contactEmail = resolvedContact.email!;
+  const { firstName: resolvedFirstName, lastName: resolvedLastName } = parseName(resolvedContact.name);
+
   const txResult = await prisma.$transaction(async (tx) => {
     // Check for existing lead with same email (dedup)
     const existingLead = await tx.lead.findFirst({
@@ -764,6 +773,7 @@ export async function handleBusinessConvertJob(
         data: {
           businessId: business.id,
           leadId: existingLead.id,
+          icpProfileId,
           apolloContactJson: apolloContactJson
             ? toInputJson(apolloContactJson)
             : Prisma.JsonNull,
@@ -786,7 +796,25 @@ export async function handleBusinessConvertJob(
         throw err;
       });
 
-      // Record cost events inside transaction
+      // Create BusinessContact rows even for existing leads
+      if (allCandidates.length > 0) {
+        await tx.businessContact.createMany({
+          data: allCandidates.slice(0, 5).map((c) => ({
+            businessId: business.id,
+            name: c.name,
+            ...(c.title !== null ? { title: c.title } : {}),
+            ...(c.email !== null ? { email: c.email } : {}),
+            ...(c.phone !== null ? { phone: c.phone } : {}),
+            ...(c.linkedinUrl !== null ? { linkedinUrl: c.linkedinUrl } : {}),
+            seniority: c.seniority,
+            positionRank: c.positionRank,
+            source: c.source,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      // Record cost events
       for (const ce of costEvents) {
         await tx.discoveryCostEvent.create({
           data: {
@@ -803,8 +831,8 @@ export async function handleBusinessConvertJob(
     }
 
     // Determine first/last name — use contact data, fallback to business name
-    const firstName = resolvedContact.firstName || business.name;
-    const lastName = resolvedContact.lastName || '';
+    const firstName = resolvedFirstName || business.name;
+    const lastName = resolvedLastName || '';
 
     const lead = await tx.lead.create({
       data: {
@@ -815,7 +843,7 @@ export async function handleBusinessConvertJob(
         businessId: business.id,
         decisionMakerTitle: resolvedContact.title ?? null,
         decisionMakerPhone: resolvedContact.phone ?? null,
-        source: 'SERPAPI_DISCOVERY',
+        source: leadSource,
         status: 'new',
       },
     });
@@ -824,6 +852,7 @@ export async function handleBusinessConvertJob(
       data: {
         businessId: business.id,
         leadId: lead.id,
+        icpProfileId,
         apolloContactJson: apolloContactJson
           ? toInputJson(apolloContactJson)
           : Prisma.JsonNull,
@@ -834,6 +863,24 @@ export async function handleBusinessConvertJob(
         ...(businessInsights !== null ? { businessInsights } : {}),
       },
     });
+
+    // Create BusinessContact rows for all scraped contacts (max 5)
+    if (allCandidates.length > 0) {
+      await tx.businessContact.createMany({
+        data: allCandidates.slice(0, 5).map((c) => ({
+          businessId: business.id,
+          name: c.name,
+          ...(c.title !== null ? { title: c.title } : {}),
+          ...(c.email !== null ? { email: c.email } : {}),
+          ...(c.phone !== null ? { phone: c.phone } : {}),
+          ...(c.linkedinUrl !== null ? { linkedinUrl: c.linkedinUrl } : {}),
+          seniority: c.seniority,
+          positionRank: c.positionRank,
+          source: c.source,
+        })),
+        skipDuplicates: true,
+      });
+    }
 
     // Record cost events inside transaction
     for (const ce of costEvents) {
@@ -851,7 +898,7 @@ export async function handleBusinessConvertJob(
     return { lead, isNew: true };
   });
 
-  // ── 8. Enqueue enrichment.run if lead is newly created ────────────────
+  // ── 9. Enqueue enrichment.run if lead is newly created ────────────────
   if (txResult.isNew && deps.enqueueEnrichmentRun) {
     await deps.enqueueEnrichmentRun({
       runId: discoveryRunId,
@@ -866,16 +913,16 @@ export async function handleBusinessConvertJob(
     );
   }
 
-  // ── 9. Completion log ─────────────────────────────────────────────────
+  // ── 10. Completion log ────────────────────────────────────────────────
   logger.info(
     {
       ...logCtx,
       leadId: txResult.lead.id,
       isNewLead: txResult.isNew,
       contactSource: resolvedContact.source,
+      businessContactCount: Math.min(allCandidates.length, 5),
       paidProvidersCalled: costEvents.length,
-      hunterSkipped: costEvents.every((ce) => ce.provider !== 'HUNTER'),
-      apolloSkipped: costEvents.every((ce) => ce.provider !== 'APOLLO'),
+      leadSource,
     },
     'Completed business.convert job',
   );

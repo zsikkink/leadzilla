@@ -20,8 +20,10 @@ export interface DecisionMaker {
   name: string;
   title: string | null;
   email: string | null;
+  phone: string | null;
   linkedinUrl: string | null;
   seniority: 'executive' | 'director' | 'manager' | 'other';
+  positionRank: number;
   source: string;
 }
 
@@ -175,6 +177,8 @@ const PRIORITY_A_PATHS = [
   '/contact-us',
   '/team',
   '/our-team',
+  '/leadership',
+  '/people',
 ];
 
 const PRIORITY_B_PATHS = [
@@ -296,7 +300,30 @@ const GENERIC_EMAIL_PREFIXES = new Set([
   'sales',
   'help',
   'enquiries',
+  'enquiry',
+  'inquiry',
+  'general',
   'team',
+  'mail',
+  'office',
+  'service',
+  'webmaster',
+  'postmaster',
+  'marketing',
+  'hr',
+  'finance',
+  'billing',
+  'accounts',
+  'reception',
+  'feedback',
+  'appointments',
+  'events',
+  'press',
+  'media',
+  'partnerships',
+  'careers',
+  'jobs',
+  'recruitment',
 ]);
 
 const PLATFORM_EMAIL_DOMAINS = new Set([
@@ -609,13 +636,24 @@ function detectWhatsApp($: cheerio.CheerioAPI): boolean {
 
 // ── New extractors ─────────────────────────────────────────────────────────
 
-/** Extract decision makers from team/about pages. */
+/** Maximum decision makers to extract per page. */
+const MAX_DECISION_MAKERS = 5;
+
+/** Extract decision makers from team/about pages. Preserves visual page order via positionRank. */
 function extractDecisionMakers($: cheerio.CheerioAPI, pageUrl: string): DecisionMaker[] {
   const makers: DecisionMaker[] = [];
   const seenNames = new Set<string>();
 
+  function addMaker(dm: Omit<DecisionMaker, 'positionRank'>): void {
+    if (makers.length >= MAX_DECISION_MAKERS) return;
+    if (seenNames.has(dm.name.toLowerCase())) return;
+    seenNames.add(dm.name.toLowerCase());
+    makers.push({ ...dm, positionRank: makers.length + 1 });
+  }
+
   // 1. JSON-LD Person schema entries
   $('script[type="application/ld+json"]').each((_, el) => {
+    if (makers.length >= MAX_DECISION_MAKERS) return false;
     const raw = $(el).html() ?? '';
     try {
       const data = JSON.parse(raw) as Record<string, unknown>;
@@ -631,15 +669,16 @@ function extractDecisionMakers($: cheerio.CheerioAPI, pageUrl: string): Decision
           const name = (person['name'] as string).trim();
           const jobTitle = typeof person['jobTitle'] === 'string' ? (person['jobTitle'] as string).trim() : null;
           const email = typeof person['email'] === 'string' ? (person['email'] as string).trim() : null;
+          const phone = typeof person['telephone'] === 'string' ? (person['telephone'] as string).trim() : null;
           const sameAs = Array.isArray(person['sameAs']) ? (person['sameAs'] as string[]) : [];
           const linkedinUrl = sameAs.find((u) => typeof u === 'string' && u.includes('linkedin.com')) ?? null;
 
-          if (name && !seenNames.has(name.toLowerCase())) {
-            seenNames.add(name.toLowerCase());
-            makers.push({
+          if (name) {
+            addMaker({
               name,
               title: jobTitle,
               email,
+              phone,
               linkedinUrl,
               seniority: jobTitle ? classifySeniority(jobTitle) : 'other',
               source: pageUrl,
@@ -653,6 +692,8 @@ function extractDecisionMakers($: cheerio.CheerioAPI, pageUrl: string): Decision
   });
 
   // 2. Team/staff sections with structured HTML
+  //    Cheerio iterates in document order (top-to-bottom, left-to-right in source),
+  //    matching visual reading order for both flex-row and flex-col layouts.
   const teamSelectors = [
     '[class*="team"]',
     '[class*="staff"]',
@@ -665,6 +706,7 @@ function extractDecisionMakers($: cheerio.CheerioAPI, pageUrl: string): Decision
 
   for (const selector of teamSelectors) {
     $(selector).each((_, el) => {
+      if (makers.length >= MAX_DECISION_MAKERS) return false;
       const block = $(el);
       const nameEl = block.find('h1, h2, h3, h4, h5, h6, [class*="name"]').first();
       const titleEl = block.find('[class*="title"], [class*="position"], [class*="role"], [class*="designation"]').first();
@@ -678,9 +720,6 @@ function extractDecisionMakers($: cheerio.CheerioAPI, pageUrl: string): Decision
       if (!name || name.length < 3 || name.length > 80 || /\d/.test(name)) return;
       const wordCount = name.split(/\s+/).length;
       if (wordCount < 2 || wordCount > 5) return;
-
-      if (seenNames.has(name.toLowerCase())) return;
-      seenNames.add(name.toLowerCase());
 
       // Look for linkedin link within the block
       let linkedinUrl: string | null = null;
@@ -702,10 +741,20 @@ function extractDecisionMakers($: cheerio.CheerioAPI, pageUrl: string): Decision
         }
       });
 
-      makers.push({
+      // Look for phone within the block
+      let phone: string | null = null;
+      block.find('a[href^="tel:"]').each((_, linkEl) => {
+        if (!phone) {
+          const href = $(linkEl).attr('href') ?? '';
+          phone = href.replace('tel:', '').replace(/[\s()-]/g, '').trim() || null;
+        }
+      });
+
+      addMaker({
         name,
         title,
         email,
+        phone,
         linkedinUrl,
         seniority: title ? classifySeniority(title) : 'other',
         source: pageUrl,
@@ -714,25 +763,27 @@ function extractDecisionMakers($: cheerio.CheerioAPI, pageUrl: string): Decision
   }
 
   // 3. Heuristic: "Name - Title" or "Name, Title" patterns near headings
-  const bodyText = $.text();
-  const nameTitleRegex = /^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\s*[,\u2013\u2014\-|]\s*([A-Z][A-Za-z\s&,/]{3,50})$/gm;
-  let hMatch: RegExpExecArray | null;
-  while ((hMatch = nameTitleRegex.exec(bodyText)) !== null) {
-    const name = hMatch[1]!.trim();
-    const title = hMatch[2]!.trim();
+  if (makers.length < MAX_DECISION_MAKERS) {
+    const bodyText = $.text();
+    const nameTitleRegex = /^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\s*[,\u2013\u2014\-|]\s*([A-Z][A-Za-z\s&,/]{3,50})$/gm;
+    let hMatch: RegExpExecArray | null;
+    while ((hMatch = nameTitleRegex.exec(bodyText)) !== null) {
+      if (makers.length >= MAX_DECISION_MAKERS) break;
+      const name = hMatch[1]!.trim();
+      const title = hMatch[2]!.trim();
 
-    if (seenNames.has(name.toLowerCase())) continue;
-    if (/^(learn|read|view|see|click|find|get|our|the)\b/i.test(name)) continue;
+      if (/^(learn|read|view|see|click|find|get|our|the)\b/i.test(name)) continue;
 
-    seenNames.add(name.toLowerCase());
-    makers.push({
-      name,
-      title,
-      email: null,
-      linkedinUrl: null,
-      seniority: classifySeniority(title),
-      source: pageUrl,
-    });
+      addMaker({
+        name,
+        title,
+        email: null,
+        phone: null,
+        linkedinUrl: null,
+        seniority: classifySeniority(title),
+        source: pageUrl,
+      });
+    }
   }
 
   return makers;
