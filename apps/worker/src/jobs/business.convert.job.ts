@@ -1,5 +1,7 @@
-import { Prisma, prisma } from '@lead-flood/db';
+import { Prisma, prisma, toInputJson } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
+
+import { RetryableError } from '../errors.js';
 
 // ── Constants ──────────────────────────────────────────────────────────
 export const BUSINESS_CONVERT_JOB_NAME = 'business.convert';
@@ -194,10 +196,6 @@ interface ResolvedContact {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
-}
-
 function isCacheValid(scrapedAt: Date | null): boolean {
   if (!scrapedAt) return false;
   return Date.now() - scrapedAt.getTime() < SCRAPE_CACHE_TTL_MS;
@@ -639,7 +637,7 @@ export async function handleBusinessConvertJob(
 
   // 6c. Both paid providers retryable → throw to trigger pg-boss retry
   if (!resolvedContact && hunterRetryable && apolloRetryable) {
-    throw new Error(
+    throw new RetryableError(
       `Both Hunter and Apollo returned retryable errors for domain ${domain}`,
     );
   }
@@ -737,6 +735,7 @@ export async function handleBusinessConvertJob(
         hunterContactJson: hunterContactJson
           ? toInputJson(hunterContactJson)
           : Prisma.JsonNull,
+        metadata: toInputJson({ contactSource: resolvedContact.source }),
       },
     });
 

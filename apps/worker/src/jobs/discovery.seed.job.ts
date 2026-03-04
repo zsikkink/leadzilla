@@ -5,7 +5,7 @@ import type {
   DiscoveryLanguageCode,
   SearchTaskType,
 } from '@lead-flood/discovery';
-import { prisma, type Prisma } from '@lead-flood/db';
+import { prisma, toInputJson } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
@@ -65,10 +65,6 @@ const ALLOWED_TASK_TYPES = new Set<SearchTaskType>([
   'SERP_MAPS_LOCAL',
 ]);
 
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
-}
-
 function withSeedOverrides(
   config: DiscoveryRuntimeConfig,
   payload: DiscoverySeedJobPayload,
@@ -125,6 +121,39 @@ export async function handleDiscoverySeedJob(
   const shouldEnqueueRunTasks = job.data.enqueueRunTasks ?? job.data.reason !== 'api';
 
   try {
+    // Bug 6: Scheduled seeds arrive without icpProfileId/discoveryRunId.
+    // Auto-select the oldest active ICP and create a tracking JobExecution.
+    if (!job.data.icpProfileId && job.data.reason === 'scheduled') {
+      const defaultIcp = await prisma.icpProfile.findFirst({
+        where: { isActive: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (defaultIcp) {
+        job.data.icpProfileId = defaultIcp.id;
+        const run = await prisma.jobExecution.create({
+          data: {
+            type: 'discovery.seed',
+            status: 'queued',
+            payload: toInputJson({
+              reason: 'scheduled',
+              icpProfileId: defaultIcp.id,
+            }),
+          },
+        });
+        job.data.discoveryRunId = run.id;
+        logger.info(
+          {
+            jobId: job.id,
+            queue: job.name,
+            correlationId,
+            icpProfileId: defaultIcp.id,
+            discoveryRunId: run.id,
+          },
+          'Scheduled seed: auto-selected default ICP profile and created discovery run',
+        );
+      }
+    }
+
     // B9: If ICP profile is provided, load its target industries for v2 task generation
     let icpSeedConfig: IcpSeedConfig | undefined;
     if (job.data.icpProfileId) {
@@ -184,6 +213,7 @@ export async function handleDiscoverySeedJob(
             icpProfileId: job.data.icpProfileId,
             includeWebsiteAnalysis: job.data.includeWebsiteAnalysis,
             includeSocialMediaAnalysis: job.data.includeSocialMediaAnalysis,
+            ...(job.data.maxTasks !== undefined ? { maxTasks: job.data.maxTasks } : {}),
           },
           {
             ...DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,

@@ -13,7 +13,7 @@ import type {
   UpdateIcpProfileRequest,
   UpdateQualificationRuleRequest,
 } from '@lead-flood/contracts';
-import { Prisma, prisma } from '@lead-flood/db';
+import { Prisma, prisma, toInputJson } from '@lead-flood/db';
 
 import { IcpNotFoundError, IcpNotImplementedError } from './icp.errors.js';
 
@@ -432,10 +432,6 @@ function mapIcpProfileToResponse(
     updatedAt: icp.updatedAt.toISOString(),
     qualificationRules: icp.qualificationRules?.map((rule) => mapQualificationRuleToResponse(rule)),
   };
-}
-
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
 
 export class StubIcpRepository implements IcpRepository {

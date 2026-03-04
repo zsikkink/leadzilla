@@ -1,6 +1,6 @@
 import PgBoss from 'pg-boss';
 
-import { Prisma, prisma } from '@lead-flood/db';
+import { Prisma, prisma, toInputJson } from '@lead-flood/db';
 import { createLogger } from '@lead-flood/observability';
 import type {
   RunDiscoverySeedRequest,
@@ -22,10 +22,6 @@ import { buildServer, LeadAlreadyExistsError } from './server.js';
 function toDayStart(value: string): Date {
   const source = new Date(value);
   return new Date(Date.UTC(source.getUTCFullYear(), source.getUTCMonth(), source.getUTCDate()));
-}
-
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
 
 async function main(): Promise<void> {
@@ -410,7 +406,7 @@ async function main(): Promise<void> {
     },
     enqueueMessageGenerate: async (payload: MessageGenerateJobPayload) => {
       await boss.send('message.generate', payload, {
-        singletonKey: `message.generate:${payload.runId}`,
+        singletonKey: `message.generate:${payload.leadId}:${payload.icpProfileId}`,
         retryLimit: 3,
         retryDelay: 30,
         retryBackoff: true,
@@ -448,15 +444,14 @@ async function main(): Promise<void> {
       return true;
     },
     listLeads: async (query) => {
-      const where = {
+      const where: Prisma.LeadWhereInput = {
         deletedAt: null,
         ...(query.icpProfileId
           ? {
-              discoveryRecords: {
-                some: {
-                  icpProfileId: query.icpProfileId,
-                },
-              },
+              OR: [
+                { discoveryRecords: { some: { icpProfileId: query.icpProfileId } } },
+                { scorePredictions: { some: { icpProfileId: query.icpProfileId } } },
+              ],
             }
           : {}),
         ...(query.status ? { status: query.status } : {}),
@@ -492,6 +487,11 @@ async function main(): Promise<void> {
               ...(query.icpProfileId ? { where: { icpProfileId: query.icpProfileId } } : {}),
               orderBy: [{ discoveredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
               take: 1,
+            },
+            businessConversions: {
+              orderBy: [{ convertedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+              take: 1,
+              select: { id: true, convertedAt: true },
             },
             enrichmentRecords: {
               orderBy: [{ enrichedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
@@ -572,7 +572,7 @@ async function main(): Promise<void> {
             error: lead.error,
             createdAt: lead.createdAt.toISOString(),
             updatedAt: lead.updatedAt.toISOString(),
-            latestIcpProfileId: lead.discoveryRecords[0]?.icpProfileId ?? null,
+            latestIcpProfileId: lead.discoveryRecords[0]?.icpProfileId ?? lead.scorePredictions[0]?.icpProfileId ?? null,
             latestScoreBand: lead.scorePredictions[0]?.scoreBand
               ?? (scoreInfoFallback?.scoreBand === 'HIGH' || scoreInfoFallback?.scoreBand === 'MEDIUM' || scoreInfoFallback?.scoreBand === 'LOW'
                 ? scoreInfoFallback.scoreBand : null),

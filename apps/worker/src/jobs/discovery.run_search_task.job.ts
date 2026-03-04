@@ -3,9 +3,11 @@ import type {
   DiscoveryProvider as SerpDiscoveryProvider,
   DiscoveryRuntimeConfig,
 } from '@lead-flood/discovery';
-import { prisma, type Prisma } from '@lead-flood/db';
+import { prisma, toInputJson } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
+
+import { classifyError } from '../errors.js';
 
 export const DISCOVERY_RUN_SEARCH_TASK_JOB_NAME = 'discovery.run_search_task';
 export const DISCOVERY_RUN_SEARCH_TASK_IDEMPOTENCY_KEY_PATTERN =
@@ -66,10 +68,6 @@ interface RunState {
   serpapiRequests: number;
   startedAtMs: number;
   finalized: boolean;
-}
-
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
 
 function getRunKey(job: Job<DiscoveryRunSearchTaskJobPayload>): string {
@@ -231,6 +229,7 @@ export async function handleDiscoveryRunSearchTaskJob(
   job: Job<DiscoveryRunSearchTaskJobPayload>,
   dependencies: DiscoveryRunSearchTaskDependencies,
 ): Promise<void> {
+  try {
   const slot = job.data.slot ?? 0;
   const correlationId = job.data.correlationId ?? job.id;
   const runKey = getRunKey(job);
@@ -465,4 +464,17 @@ export async function handleDiscoveryRunSearchTaskJob(
       ...DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,
     },
   );
+  } catch (error: unknown) {
+    logger.error(
+      {
+        jobId: job.id,
+        queue: job.name,
+        slot: job.data.slot ?? 0,
+        correlationId: job.data.correlationId ?? job.id,
+        error,
+      },
+      'Failed discovery.run_search_task job',
+    );
+    throw classifyError(error);
+  }
 }

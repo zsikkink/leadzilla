@@ -1,8 +1,10 @@
 import type { GenerateMessageDraftRequest } from '@lead-flood/contracts';
-import { type Prisma, prisma } from '@lead-flood/db';
+import { prisma, toInputJson } from '@lead-flood/db';
 import type { OpenAiAdapter } from '@lead-flood/providers';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
+
+import { classifyError } from '../errors.js';
 
 import {
   validateMessageVariant,
@@ -30,8 +32,9 @@ export const MESSAGE_GENERATE_RETRY_OPTIONS: Pick<
 export interface MessageGenerateJobPayload
   extends Pick<
     GenerateMessageDraftRequest,
-    'leadId' | 'icpProfileId' | 'scorePredictionId' | 'knowledgeEntryIds' | 'channel' | 'promptVersion'
-  > {
+    'leadId' | 'icpProfileId' | 'scorePredictionId' | 'knowledgeEntryIds' | 'promptVersion'
+  >,
+    Partial<Pick<GenerateMessageDraftRequest, 'channel'>> {
   runId: string;
   correlationId?: string | undefined;
   followUpNumber?: number | undefined;
@@ -49,10 +52,6 @@ export interface MessageGenerateLogger {
 export interface MessageGenerateJobDependencies {
   openAiAdapter: OpenAiAdapter;
   boss?: Pick<PgBoss, 'send'> | undefined;
-}
-
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
 
 /**
@@ -738,6 +737,6 @@ export async function handleMessageGenerateJob(
       'Failed message.generate job',
     );
 
-    throw error;
+    throw classifyError(error);
   }
 }

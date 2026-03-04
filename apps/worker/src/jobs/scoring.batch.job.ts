@@ -1,5 +1,4 @@
-import { createHash } from 'node:crypto';
-import { Prisma, prisma } from '@lead-flood/db';
+import { prisma, toInputJson } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
 import {
@@ -9,11 +8,11 @@ import {
 } from '../scoring/deterministic.js';
 import { predictLogistic } from '../scoring/logistic.js';
 import {
-  BASELINE_MODEL_VERSION_TAG,
-  TRAINED_MODEL_FEATURE_KEYS,
+  asDeterministicRules,
+  computeBlendRatio,
+  ensureBaselineModelVersion,
   extractFeatureVectorForModel,
   findActiveTrainedModel,
-  computeBlendRatio,
   getQualificationThreshold,
 } from '../scoring/shared.js';
 
@@ -52,107 +51,6 @@ export interface ScoringBatchJobDependencies {
 
 const DEFAULT_BATCH_SIZE = 50;
 
-const BASELINE_FEATURE_EXTRACTOR_VERSION = 'features_v1';
-
-const BASELINE_TRAINING_RUN_TRIGGER = 'MANUAL';
-
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
-}
-
-function deterministicChecksum(input: string): string {
-  return createHash('sha256').update(input).digest('hex');
-}
-
-function asDeterministicRules(
-  value: Awaited<ReturnType<typeof prisma.qualificationRule.findMany>>,
-): DeterministicRule[] {
-  return value.map((rule) => ({
-    id: rule.id,
-    name: rule.name,
-    ruleType: rule.ruleType,
-    isRequired: rule.isRequired,
-    fieldKey: rule.fieldKey,
-    operator: rule.operator,
-    valueJson: rule.valueJson,
-    weight: rule.weight,
-    isActive: rule.isActive,
-    orderIndex: rule.orderIndex,
-    priority: rule.priority,
-  }));
-}
-
-async function ensureBaselineModelVersion(): Promise<string> {
-  const existing = await prisma.modelVersion.findUnique({
-    where: { versionTag: BASELINE_MODEL_VERSION_TAG },
-    select: { id: true },
-  });
-  if (existing) {
-    return existing.id;
-  }
-
-  const now = new Date();
-  const checksumSource = JSON.stringify({
-    versionTag: BASELINE_MODEL_VERSION_TAG,
-    sourceVersion: BASELINE_FEATURE_EXTRACTOR_VERSION,
-    featureKeys: TRAINED_MODEL_FEATURE_KEYS,
-  });
-
-  try {
-    const created = await prisma.$transaction(async (tx) => {
-      const trainingRun = await tx.trainingRun.create({
-        data: {
-          modelType: 'LOGISTIC_REGRESSION',
-          status: 'SUCCEEDED',
-          trigger: BASELINE_TRAINING_RUN_TRIGGER,
-          configJson: {
-            baseline: true,
-            sourceVersion: BASELINE_FEATURE_EXTRACTOR_VERSION,
-          },
-          trainingWindowStart: new Date(now.getTime() - 86_400_000),
-          trainingWindowEnd: now,
-          datasetSize: 0,
-          positiveCount: 0,
-          negativeCount: 0,
-          startedAt: now,
-          endedAt: now,
-        },
-      });
-
-      return tx.modelVersion.create({
-        data: {
-          trainingRunId: trainingRun.id,
-          modelType: 'LOGISTIC_REGRESSION',
-          versionTag: BASELINE_MODEL_VERSION_TAG,
-          stage: 'ACTIVE',
-          featureSchemaJson: {
-            sourceVersion: BASELINE_FEATURE_EXTRACTOR_VERSION,
-            keys: TRAINED_MODEL_FEATURE_KEYS,
-          },
-          coefficientsJson: Prisma.JsonNull,
-          intercept: 0,
-          deterministicWeightsJson: {},
-          checksum: deterministicChecksum(checksumSource),
-          trainedAt: now,
-          activatedAt: now,
-        },
-      });
-    });
-
-    return created.id;
-  } catch (error: unknown) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-      const fallback = await prisma.modelVersion.findUnique({
-        where: { versionTag: BASELINE_MODEL_VERSION_TAG },
-        select: { id: true },
-      });
-      if (fallback) {
-        return fallback.id;
-      }
-    }
-    throw error;
-  }
-}
 
 export async function handleScoringBatchJob(
   logger: ScoringBatchLogger,
@@ -272,9 +170,23 @@ export async function handleScoringBatchJob(
             ? (latestSnapshot.featuresJson as Record<string, unknown>)
             : {};
 
+        // Data alignment hard filter: override scoring when cross-source data mismatch is severe
+        const dataAlignmentScore = typeof featurePayload.data_alignment_score === 'number'
+          ? featurePayload.data_alignment_score
+          : null;
+        const dataAlignmentFailed = dataAlignmentScore !== null && dataAlignmentScore < 0.3;
+
         // Evaluate deterministic score
         const rules = rulesByIcp.get(targetIcpId) ?? [];
         const deterministic = evaluateDeterministicScore(rules, featurePayload);
+
+        if (dataAlignmentFailed) {
+          deterministic.hardFilterPassed = false;
+          deterministic.qualificationScore = 0;
+          deterministic.qualificationPath = 'HARD_FILTERED';
+          deterministic.reasonCodes.push('HARD_FILTER_FAILED_DATA_ALIGNMENT_SCORE');
+        }
+
         const deterministicScore = deterministic.qualificationScore;
 
         // Evaluate logistic model score if available

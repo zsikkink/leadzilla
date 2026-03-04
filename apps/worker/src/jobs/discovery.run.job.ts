@@ -4,7 +4,7 @@ import type {
   EnrichmentProvider,
 } from '@lead-flood/contracts';
 import { createHash } from 'node:crypto';
-import { Prisma, prisma } from '@lead-flood/db';
+import { Prisma, prisma, toInputJson } from '@lead-flood/db';
 import {
   ApolloRateLimitError,
   BraveSearchRateLimitError,
@@ -149,10 +149,6 @@ function deriveLeadName(email: string): { firstName: string; lastName: string } 
     firstName: first ? first.slice(0, 1).toUpperCase() + first.slice(1) : 'Lead',
     lastName: rest.join(' ').trim(),
   };
-}
-
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
 
 function toCount(value: unknown): number {
@@ -1591,7 +1587,7 @@ export async function handleDiscoveryRunJob(
       });
 
       await dependencies.boss.send(ENRICHMENT_RUN_JOB_NAME, enrichmentPayload, {
-        singletonKey: `enrichment.run:${lead.id}:${dependencies.defaultEnrichmentProvider}`,
+        singletonKey: `enrichment.run:${lead.id}:convert`,
         ...ENRICHMENT_RUN_RETRY_OPTIONS,
       });
 

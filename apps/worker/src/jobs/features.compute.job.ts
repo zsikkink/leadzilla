@@ -1,15 +1,17 @@
 import { createHash } from 'node:crypto';
-import { prisma } from '@lead-flood/db';
-import type { Prisma } from '@lead-flood/db';
+import { prisma, toInputJson } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
+
+import { classifyError } from '../errors.js';
 
 import {
   SCORING_COMPUTE_JOB_NAME,
   SCORING_COMPUTE_RETRY_OPTIONS,
   type ScoringComputeJobPayload,
 } from './scoring.compute.job.js';
-import { evaluateDeterministicScore, type DeterministicRule } from '../scoring/deterministic.js';
+import { evaluateDeterministicScore } from '../scoring/deterministic.js';
+import { asDeterministicRules } from '../scoring/shared.js';
 import { computePopulationRates, detectFeatureDrift } from '../utils/feature-drift.js';
 
 export const FEATURES_COMPUTE_JOB_NAME = 'features.compute';
@@ -121,10 +123,6 @@ export const FEATURE_KEYS = [
   // ── v3 features (data alignment) ──
   'data_alignment_score',
 ] as const;
-
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
-}
 
 function normalizeString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
@@ -442,22 +440,6 @@ function buildFeaturePayload(input: {
   };
 }
 
-function asDeterministicRules(value: Awaited<ReturnType<typeof prisma.qualificationRule.findMany>>): DeterministicRule[] {
-  return value.map((rule) => ({
-    id: rule.id,
-    name: rule.name,
-    ruleType: rule.ruleType,
-    isRequired: rule.isRequired,
-    fieldKey: rule.fieldKey,
-    operator: rule.operator,
-    valueJson: rule.valueJson,
-    weight: rule.weight,
-    isActive: rule.isActive,
-    orderIndex: rule.orderIndex,
-    priority: rule.priority,
-  }));
-}
-
 /** Classify review count into tiers: 0=none, 1=low, 2=medium, 3=high, 4=very_high */
 function toReviewCountTier(count: number): number {
   if (count <= 0) return 0;
@@ -736,7 +718,7 @@ export async function handleFeaturesComputeJob(
     const businessConversion = lead.businessId
       ? await prisma.businessConversion.findFirst({
           where: { leadId },
-          select: { apolloContactJson: true, hunterContactJson: true },
+          select: { apolloContactJson: true, hunterContactJson: true, metadata: true },
           orderBy: { convertedAt: 'desc' },
         })
       : null;
@@ -822,9 +804,19 @@ export async function handleFeaturesComputeJob(
     const hunterContact = businessConversion?.hunterContactJson && typeof businessConversion.hunterContactJson === 'object'
       ? (businessConversion.hunterContactJson as Record<string, unknown>)
       : null;
-    const contactSource = apolloContact ? 'APOLLO' : hunterContact ? 'HUNTER' : 'NONE';
+    const conversionMetadata = businessConversion?.metadata && typeof businessConversion.metadata === 'object'
+      ? (businessConversion.metadata as Record<string, unknown>)
+      : null;
+    const contactSource = apolloContact ? 'APOLLO'
+      : hunterContact ? 'HUNTER'
+      : (conversionMetadata?.contactSource as string) ?? 'NONE';
     const hasDecisionMakerPhone = Boolean(lead.decisionMakerPhone);
-    const decisionMakerTitle = typeof apolloContact?.title === 'string' ? apolloContact.title.toLowerCase() : '';
+    // Read title from Apollo first, then Hunter position, then website decision makers
+    const decisionMakerTitle = (
+      typeof apolloContact?.title === 'string' ? apolloContact.title
+      : typeof hunterContact?.position === 'string' ? hunterContact.position
+      : ''
+    ).toLowerCase();
     const decisionMakerSeniority =
       /owner|ceo|founder/i.test(decisionMakerTitle) ? 'executive'
       : /director|vp|head/i.test(decisionMakerTitle) ? 'director'
@@ -891,7 +883,7 @@ export async function handleFeaturesComputeJob(
       && (apifyInstagram.businessEmail as string).length > 0;
 
     // ── Cross-source data alignment score ──
-    const websiteTitle = typeof apifyWebsite?.title === 'string' ? apifyWebsite.title : null;
+    const websiteTitle = typeof apifyWebsite?.pageTitle === 'string' ? apifyWebsite.pageTitle : null;
     const websiteDetectedCountry = typeof apifyWebsite?.detectedCountry === 'string'
       ? apifyWebsite.detectedCountry
       : null;
@@ -1342,6 +1334,6 @@ export async function handleFeaturesComputeJob(
       'Failed features.compute job',
     );
 
-    throw error;
+    throw classifyError(error);
   }
 }

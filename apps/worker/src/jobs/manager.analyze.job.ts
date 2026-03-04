@@ -6,7 +6,7 @@ import type {
   TrendComparison,
   VariantBreakdownItem,
 } from '@lead-flood/contracts';
-import { type Prisma, prisma } from '@lead-flood/db';
+import { prisma, toInputJson } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
 import { formatErrorMessage } from '../errors.js';
@@ -43,10 +43,6 @@ const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 function safeRate(numerator: number, denominator: number): number {
   if (denominator === 0) return 0;
   return Math.round((numerator / denominator) * 10000) / 10000;
-}
-
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
 
 async function computeIcpBreakdown(

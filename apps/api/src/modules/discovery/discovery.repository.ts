@@ -1,5 +1,4 @@
-import { prisma } from '@lead-flood/db';
-import type { Prisma } from '@lead-flood/db';
+import { prisma, toInputJson } from '@lead-flood/db';
 import type {
   CreateDiscoveryRunRequest,
   DiscoveryRunStatusResponse,
@@ -24,10 +23,6 @@ interface DiscoveryRunProgress {
 function toDayStart(value: string): Date {
   const source = new Date(value);
   return new Date(Date.UTC(source.getUTCFullYear(), source.getUTCMonth(), source.getUTCDate()));
-}
-
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
 
 function toCount(value: unknown): number {

@@ -8,8 +8,7 @@ import type {
   ListEnrichmentRecordsResponse,
   PipelineRunStatus,
 } from '@lead-flood/contracts';
-import { prisma } from '@lead-flood/db';
-import type { Prisma } from '@lead-flood/db';
+import { prisma, toInputJson } from '@lead-flood/db';
 
 import { EnrichmentNotImplementedError, EnrichmentRunNotFoundError } from './enrichment.errors.js';
 
@@ -19,10 +18,6 @@ interface EnrichmentRunProgress {
   totalItems: number;
   processedItems: number;
   failedItems: number;
-}
-
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
 
 function toCount(value: unknown): number {

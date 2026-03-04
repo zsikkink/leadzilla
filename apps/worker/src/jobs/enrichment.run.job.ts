@@ -2,7 +2,7 @@ import type {
   CreateEnrichmentRunRequest,
   EnrichmentProvider,
 } from '@lead-flood/contracts';
-import { Prisma, prisma } from '@lead-flood/db';
+import { Prisma, prisma, toInputJson } from '@lead-flood/db';
 import type { ProviderBudgetTracker } from '../utils/provider-budget.js';
 import { getProviderCostCents } from '../utils/provider-budget.js';
 import type { EnrichmentProviderRotator } from '../utils/provider-rotation.js';
@@ -23,6 +23,7 @@ import {
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { classifyError } from '../errors.js';
 import {
   FEATURES_COMPUTE_JOB_NAME,
   FEATURES_COMPUTE_RETRY_OPTIONS,
@@ -77,10 +78,6 @@ export interface EnrichmentRunDependencies {
 function domainFromEmail(email: string): string | undefined {
   const [, domain] = email.split('@');
   return domain?.toLowerCase();
-}
-
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
 
 function deriveProviderRecordId(
@@ -379,8 +376,10 @@ async function executeWithRotation(
           `Provider ${currentProvider} returned sparse data — escalating to next tier`,
         );
         // Still record this as a success but try the next provider for more complete data
+        // Only escalate forward (toward more expensive/richer providers)
         failedProviders.push(currentProvider);
-        const nextProvider = rotator.getNextProvider(leadId, failedProviders);
+        const currentIdx = rotator.getPriorityIndex(currentProvider);
+        const nextProvider = rotator.getNextProviderAfter(currentIdx, failedProviders);
         if (nextProvider) {
           currentProvider = nextProvider;
           continue;
@@ -901,6 +900,6 @@ export async function handleEnrichmentRunJob(
       'Failed enrichment.run job',
     );
 
-    throw error;
+    throw classifyError(error);
   }
 }
