@@ -1,7 +1,15 @@
 'use client';
 
+import type { FunnelResponse } from '@lead-flood/contracts';
 import {
+  ArrowRight,
   BarChart3,
+  Cpu,
+  Database,
+  MessageSquare,
+  Search,
+  Send,
+  TrendingUp,
   Users,
 } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
@@ -39,6 +47,156 @@ function StatCard({
       <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">{label}</p>
       <p className={`mt-1 text-2xl font-extrabold tracking-tight ${accent}`}>{value}</p>
       {sub ? <p className="mt-0.5 text-xs text-muted-foreground/50">{sub}</p> : null}
+    </div>
+  );
+}
+
+// ── Pipeline stage definitions ──────────────────────────────────────────
+interface PipelineStage {
+  key: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string | undefined }>;
+  colorClass: string;
+  bgClass: string;
+  barClass: string;
+  getProcessed: (d: FunnelResponse) => number;
+  getPending: (d: FunnelResponse) => number;
+}
+
+const PIPELINE_STAGES: PipelineStage[] = [
+  {
+    key: 'discovery',
+    label: 'Discovery',
+    icon: Search,
+    colorClass: 'text-blue-400',
+    bgClass: 'bg-blue-500/15',
+    barClass: 'bg-blue-400',
+    getProcessed: (d) => d.discoveredCount,
+    getPending: () => 0,
+  },
+  {
+    key: 'enrichment',
+    label: 'Enrichment',
+    icon: Database,
+    colorClass: 'text-zbooni-teal',
+    bgClass: 'bg-zbooni-teal/15',
+    barClass: 'bg-zbooni-teal',
+    getProcessed: (d) => d.enrichedCount,
+    getPending: (d) => Math.max(0, d.discoveredCount - d.enrichedCount),
+  },
+  {
+    key: 'features',
+    label: 'Feature Extraction',
+    icon: Cpu,
+    colorClass: 'text-purple-400',
+    bgClass: 'bg-purple-500/15',
+    barClass: 'bg-purple-400',
+    getProcessed: (d) => d.qualifiedCount,
+    getPending: (d) => Math.max(0, d.enrichedCount - d.qualifiedCount),
+  },
+  {
+    key: 'scoring',
+    label: 'Scoring',
+    icon: TrendingUp,
+    colorClass: 'text-yellow-400',
+    bgClass: 'bg-yellow-500/15',
+    barClass: 'bg-yellow-400',
+    getProcessed: (d) => d.scoredCount,
+    getPending: (d) => Math.max(0, d.enrichedCount - d.scoredCount),
+  },
+  {
+    key: 'messaging',
+    label: 'Messaging',
+    icon: Send,
+    colorClass: 'text-zbooni-green',
+    bgClass: 'bg-zbooni-green/15',
+    barClass: 'bg-zbooni-green',
+    getProcessed: (d) => d.messagesSentCount,
+    getPending: (d) => Math.max(0, d.scoredCount - d.messagesSentCount),
+  },
+  {
+    key: 'followups',
+    label: 'Follow-ups',
+    icon: MessageSquare,
+    colorClass: 'text-emerald-400',
+    bgClass: 'bg-emerald-500/15',
+    barClass: 'bg-emerald-400',
+    getProcessed: (d) => d.repliesCount,
+    getPending: (d) => Math.max(0, d.messagesSentCount - d.repliesCount),
+  },
+];
+
+function PipelineStageCard({ stage, data }: { stage: PipelineStage; data: FunnelResponse }) {
+  const Icon = stage.icon;
+  const processed = stage.getProcessed(data);
+  const pending = stage.getPending(data);
+  const total = processed + pending;
+  const progressPct = total > 0 ? Math.round((processed / total) * 100) : 100;
+  const isComplete = pending === 0;
+
+  return (
+    <div className="rounded-xl border border-border/30 bg-zbooni-dark/40 p-4 transition-colors hover:border-border/50">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${stage.bgClass}`}>
+            <Icon className={`h-5 w-5 ${stage.colorClass}`} />
+          </div>
+          <div>
+            <p className="text-sm font-bold tracking-tight">{stage.label}</p>
+            <p className="text-[10px] text-muted-foreground/40 uppercase tracking-wider font-medium">Stage</p>
+          </div>
+        </div>
+        <div
+          className={`h-2 w-2 rounded-full ${isComplete ? 'bg-zbooni-green' : 'bg-yellow-400 animate-pulse'}`}
+          title={isComplete ? 'All caught up' : `${pending} pending`}
+        />
+      </div>
+      <div className="mt-4 flex items-end justify-between">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Processed</p>
+          <p className={`text-2xl font-extrabold tracking-tight ${stage.colorClass}`}>{processed.toLocaleString()}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Pending</p>
+          <p className={`text-lg font-bold tracking-tight ${pending > 0 ? 'text-yellow-400' : 'text-muted-foreground/30'}`}>
+            {pending.toLocaleString()}
+          </p>
+        </div>
+      </div>
+      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-border/30">
+        <div
+          className={`h-full rounded-full transition-all duration-500 ease-out ${stage.barClass}`}
+          style={{ width: `${Math.max(progressPct, processed > 0 ? 3 : 0)}%` }}
+        />
+      </div>
+      <p className="mt-1.5 text-[10px] text-muted-foreground/40 font-medium">{progressPct}% complete</p>
+    </div>
+  );
+}
+
+function PipelineFlowStrip({ data }: { data: FunnelResponse }) {
+  return (
+    <div className="flex items-center justify-between w-full pb-1">
+      {PIPELINE_STAGES.map((stage, i) => {
+        const processed = stage.getProcessed(data);
+        const Icon = stage.icon;
+        return (
+          <div key={stage.key} className="flex flex-1 items-center gap-1">
+            <div className="flex flex-1 items-center gap-2 rounded-lg border border-border/30 bg-zbooni-dark/40 px-3 py-2">
+              <div className={`flex h-7 w-7 items-center justify-center rounded-md ${stage.bgClass}`}>
+                <Icon className={`h-3.5 w-3.5 ${stage.colorClass}`} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[10px] font-medium text-muted-foreground/50 leading-none">{stage.label}</p>
+                <p className={`text-sm font-extrabold tracking-tight ${stage.colorClass}`}>{processed.toLocaleString()}</p>
+              </div>
+            </div>
+            {i < PIPELINE_STAGES.length - 1 ? (
+              <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/30" />
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -114,6 +272,48 @@ export default function AnalyticsPage() {
       {funnel.error || feedback.error || scoreDistribution.error ? (
         <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {funnel.error ?? feedback.error ?? scoreDistribution.error}
+        </div>
+      ) : null}
+
+      {/* ── Pipeline Overview ───────────────────────────────────────── */}
+      {funnel.data ? (
+        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+          <div className="mb-4 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="h-1.5 w-1.5 rounded-full bg-zbooni-green animate-pulse" />
+              <h2 className="text-base font-bold tracking-tight">Pipeline Overview</h2>
+            </div>
+            <div className="flex items-center gap-4 text-[11px] text-muted-foreground/50">
+              <span>
+                Total Processed:{' '}
+                <strong className="text-foreground">
+                  {PIPELINE_STAGES.reduce((sum, s) => sum + s.getProcessed(funnel.data!), 0).toLocaleString()}
+                </strong>
+              </span>
+              <span>
+                Total Pending:{' '}
+                <strong className="text-yellow-400">
+                  {PIPELINE_STAGES.reduce((sum, s) => sum + s.getPending(funnel.data!), 0).toLocaleString()}
+                </strong>
+              </span>
+              <span>
+                Healthy:{' '}
+                <strong className="text-zbooni-green">
+                  {PIPELINE_STAGES.filter((s) => s.getPending(funnel.data!) === 0).length}/{PIPELINE_STAGES.length}
+                </strong>
+              </span>
+            </div>
+          </div>
+
+          {/* Flow strip */}
+          <PipelineFlowStrip data={funnel.data} />
+
+          {/* Stage cards grid */}
+          <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
+            {PIPELINE_STAGES.map((stage) => (
+              <PipelineStageCard key={stage.key} stage={stage} data={funnel.data!} />
+            ))}
+          </div>
         </div>
       ) : null}
 

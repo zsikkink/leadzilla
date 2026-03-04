@@ -9,7 +9,9 @@ import {
   Gauge,
   Hash,
   Inbox,
+  Loader2,
   Mail,
+  MessageCircle,
   MessageSquare,
   RotateCcw,
   Save,
@@ -20,7 +22,7 @@ import {
   Timer,
   Zap,
 } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { useApiQuery } from '../../src/hooks/use-api-query.js';
@@ -231,8 +233,6 @@ const PIPELINE_SETTINGS: PipelineSetting[] = [
     unit: '/day',
   },
 ];
-
-// Placeholder data removed — now using real API queries
 
 // ── Sub-components ─────────────────────────────────────────────────────
 
@@ -498,14 +498,74 @@ function getDefaultSettings(): SettingsState {
   };
 }
 
+// Keys that exist in SettingsState (for type-safe lookup)
+const NUMERIC_SETTING_KEYS = new Set([
+  'deterministicAiBlend',
+  'scoreQualificationThreshold',
+  'enrichmentThreshold',
+  'followUpMaxCount',
+  'followUpIntervalHours',
+  'coldLeadTimeoutDays',
+  'whatsappDailyLimit',
+  'emailDailyLimit',
+  'modelActivationAuc',
+  'providerBudgetCeiling',
+]);
+
 // ── Main page ──────────────────────────────────────────────────────────
 
 export default function ControlsSettingsPage() {
   const { apiClient } = useAuth();
   const [settings, setSettings] = useState<SettingsState>(getDefaultSettings);
+  const [messagingInstructions, setMessagingInstructions] = useState('');
   const [hasChanges, setHasChanges] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isLoadingSettings, setIsLoadingSettings] = useState(true);
+  const loadedRef = useRef(false);
 
-  // Real data queries
+  // Load all settings from API on mount
+  useEffect(() => {
+    if (loadedRef.current) return;
+    loadedRef.current = true;
+
+    apiClient
+      .listPipelineSettings()
+      .then(({ items }) => {
+        const newSettings = { ...getDefaultSettings() };
+        for (const item of items) {
+          if (item.key === 'messagingInstructions') {
+            setMessagingInstructions(String(item.value ?? ''));
+          } else if (item.key === 'scoreTierBands') {
+            const val = item.value as {
+              low?: number | undefined;
+              med?: number | undefined;
+              high?: number | undefined;
+            } | null;
+            if (val && typeof val === 'object') {
+              newSettings.scoreTierBands = {
+                low: val.low ?? 0.34,
+                med: val.med ?? 0.67,
+                high: val.high ?? 0.67,
+              };
+            }
+          } else if (NUMERIC_SETTING_KEYS.has(item.key)) {
+            const num = Number(item.value);
+            if (!Number.isNaN(num)) {
+              (newSettings as Record<string, unknown>)[item.key] = num;
+            }
+          }
+        }
+        setSettings(newSettings);
+      })
+      .catch(() => {
+        // Use defaults if API fails
+      })
+      .finally(() => {
+        setIsLoadingSettings(false);
+      });
+  }, [apiClient]);
+
+  // Real data queries for status cards
   const stats = useApiQuery(
     useCallback(() => apiClient.getPipelineStats(), [apiClient]),
   );
@@ -524,15 +584,34 @@ export default function ControlsSettingsPage() {
     [],
   );
 
-  const handleSave = useCallback(() => {
-    toast.success('Settings saved locally — API persistence coming soon');
-    setHasChanges(false);
-  }, []);
+  const handleSave = useCallback(async () => {
+    setIsSaving(true);
+    try {
+      // Save all settings in parallel
+      const settingEntries = Object.entries(settings) as [string, unknown][];
+      const promises = settingEntries.map(([key, value]) =>
+        apiClient.updatePipelineSetting(key, value),
+      );
+      // Also save messaging instructions
+      promises.push(
+        apiClient.updatePipelineSetting('messagingInstructions', messagingInstructions),
+      );
+
+      await Promise.all(promises);
+      toast.success('All settings saved to pipeline');
+      setHasChanges(false);
+    } catch {
+      toast.error('Failed to save some settings. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
+  }, [apiClient, settings, messagingInstructions]);
 
   const handleReset = useCallback(() => {
     setSettings(getDefaultSettings());
-    setHasChanges(false);
-    toast.info('Settings reset to defaults');
+    setMessagingInstructions('');
+    setHasChanges(true);
+    toast.info('Settings reset to defaults — click Save to persist');
   }, []);
 
   return (
@@ -557,16 +636,20 @@ export default function ControlsSettingsPage() {
           <button
             type="button"
             onClick={handleSave}
-            disabled={!hasChanges}
+            disabled={!hasChanges || isSaving}
             className={cn(
               'inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold transition-all',
-              hasChanges
+              hasChanges && !isSaving
                 ? 'bg-zbooni-teal/20 text-zbooni-teal hover:bg-zbooni-teal/30'
                 : 'bg-muted/10 text-muted-foreground/40 cursor-not-allowed',
             )}
           >
-            <Save className="h-3.5 w-3.5" />
-            Save Settings
+            {isSaving ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Save className="h-3.5 w-3.5" />
+            )}
+            {isSaving ? 'Saving...' : 'Save Settings'}
           </button>
         </div>
       </div>
@@ -667,6 +750,39 @@ export default function ControlsSettingsPage() {
         </StatusCard>
       </div>
 
+      {/* ── Messaging Instructions ────────────────────────────────────── */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-green/10">
+            <MessageCircle className="h-4 w-4 text-zbooni-green" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold tracking-tight">Messaging Instructions</h2>
+            <p className="text-[11px] text-muted-foreground/50">
+              Custom instructions included every time the AI generates outreach messages
+            </p>
+          </div>
+        </div>
+        {isLoadingSettings ? (
+          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground/50">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading saved instructions...
+          </div>
+        ) : (
+          <textarea
+            value={messagingInstructions}
+            onChange={(e) => {
+              setMessagingInstructions(e.target.value);
+              setHasChanges(true);
+            }}
+            rows={6}
+            placeholder="Enter custom instructions for the AI message generator. These instructions will be included every time a new outreach message is created. Example: 'Always mention our payment link feature. Keep tone professional but warm. Reference UAE market growth.'"
+            className="w-full resize-y rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none"
+            aria-label="Messaging Instructions"
+          />
+        )}
+      </div>
+
       {/* ── Pipeline Settings ───────────────────────────────────────── */}
       <div className="relative">
         <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-zbooni-teal/[0.02] via-transparent to-zbooni-green/[0.02]" />
@@ -688,41 +804,48 @@ export default function ControlsSettingsPage() {
             ) : null}
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-2">
-            {PIPELINE_SETTINGS.map((setting) => {
-              if (setting.type === 'slider') {
-                return (
-                  <SettingSlider
-                    key={setting.key}
-                    setting={setting}
-                    value={settings[setting.key as keyof SettingsState] as number}
-                    onChange={(v) => updateSetting(setting.key as keyof SettingsState, v as never)}
-                  />
-                );
-              }
-              if (setting.type === 'number') {
-                return (
-                  <SettingNumber
-                    key={setting.key}
-                    setting={setting}
-                    value={settings[setting.key as keyof SettingsState] as number}
-                    onChange={(v) => updateSetting(setting.key as keyof SettingsState, v as never)}
-                  />
-                );
-              }
-              if (setting.type === 'tier-bands') {
-                return (
-                  <SettingTierBands
-                    key={setting.key}
-                    setting={setting}
-                    value={settings.scoreTierBands}
-                    onChange={(v) => updateSetting('scoreTierBands', v)}
-                  />
-                );
-              }
-              return null;
-            })}
-          </div>
+          {isLoadingSettings ? (
+            <div className="flex items-center gap-2 py-8 justify-center text-sm text-muted-foreground/50">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading pipeline settings...
+            </div>
+          ) : (
+            <div className="grid gap-3 lg:grid-cols-2">
+              {PIPELINE_SETTINGS.map((setting) => {
+                if (setting.type === 'slider') {
+                  return (
+                    <SettingSlider
+                      key={setting.key}
+                      setting={setting}
+                      value={settings[setting.key as keyof SettingsState] as number}
+                      onChange={(v) => updateSetting(setting.key as keyof SettingsState, v as never)}
+                    />
+                  );
+                }
+                if (setting.type === 'number') {
+                  return (
+                    <SettingNumber
+                      key={setting.key}
+                      setting={setting}
+                      value={settings[setting.key as keyof SettingsState] as number}
+                      onChange={(v) => updateSetting(setting.key as keyof SettingsState, v as never)}
+                    />
+                  );
+                }
+                if (setting.type === 'tier-bands') {
+                  return (
+                    <SettingTierBands
+                      key={setting.key}
+                      setting={setting}
+                      value={settings.scoreTierBands}
+                      onChange={(v) => updateSetting('scoreTierBands', v)}
+                    />
+                  );
+                }
+                return null;
+              })}
+            </div>
+          )}
         </div>
       </div>
 
