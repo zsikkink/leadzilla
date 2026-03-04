@@ -746,6 +746,7 @@ model Business {
   leads                    Lead[]
   businessConversions      BusinessConversion[]
   costEvents               DiscoveryCostEvent[]
+  contacts                 BusinessContact[]    @relation("businessContacts")
 
   @@index([countryCode, city])
   @@index([websiteDomain])
@@ -840,6 +841,7 @@ model BusinessConversion {
   business          Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   leadId            String
   lead              Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  icpProfileId       String?
   apolloContactJson  Json?
   hunterContactJson  Json?
   metadata           Json?
@@ -879,4 +881,23 @@ model LeadPipelineEvent {
   @@index([stage, status])
   @@index([jobId])
   @@map("lead_pipeline_events")
+}
+
+model BusinessContact {
+  id           String   @id @default(uuid())
+  businessId   String
+  business     Business @relation("businessContacts", fields: [businessId], references: [id])
+  name         String
+  title        String?
+  email        String?
+  phone        String?
+  linkedinUrl  String?
+  seniority    String   @default("other")
+  positionRank Int      @default(99)
+  source       String   @default("website_scrape")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([businessId])
+  @@map("business_contacts")
 }
