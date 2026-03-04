@@ -4,27 +4,22 @@ import {
   ArrowLeft,
   Brain,
   Building2,
-  Clock,
-  Cpu,
-  Database,
   ExternalLink,
   Globe,
   Hash,
+  Instagram,
   Linkedin,
   Mail,
   MapPin,
-  MessageSquare,
-  Pencil,
+  Monitor,
   Phone,
-  Search,
-  Send,
+  Shield,
   User,
   Users,
   Briefcase,
   AlertCircle,
   TrendingUp,
 } from 'lucide-react';
-import type { GetLeadResponse, MessageSendResponse } from '@lead-flood/contracts';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 
@@ -522,6 +517,7 @@ export default function LeadDetailPage() {
 
   // Fetch linked Business scraper data via business_conversions → businesses
   const [businessData, setBusinessData] = useState<BusinessScrapeData | null>(null);
+  const [businessId, setBusinessId] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     async function fetchBusiness() {
@@ -534,13 +530,15 @@ export default function LeadDetailPage() {
           .eq('lead_id', id)
           .limit(1);
 
-        const businessId = conversions?.[0]?.business_id;
-        if (!businessId || cancelled) return;
+        const bizId = conversions?.[0]?.business_id;
+        if (!bizId || cancelled) return;
+
+        setBusinessId(bizId);
 
         const { data: biz } = await supabase
           .from('businesses')
           .select('name, website_domain, instagram_handle, rating, review_count, follower_count, category, apify_website_scrape_json, apify_instagram_scrape_json')
-          .eq('id', businessId)
+          .eq('id', bizId)
           .single();
 
         if (!biz || cancelled) return;
@@ -602,6 +600,17 @@ export default function LeadDetailPage() {
               {l.firstName} {l.lastName}
             </h1>
             <p className="mt-0.5 text-sm text-muted-foreground">{l.email}</p>
+            {businessData ? (
+              <button
+                type="button"
+                onClick={() => router.push(`/dashboard/leads/businesses?selected=${businessId ?? ''}`)}
+                className="mt-1 inline-flex items-center gap-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:text-zbooni-green"
+              >
+                <Building2 className="h-3 w-3" />
+                {businessData.name}
+                <ExternalLink className="h-2.5 w-2.5" />
+              </button>
+            ) : null}
           </div>
           <div className="flex items-center gap-2">
             <LeadStatusBadge status={l.status} />

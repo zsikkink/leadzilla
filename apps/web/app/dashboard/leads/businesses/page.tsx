@@ -1,7 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
+  ArrowLeft,
   Building2,
   ChevronDown,
   ChevronRight,
@@ -53,6 +55,8 @@ interface BusinessRow {
   instagram_scraped_at: string | null;
   created_at: string;
   updated_at: string;
+  // Joined from business_conversions → leads
+  leadBlendedScore?: number | null | undefined;
 }
 
 // ── Helpers for extracting scraper intelligence ────────────────────────────
@@ -110,7 +114,25 @@ function extractInstagramData(scrape: Record<string, unknown>): {
 
 // ── Score badge ──────────────────────────────────────────────────────────────
 
-function ScoreBadge({ score, band }: { score: number; band: string | null }) {
+function ScoreBadge({ score, band, leadScore }: { score: number; band: string | null; leadScore?: number | null | undefined }) {
+  // Prefer lead's blended score over pre-qualification deterministic score
+  if (leadScore != null) {
+    const pct = Math.round(leadScore * 100);
+    const leadBand = leadScore >= 0.7 ? 'HIGH' : leadScore >= 0.4 ? 'MEDIUM' : 'LOW';
+    const color = leadBand === 'HIGH' ? 'text-zbooni-green bg-zbooni-green/10' : leadBand === 'MEDIUM' ? 'text-yellow-400 bg-yellow-400/10' : 'text-red-400 bg-red-400/10';
+    return (
+      <span className={cn('rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider', color)}>
+        {pct}% {leadBand}
+      </span>
+    );
+  }
+  if (score === 0) {
+    return (
+      <span className="rounded-md bg-muted/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/50">
+        Not scored
+      </span>
+    );
+  }
   const color = band === 'HIGH' ? 'text-zbooni-green bg-zbooni-green/10' : band === 'MEDIUM' ? 'text-yellow-400 bg-yellow-400/10' : 'text-red-400 bg-red-400/10';
   return (
     <span className={cn('rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider', color)}>
@@ -143,7 +165,7 @@ function BusinessCard({ biz, isSelected, onSelect }: { biz: BusinessRow; isSelec
           <p className="text-sm font-bold tracking-tight truncate">{biz.name}</p>
           <p className="text-[11px] text-muted-foreground/60">{biz.category ?? 'Uncategorized'}</p>
         </div>
-        <ScoreBadge score={biz.deterministic_score} band={biz.score_band} />
+        <ScoreBadge score={biz.deterministic_score} band={biz.score_band} leadScore={biz.leadBlendedScore} />
       </div>
       <div className="mt-2 flex items-center gap-3 text-[11px] text-muted-foreground/40">
         <span className="flex items-center gap-1"><Globe className="h-3 w-3" />{countryName(biz.country_code)}{biz.city ? ` / ${biz.city}` : ''}</span>
@@ -202,7 +224,7 @@ function BusinessDetailPanel({ biz, onClose }: { biz: BusinessRow; onClose: () =
           <p className="mt-1 text-xs text-muted-foreground/60">{biz.category ?? 'Uncategorized'} &middot; {countryName(biz.country_code)}{biz.city ? `, ${biz.city}` : ''}</p>
         </div>
         <div className="flex items-center gap-3">
-          <ScoreBadge score={biz.deterministic_score} band={biz.score_band} />
+          <ScoreBadge score={biz.deterministic_score} band={biz.score_band} leadScore={biz.leadBlendedScore} />
           <button type="button" onClick={onClose} className="rounded-lg p-1 text-muted-foreground/40 hover:bg-muted/10 hover:text-foreground"><X className="h-4 w-4" /></button>
         </div>
       </div>
@@ -236,19 +258,32 @@ function BusinessDetailPanel({ biz, onClose }: { biz: BusinessRow; onClose: () =
       {/* Contact info */}
       <div className="mt-4 flex flex-wrap gap-3 text-xs">
         {biz.website_domain && (
-          <span className="flex items-center gap-1 rounded-full border border-border/30 px-2.5 py-1 text-muted-foreground">
-            <Globe className="h-3 w-3" />{biz.website_domain}
-          </span>
+          <a
+            href={`https://${biz.website_domain}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 rounded-full border border-border/30 px-2.5 py-1 text-zbooni-teal transition-colors hover:border-zbooni-teal/40 hover:text-zbooni-green"
+          >
+            <Globe className="h-3 w-3" />{biz.website_domain}<ExternalLink className="h-2.5 w-2.5" />
+          </a>
         )}
         {biz.phone_e164 && (
-          <span className="flex items-center gap-1 rounded-full border border-border/30 px-2.5 py-1 text-muted-foreground">
+          <a
+            href={`tel:${biz.phone_e164}`}
+            className="flex items-center gap-1 rounded-full border border-border/30 px-2.5 py-1 text-muted-foreground transition-colors hover:border-border/50 hover:text-foreground"
+          >
             <Phone className="h-3 w-3" />{biz.phone_e164}
-          </span>
+          </a>
         )}
         {biz.instagram_handle && (
-          <span className="flex items-center gap-1 rounded-full border border-border/30 px-2.5 py-1 text-muted-foreground">
-            <Instagram className="h-3 w-3" />@{biz.instagram_handle}
-          </span>
+          <a
+            href={`https://instagram.com/${biz.instagram_handle}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 rounded-full border border-border/30 px-2.5 py-1 text-pink-400 transition-colors hover:border-pink-400/40 hover:text-pink-300"
+          >
+            <Instagram className="h-3 w-3" />@{biz.instagram_handle}<ExternalLink className="h-2.5 w-2.5" />
+          </a>
         )}
       </div>
 
@@ -296,7 +331,14 @@ function BusinessDetailPanel({ biz, onClose }: { biz: BusinessRow; onClose: () =
               {socialLinks.map((sl, i) => (
                 <div key={i} className="flex items-center gap-2 text-sm">
                   <span className="w-20 text-[11px] font-semibold uppercase text-muted-foreground/50">{sl.platform}</span>
-                  <span className="truncate font-mono text-xs text-foreground/70">{sl.url}</span>
+                  <a
+                    href={sl.url.startsWith('http') ? sl.url : `https://${sl.url}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 truncate font-mono text-xs text-zbooni-teal transition-colors hover:text-zbooni-green"
+                  >
+                    {sl.url}<ExternalLink className="h-2.5 w-2.5 shrink-0" />
+                  </a>
                 </div>
               ))}
             </div>
@@ -321,13 +363,13 @@ function BusinessDetailPanel({ biz, onClose }: { biz: BusinessRow; onClose: () =
               {contactInfo.emails.length > 0 && (
                 <div>
                   <p className="text-[10px] font-semibold uppercase text-muted-foreground/40">Emails</p>
-                  {contactInfo.emails.map((e) => <p key={e} className="font-mono text-foreground/70">{e}</p>)}
+                  {contactInfo.emails.map((e) => <a key={e} href={`mailto:${e}`} className="block font-mono text-zbooni-teal transition-colors hover:text-zbooni-green">{e}</a>)}
                 </div>
               )}
               {contactInfo.phones.length > 0 && (
                 <div>
                   <p className="text-[10px] font-semibold uppercase text-muted-foreground/40">Phones</p>
-                  {contactInfo.phones.map((p) => <p key={p} className="font-mono text-foreground/70">{p}</p>)}
+                  {contactInfo.phones.map((p) => <a key={p} href={`tel:${p}`} className="block font-mono text-foreground/70 transition-colors hover:text-foreground">{p}</a>)}
                 </div>
               )}
               {contactInfo.addresses.length > 0 && (
@@ -367,13 +409,13 @@ function BusinessDetailPanel({ biz, onClose }: { biz: BusinessRow; onClose: () =
               {igData.businessEmail && (
                 <div>
                   <p className="text-[10px] font-semibold uppercase text-muted-foreground/40">Business Email</p>
-                  <p className="font-mono text-xs text-foreground/70">{igData.businessEmail}</p>
+                  <a href={`mailto:${igData.businessEmail}`} className="font-mono text-xs text-zbooni-teal transition-colors hover:text-zbooni-green">{igData.businessEmail}</a>
                 </div>
               )}
               {igData.businessPhone && (
                 <div>
                   <p className="text-[10px] font-semibold uppercase text-muted-foreground/40">Business Phone</p>
-                  <p className="font-mono text-xs text-foreground/70">{igData.businessPhone}</p>
+                  <a href={`tel:${igData.businessPhone}`} className="font-mono text-xs text-foreground/70 transition-colors hover:text-foreground">{igData.businessPhone}</a>
                 </div>
               )}
               {igData.bio && (
@@ -408,12 +450,13 @@ function BusinessDetailPanel({ biz, onClose }: { biz: BusinessRow; onClose: () =
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function BusinessIntelligencePage() {
+  const searchParams = useSearchParams();
   const [businesses, setBusinesses] = useState<BusinessRow[]>([]);
   const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('selected'));
   const [page, setPage] = useState(1);
   const pageSize = 30;
 
@@ -436,7 +479,58 @@ export default function BusinessIntelligencePage() {
         .range(from, to);
 
       if (fetchError) throw new Error(fetchError.message);
-      setBusinesses((data ?? []) as BusinessRow[]);
+
+      const rows = (data ?? []) as BusinessRow[];
+
+      // Fetch lead blended scores via business_conversions → leads
+      if (rows.length > 0) {
+        const bizIds = rows.map((b) => b.id);
+        const { data: conversions } = await supabase
+          .from('business_conversions')
+          .select('business_id, lead_id')
+          .in('business_id', bizIds);
+
+        if (conversions && conversions.length > 0) {
+          const leadIds = [...new Set(conversions.map((c: { lead_id: string }) => c.lead_id))];
+          const { data: leads } = await supabase
+            .from('leads')
+            .select('id, enrichment_data')
+            .in('id', leadIds);
+
+          if (leads) {
+            // Build leadId → blendedScore map
+            const leadScoreMap = new Map<string, number>();
+            for (const lead of leads) {
+              const ed = lead.enrichment_data as Record<string, unknown> | null;
+              if (ed?._scoreInfo && typeof ed._scoreInfo === 'object') {
+                const si = ed._scoreInfo as Record<string, unknown>;
+                if (typeof si.blendedScore === 'number') {
+                  leadScoreMap.set(lead.id, si.blendedScore);
+                }
+              }
+            }
+
+            // Build businessId → leadId map (take first conversion)
+            const bizLeadMap = new Map<string, string>();
+            for (const conv of conversions) {
+              const c = conv as { business_id: string; lead_id: string };
+              if (!bizLeadMap.has(c.business_id)) {
+                bizLeadMap.set(c.business_id, c.lead_id);
+              }
+            }
+
+            // Merge scores into business rows
+            for (const row of rows) {
+              const leadId = bizLeadMap.get(row.id);
+              if (leadId) {
+                row.leadBlendedScore = leadScoreMap.get(leadId) ?? null;
+              }
+            }
+          }
+        }
+      }
+
+      setBusinesses(rows);
       setTotal(count ?? 0);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load businesses');
@@ -468,6 +562,14 @@ export default function BusinessIntelligencePage() {
 
   return (
     <div className="space-y-4">
+      {/* Back to leads */}
+      <a
+        href="/dashboard/leads"
+        className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ArrowLeft className="h-4 w-4" /> Back to Leads
+      </a>
+
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>

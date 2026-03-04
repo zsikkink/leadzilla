@@ -1,7 +1,7 @@
 'use client';
 
 import type { LeadScoreBand, LeadStatus } from '@lead-flood/contracts';
-import { Check, Eye, Phone, X } from 'lucide-react';
+import { Building2, Check, Eye, Phone, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
@@ -163,6 +163,24 @@ export default function LeadsPage() {
         <p className="mt-0.5 text-sm text-muted-foreground">
           {leads.data ? `${leads.data.total} total leads` : 'Loading...'}
         </p>
+      </div>
+
+      {/* Tab navigation */}
+      <div className="flex items-center gap-0.5 border-b border-border/30">
+        <button
+          type="button"
+          className="relative px-4 py-2.5 text-sm font-semibold text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-zbooni-teal"
+        >
+          Leads
+        </button>
+        <button
+          type="button"
+          onClick={() => router.push('/dashboard/leads/businesses')}
+          className="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-muted-foreground/60 transition-colors hover:text-foreground"
+        >
+          <Building2 className="h-3.5 w-3.5" />
+          Business Intel
+        </button>
       </div>
 
       {/* Filters */}
