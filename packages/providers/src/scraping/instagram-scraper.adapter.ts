@@ -13,6 +13,13 @@ export interface InstagramScraperConfig {
   rateLimitPerMinute?: number | undefined;
 }
 
+export interface InstagramRecentPost {
+  caption: string;
+  likeCount: number;
+  commentCount: number;
+  postType: 'image' | 'video' | 'carousel';
+}
+
 export interface InstagramScraperData {
   followerCount: number;
   followingCount: number;
@@ -29,6 +36,7 @@ export interface InstagramScraperData {
   mediaCount: number;
   storyHighlightsCount: number;
   isProfessionalAccount: boolean;
+  recentPosts: InstagramRecentPost[];
 }
 
 export interface InstagramScraperFailure {
@@ -67,7 +75,10 @@ const EMPTY_DATA: InstagramScraperData = {
   mediaCount: 0,
   storyHighlightsCount: 0,
   isProfessionalAccount: false,
+  recentPosts: [],
 };
+
+const MEDIA_FETCH_TIMEOUT_MS = 10_000;
 
 function safeNumber(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -383,6 +394,9 @@ function mergePartials(
     }
     if (partial.isProfessionalAccount && !merged.isProfessionalAccount) {
       merged.isProfessionalAccount = partial.isProfessionalAccount;
+    }
+    if (partial.recentPosts && partial.recentPosts.length > 0 && merged.recentPosts.length === 0) {
+      merged.recentPosts = partial.recentPosts;
     }
   }
 
@@ -865,6 +879,40 @@ export class InstagramScraperAdapter {
 
       const effectivePostCount = recentPostCount > 0 ? recentPostCount : mediaCount;
 
+      // Extract recent posts from edges if available (profile API may include them)
+      let recentPosts: InstagramRecentPost[] = [];
+      for (const edge of edges.slice(0, 3)) {
+        const node = edge.node as Record<string, unknown> | undefined;
+        if (!node) continue;
+        const captionEdges = (node.edge_media_to_caption as Record<string, unknown> | undefined)?.edges as Array<Record<string, unknown>> | undefined;
+        const captionText = typeof (captionEdges?.[0]?.node as Record<string, unknown> | undefined)?.text === 'string'
+          ? ((captionEdges?.[0]?.node as Record<string, unknown>)?.text as string).slice(0, 500)
+          : '';
+        const mediaType = typeof node.__typename === 'string' ? node.__typename : '';
+        let postType: 'image' | 'video' | 'carousel' = 'image';
+        if (mediaType === 'GraphVideo' || node.is_video === true) postType = 'video';
+        else if (mediaType === 'GraphSidecar') postType = 'carousel';
+
+        recentPosts.push({
+          caption: captionText,
+          likeCount: safeNumber((node.edge_liked_by as Record<string, unknown> | undefined)?.count ?? node.like_count),
+          commentCount: safeNumber((node.edge_media_to_comment as Record<string, unknown> | undefined)?.count ?? node.comment_count),
+          postType,
+        });
+      }
+
+      // If no posts from profile edges, try fetching from feed endpoint
+      if (recentPosts.length === 0) {
+        const userId = typeof user.pk === 'string' ? user.pk
+          : typeof user.pk === 'number' ? String(user.pk)
+          : typeof user.id === 'string' ? user.id
+          : null;
+
+        if (userId) {
+          recentPosts = await this.fetchRecentMedia(userId);
+        }
+      }
+
       return {
         status: 'success',
         data: {
@@ -883,11 +931,80 @@ export class InstagramScraperAdapter {
           mediaCount,
           storyHighlightsCount: highlightCount,
           isProfessionalAccount,
+          recentPosts,
         },
       };
     } catch {
       // Network error during authenticated request — signal fallback
       return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  /**
+   * Fetch recent media posts for a user ID using the authenticated feed endpoint.
+   * Returns up to 3 posts. Gracefully returns empty array on any failure.
+   */
+  private async fetchRecentMedia(
+    userId: string,
+  ): Promise<InstagramRecentPost[]> {
+    const csrfToken = this.sessionCookies.get('csrftoken') ?? '';
+    const url = `https://www.instagram.com/api/v1/feed/user/${encodeURIComponent(userId)}/?count=3`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), MEDIA_FETCH_TIMEOUT_MS);
+
+    try {
+      await this.waitForRateLimit();
+
+      const response = await this.fetchImpl(url, {
+        method: 'GET',
+        headers: {
+          'User-Agent': this.userAgent,
+          Accept: '*/*',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'X-CSRFToken': csrfToken,
+          'X-IG-App-ID': IG_APP_ID,
+          'X-Requested-With': 'XMLHttpRequest',
+          'Sec-Fetch-Dest': 'empty',
+          'Sec-Fetch-Mode': 'cors',
+          'Sec-Fetch-Site': 'same-origin',
+          Referer: 'https://www.instagram.com/',
+          Cookie: formatCookieHeader(this.sessionCookies),
+        },
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        return [];
+      }
+
+      const body = (await response.json()) as Record<string, unknown>;
+      const items = Array.isArray(body.items) ? body.items as Array<Record<string, unknown>> : [];
+
+      const posts: InstagramRecentPost[] = [];
+      for (const item of items.slice(0, 3)) {
+        const caption = item.caption as Record<string, unknown> | null | undefined;
+        const captionText = typeof caption?.text === 'string' ? caption.text : '';
+
+        const mediaType = safeNumber(item.media_type);
+        let postType: 'image' | 'video' | 'carousel' = 'image';
+        if (mediaType === 2) postType = 'video';
+        else if (mediaType === 8) postType = 'carousel';
+
+        posts.push({
+          caption: captionText.slice(0, 500), // cap at 500 chars
+          likeCount: safeNumber(item.like_count),
+          commentCount: safeNumber(item.comment_count),
+          postType,
+        });
+      }
+
+      return posts;
+    } catch {
+      return [];
     } finally {
       clearTimeout(timeout);
     }

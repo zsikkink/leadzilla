@@ -273,10 +273,14 @@ function LeadSearchResult({ lead, isSelected, onSelect }: { lead: LeadRecord; is
 //  LIFECYCLE TAB CONTENT
 // ══════════════════════════════════════════════════════════════════════════════
 
+const PAGE_SIZE_OPTIONS = [8, 16, 25, 50] as const;
+
 function LifecycleTab() {
   const { apiClient } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(8);
 
   const leadsQuery = useApiQuery(
     useCallback(() => apiClient.listLeads({ page: 1, pageSize: 50, includeQualityMetrics: false }), [apiClient]),
@@ -290,6 +294,23 @@ function LifecycleTab() {
     return allLeads.filter((lead) => lead.name.toLowerCase().includes(q) || lead.company.toLowerCase().includes(q) || lead.email.toLowerCase().includes(q) || lead.id.toLowerCase().includes(q));
   }, [searchQuery, allLeads]);
 
+  const totalPages = Math.max(1, Math.ceil(filteredLeads.length / pageSize));
+  const paginatedLeads = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredLeads.slice(start, start + pageSize);
+  }, [filteredLeads, currentPage, pageSize]);
+
+  // Reset to page 1 when search query or page size changes
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchQuery(value);
+    setCurrentPage(1);
+  }, []);
+
+  const handlePageSizeChange = useCallback((size: number) => {
+    setPageSize(size);
+    setCurrentPage(1);
+  }, []);
+
   const selectedLead = selectedLeadId ? allLeads.find((l) => l.id === selectedLeadId) ?? null : null;
 
   return (
@@ -300,7 +321,7 @@ function LifecycleTab() {
             <Search className="h-4 w-4 text-zbooni-teal" />
           </div>
           <div className="relative flex-1">
-            <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search by lead ID, name, company, or email..." className="w-full rounded-xl border border-border/50 bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-zbooni-teal/50 focus:outline-none focus:ring-1 focus:ring-zbooni-teal/30" />
+            <input type="text" value={searchQuery} onChange={(e) => handleSearchChange(e.target.value)} placeholder="Search by lead ID, name, company, or email..." className="w-full rounded-xl border border-border/50 bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-zbooni-teal/50 focus:outline-none focus:ring-1 focus:ring-zbooni-teal/30" />
           </div>
           <span className="text-[11px] text-muted-foreground/40">{leadsQuery.isLoading ? '...' : `${filteredLeads.length} lead${filteredLeads.length !== 1 ? 's' : ''}`}</span>
         </div>
@@ -309,22 +330,63 @@ function LifecycleTab() {
       {leadsQuery.error ? <p className="text-sm text-destructive">{leadsQuery.error}</p> : null}
 
       <div className="grid gap-4 lg:grid-cols-[340px_1fr]">
-        <div className="space-y-3">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/40">Search Results</p>
-          {leadsQuery.isLoading ? (
-            <div className="flex items-center gap-2 rounded-xl border border-border/30 bg-zbooni-dark/20 p-6">
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground/40" />
-              <span className="text-sm text-muted-foreground/50">Loading leads...</span>
-            </div>
-          ) : filteredLeads.length > 0 ? (
-            filteredLeads.map((lead) => (
-              <LeadSearchResult key={lead.id} lead={lead} isSelected={selectedLeadId === lead.id} onSelect={() => setSelectedLeadId(lead.id)} />
-            ))
-          ) : (
-            <div className="rounded-xl border border-border/30 bg-zbooni-dark/20 p-6 text-center">
-              <Search className="mx-auto h-8 w-8 text-muted-foreground/20" />
-              <p className="mt-2 text-sm text-muted-foreground/50">No leads match your search</p>
-              <p className="mt-1 text-[11px] text-muted-foreground/30">Try a different name, company, or ID</p>
+        <div className="flex flex-col">
+          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/40">Search Results</p>
+          <div className="max-h-[calc(100vh-240px)] overflow-y-auto space-y-3 pr-1">
+            {leadsQuery.isLoading ? (
+              <div className="flex items-center gap-2 rounded-xl border border-border/30 bg-zbooni-dark/20 p-6">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground/40" />
+                <span className="text-sm text-muted-foreground/50">Loading leads...</span>
+              </div>
+            ) : paginatedLeads.length > 0 ? (
+              paginatedLeads.map((lead) => (
+                <LeadSearchResult key={lead.id} lead={lead} isSelected={selectedLeadId === lead.id} onSelect={() => setSelectedLeadId(lead.id)} />
+              ))
+            ) : (
+              <div className="rounded-xl border border-border/30 bg-zbooni-dark/20 p-6 text-center">
+                <Search className="mx-auto h-8 w-8 text-muted-foreground/20" />
+                <p className="mt-2 text-sm text-muted-foreground/50">No leads match your search</p>
+                <p className="mt-1 text-[11px] text-muted-foreground/30">Try a different name, company, or ID</p>
+              </div>
+            )}
+          </div>
+          {/* Pagination controls */}
+          {filteredLeads.length > 0 && (
+            <div className="mt-3 flex items-center justify-between border-t border-border/30 pt-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-muted-foreground/40">Show</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+                  className="rounded-md border border-border/40 bg-background px-2 py-1 text-[11px] text-foreground focus:border-zbooni-teal/50 focus:outline-none"
+                >
+                  {PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={size}>{size}</option>
+                  ))}
+                </select>
+                <span className="text-[10px] text-muted-foreground/40">of {filteredLeads.length}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  className="rounded-md border border-border/40 bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  Prev
+                </button>
+                <span className="px-2 text-[11px] font-medium tabular-nums text-muted-foreground/60">
+                  {currentPage} / {totalPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  className="rounded-md border border-border/40 bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
             </div>
           )}
         </div>

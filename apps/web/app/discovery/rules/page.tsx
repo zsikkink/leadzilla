@@ -374,22 +374,11 @@ export default function ICPRulesPage() {
                 <h3 className="mt-3 text-sm font-bold tracking-tight">
                   {profile.name}
                 </h3>
-                {profile.description ? (
-                  <p className="mt-1 line-clamp-2 text-xs text-muted-foreground leading-relaxed">
-                    {profile.description}
-                  </p>
-                ) : null}
 
                 <div className="mt-3 flex items-center justify-between">
                   <span className="text-xs text-muted-foreground">
                     {ruleCount} rules
                   </span>
-                  {profile.targetCountries.length > 0 ? (
-                    <span className="text-[10px] font-mono text-muted-foreground/60">
-                      {profile.targetCountries.slice(0, 3).join(', ')}
-                      {profile.targetCountries.length > 3 ? ` +${profile.targetCountries.length - 3}` : ''}
-                    </span>
-                  ) : null}
                   {isSelected ? (
                     <ChevronRight className="h-3.5 w-3.5 text-zbooni-green" />
                   ) : null}
@@ -418,30 +407,6 @@ export default function ICPRulesPage() {
                 </p>
               </div>
             </div>
-
-            {/* Full description */}
-            {selectedProfile.description ? (
-              <div className="mt-4 rounded-lg border border-border/30 bg-slate-800/60 px-4 py-3">
-                <div className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
-                  {selectedProfile.description}
-                </div>
-                {(selectedProfile.targetCountries.length > 0 || selectedProfile.minCompanySize !== null) ? (
-                  <div className="mt-3 flex flex-wrap gap-4 border-t border-border/20 pt-3 text-xs text-slate-400">
-                    {selectedProfile.targetCountries.length > 0 ? (
-                      <span>Countries: <strong className="text-slate-200">{selectedProfile.targetCountries.join(', ')}</strong></span>
-                    ) : null}
-                    {selectedProfile.minCompanySize !== null || selectedProfile.maxCompanySize !== null ? (
-                      <span>Company Size: <strong className="text-slate-200">
-                        {selectedProfile.minCompanySize ?? '—'} – {selectedProfile.maxCompanySize ?? '—'}
-                      </strong></span>
-                    ) : null}
-                    {selectedProfile.excludedDomains.length > 0 ? (
-                      <span>Excluded: <strong className="text-slate-200">{selectedProfile.excludedDomains.join(', ')}</strong></span>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
 
             {/* Formula explanation */}
             <div className="mt-4 rounded-lg border border-border/50 bg-slate-800 px-4 py-3">

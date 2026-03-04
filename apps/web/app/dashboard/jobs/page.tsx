@@ -105,13 +105,13 @@ function PipelineFlowStrip({ data }: { data: FunnelResponse }) {
           Pipeline Flow
         </p>
       </div>
-      <div className="flex items-center gap-1 overflow-x-auto pb-1">
+      <div className="flex items-center justify-between w-full pb-1">
         {PIPELINE_STAGES.map((stage, i) => {
           const processed = stage.getProcessed(data);
           const Icon = stage.icon;
           return (
-            <div key={stage.key} className="flex items-center gap-1 shrink-0">
-              <div className="flex items-center gap-2 rounded-lg border border-border/30 bg-zbooni-dark/40 px-3 py-2">
+            <div key={stage.key} className="flex flex-1 items-center gap-1">
+              <div className="flex flex-1 items-center gap-2 rounded-lg border border-border/30 bg-zbooni-dark/40 px-3 py-2">
                 <div className={`flex h-7 w-7 items-center justify-center rounded-md ${stage.bgClass}`}>
                   <Icon className={`h-3.5 w-3.5 ${stage.colorClass}`} />
                 </div>
