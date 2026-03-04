@@ -176,10 +176,16 @@ export class OpenAiAdapter {
       '- NEVER ask to schedule a call in the CTA — this kills reply rate by 44%',
       '- NEVER mention competitor names',
       '- NEVER use generic phrases like "I hope this finds you well"',
-      '- Use the business intelligence to make observations specific to their business',
+      '- If business intelligence is provided, you MUST reference at least one specific detail from it',
+      '',
+      'VARIANT DIFFERENTIATION (mandatory):',
+      '- variant_a: formal/direct tone, lead with a data-driven hook or industry observation',
+      '- variant_b: conversational/casual tone, lead with a question or personal insight about their business',
+      '- variant_b MUST take a completely different angle — different hook, different observation, different CTA',
+      '- If variant_a leads with a compliment, variant_b must lead with a question or challenge',
+      '- The two variants must NOT be paraphrases of each other',
       '',
       'Each variant must have: subject (email subject line, 2-4 words question format; null for WhatsApp), bodyText (plain text), bodyHtml (null), ctaText (the CTA text or null).',
-      'variant_a should be more formal/direct; variant_b should be more conversational/casual.',
     ].join('\n');
 
     const userPrompt = [
@@ -247,6 +253,48 @@ export class OpenAiAdapter {
         reasoning: parsed.reasoning,
       }),
     );
+  }
+
+  async generateBusinessInsights(
+    businessData: string,
+  ): Promise<
+    | { status: 'success'; data: string }
+    | { status: 'retryable_error'; failure: OpenAiFailure }
+    | { status: 'terminal_error'; failure: OpenAiFailure }
+  > {
+    if (!this.apiKey) {
+      return {
+        status: 'terminal_error',
+        failure: {
+          classification: 'terminal',
+          statusCode: null,
+          message: 'OPENAI_API_KEY is not configured',
+          raw: null,
+        },
+      };
+    }
+
+    const systemPrompt = [
+      'You are a sales intelligence analyst for Zbooni, a UAE fintech company.',
+      'Given business data from web scraping, write exactly 2 specific, insightful observations a salesperson could reference in outreach.',
+      'Be concrete — mention specific services, products, pricing, team members, technology choices, or recent activity.',
+      'Keep each observation to 1-2 sentences.',
+      'Format: Return a JSON object with a single "insights" field containing the two observations separated by a newline.',
+    ].join(' ');
+
+    const InsightsSchema = z.object({
+      insights: z.string(),
+    });
+
+    const result = await this.callChatCompletion<string>(
+      this.generationModel,
+      systemPrompt,
+      businessData,
+      InsightsSchema,
+      (parsed) => parsed.insights,
+    );
+
+    return result;
   }
 
   async classifyReply(

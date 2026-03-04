@@ -55,6 +55,26 @@ export interface MessageGenerateJobDependencies {
 }
 
 /**
+ * Normalize text for comparison: lowercase, collapse whitespace, strip punctuation.
+ * Used to detect when variant_a and variant_b are effectively identical.
+ */
+function normalizeForComparison(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Check if two message variants are meaningfully different.
+ * Returns true if they differ in body text after normalization.
+ */
+function areVariantsDifferent(a: { bodyText: string }, b: { bodyText: string }): boolean {
+  return normalizeForComparison(a.bodyText) !== normalizeForComparison(b.bodyText);
+}
+
+/**
  * Deterministically assign A/B variant based on leadId hash.
  * Uses a simple string hash to split leads ~50/50 between variant_a and variant_b.
  */
@@ -79,6 +99,7 @@ function buildMessageContext(
   websiteScrape: Record<string, unknown> | null,
   instagramScrape: Record<string, unknown> | null,
   companyName: string | null,
+  preComputedInsights?: string | null | undefined,
 ): MessageContext {
   let companyInsight: string | null = null;
   let socialPresence: string | null = null;
@@ -207,9 +228,31 @@ function buildMessageContext(
       parts.push(`${(engagementRate * 100).toFixed(1)}% engagement`);
     }
 
+    // Include recent post themes if available
+    const recentPosts = Array.isArray(instagramScrape.recentPosts)
+      ? instagramScrape.recentPosts as Array<Record<string, unknown>>
+      : [];
+    if (recentPosts.length > 0) {
+      const postThemes = recentPosts
+        .filter(p => typeof p.caption === 'string' && (p.caption as string).length > 10)
+        .slice(0, 2)
+        .map(p => {
+          const caption = (p.caption as string).slice(0, 80).replace(/\n/g, ' ');
+          return `"${caption}..."`;
+        });
+      if (postThemes.length > 0) {
+        parts.push(`recent posts about: ${postThemes.join(', ')}`);
+      }
+    }
+
     if (parts.length > 0) {
       socialPresence = parts.join(', ') + '.';
     }
+  }
+
+  // If pre-computed AI insights are available, prepend them to companyInsight
+  if (preComputedInsights) {
+    companyInsight = preComputedInsights + (companyInsight ? `\n${companyInsight}` : '');
   }
 
   return { companyInsight, socialPresence, techGap, teamSignal };
@@ -321,6 +364,16 @@ export async function handleMessageGenerateJob(
         })
       : null;
 
+    // Load pre-computed AI business insights from BusinessConversion
+    const businessConversion = lead.businessId
+      ? await prisma.businessConversion.findFirst({
+          where: { leadId },
+          select: { businessInsights: true },
+          orderBy: { createdAt: 'desc' },
+        })
+      : null;
+    const preComputedInsights = businessConversion?.businessInsights ?? null;
+
     const latestScore = scorePredictionId
       ? await prisma.leadScorePrediction.findUnique({
           where: { id: scorePredictionId },
@@ -352,7 +405,7 @@ export async function handleMessageGenerateJob(
     const instagramScrape = business?.apifyInstagramScrapeJson && typeof business.apifyInstagramScrapeJson === 'object'
       ? business.apifyInstagramScrapeJson as Record<string, unknown>
       : null;
-    const messageContext = buildMessageContext(websiteScrape, instagramScrape, companyName);
+    const messageContext = buildMessageContext(websiteScrape, instagramScrape, companyName, preComputedInsights);
 
     // Format for AI prompt — structured intelligence replaces raw feature numbers
     const intelligenceParts: string[] = [];
@@ -457,10 +510,38 @@ export async function handleMessageGenerateJob(
         generatedByModel = result.data.model;
         variantAContent = result.data.variant_a;
         variantBContent = result.data.variant_b;
+
+        logger.info(
+          { jobId: job.id, leadId, model: result.data.model },
+          'OpenAI message generation succeeded',
+        );
+
+        // Check if variants are meaningfully different
+        if (!areVariantsDifferent(variantAContent, variantBContent)) {
+          logger.warn(
+            { jobId: job.id, leadId },
+            'Variants are identical after normalization — retrying with explicit differentiation instruction',
+          );
+
+          const diffRetryContext = {
+            ...generateContext,
+            icpDescription: `${generateContext.icpDescription}\n\nCRITICAL: variant_a and variant_b MUST be meaningfully different. Use a different hook, different observation, and different CTA for each. If variant_a leads with a compliment, variant_b should lead with a question or insight. Do NOT generate two versions of the same message.`,
+          };
+
+          const diffRetryResult = await deps.openAiAdapter.generateMessageVariants(diffRetryContext);
+          if (diffRetryResult.status === 'success' && areVariantsDifferent(diffRetryResult.data.variant_a, diffRetryResult.data.variant_b)) {
+            generatedByModel = diffRetryResult.data.model;
+            variantAContent = diffRetryResult.data.variant_a;
+            variantBContent = diffRetryResult.data.variant_b;
+            logger.info({ jobId: job.id, leadId }, 'Differentiation retry succeeded — variants are now different');
+          } else {
+            logger.warn({ jobId: job.id, leadId }, 'Differentiation retry did not produce different variants — proceeding with originals');
+          }
+        }
       } else {
         logger.warn(
           { jobId: job.id, leadId, status: result.status },
-          'OpenAI message generation failed, creating stub draft',
+          'OpenAI message generation failed — using fallback templates',
         );
       }
 

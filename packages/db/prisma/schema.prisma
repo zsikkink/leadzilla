@@ -840,10 +840,11 @@ model BusinessConversion {
   business          Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   leadId            String
   lead              Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  apolloContactJson Json?
-  hunterContactJson Json?
-  metadata          Json?
-  convertedAt       DateTime @default(now())
+  apolloContactJson  Json?
+  hunterContactJson  Json?
+  metadata           Json?
+  businessInsights   String?
+  convertedAt        DateTime @default(now())
   createdAt         DateTime @default(now())
 
   @@unique([businessId, leadId])

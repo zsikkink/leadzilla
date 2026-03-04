@@ -137,6 +137,13 @@ interface InstagramScraperResult {
     mediaCount: number;
     storyHighlightsCount: number;
     isProfessionalAccount: boolean;
+    // Recent posts (v2.1)
+    recentPosts?: Array<{
+      caption: string;
+      likeCount: number;
+      commentCount: number;
+      postType: 'image' | 'video' | 'carousel';
+    }> | undefined;
   } | undefined;
 }
 
@@ -146,6 +153,15 @@ interface SmtpVerificationResult {
   isCatchAll: boolean;
   isDisposable: boolean;
   durationMs: number;
+}
+
+interface OpenAiInsightGenerator {
+  generateBusinessInsights(businessData: string): Promise<
+    | { status: 'success'; data: string }
+    | { status: 'retryable_error'; failure: { message: string } }
+    | { status: 'terminal_error'; failure: { message: string } }
+  >;
+  isConfigured: boolean;
 }
 
 export interface BusinessConvertJobDependencies {
@@ -169,6 +185,7 @@ export interface BusinessConvertJobDependencies {
     verify(email: string): Promise<SmtpVerificationResult>;
     isConfigured: boolean;
   } | undefined;
+  openAiAdapter?: OpenAiInsightGenerator | undefined;
   enqueueEnrichmentRun?: ((payload: {
     runId: string;
     leadId: string;
@@ -417,6 +434,83 @@ export async function handleBusinessConvertJob(
           'Instagram scrape failed — continuing without Instagram data',
         );
       }
+    }
+  }
+
+  // ── 4b. Generate AI business insights from scrape data ───────────────
+  let businessInsights: string | null = null;
+
+  if (deps.openAiAdapter?.isConfigured && (websiteScrapeData || instagramData)) {
+    const insightParts: string[] = [];
+    insightParts.push(`Business: ${business.name}`);
+    if (domain) insightParts.push(`Domain: ${domain}`);
+    if (business.category) insightParts.push(`Category: ${business.category}`);
+    if (business.city) insightParts.push(`City: ${business.city}`);
+    if (business.countryCode) insightParts.push(`Country: ${business.countryCode}`);
+
+    if (websiteScrapeData) {
+      if (websiteScrapeData.hasShopify) insightParts.push('Uses Shopify');
+      if (websiteScrapeData.hasWhatsApp) insightParts.push('Has WhatsApp on site');
+      if (websiteScrapeData.hasPricingTiers) insightParts.push('Has tiered pricing');
+      if (websiteScrapeData.hasProductCatalog) insightParts.push('Has product catalog');
+      if (websiteScrapeData.detectedPlatforms.length > 0) insightParts.push(`Platforms: ${websiteScrapeData.detectedPlatforms.join(', ')}`);
+      if (websiteScrapeData.paymentWidgets.length > 0) insightParts.push(`Payment widgets: ${websiteScrapeData.paymentWidgets.join(', ')}`);
+      if (websiteScrapeData.technologies) {
+        const tech = websiteScrapeData.technologies;
+        const techParts: string[] = [];
+        if (tech.crm.length > 0) techParts.push(`CRM: ${tech.crm.join(', ')}`);
+        if (tech.liveChat.length > 0) techParts.push(`Live chat: ${tech.liveChat.join(', ')}`);
+        if (tech.analytics.length > 0) techParts.push(`Analytics: ${tech.analytics.join(', ')}`);
+        if (tech.ecommerce.length > 0) techParts.push(`Ecommerce: ${tech.ecommerce.join(', ')}`);
+        if (techParts.length > 0) insightParts.push(`Tech: ${techParts.join('; ')}`);
+      }
+      if (websiteScrapeData.businessSignals.estimatedEmployeeCount) {
+        insightParts.push(`~${websiteScrapeData.businessSignals.estimatedEmployeeCount} employees`);
+      }
+      if (websiteScrapeData.decisionMakers.length > 0) {
+        const topDMs = websiteScrapeData.decisionMakers.slice(0, 3).map(dm => `${dm.name} (${dm.title ?? dm.seniority})`);
+        insightParts.push(`Key people: ${topDMs.join(', ')}`);
+      }
+    }
+
+    if (instagramData) {
+      const igParts: string[] = [];
+      if (instagramData.followerCount > 0) igParts.push(`${instagramData.followerCount} followers`);
+      if (instagramData.businessCategory) igParts.push(`Category: ${instagramData.businessCategory}`);
+      if (instagramData.bio) igParts.push(`Bio: ${instagramData.bio}`);
+      if (instagramData.engagementRate !== null) igParts.push(`Engagement: ${(instagramData.engagementRate * 100).toFixed(1)}%`);
+      if (igParts.length > 0) insightParts.push(`Instagram: ${igParts.join(', ')}`);
+
+      // Include recent post topics for context
+      if (instagramData.recentPosts && instagramData.recentPosts.length > 0) {
+        const postSummaries = instagramData.recentPosts
+          .filter(p => p.caption.length > 0)
+          .slice(0, 3)
+          .map(p => `"${p.caption.slice(0, 100)}..." (${p.likeCount} likes)`);
+        if (postSummaries.length > 0) {
+          insightParts.push(`Recent posts: ${postSummaries.join('; ')}`);
+        }
+      }
+    }
+
+    const businessDataStr = insightParts.join('\n');
+
+    try {
+      const insightResult = await deps.openAiAdapter.generateBusinessInsights(businessDataStr);
+      if (insightResult.status === 'success') {
+        businessInsights = insightResult.data;
+        logger.info(
+          { ...logCtx, insightsLength: businessInsights.length },
+          'Generated AI business insights',
+        );
+      } else {
+        logger.warn(
+          { ...logCtx, insightStatus: insightResult.status },
+          'AI insight generation failed — proceeding without insights',
+        );
+      }
+    } catch {
+      logger.warn(logCtx, 'AI insight generation threw — proceeding without insights');
     }
   }
 
@@ -676,6 +770,7 @@ export async function handleBusinessConvertJob(
           hunterContactJson: hunterContactJson
             ? toInputJson(hunterContactJson)
             : Prisma.JsonNull,
+          ...(businessInsights !== null ? { businessInsights } : {}),
         },
       }).catch((err: unknown) => {
         if (
@@ -736,6 +831,7 @@ export async function handleBusinessConvertJob(
           ? toInputJson(hunterContactJson)
           : Prisma.JsonNull,
         metadata: toInputJson({ contactSource: resolvedContact.source }),
+        ...(businessInsights !== null ? { businessInsights } : {}),
       },
     });
 
