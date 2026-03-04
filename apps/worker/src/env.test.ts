@@ -36,6 +36,49 @@ describe('loadWorkerEnv', () => {
     );
   });
 
+  it('uses default concurrency values', () => {
+    const env = loadWorkerEnv({
+      DATABASE_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood',
+      APP_ENV: 'test',
+    });
+
+    expect(env.WORKER_PREQUALIFY_CONCURRENCY).toBe(5);
+    expect(env.WORKER_CONVERT_CONCURRENCY).toBe(3);
+    expect(env.WORKER_FEATURES_CONCURRENCY).toBe(5);
+  });
+
+  it('parses custom concurrency values', () => {
+    const env = loadWorkerEnv({
+      DATABASE_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood',
+      APP_ENV: 'test',
+      WORKER_PREQUALIFY_CONCURRENCY: '10',
+      WORKER_CONVERT_CONCURRENCY: '5',
+      WORKER_FEATURES_CONCURRENCY: '15',
+    });
+
+    expect(env.WORKER_PREQUALIFY_CONCURRENCY).toBe(10);
+    expect(env.WORKER_CONVERT_CONCURRENCY).toBe(5);
+    expect(env.WORKER_FEATURES_CONCURRENCY).toBe(15);
+  });
+
+  it('rejects concurrency values outside allowed range', () => {
+    expect(() =>
+      loadWorkerEnv({
+        DATABASE_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood',
+        APP_ENV: 'test',
+        WORKER_PREQUALIFY_CONCURRENCY: '0',
+      }),
+    ).toThrowError('Invalid worker environment configuration');
+
+    expect(() =>
+      loadWorkerEnv({
+        DATABASE_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood',
+        APP_ENV: 'test',
+        WORKER_CONVERT_CONCURRENCY: '11',
+      }),
+    ).toThrowError('Invalid worker environment configuration');
+  });
+
   it('throws when legacy Google CSE env vars are present', () => {
     expect(() =>
       loadWorkerEnv({

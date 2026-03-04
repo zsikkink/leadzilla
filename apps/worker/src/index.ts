@@ -551,6 +551,11 @@ async function main(): Promise<void> {
           });
         },
       }),
+    {
+      batchSize: env.WORKER_PREQUALIFY_CONCURRENCY,
+      pollingIntervalSeconds: 1,
+      concurrent: true,
+    },
   );
 
   await registerWorker<BusinessConvertJobPayload>(
@@ -587,6 +592,11 @@ async function main(): Promise<void> {
           );
         },
       }),
+    {
+      batchSize: env.WORKER_CONVERT_CONCURRENCY,
+      pollingIntervalSeconds: 1,
+      concurrent: true,
+    },
   );
 
   await registerWorker<EnrichmentRunJobPayload>(
@@ -607,6 +617,9 @@ async function main(): Promise<void> {
         providerRotator: enrichmentProviderRotator,
         budgetTracker: providerBudgetTracker,
       }),
+    {
+      pollingIntervalSeconds: 1,
+    },
   );
   await registerWorker<FeaturesComputeJobPayload>(
     boss,
@@ -616,6 +629,11 @@ async function main(): Promise<void> {
       handleFeaturesComputeJob(jobLogger, job, {
         boss,
       }),
+    {
+      batchSize: env.WORKER_FEATURES_CONCURRENCY,
+      pollingIntervalSeconds: 1,
+      concurrent: true,
+    },
   );
   await registerWorker<LabelsGenerateJobPayload>(
     boss,
@@ -647,6 +665,9 @@ async function main(): Promise<void> {
           });
         },
       }),
+    {
+      pollingIntervalSeconds: 1,
+    },
   );
   await registerWorker<ScoringBatchJobPayload>(
     boss,
@@ -695,6 +716,9 @@ async function main(): Promise<void> {
         openAiAdapter,
         boss,
       }),
+    {
+      pollingIntervalSeconds: 1,
+    },
   );
   await registerWorker<MessageSendJobPayload>(
     boss,

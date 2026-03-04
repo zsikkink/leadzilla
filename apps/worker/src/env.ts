@@ -145,6 +145,9 @@ const WorkerEnvSchema = z.object({
   DISCOVERY_SEARCH_PROVIDER: z.enum(['GOOGLE_PLACES', 'SERPAPI']).default('SERPAPI'),
   WEBSITE_SCRAPER_PLAYWRIGHT_ENABLED: envBoolean.default(true),
   WEBSITE_SCRAPER_CHROMIUM_PATH: optionalNonEmptyString(),
+  WORKER_PREQUALIFY_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(5),
+  WORKER_CONVERT_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(3),
+  WORKER_FEATURES_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(5),
 });
 
 export type WorkerEnv = z.infer<typeof WorkerEnvSchema>;
