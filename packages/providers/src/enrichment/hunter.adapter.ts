@@ -35,6 +35,8 @@ export interface HunterDomainContact {
   lastName: string | null;
   position: string | null;
   type: 'personal' | 'generic' | null;
+  confidence: number | null;
+  verification: string | null;
 }
 
 export type HunterDomainSearchResult =
@@ -297,12 +299,18 @@ export class HunterAdapter {
           : e.type === 'generic' ? 'generic' as const
           : null;
 
+        const verification = e.verification && typeof e.verification === 'object'
+          ? normalizeString((e.verification as Record<string, unknown>).status)
+          : normalizeString(e.verification);
+
         return {
           email,
           firstName: normalizeString(e.first_name),
           lastName: normalizeString(e.last_name),
           position: normalizeString(e.position),
           type: emailType,
+          confidence: typeof e.confidence === 'number' ? e.confidence : null,
+          verification: verification ?? null,
         };
       })
       .filter((c): c is HunterDomainContact => c !== null);

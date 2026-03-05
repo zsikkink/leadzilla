@@ -1,3 +1,5 @@
+import { promises as dns } from 'node:dns';
+
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyPluginAsync } from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
@@ -59,6 +61,39 @@ function isGenericEmail(email: string): boolean {
   const prefix = email.split('@')[0]?.toLowerCase();
   if (!prefix) return true;
   return GENERIC_PREFIXES.has(prefix);
+}
+
+// ── Email deliverability gate (inline — API can't import @lead-flood/providers) ──
+const DISPOSABLE_DOMAINS = new Set([
+  'mailinator.com', 'guerrillamail.com', 'yopmail.com', 'tempmail.com',
+  'throwaway.email', 'guerrillamail.de', 'dispostable.com', 'temp-mail.org',
+  'fakeinbox.com', 'sharklasers.com', 'guerrillamailblock.com',
+  'grr.la', 'mailnesia.com', 'trashmail.com', 'maildrop.cc',
+  'mailnator.com', 'guerrillamail.net', 'guerrillamail.org',
+  'tempail.com', 'throwaway.com', 'getnada.com', 'mohmal.com',
+  'tempr.email', 'discard.email', 'mailsac.com', 'harakirimail.com',
+  'mytemp.email', 'emailondeck.com', 'tempinbox.com',
+]);
+
+export async function isEmailDeliverable(
+  email: string,
+): Promise<{ ok: boolean; reason?: string | undefined }> {
+  const domain = email.split('@')[1]?.toLowerCase();
+  if (!domain) return { ok: false, reason: 'INVALID_FORMAT' };
+
+  if (DISPOSABLE_DOMAINS.has(domain)) {
+    return { ok: false, reason: 'DISPOSABLE_DOMAIN' };
+  }
+
+  try {
+    const mx = await dns.resolveMx(domain);
+    if (!mx || mx.length === 0) {
+      return { ok: false, reason: 'NO_MX_RECORDS' };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: 'DNS_LOOKUP_FAILED' };
+  }
 }
 
 export class LeadAlreadyExistsError extends Error {
@@ -215,6 +250,16 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         reply.status(400);
         return ErrorResponseSchema.parse({
           error: 'Generic email addresses (info@, contact@, etc.) are not accepted. Please provide a personal email.',
+          requestId: request.id,
+        });
+      }
+
+      // Check email deliverability (MX records + disposable domain)
+      const deliverability = await isEmailDeliverable(parsedRequest.data.email);
+      if (!deliverability.ok) {
+        reply.status(422);
+        return ErrorResponseSchema.parse({
+          error: `Undeliverable email: ${deliverability.reason}`,
           requestId: request.id,
         });
       }

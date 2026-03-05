@@ -1,9 +1,28 @@
 import { createLogger } from '@lead-flood/observability';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { type LoginRequest } from '@lead-flood/contracts';
 
 import { buildServer, type BuildServerOptions } from './server.js';
+
+// Mock dns for isEmailDeliverable tests
+vi.mock('node:dns', () => ({
+  promises: {
+    resolveMx: vi.fn(async (domain: string) => {
+      if (domain === 'mailinator.com' || domain === 'yopmail.com') {
+        return [{ exchange: 'mx.mailinator.com', priority: 10 }];
+      }
+      if (domain === 'no-mx.invalid') {
+        return [];
+      }
+      if (domain === 'dns-fail.invalid') {
+        throw new Error('ENOTFOUND');
+      }
+      // Default: valid MX
+      return [{ exchange: 'mx.example.com', priority: 10 }];
+    }),
+  },
+}));
 import type { ApiEnv } from './env.js';
 
 const env: ApiEnv = {
@@ -252,5 +271,87 @@ describe('buildServer', () => {
       id: 'job_1',
       status: 'completed',
     });
+  });
+
+  it('returns 422 for disposable domain email', async () => {
+    const server = buildServer(makeDefaultOptions());
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/leads',
+      headers: authHeaders(),
+      payload: {
+        firstName: 'Spam',
+        lastName: 'Bot',
+        email: 'test@mailinator.com',
+        source: 'manual',
+      },
+    });
+
+    const body = response.json() as { error: string };
+    expect(response.statusCode).toBe(422);
+    expect(body.error).toContain('DISPOSABLE_DOMAIN');
+  });
+
+  it('returns 422 for domain with no MX records', async () => {
+    const server = buildServer(makeDefaultOptions());
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/leads',
+      headers: authHeaders(),
+      payload: {
+        firstName: 'No',
+        lastName: 'MX',
+        email: 'user@no-mx.invalid',
+        source: 'manual',
+      },
+    });
+
+    const body = response.json() as { error: string };
+    expect(response.statusCode).toBe(422);
+    expect(body.error).toContain('NO_MX_RECORDS');
+  });
+
+  it('returns 422 for domain with DNS lookup failure', async () => {
+    const server = buildServer(makeDefaultOptions());
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/leads',
+      headers: authHeaders(),
+      payload: {
+        firstName: 'DNS',
+        lastName: 'Fail',
+        email: 'user@dns-fail.invalid',
+        source: 'manual',
+      },
+    });
+
+    const body = response.json() as { error: string };
+    expect(response.statusCode).toBe(422);
+    expect(body.error).toContain('DNS_LOOKUP_FAILED');
+  });
+
+  it('allows lead creation for valid domain with MX records', async () => {
+    const server = buildServer(makeDefaultOptions());
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/leads',
+      headers: authHeaders(),
+      payload: {
+        firstName: 'Valid',
+        lastName: 'User',
+        email: 'valid@example.com',
+        source: 'manual',
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
   });
 });

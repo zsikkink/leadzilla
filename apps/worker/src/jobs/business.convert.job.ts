@@ -60,6 +60,8 @@ interface HunterContact {
   lastName: string | null;
   position: string | null;
   type: 'personal' | 'generic' | null;
+  confidence: number | null;
+  verification: string | null;
 }
 
 type HunterDomainSearchResult =
@@ -641,6 +643,37 @@ export async function handleBusinessConvertJob(
         hunterContactJson = hunterResult.contacts;
         for (const hc of hunterResult.contacts) {
           if (isGenericEmail(hc.email)) continue;
+
+          // Skip emails Hunter marks as invalid
+          if (hc.verification === 'invalid') {
+            logger.info(
+              { ...logCtx, email: hc.email, hunterVerification: hc.verification },
+              'Skipping Hunter contact — marked invalid by Hunter',
+            );
+            continue;
+          }
+
+          // Skip low-confidence emails (likely pattern-guessed, unverified)
+          if (hc.confidence !== null && hc.confidence < 50) {
+            logger.info(
+              { ...logCtx, email: hc.email, hunterConfidence: hc.confidence },
+              'Skipping Hunter contact — confidence below 50',
+            );
+            continue;
+          }
+
+          // SMTP verify Hunter email if verifier is available
+          if (deps.smtpVerifier?.isConfigured) {
+            const smtpResult = await deps.smtpVerifier.verify(hc.email);
+            if (smtpResult.status !== 'valid' && smtpResult.status !== 'catch_all') {
+              logger.info(
+                { ...logCtx, email: hc.email, smtpStatus: smtpResult.status, hunterConfidence: hc.confidence },
+                'Hunter contact failed SMTP verification',
+              );
+              continue;
+            }
+          }
+
           allCandidates.push({
             name: [hc.firstName ?? '', hc.lastName ?? ''].filter(Boolean).join(' ') || business.name,
             title: hc.position,
@@ -670,6 +703,19 @@ export async function handleBusinessConvertJob(
       if (apolloResult.status === 'success' && apolloResult.contacts.length > 0) {
         for (const ac of apolloResult.contacts) {
           if (isGenericEmail(ac.email)) continue;
+
+          // SMTP verify Apollo email if verifier is available
+          if (deps.smtpVerifier?.isConfigured) {
+            const smtpResult = await deps.smtpVerifier.verify(ac.email);
+            if (smtpResult.status !== 'valid' && smtpResult.status !== 'catch_all') {
+              logger.info(
+                { ...logCtx, email: ac.email, smtpStatus: smtpResult.status },
+                'Apollo contact failed SMTP verification',
+              );
+              continue;
+            }
+          }
+
           apolloContactJson = ac;
           allCandidates.push({
             name: [ac.firstName, ac.lastName].filter(Boolean).join(' ') || business.name,
