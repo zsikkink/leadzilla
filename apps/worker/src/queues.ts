@@ -5,7 +5,6 @@ import {
   ANALYTICS_ROLLUP_JOB_NAME,
   ANALYTICS_ROLLUP_RETRY_OPTIONS,
 } from './jobs/analytics.rollup.job.js';
-import { ENRICHMENT_RUN_JOB_NAME, ENRICHMENT_RUN_RETRY_OPTIONS } from './jobs/enrichment.run.job.js';
 import { FOLLOWUP_CHECK_JOB_NAME, FOLLOWUP_CHECK_RETRY_OPTIONS } from './jobs/followup.check.job.js';
 import {
   DISCOVERY_RUN_SEARCH_TASK_JOB_NAME,
@@ -48,6 +47,10 @@ import {
   BUSINESS_CONVERT_JOB_NAME,
   BUSINESS_CONVERT_RETRY_OPTIONS,
 } from './jobs/business.convert.job.js';
+import {
+  APOLLO_ENRICH_JOB_NAME,
+  APOLLO_ENRICH_RETRY_OPTIONS,
+} from './jobs/apollo.enrich.job.js';
 import {
   PIPELINE_HEALTH_JOB_NAME,
   PIPELINE_HEALTH_RETRY_OPTIONS,
@@ -141,10 +144,6 @@ export const WORKER_QUEUE_DEFINITIONS: readonly WorkerQueueDefinition[] = [
     retryOptions: normalizeRetryOptions(BUSINESS_CONVERT_JOB_NAME, BUSINESS_CONVERT_RETRY_OPTIONS),
   },
   {
-    name: ENRICHMENT_RUN_JOB_NAME,
-    retryOptions: normalizeRetryOptions(ENRICHMENT_RUN_JOB_NAME, ENRICHMENT_RUN_RETRY_OPTIONS),
-  },
-  {
     name: FEATURES_COMPUTE_JOB_NAME,
     retryOptions: normalizeRetryOptions(FEATURES_COMPUTE_JOB_NAME, FEATURES_COMPUTE_RETRY_OPTIONS),
   },
@@ -155,6 +154,10 @@ export const WORKER_QUEUE_DEFINITIONS: readonly WorkerQueueDefinition[] = [
   {
     name: SCORING_COMPUTE_JOB_NAME,
     retryOptions: normalizeRetryOptions(SCORING_COMPUTE_JOB_NAME, SCORING_COMPUTE_RETRY_OPTIONS),
+  },
+  {
+    name: APOLLO_ENRICH_JOB_NAME,
+    retryOptions: normalizeRetryOptions(APOLLO_ENRICH_JOB_NAME, APOLLO_ENRICH_RETRY_OPTIONS),
   },
   {
     name: SCORING_BATCH_JOB_NAME,

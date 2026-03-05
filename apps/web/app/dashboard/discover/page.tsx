@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 import { countryName } from '../../../src/lib/countries.js';
+import { getSupabaseBrowserClient } from '../../../src/lib/supabase-client.js';
 import { cn } from '../../../src/lib/utils.js';
 
 // ── City mapping by country ──────────────────────────────
@@ -285,6 +286,33 @@ export default function DiscoverPage() {
   const [limit, setLimit] = useState('25');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Discovery yield rates for cost estimate
+  const [yieldRates, setYieldRates] = useState<Map<string, number>>(new Map());
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchYieldRates() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data } = await supabase
+          .from('pipeline_settings')
+          .select('key, valueJson')
+          .like('key', 'discovery_yield_rate:%');
+        if (!data || cancelled) return;
+        const map = new Map<string, number>();
+        for (const row of data) {
+          const icpId = (row.key as string).replace('discovery_yield_rate:', '');
+          const rate = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
+          if (!isNaN(rate) && rate > 0) map.set(icpId, rate);
+        }
+        setYieldRates(map);
+      } catch {
+        // Non-critical
+      }
+    }
+    void fetchYieldRates();
+    return () => { cancelled = true; };
+  }, []);
 
   // Run tracking — multi-run via API
   const [runsRefreshKey, setRunsRefreshKey] = useState(0);
@@ -648,6 +676,43 @@ export default function DiscoverPage() {
               ))}
             </div>
           </div>
+
+          {/* Cost Estimate */}
+          {selectedIcpIds.size > 0 && parseInt(limit, 10) > 0 ? (() => {
+            const desiredLeads = parseInt(limit, 10);
+            // Compute blended yield rate from selected ICPs
+            const selectedRates = Array.from(selectedIcpIds)
+              .map((id) => yieldRates.get(id))
+              .filter((r): r is number => r !== undefined);
+            const avgYieldRate = selectedRates.length > 0
+              ? selectedRates.reduce((a, b) => a + b, 0) / selectedRates.length
+              : 0.15; // default 15%
+            const hasHistoricalData = selectedRates.length > 0;
+            const searchBudget = Math.ceil(desiredLeads / avgYieldRate * 1.5);
+            const hunterLookups = Math.ceil(searchBudget * 0.7);
+            const estLeads = Math.round(searchBudget * avgYieldRate);
+            return (
+              <div className="rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 px-4 py-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <TrendingUp className="h-3.5 w-3.5 text-zbooni-teal" />
+                  <span className="text-xs font-semibold text-zbooni-teal">Cost Estimate</span>
+                  {!hasHistoricalData ? (
+                    <span className="text-[10px] text-muted-foreground/50">(using default 15% yield)</span>
+                  ) : null}
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  ~<strong className="text-foreground">{searchBudget}</strong> search tasks
+                  {' + ~'}<strong className="text-foreground">{hunterLookups}</strong> Hunter lookups
+                  {' → est. '}<strong className="text-zbooni-green">{estLeads}</strong> leads
+                  {hasHistoricalData ? (
+                    <span className="text-muted-foreground/60">
+                      {' '}(based on {Math.round(avgYieldRate * 100)}% yield)
+                    </span>
+                  ) : null}
+                </p>
+              </div>
+            );
+          })() : null}
 
           {/* Error */}
           {submitError ? (

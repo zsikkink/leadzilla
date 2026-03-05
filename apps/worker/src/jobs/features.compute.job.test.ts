@@ -111,7 +111,7 @@ describe('features.compute helpers', () => {
       'contact_source',
       // v2.1 features (enhanced scrapers)
       'decision_maker_count',
-      'has_executive_contact',
+      'apollo_has_direct_phone',
       'website_email_count',
       'website_phone_count',
       'social_link_count',

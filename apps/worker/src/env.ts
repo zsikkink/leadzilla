@@ -90,11 +90,9 @@ const WorkerEnvSchema = z.object({
   HUNTER_API_KEY: optionalNonEmptyString(),
   HUNTER_BASE_URL: z.string().url().default('https://api.hunter.io/v2'),
   HUNTER_RATE_LIMIT_MS: z.coerce.number().int().min(0).default(250),
-  OTHER_FREE_ENRICHMENT_ENABLED: envBoolean.default(true),
-  PUBLIC_LOOKUP_BASE_URL: z.string().url().default('https://autocomplete.clearbit.com/v1/companies/suggest'),
   ENRICHMENT_DEFAULT_PROVIDER: z
-    .enum(['HUNTER', 'OTHER_FREE', 'PEOPLE_DATA_LABS'])
-    .default('OTHER_FREE'),
+    .enum(['HUNTER', 'PEOPLE_DATA_LABS'])
+    .default('HUNTER'),
   DISCOVERY_ENABLED: envBoolean.default(false),
   SERPAPI_DISCOVERY_ENABLED: envBoolean.default(true),
   ENRICHMENT_ENABLED: envBoolean.default(true),

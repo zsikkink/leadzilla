@@ -70,6 +70,39 @@ const ALLOWED_TASK_TYPES = new Set<SearchTaskType>([
   'SERP_MAPS_LOCAL',
 ]);
 
+const DEFAULT_YIELD_RATE = 0.15;
+
+/**
+ * Compute an adaptive search task budget based on historical yield rates.
+ * Formula: ceil(desiredLeads / yieldRate) * 1.5
+ * Reads from PipelineSetting key `discovery_yield_rate:{icpProfileId}`.
+ */
+async function computeAdaptiveSearchTaskBudget(
+  desiredLeads: number,
+  icpProfileId: string | undefined,
+): Promise<number> {
+  let yieldRate = DEFAULT_YIELD_RATE;
+  if (icpProfileId) {
+    try {
+      const setting = await prisma.pipelineSetting.findUnique({
+        where: { key: `discovery_yield_rate:${icpProfileId}` },
+        select: { valueJson: true },
+      });
+      if (setting?.valueJson !== null && setting?.valueJson !== undefined) {
+        const stored = typeof setting.valueJson === 'number'
+          ? setting.valueJson
+          : Number(setting.valueJson);
+        if (Number.isFinite(stored) && stored > 0 && stored <= 1) {
+          yieldRate = stored;
+        }
+      }
+    } catch {
+      // DB failure — use default
+    }
+  }
+  return Math.ceil((desiredLeads / yieldRate) * 1.5);
+}
+
 function withSeedOverrides(
   config: DiscoveryRuntimeConfig,
   payload: DiscoverySeedJobPayload,
@@ -122,7 +155,7 @@ export async function handleDiscoverySeedJob(
 ): Promise<void> {
   const correlationId = job.data.correlationId ?? job.id;
   const startedAt = Date.now();
-  const seedConfig = withSeedOverrides(dependencies.config, job.data);
+  let seedConfig = withSeedOverrides(dependencies.config, job.data);
   const shouldEnqueueRunTasks = job.data.enqueueRunTasks ?? job.data.reason !== 'api';
 
   try {
@@ -193,6 +226,26 @@ export async function handleDiscoverySeedJob(
           'Using ICP v2 category mapping for task generation',
         );
       }
+    }
+
+      // 5B: Adaptive maxTasks — if user set maxTasks (desired leads), compute search budget
+    if (seedConfig.maxTasks > 0 && job.data.icpProfileId) {
+      const adaptiveBudget = await computeAdaptiveSearchTaskBudget(
+        seedConfig.maxTasks,
+        job.data.icpProfileId,
+      );
+      seedConfig = { ...seedConfig, maxTasks: adaptiveBudget };
+      logger.info(
+        {
+          jobId: job.id,
+          queue: job.name,
+          correlationId,
+          desiredLeads: job.data.maxTasks,
+          adaptiveBudget,
+          icpProfileId: job.data.icpProfileId,
+        },
+        'Computed adaptive search task budget from historical yield',
+      );
     }
 
     const seedResult = await seedSearchTasks(seedConfig, new Date(), icpSeedConfig);

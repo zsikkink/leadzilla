@@ -12,17 +12,19 @@ import {
   Search,
   Send,
   Tag,
+  Target,
   ThumbsDown,
   ThumbsUp,
   TrendingUp,
   Unplug,
   Users,
 } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { cn } from '../../../src/lib/utils.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
+import { getSupabaseBrowserClient } from '../../../src/lib/supabase-client.js';
 
 type DateRange = '7d' | '30d' | '90d' | 'all';
 
@@ -200,9 +202,56 @@ function PipelineStageCard({ stage, data }: { stage: PipelineStage; data: Funnel
 
 // ── Main page ────────────────────────────────────────────────────────────
 
+interface YieldEntry {
+  icpProfileId: string;
+  icpName: string;
+  yieldRate: number;
+  updatedAt: string;
+}
+
 export default function AnalyticsPage() {
   const { apiClient } = useAuth();
   const [dateRange, setDateRange] = useState<DateRange>('all');
+
+  // Discovery yield rates from PipelineSetting
+  const [yieldEntries, setYieldEntries] = useState<YieldEntry[]>([]);
+  const icps = useApiQuery(
+    useCallback(() => apiClient.listIcps({ page: 1, pageSize: 50 }), [apiClient]),
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchYieldRates() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data } = await supabase
+          .from('pipeline_settings')
+          .select('key, valueJson, updatedAt')
+          .like('key', 'discovery_yield_rate:%');
+
+        if (!data || cancelled) return;
+        const entries: YieldEntry[] = data
+          .map((row: { key: string; valueJson: unknown; updatedAt: string }) => {
+            const icpId = row.key.replace('discovery_yield_rate:', '');
+            const rate = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
+            if (isNaN(rate)) return null;
+            const icp = icps.data?.items.find((i) => i.id === icpId);
+            return {
+              icpProfileId: icpId,
+              icpName: icp?.name ?? icpId.slice(0, 12) + '...',
+              yieldRate: rate,
+              updatedAt: row.updatedAt,
+            };
+          })
+          .filter((e): e is YieldEntry => e !== null);
+        setYieldEntries(entries);
+      } catch {
+        // Supplementary data — fail silently
+      }
+    }
+    if (icps.data) void fetchYieldRates();
+    return () => { cancelled = true; };
+  }, [icps.data]);
 
   const dateFilter = useMemo(() => {
     if (dateRange === 'all') return {};
@@ -311,6 +360,47 @@ export default function AnalyticsPage() {
             {PIPELINE_STAGES.map((stage) => (
               <PipelineStageCard key={stage.key} stage={stage} data={funnel.data!} />
             ))}
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Discovery Yield Rates ─────────────────────────────────── */}
+      {yieldEntries.length > 0 ? (
+        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+          <div className="mb-4 flex items-center gap-2">
+            <Target className="h-4 w-4 text-zbooni-green" />
+            <h2 className="text-base font-bold tracking-tight">Discovery Yield</h2>
+            <span className="ml-auto text-xs text-muted-foreground/50">
+              Qualified leads per search task
+            </span>
+          </div>
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+            {yieldEntries.map((entry) => {
+              const pct = Math.round(entry.yieldRate * 100);
+              return (
+                <div
+                  key={entry.icpProfileId}
+                  className="rounded-xl border border-border/30 bg-zbooni-dark/40 p-4"
+                >
+                  <div className="flex items-center gap-2">
+                    <Target className="h-3.5 w-3.5 text-zbooni-teal" />
+                    <p className="text-sm font-semibold truncate">{entry.icpName}</p>
+                  </div>
+                  <p className="mt-2 text-3xl font-extrabold tracking-tight text-zbooni-green tabular-nums">
+                    {pct}%
+                  </p>
+                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-border/30">
+                    <div
+                      className="h-full rounded-full bg-zbooni-green/70 transition-all duration-500"
+                      style={{ width: `${Math.min(pct, 100)}%` }}
+                    />
+                  </div>
+                  <p className="mt-1.5 text-[10px] text-muted-foreground/40">
+                    Updated {new Date(entry.updatedAt).toLocaleDateString()}
+                  </p>
+                </div>
+              );
+            })}
           </div>
         </div>
       ) : null}

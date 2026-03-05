@@ -107,7 +107,7 @@ export const FEATURE_KEYS = [
   'contact_source',
   // ── v2.1 features (enhanced scrapers) ──
   'decision_maker_count',
-  'has_executive_contact',
+  'apollo_has_direct_phone',
   'website_email_count',
   'website_phone_count',
   'social_link_count',
@@ -350,7 +350,7 @@ function buildFeaturePayload(input: {
   contactSource: string;
   // v2.1 features (enhanced scrapers)
   decisionMakerCount: number;
-  hasExecutiveContact: boolean;
+  apolloHasDirectPhone: boolean;
   websiteEmailCount: number;
   websitePhoneCount: number;
   socialLinkCount: number;
@@ -422,7 +422,7 @@ function buildFeaturePayload(input: {
     contact_source: input.contactSource,
     // v2.1 features (enhanced scrapers)
     decision_maker_count: input.decisionMakerCount,
-    has_executive_contact: input.hasExecutiveContact,
+    apollo_has_direct_phone: input.apolloHasDirectPhone,
     website_email_count: input.websiteEmailCount,
     website_phone_count: input.websitePhoneCount,
     social_link_count: input.socialLinkCount,
@@ -718,7 +718,7 @@ export async function handleFeaturesComputeJob(
     const businessConversion = lead.businessId
       ? await prisma.businessConversion.findFirst({
           where: { leadId },
-          select: { apolloContactJson: true, hunterContactJson: true, metadata: true },
+          select: { apolloContactJson: true, hunterContactJson: true, metadata: true, apolloHasDirectPhone: true },
           orderBy: { convertedAt: 'desc' },
         })
       : null;
@@ -829,9 +829,7 @@ export async function handleFeaturesComputeJob(
       ? (apifyWebsite.decisionMakers as Array<Record<string, unknown>>)
       : [];
     const decisionMakerCount = websiteDecisionMakers.length;
-    const hasExecutiveContact = websiteDecisionMakers.some(
-      (dm) => dm.seniority === 'executive',
-    );
+    const apolloHasDirectPhone = businessConversion?.apolloHasDirectPhone === true;
 
     const websiteContactInfo = apifyWebsite?.contactInfo && typeof apifyWebsite.contactInfo === 'object'
       ? (apifyWebsite.contactInfo as Record<string, unknown>)
@@ -1127,7 +1125,7 @@ export async function handleFeaturesComputeJob(
       contactSource,
       // v2.1 features (enhanced scrapers)
       decisionMakerCount,
-      hasExecutiveContact,
+      apolloHasDirectPhone,
       websiteEmailCount,
       websitePhoneCount,
       socialLinkCount,

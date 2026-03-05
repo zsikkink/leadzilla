@@ -14,7 +14,6 @@ describe('loadWorkerEnv', () => {
       COMPANY_SEARCH_ENABLED: 'true',
       PDL_ENABLED: 'false',
       HUNTER_ENABLED: 'true',
-      OTHER_FREE_ENRICHMENT_ENABLED: 'true',
       DISCOVERY_ENABLED: 'false',
       SERPAPI_DISCOVERY_ENABLED: 'true',
       ENRICHMENT_ENABLED: 'true',
@@ -27,7 +26,7 @@ describe('loadWorkerEnv', () => {
     expect(env.DISCOVERY_ENABLED).toBe(false);
     expect(env.SERPAPI_DISCOVERY_ENABLED).toBe(true);
     expect(env.ENRICHMENT_ENABLED).toBe(true);
-    expect(env.ENRICHMENT_DEFAULT_PROVIDER).toBe('OTHER_FREE');
+    expect(env.ENRICHMENT_DEFAULT_PROVIDER).toBe('HUNTER');
   });
 
   it('throws on missing DATABASE_URL', () => {

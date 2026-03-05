@@ -315,6 +315,14 @@ export class SmtpVerifier {
   private readonly fromAddress: string;
   private readonly minIntervalMs: number;
 
+  /** MX host cache — 60-second TTL per domain */
+  private readonly mxCache = new Map<string, { mxHost: string | null; expiresAt: number }>();
+  private static readonly MX_CACHE_TTL_MS = 60_000;
+
+  /** Result cache — 24-hour TTL per email address */
+  private readonly resultCache = new Map<string, { result: SmtpVerificationResult; expiresAt: number }>();
+  private static readonly RESULT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
   constructor(config?: SmtpVerifierConfig | undefined) {
     this.timeoutMs = config?.timeoutMs ?? 10_000;
     this.heloDomain = config?.heloDomain ?? 'verify.leadflood.io';
@@ -326,10 +334,34 @@ export class SmtpVerifier {
     return true; // No external API key needed
   }
 
+  /** Remove expired entries from both caches. */
+  private cleanExpiredCache(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.mxCache) {
+      if (entry.expiresAt <= now) this.mxCache.delete(key);
+    }
+    for (const [key, entry] of this.resultCache) {
+      if (entry.expiresAt <= now) this.resultCache.delete(key);
+    }
+  }
+
+  /** Resolve MX host with caching (60s TTL). */
+  private async lookupMx(domain: string): Promise<string | null> {
+    const cached = this.mxCache.get(domain);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.mxHost;
+    }
+    const mxHost = await resolveMx(domain);
+    this.mxCache.set(domain, { mxHost, expiresAt: Date.now() + SmtpVerifier.MX_CACHE_TTL_MS });
+    return mxHost;
+  }
+
   /**
    * Verify an email address via SMTP handshake.
    */
   async verify(email: string): Promise<SmtpVerificationResult> {
+    this.cleanExpiredCache();
+
     const startMs = Date.now();
     const emailLower = email.toLowerCase().trim();
     const atIndex = emailLower.indexOf('@');
@@ -337,17 +369,27 @@ export class SmtpVerifier {
       return this.buildResult(emailLower, 'invalid', null, null, null, false, false, startMs);
     }
 
+    // Check result cache first
+    const cachedResult = this.resultCache.get(emailLower);
+    if (cachedResult && cachedResult.expiresAt > Date.now()) {
+      return cachedResult.result;
+    }
+
     const domain = emailLower.slice(atIndex + 1);
 
     // 1. Disposable domain check
     if (DISPOSABLE_DOMAINS.has(domain)) {
-      return this.buildResult(emailLower, 'disposable', null, null, null, false, true, startMs);
+      const result = this.buildResult(emailLower, 'disposable', null, null, null, false, true, startMs);
+      this.resultCache.set(emailLower, { result, expiresAt: Date.now() + SmtpVerifier.RESULT_CACHE_TTL_MS });
+      return result;
     }
 
-    // 2. MX record lookup
-    const mxHost = await resolveMx(domain);
+    // 2. MX record lookup (cached)
+    const mxHost = await this.lookupMx(domain);
     if (!mxHost) {
-      return this.buildResult(emailLower, 'no_mx', null, null, null, false, false, startMs);
+      const result = this.buildResult(emailLower, 'no_mx', null, null, null, false, false, startMs);
+      this.resultCache.set(emailLower, { result, expiresAt: Date.now() + SmtpVerifier.RESULT_CACHE_TTL_MS });
+      return result;
     }
 
     // 3. Rate limit per domain
@@ -355,13 +397,16 @@ export class SmtpVerifier {
 
     // 4. SMTP handshake
     let socket: net.Socket | null = null;
+    let smtpResult: SmtpVerificationResult;
     try {
       socket = await this.connectToMx(mxHost);
 
       // Wait for greeting
       const greeting = await waitForGreeting(socket, this.timeoutMs);
       if (greeting.code !== 220) {
-        return this.buildResult(emailLower, 'smtp_error', mxHost, greeting.code, greeting.message, false, false, startMs);
+        smtpResult = this.buildResult(emailLower, 'smtp_error', mxHost, greeting.code, greeting.message, false, false, startMs);
+        this.resultCache.set(emailLower, { result: smtpResult, expiresAt: Date.now() + SmtpVerifier.RESULT_CACHE_TTL_MS });
+        return smtpResult;
       }
 
       // EHLO/HELO
@@ -370,14 +415,18 @@ export class SmtpVerifier {
         // Try HELO fallback
         const helo = await sendSmtpCommand(socket, `HELO ${this.heloDomain}`, this.timeoutMs);
         if (helo.code !== 250) {
-          return this.buildResult(emailLower, 'smtp_error', mxHost, helo.code, helo.message, false, false, startMs);
+          smtpResult = this.buildResult(emailLower, 'smtp_error', mxHost, helo.code, helo.message, false, false, startMs);
+          this.resultCache.set(emailLower, { result: smtpResult, expiresAt: Date.now() + SmtpVerifier.RESULT_CACHE_TTL_MS });
+          return smtpResult;
         }
       }
 
       // MAIL FROM
       const mailFrom = await sendSmtpCommand(socket, `MAIL FROM:<${this.fromAddress}>`, this.timeoutMs);
       if (mailFrom.code !== 250) {
-        return this.buildResult(emailLower, 'smtp_error', mxHost, mailFrom.code, mailFrom.message, false, false, startMs);
+        smtpResult = this.buildResult(emailLower, 'smtp_error', mxHost, mailFrom.code, mailFrom.message, false, false, startMs);
+        this.resultCache.set(emailLower, { result: smtpResult, expiresAt: Date.now() + SmtpVerifier.RESULT_CACHE_TTL_MS });
+        return smtpResult;
       }
 
       // RCPT TO — the actual verification
@@ -404,24 +453,19 @@ export class SmtpVerifier {
       // Determine status
       if (rcptTo.code === 250) {
         const status: SmtpVerificationStatus = isCatchAll ? 'catch_all' : 'valid';
-        return this.buildResult(emailLower, status, mxHost, rcptTo.code, rcptTo.message, isCatchAll, false, startMs);
+        smtpResult = this.buildResult(emailLower, status, mxHost, rcptTo.code, rcptTo.message, isCatchAll, false, startMs);
+      } else if (rcptTo.code >= 550 && rcptTo.code <= 559) {
+        // 550-559 = mailbox doesn't exist
+        smtpResult = this.buildResult(emailLower, 'invalid', mxHost, rcptTo.code, rcptTo.message, false, false, startMs);
+      } else if (rcptTo.code >= 450 && rcptTo.code <= 459) {
+        // 450-459 = temporary failure (greylisting) — treat as valid-ish
+        smtpResult = this.buildResult(emailLower, 'valid', mxHost, rcptTo.code, rcptTo.message, false, false, startMs);
+      } else {
+        smtpResult = this.buildResult(emailLower, 'smtp_error', mxHost, rcptTo.code, rcptTo.message, false, false, startMs);
       }
-
-      // 550, 551, 552, 553 = mailbox doesn't exist
-      if (rcptTo.code >= 550 && rcptTo.code <= 559) {
-        return this.buildResult(emailLower, 'invalid', mxHost, rcptTo.code, rcptTo.message, false, false, startMs);
-      }
-
-      // 450, 451, 452 = temporary failure (greylisting, etc.)
-      // Treat as valid-ish since greylisting means the server is at least real
-      if (rcptTo.code >= 450 && rcptTo.code <= 459) {
-        return this.buildResult(emailLower, 'valid', mxHost, rcptTo.code, rcptTo.message, false, false, startMs);
-      }
-
-      return this.buildResult(emailLower, 'smtp_error', mxHost, rcptTo.code, rcptTo.message, false, false, startMs);
     } catch (err: unknown) {
       const isTimeout = err instanceof Error && err.message.includes('timeout');
-      return this.buildResult(
+      smtpResult = this.buildResult(
         emailLower,
         isTimeout ? 'timeout' : 'smtp_error',
         mxHost,
@@ -431,11 +475,17 @@ export class SmtpVerifier {
         false,
         startMs,
       );
+      // Don't cache transient errors (timeout, smtp_error) — they may resolve on retry
+      return smtpResult;
     } finally {
       if (socket && !socket.destroyed) {
         socket.destroy();
       }
     }
+
+    // Cache definitive results (valid, invalid, catch_all)
+    this.resultCache.set(emailLower, { result: smtpResult, expiresAt: Date.now() + SmtpVerifier.RESULT_CACHE_TTL_MS });
+    return smtpResult;
   }
 
   /**

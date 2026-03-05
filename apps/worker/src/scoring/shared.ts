@@ -83,7 +83,7 @@ export const TRAINED_MODEL_FEATURE_KEYS = [
   'has_decision_maker_phone',
   // ── v2.1 additions (enhanced scraper features) ──
   'decision_maker_count',
-  'has_executive_contact',
+  'apollo_has_direct_phone',
   'website_email_count',
   'website_phone_count',
   'social_link_count',

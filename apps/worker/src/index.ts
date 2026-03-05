@@ -14,8 +14,6 @@ import {
   ApolloDiscoveryAdapter,
   HunterEnrichmentAdapter,
   InstagramScraperAdapter,
-  PdlEnrichmentAdapter,
-  PublicWebLookupAdapter,
   OpenAiAdapter,
   ResendAdapter,
   TrengoAdapter,
@@ -54,13 +52,8 @@ import {
   type DiscoverySeedJobPayload,
 } from './jobs/discovery.seed.job.js';
 import {
-  ENRICHMENT_RUN_JOB_NAME,
-  ENRICHMENT_RUN_RETRY_OPTIONS,
-  handleEnrichmentRunJob,
-  type EnrichmentRunJobPayload,
-} from './jobs/enrichment.run.job.js';
-import {
   FEATURES_COMPUTE_JOB_NAME,
+  FEATURES_COMPUTE_RETRY_OPTIONS,
   handleFeaturesComputeJob,
   type FeaturesComputeJobPayload,
 } from './jobs/features.compute.job.js';
@@ -124,6 +117,12 @@ import {
   type ScoringComputeJobPayload,
 } from './jobs/scoring.compute.job.js';
 import {
+  APOLLO_ENRICH_JOB_NAME,
+  APOLLO_ENRICH_RETRY_OPTIONS,
+  handleApolloEnrichJob,
+  type ApolloEnrichJobPayload,
+} from './jobs/apollo.enrich.job.js';
+import {
   SCORING_BATCH_JOB_NAME,
   handleScoringBatchJob,
   type ScoringBatchJobPayload,
@@ -157,8 +156,6 @@ import { buildDefaultWorkerId, startJobRequestDispatcher } from './job-requests/
 import { EmailRateLimiter } from './messaging/email-rate-limiter.js';
 import { WhatsAppRateLimiter } from './messaging/rate-limiter.js';
 import { dispatchPendingOutboxEvents } from './outbox-dispatcher.js';
-import { ProviderBudgetTracker } from './utils/provider-budget.js';
-import { EnrichmentProviderRotator } from './utils/provider-rotation.js';
 import { ensureWorkerQueues, HEARTBEAT_QUEUE_NAME } from './queues.js';
 import { registerWorkerSchedules } from './schedules.js';
 
@@ -251,22 +248,11 @@ async function main(): Promise<void> {
     minRequestIntervalMs: env.APOLLO_RATE_LIMIT_MS,
   });
 
-  const pdlAdapter = new PdlEnrichmentAdapter({
-    apiKey: env.PDL_API_KEY ?? '',
-    baseUrl: env.PDL_BASE_URL,
-    minRequestIntervalMs: env.PDL_RATE_LIMIT_MS,
-  });
-
   const hunterAdapter = new HunterEnrichmentAdapter({
     enabled: env.HUNTER_ENABLED,
     apiKey: env.HUNTER_API_KEY,
     baseUrl: env.HUNTER_BASE_URL,
     minRequestIntervalMs: env.HUNTER_RATE_LIMIT_MS,
-  });
-
-  const publicWebLookupAdapter = new PublicWebLookupAdapter({
-    enabled: env.OTHER_FREE_ENRICHMENT_ENABLED,
-    baseUrl: env.PUBLIC_LOOKUP_BASE_URL,
   });
 
   const websiteScraperAdapter = new WebsiteScraperAdapter({
@@ -409,8 +395,6 @@ async function main(): Promise<void> {
     maxDaily: env.EMAIL_DAILY_SEND_LIMIT,
   });
 
-  const providerBudgetTracker = new ProviderBudgetTracker();
-  const enrichmentProviderRotator = new EnrichmentProviderRotator();
 
   let outboxDispatchRunning = false;
   const runOutboxDispatch = async (): Promise<void> => {
@@ -537,7 +521,7 @@ async function main(): Promise<void> {
     stopJobRequestDispatcher = dispatcher.stop;
   }
 
-  // ── New pipeline: business.prequalify → business.convert → enrichment.run ──
+  // ── Pipeline: business.prequalify → business.convert → features.compute ──
   await registerWorker<BusinessPrequalifyJobPayload>(
     boss,
     logger,
@@ -576,19 +560,20 @@ async function main(): Promise<void> {
         instagramScraperAdapter,
         smtpVerifier: new SmtpVerifier(),
         openAiAdapter: openAiAdapter.isConfigured ? openAiAdapter : undefined,
-        enqueueEnrichmentRun: async (payload) => {
-          const enrichmentPayload: EnrichmentRunJobPayload = {
+        enqueueFeaturesCompute: async (payload) => {
+          const featuresPayload: FeaturesComputeJobPayload = {
             runId: payload.runId,
             leadId: payload.leadId,
             icpProfileId: payload.icpProfileId,
+            snapshotVersion: payload.snapshotVersion,
             ...(payload.correlationId !== undefined ? { correlationId: payload.correlationId } : {}),
           };
           await boss.send(
-            ENRICHMENT_RUN_JOB_NAME,
-            enrichmentPayload,
+            FEATURES_COMPUTE_JOB_NAME,
+            featuresPayload,
             {
-              singletonKey: `enrichment.run:${payload.leadId}`,
-              ...ENRICHMENT_RUN_RETRY_OPTIONS,
+              singletonKey: `features.compute:${payload.leadId}:${payload.snapshotVersion}`,
+              ...FEATURES_COMPUTE_RETRY_OPTIONS,
             },
           );
         },
@@ -600,28 +585,6 @@ async function main(): Promise<void> {
     },
   );
 
-  await registerWorker<EnrichmentRunJobPayload>(
-    boss,
-    logger,
-    ENRICHMENT_RUN_JOB_NAME,
-    (jobLogger, job) =>
-      handleEnrichmentRunJob(jobLogger, job, {
-        boss,
-        pdlAdapter,
-        hunterAdapter,
-        publicWebLookupAdapter,
-        enrichmentEnabled: env.ENRICHMENT_ENABLED,
-        pdlEnabled: env.PDL_ENABLED,
-        hunterEnabled: env.HUNTER_ENABLED,
-        otherFreeEnabled: env.OTHER_FREE_ENRICHMENT_ENABLED,
-        defaultProvider: env.ENRICHMENT_DEFAULT_PROVIDER,
-        providerRotator: enrichmentProviderRotator,
-        budgetTracker: providerBudgetTracker,
-      }),
-    {
-      pollingIntervalSeconds: 1,
-    },
-  );
   await registerWorker<FeaturesComputeJobPayload>(
     boss,
     logger,
@@ -659,6 +622,12 @@ async function main(): Promise<void> {
         openAiAdapter,
         deterministicWeight: env.SCORING_DETERMINISTIC_WEIGHT,
         aiWeight: env.SCORING_AI_WEIGHT,
+        enqueueApolloEnrich: async (payload) => {
+          await boss.send(APOLLO_ENRICH_JOB_NAME, payload, {
+            singletonKey: `apollo.enrich:${payload.leadId}:${payload.icpProfileId}`,
+            ...APOLLO_ENRICH_RETRY_OPTIONS,
+          });
+        },
         enqueueMessageGenerate: async (payload) => {
           await boss.send(MESSAGE_GENERATE_JOB_NAME, payload, {
             singletonKey: `message.generate:${payload.leadId}:${payload.icpProfileId}`,
@@ -669,6 +638,24 @@ async function main(): Promise<void> {
     {
       pollingIntervalSeconds: 1,
     },
+  );
+  await registerWorker<ApolloEnrichJobPayload>(
+    boss,
+    logger,
+    APOLLO_ENRICH_JOB_NAME,
+    (jobLogger, job) =>
+      handleApolloEnrichJob(jobLogger, job, {
+        apolloAdapter: {
+          searchContactsByDomain: (d) => apolloAdapter.searchContactsByDomain(d),
+          isConfigured: Boolean(env.APOLLO_API_KEY),
+        },
+        enqueueMessageGenerate: async (payload) => {
+          await boss.send(MESSAGE_GENERATE_JOB_NAME, payload, {
+            singletonKey: `message.generate:${payload.leadId}:${payload.icpProfileId}`,
+            ...MESSAGE_GENERATE_RETRY_OPTIONS,
+          });
+        },
+      }),
   );
   await registerWorker<ScoringBatchJobPayload>(
     boss,

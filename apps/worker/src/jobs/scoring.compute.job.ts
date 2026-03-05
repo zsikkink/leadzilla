@@ -56,6 +56,16 @@ export interface ScoringComputeJobDependencies {
     correlationId?: string | undefined;
     channel?: string | undefined;
   }) => Promise<void>) | undefined;
+  enqueueApolloEnrich?: ((payload: {
+    leadId: string;
+    icpProfileId: string;
+    scorePredictionId: string;
+    runId: string;
+    scoreBand: 'LOW' | 'MEDIUM' | 'HIGH';
+    apolloHasEmail: boolean;
+    apolloHasDirectPhone: boolean;
+    correlationId?: string | undefined;
+  }) => Promise<void>) | undefined;
 }
 
 export async function handleScoringComputeJob(
@@ -288,22 +298,48 @@ export async function handleScoringComputeJob(
 
         persistedPredictions += 1;
 
-        if (deps?.enqueueMessageGenerate && blendedScore >= qualificationThreshold) {
-          const phoneData = leadPhoneMap.get(targetLeadId);
-          const hasPhone = Boolean(phoneData?.decisionMakerPhone || phoneData?.phone);
-          const channel = blendedScore >= 0.67 && hasPhone ? 'WHATSAPP' : 'EMAIL';
-          await deps.enqueueMessageGenerate({
-            leadId: targetLeadId,
-            icpProfileId: targetIcpId,
-            scorePredictionId: prediction.id,
-            runId,
-            correlationId: effectiveCorrelationId,
-            channel,
-          });
-          logger.info(
-            { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, blendedScore },
-            'Enqueued message.generate for qualifying lead',
-          );
+        if (blendedScore >= qualificationThreshold) {
+          // Prefer apollo.enrich (post-scoring reveal) over direct message.generate
+          if (deps?.enqueueApolloEnrich) {
+            // Look up BusinessConversion for apolloHasEmail/apolloHasDirectPhone
+            const businessConversion = await prisma.businessConversion.findFirst({
+              where: { leadId: targetLeadId, icpProfileId: targetIcpId },
+              select: { apolloHasEmail: true, apolloHasDirectPhone: true },
+              orderBy: { createdAt: 'desc' },
+            });
+
+            await deps.enqueueApolloEnrich({
+              leadId: targetLeadId,
+              icpProfileId: targetIcpId,
+              scorePredictionId: prediction.id,
+              runId,
+              scoreBand: scoreBand as 'LOW' | 'MEDIUM' | 'HIGH',
+              apolloHasEmail: businessConversion?.apolloHasEmail ?? false,
+              apolloHasDirectPhone: businessConversion?.apolloHasDirectPhone ?? false,
+              correlationId: effectiveCorrelationId,
+            });
+            logger.info(
+              { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, blendedScore, scoreBand },
+              'Enqueued apollo.enrich for qualifying lead',
+            );
+          } else if (deps?.enqueueMessageGenerate) {
+            // Fallback: direct to message.generate if apollo.enrich not wired
+            const phoneData = leadPhoneMap.get(targetLeadId);
+            const hasPhone = Boolean(phoneData?.decisionMakerPhone || phoneData?.phone);
+            const channel = blendedScore >= 0.67 && hasPhone ? 'WHATSAPP' : 'EMAIL';
+            await deps.enqueueMessageGenerate({
+              leadId: targetLeadId,
+              icpProfileId: targetIcpId,
+              scorePredictionId: prediction.id,
+              runId,
+              correlationId: effectiveCorrelationId,
+              channel,
+            });
+            logger.info(
+              { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, blendedScore },
+              'Enqueued message.generate for qualifying lead (no apollo.enrich)',
+            );
+          }
         }
       }
     }

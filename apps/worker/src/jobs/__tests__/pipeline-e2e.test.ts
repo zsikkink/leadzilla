@@ -5,7 +5,7 @@
  * with mocked external HTTP calls (PDL, OpenAI, Resend, Trengo, Slack).
  *
  * Pipeline under test:
- *   enrichment → features → scoring → message.generate → message.send (email)
+ *   features → scoring → message.generate → message.send (email)
  *   → 3× follow-up cycle (followup.check → message.generate → message.send WhatsApp)
  *   → reply classification → sales notification → analytics rollup
  */
@@ -13,7 +13,6 @@ import { randomUUID } from 'node:crypto';
 
 import { type Prisma, prisma } from '@lead-flood/db';
 import {
-  PdlEnrichmentAdapter,
   OpenAiAdapter,
   ResendAdapter,
   TrengoAdapter,
@@ -21,8 +20,6 @@ import {
 import type { ReplyClassifyJobPayload } from '@lead-flood/contracts';
 import type { Job } from 'pg-boss';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-
-import { handleEnrichmentRunJob, type EnrichmentRunJobPayload, type EnrichmentRunDependencies } from '../enrichment.run.job.js';
 import { handleFeaturesComputeJob, type FeaturesComputeJobPayload, type FeaturesComputeDependencies } from '../features.compute.job.js';
 import { handleScoringComputeJob, type ScoringComputeJobPayload, type ScoringComputeJobDependencies } from '../scoring.compute.job.js';
 import { handleMessageGenerateJob, type MessageGenerateJobPayload, type MessageGenerateJobDependencies } from '../message.generate.job.js';
@@ -75,30 +72,6 @@ const mockBoss = { send: bossSendSpy };
 // ---------------------------------------------------------------------------
 // Mock fetch factories
 // ---------------------------------------------------------------------------
-
-function makePdlFetch(): typeof fetch {
-  return vi.fn().mockResolvedValue(
-    new Response(
-      JSON.stringify({
-        work_email: `${TEST_PREFIX}@zbooni.test`,
-        mobile_phone: '+971501234567',
-        location_country: 'united arab emirates',
-        location_locality: 'Dubai',
-        linkedin_url: 'https://linkedin.com/in/e2e-test',
-        experience: [
-          {
-            company: 'Zbooni Test Corp',
-            industry: 'Financial Services',
-            company_domain: 'zbooni-test.com',
-            company_size: 150,
-            company_website: 'https://zbooni-test.com',
-          },
-        ],
-      }),
-      { status: 200, headers: { 'content-type': 'application/json' } },
-    ),
-  ) as unknown as typeof fetch;
-}
 
 function makeOpenAiGenerateFetch(): typeof fetch {
   // Return a fresh Response per call to avoid "Body has already been read" errors
@@ -187,14 +160,6 @@ function makeSlackFetch(): typeof fetch {
 // Adapter factories
 // ---------------------------------------------------------------------------
 
-function makePdlAdapter(): PdlEnrichmentAdapter {
-  return new PdlEnrichmentAdapter({
-    apiKey: 'test-pdl-key',
-    baseUrl: 'https://api.peopledatalabs.test/v5',
-    fetchImpl: makePdlFetch(),
-  });
-}
-
 function makeOpenAiGenerateAdapter(): OpenAiAdapter {
   return new OpenAiAdapter({
     apiKey: 'test-openai-key',
@@ -273,13 +238,14 @@ describe('pipeline full lifecycle', () => {
       },
     });
 
-    // Seed Lead
+    // Seed Lead (pre-populated with phone that business.convert provides in new pipeline)
     await prisma.lead.create({
       data: {
         id: LEAD_ID,
         firstName: 'Pipeline',
         lastName: 'Tester',
         email: LEAD_EMAIL,
+        phone: '+971501234567',
         source: 'e2e-test',
         status: 'new',
       },
@@ -295,7 +261,12 @@ describe('pipeline full lifecycle', () => {
         providerRecordId: `apollo-e2e-${TEST_PREFIX}`,
         queryHash: `e2e-${TEST_PREFIX}`,
         status: 'DISCOVERED',
-        rawPayload: { source: 'e2e-test' },
+        rawPayload: {
+          source: 'e2e-test',
+          companyName: 'Zbooni Test Corp',
+          industry: 'Financial Services',
+          country: 'AE',
+        },
         discoveredAt: new Date(),
       },
     });
@@ -348,48 +319,9 @@ describe('pipeline full lifecycle', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Stage 1: Enrichment
+  // Stage 1: Feature extraction (directly from pre-seeded lead)
   // -----------------------------------------------------------------------
-  it('stage 1: enrichment.run enriches the lead via PDL', async () => {
-    const payload: EnrichmentRunJobPayload = {
-      runId: RUN_ID,
-      leadId: LEAD_ID,
-      provider: 'PEOPLE_DATA_LABS',
-      icpProfileId: ICP_ID,
-      correlationId: `corr-${RUN_ID}`,
-    };
-
-    const stubHunter = { enrichLead: vi.fn() } as unknown as EnrichmentRunDependencies['hunterAdapter'];
-    const stubPublicWeb = { enrichLead: vi.fn() } as unknown as EnrichmentRunDependencies['publicWebLookupAdapter'];
-
-    const deps: EnrichmentRunDependencies = {
-      boss: mockBoss,
-      pdlAdapter: makePdlAdapter(),
-      hunterAdapter: stubHunter,
-      publicWebLookupAdapter: stubPublicWeb,
-      enrichmentEnabled: true,
-      pdlEnabled: true,
-      hunterEnabled: false,
-      otherFreeEnabled: false,
-      defaultProvider: 'PEOPLE_DATA_LABS',
-    };
-
-    await handleEnrichmentRunJob(noopLogger, makeJob(payload, 'enrichment.run'), deps);
-
-    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: LEAD_ID } });
-    expect(lead.status).toBe('enriched');
-    expect(lead.phone).toBe('+971501234567');
-
-    const records = await prisma.leadEnrichmentRecord.findMany({ where: { leadId: LEAD_ID } });
-    const completed = records.find((r) => r.status === 'COMPLETED');
-    expect(completed).toBeTruthy();
-    expect(completed!.provider).toBe('PEOPLE_DATA_LABS');
-  });
-
-  // -----------------------------------------------------------------------
-  // Stage 2: Feature extraction
-  // -----------------------------------------------------------------------
-  it('stage 2: features.compute extracts feature vector', async () => {
+  it('stage 1: features.compute extracts feature vector', async () => {
     bossSendSpy.mockClear();
 
     const payload: FeaturesComputeJobPayload = {
@@ -422,7 +354,7 @@ describe('pipeline full lifecycle', () => {
   // -----------------------------------------------------------------------
   // Stage 3: Scoring
   // -----------------------------------------------------------------------
-  it('stage 3: scoring.compute produces a score prediction', async () => {
+  it('stage 2: scoring.compute produces a score prediction', async () => {
     bossSendSpy.mockClear();
 
     const payload: ScoringComputeJobPayload = {
@@ -452,7 +384,7 @@ describe('pipeline full lifecycle', () => {
   // -----------------------------------------------------------------------
   // Stage 4: Message generation (initial outreach)
   // -----------------------------------------------------------------------
-  it('stage 4: message.generate creates initial draft + auto-approved variants', async () => {
+  it('stage 3: message.generate creates initial draft + auto-approved variants', async () => {
     bossSendSpy.mockClear();
 
     const prediction = await prisma.leadScorePrediction.findFirst({
@@ -504,7 +436,7 @@ describe('pipeline full lifecycle', () => {
   // -----------------------------------------------------------------------
   // Stage 5: Email send (initial outreach, followUpNumber=0)
   // -----------------------------------------------------------------------
-  it('stage 5: message.send delivers initial email via Resend', async () => {
+  it('stage 4: message.send delivers initial email via Resend', async () => {
     bossSendSpy.mockClear();
 
     const send = await prisma.messageSend.findFirst({
@@ -985,7 +917,7 @@ describe('pipeline full lifecycle', () => {
     });
     expect(rollup).toBeTruthy();
     expect(rollup!.discoveredCount).toBeGreaterThanOrEqual(1);
-    expect(rollup!.enrichedCount).toBeGreaterThanOrEqual(1);
+    // enrichedCount is 0 in new pipeline (enrichment.run removed)
     expect(rollup!.scoredCount).toBeGreaterThanOrEqual(1);
   });
 
@@ -996,17 +928,10 @@ describe('pipeline full lifecycle', () => {
     // Lead should be in 'replied' state (after interested reply)
     const lead = await prisma.lead.findUniqueOrThrow({ where: { id: LEAD_ID } });
     expect(lead.status).toBe('replied');
-    expect(lead.phone).toBe('+971501234567');
 
     // Discovery record
     const discovery = await prisma.leadDiscoveryRecord.findMany({ where: { leadId: LEAD_ID } });
     expect(discovery.length).toBeGreaterThanOrEqual(1);
-
-    // Enrichment record
-    const enrichment = await prisma.leadEnrichmentRecord.findMany({
-      where: { leadId: LEAD_ID, status: 'COMPLETED' },
-    });
-    expect(enrichment.length).toBeGreaterThanOrEqual(1);
 
     // Feature snapshot
     const features = await prisma.leadFeatureSnapshot.findMany({

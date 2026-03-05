@@ -386,7 +386,7 @@ async function main(): Promise<void> {
       await prisma.leadEnrichmentRecord.create({
         data: {
           leadId: lead.id,
-          provider: 'OTHER_FREE',
+          provider: 'HUNTER',
           status: 'COMPLETED',
           normalizedPayload: JSON.parse(JSON.stringify(enrichmentPayload)),
           rawPayload: JSON.parse(JSON.stringify(leadData.enrichmentData)),

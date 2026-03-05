@@ -9,10 +9,12 @@ import {
   Hash,
   Instagram,
   Linkedin,
+  Loader2,
   Mail,
   MapPin,
   Monitor,
   Phone,
+  RefreshCw,
   Shield,
   User,
   Users,
@@ -21,7 +23,7 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { LeadStatusBadge } from '../../../../src/components/lead-status-badge.js';
 import { ScoreBandBadge } from '../../../../src/components/score-band-badge.js';
@@ -557,6 +559,46 @@ export default function LeadDetailPage() {
     return () => { cancelled = true; };
   }, [id]);
 
+  // Backup contact rotation
+  const [isCreatingBackup, setIsCreatingBackup] = useState(false);
+  const [backupSuccess, setBackupSuccess] = useState<string | null>(null);
+
+  const backupContacts = useMemo(() => {
+    if (!lead.data) return [];
+    const currentEmail = lead.data.email?.toLowerCase();
+    return teamMembers.filter((tm) => tm.email && tm.email.toLowerCase() !== currentEmail);
+  }, [teamMembers, lead.data]);
+
+  const maxFollowUpNumber = useMemo(() => {
+    if (!sends.data?.items.length) return -1;
+    return Math.max(...sends.data.items.map((s) => s.followUpNumber ?? 0));
+  }, [sends.data]);
+
+  const hasReply = sends.data?.items.some((s) => s.status === 'REPLIED') ?? false;
+  const showBackupBanner = maxFollowUpNumber >= 3 && !hasReply && backupContacts.length > 0;
+  const nextBackup = backupContacts[0];
+
+  const handleStartBackupSequence = async (contact: typeof backupContacts[0]) => {
+    if (!contact.email) return;
+    setIsCreatingBackup(true);
+    try {
+      const nameParts = contact.fullName.split(' ');
+      const firstName = nameParts[0] ?? contact.fullName;
+      const lastName = nameParts.slice(1).join(' ') || 'Unknown';
+      await apiClient.createLead({
+        firstName,
+        lastName,
+        email: contact.email,
+        source: 'BACKUP_CONTACT_ROTATION',
+      });
+      setBackupSuccess(`New lead created for ${contact.fullName}. Message generation will start automatically.`);
+    } catch (err) {
+      setBackupSuccess(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setIsCreatingBackup(false);
+    }
+  };
+
   if (lead.error) {
     return <p className="text-sm text-destructive">{lead.error}</p>;
   }
@@ -843,6 +885,55 @@ export default function LeadDetailPage() {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Backup Contact Rotation Banner */}
+      {showBackupBanner && nextBackup ? (
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-5 shadow-sm">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/10">
+              <RefreshCw className="h-5 w-5 text-amber-400" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-bold text-amber-300">
+                No reply after {maxFollowUpNumber} follow-ups
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Start a new sequence with{' '}
+                <strong className="text-foreground">{nextBackup.fullName}</strong>
+                {nextBackup.jobTitle ? (
+                  <span className="text-muted-foreground/60">, {nextBackup.jobTitle}</span>
+                ) : null}
+                {' '}({nextBackup.email})
+              </p>
+              {backupContacts.length > 1 ? (
+                <p className="mt-0.5 text-[11px] text-muted-foreground/50">
+                  +{backupContacts.length - 1} more backup contact{backupContacts.length > 2 ? 's' : ''} available
+                </p>
+              ) : null}
+
+              {backupSuccess ? (
+                <p className={`mt-2 text-xs ${backupSuccess.startsWith('Failed') ? 'text-red-400' : 'text-zbooni-green'}`}>
+                  {backupSuccess}
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => handleStartBackupSequence(nextBackup)}
+                  disabled={isCreatingBackup}
+                  className="mt-3 inline-flex items-center gap-2 rounded-lg bg-amber-500/20 px-3.5 py-2 text-xs font-semibold text-amber-300 transition-colors hover:bg-amber-500/30 disabled:opacity-50"
+                >
+                  {isCreatingBackup ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                  Start New Sequence with {nextBackup.fullName.split(' ')[0]}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       ) : null}

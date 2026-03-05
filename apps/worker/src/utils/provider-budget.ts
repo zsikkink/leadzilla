@@ -172,7 +172,6 @@ export const PROVIDER_COST_CENTS: Record<string, number> = {
   LINKEDIN_SCRAPE: 1,
   COMPANY_SEARCH_FREE: 0,
   CLEARBIT: 5,
-  OTHER_FREE: 0,
 };
 
 /**

@@ -47,7 +47,6 @@ const ApiEnvSchema = z.object({
   HUNTER_API_KEY: z.string().min(1).optional(),
   CLEARBIT_ENABLED: z.coerce.boolean().optional(),
   CLEARBIT_API_KEY: z.string().min(1).optional(),
-  OTHER_FREE_ENRICHMENT_ENABLED: z.coerce.boolean().optional(),
   DISCOVERY_ENABLED: z.coerce.boolean().optional(),
   ENRICHMENT_ENABLED: z.coerce.boolean().optional(),
   OPENAI_API_KEY: z.string().min(1).optional(),

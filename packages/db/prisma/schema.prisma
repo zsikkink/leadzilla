@@ -82,7 +82,6 @@ enum DiscoveryRecordStatus {
 enum EnrichmentProvider {
   HUNTER
   CLEARBIT
-  OTHER_FREE
   PEOPLE_DATA_LABS
 }
 
@@ -844,10 +843,12 @@ model BusinessConversion {
   icpProfileId       String?
   apolloContactJson  Json?
   hunterContactJson  Json?
-  metadata           Json?
-  businessInsights   String?
-  convertedAt        DateTime @default(now())
-  createdAt         DateTime @default(now())
+  metadata              Json?
+  businessInsights      String?
+  apolloHasEmail        Boolean?   @map("apollo_has_email")
+  apolloHasDirectPhone  Boolean?   @map("apollo_has_direct_phone")
+  convertedAt           DateTime @default(now())
+  createdAt             DateTime @default(now())
 
   @@unique([businessId, leadId])
   @@index([businessId])

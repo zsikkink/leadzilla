@@ -1,31 +1,24 @@
 /**
  * Full pipeline chain E2E integration test
  *
- * Tests the pipeline chain from enrichment through message.send against a real
+ * Tests the pipeline chain from features.compute through message.send against a real
  * PostgreSQL database with ALL external adapters mocked at the fetch level.
  *
  * Pipeline under test:
- *   [pre-seeded lead] → enrichment.run (PDL) → features.compute
- *   → scoring.compute → message.generate (PENDING approval)
- *   → manual approval → message.send (Resend for email, Trengo for WhatsApp)
+ *   [pre-seeded lead] → features.compute → scoring.compute
+ *   → message.generate (PENDING approval) → manual approval
+ *   → message.send (Resend for email, Trengo for WhatsApp)
  */
 import { randomUUID } from 'node:crypto';
 
 import { type Prisma, prisma } from '@lead-flood/db';
 import {
-  PdlEnrichmentAdapter,
   OpenAiAdapter,
   ResendAdapter,
   TrengoAdapter,
 } from '@lead-flood/providers';
 import type { Job } from 'pg-boss';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-
-import {
-  handleEnrichmentRunJob,
-  type EnrichmentRunJobPayload,
-  type EnrichmentRunDependencies,
-} from '../enrichment.run.job.js';
 import {
   handleFeaturesComputeJob,
   type FeaturesComputeJobPayload,
@@ -95,30 +88,6 @@ const APOLLO_PERSON_ID = `apollo-${randomUUID()}`;
 const DISCOVERED_EMAIL = `${TEST_PREFIX}@zbooni-fullchain.test`;
 const DISCOVERED_FIRST_NAME = 'Khalid';
 const DISCOVERED_LAST_NAME = 'Al-Rashidi';
-
-function makePdlFetch(): typeof fetch {
-  return vi.fn().mockResolvedValue(
-    new Response(
-      JSON.stringify({
-        work_email: DISCOVERED_EMAIL,
-        mobile_phone: '+971509876543',
-        location_country: 'united arab emirates',
-        location_locality: 'Dubai',
-        linkedin_url: 'https://linkedin.com/in/khalid-fullchain',
-        experience: [
-          {
-            company: 'FullChain Test Corp',
-            industry: 'Financial Services',
-            company_domain: 'fullchain-test.com',
-            company_size: 200,
-            company_website: 'https://fullchain-test.com',
-          },
-        ],
-      }),
-      { status: 200, headers: { 'content-type': 'application/json' } },
-    ),
-  ) as unknown as typeof fetch;
-}
 
 function makeOpenAiScoringFetch(): typeof fetch {
   return vi.fn().mockImplementation(() =>
@@ -208,14 +177,6 @@ function makeTrengoFetch(): typeof fetch {
 // Adapter factories
 // ---------------------------------------------------------------------------
 
-function makePdlAdapter(): PdlEnrichmentAdapter {
-  return new PdlEnrichmentAdapter({
-    apiKey: 'test-pdl-key',
-    baseUrl: 'https://api.peopledatalabs.test/v5',
-    fetchImpl: makePdlFetch(),
-  });
-}
-
 function makeOpenAiScoringAdapter(): OpenAiAdapter {
   return new OpenAiAdapter({
     apiKey: 'test-openai-key',
@@ -276,7 +237,7 @@ function extractBossPayload<T>(queueName: string): T {
 // Test suite
 // ---------------------------------------------------------------------------
 
-describe('pipeline full chain: enrichment → message.send', () => {
+describe('pipeline full chain: features.compute → message.send', () => {
   beforeAll(async () => {
     // Seed IcpProfile
     await prisma.icpProfile.create({
@@ -292,11 +253,13 @@ describe('pipeline full chain: enrichment → message.send', () => {
     });
 
     // Seed lead + discovery record (replaces legacy discovery.run stage)
+    // In the new pipeline, business.convert pre-populates lead with phone data
     const lead = await prisma.lead.create({
       data: {
         firstName: DISCOVERED_FIRST_NAME,
         lastName: DISCOVERED_LAST_NAME,
         email: DISCOVERED_EMAIL,
+        phone: '+971509876543',
         source: 'apollo',
         status: 'new',
       },
@@ -315,6 +278,9 @@ describe('pipeline full chain: enrichment → message.send', () => {
           first_name: DISCOVERED_FIRST_NAME,
           last_name: DISCOVERED_LAST_NAME,
           email: DISCOVERED_EMAIL,
+          companyName: 'FullChain Test Corp',
+          industry: 'Financial Services',
+          country: 'AE',
           organization: { name: 'FullChain Test Corp', primary_domain: 'fullchain-test.com' },
         } as unknown as Prisma.InputJsonValue,
       },
@@ -356,61 +322,16 @@ describe('pipeline full chain: enrichment → message.send', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Stage 2: Enrichment — PDL enriches the lead
+  // Stage 2: Feature extraction (directly from pre-seeded lead)
   // -----------------------------------------------------------------------
-  it('stage 2: enrichment.run enriches the lead via PDL and enqueues features', async () => {
-    // Build enrichment payload from known data (avoids spy extraction timing issues)
-    const enrichmentPayload: EnrichmentRunJobPayload = {
+  it('stage 2: features.compute extracts feature vector and enqueues scoring', async () => {
+    const featuresPayload: FeaturesComputeJobPayload = {
       runId: RUN_ID,
       leadId: discoveredLeadId,
-      provider: 'PEOPLE_DATA_LABS',
       icpProfileId: ICP_ID,
+      snapshotVersion: 1,
       correlationId: `corr-${RUN_ID}`,
     };
-
-    const stubHunter = { enrichLead: vi.fn() } as unknown as EnrichmentRunDependencies['hunterAdapter'];
-    const stubPublicWeb = { enrichLead: vi.fn() } as unknown as EnrichmentRunDependencies['publicWebLookupAdapter'];
-
-    const deps: EnrichmentRunDependencies = {
-      boss: mockBoss,
-      pdlAdapter: makePdlAdapter(),
-      hunterAdapter: stubHunter,
-      publicWebLookupAdapter: stubPublicWeb,
-      enrichmentEnabled: true,
-      pdlEnabled: true,
-      hunterEnabled: false,
-      otherFreeEnabled: false,
-      defaultProvider: 'PEOPLE_DATA_LABS',
-    };
-
-    bossSendSpy.mockClear();
-    await handleEnrichmentRunJob(noopLogger, makeJob(enrichmentPayload, 'enrichment.run'), deps);
-
-    // Verify lead was enriched
-    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: discoveredLeadId } });
-    expect(lead.status).toBe('enriched');
-    expect(lead.phone).toBe('+971509876543');
-
-    // Verify enrichment record
-    const enrichmentRecords = await prisma.leadEnrichmentRecord.findMany({
-      where: { leadId: discoveredLeadId },
-    });
-    const completed = enrichmentRecords.find((r) => r.status === 'COMPLETED');
-    expect(completed).toBeTruthy();
-    expect(completed!.provider).toBe('PEOPLE_DATA_LABS');
-
-    // Verify features.compute was enqueued
-    const featuresPayload = extractBossPayload<FeaturesComputeJobPayload>('features.compute');
-    expect(featuresPayload.leadId).toBe(discoveredLeadId);
-    expect(featuresPayload.icpProfileId).toBe(ICP_ID);
-  });
-
-  // -----------------------------------------------------------------------
-  // Stage 3: Feature extraction
-  // -----------------------------------------------------------------------
-  it('stage 3: features.compute extracts feature vector and enqueues scoring', async () => {
-    // Build features payload from enrichment's boss.send output
-    const featuresPayload = extractBossPayload<FeaturesComputeJobPayload>('features.compute');
 
     const deps: FeaturesComputeDependencies = {
       boss: mockBoss,
@@ -440,7 +361,7 @@ describe('pipeline full chain: enrichment → message.send', () => {
   // -----------------------------------------------------------------------
   // Stage 4: Scoring — produces predictions with blendedScore >= 0.5
   // -----------------------------------------------------------------------
-  it('stage 4: scoring.compute produces a prediction with blendedScore >= 0.5', async () => {
+  it('stage 3: scoring.compute produces a prediction with blendedScore >= 0.5', async () => {
     // Extract scoring payload from features stage's boss.send
     const scoringPayload = extractBossPayload<ScoringComputeJobPayload>('scoring.compute');
 
@@ -475,7 +396,7 @@ describe('pipeline full chain: enrichment → message.send', () => {
   // -----------------------------------------------------------------------
   // Stage 5: Message generation — creates PENDING drafts (no autoApprove)
   // -----------------------------------------------------------------------
-  it('stage 5: message.generate creates drafts with PENDING approval', async () => {
+  it('stage 4: message.generate creates drafts with PENDING approval', async () => {
     bossSendSpy.mockClear();
 
     const prediction = await prisma.leadScorePrediction.findFirst({
@@ -534,7 +455,7 @@ describe('pipeline full chain: enrichment → message.send', () => {
   // -----------------------------------------------------------------------
   // Stage 6: Manual approval + email send via Resend
   // -----------------------------------------------------------------------
-  it('stage 6: after manual approval, message.send delivers email via Resend', async () => {
+  it('stage 5: after manual approval, message.send delivers email via Resend', async () => {
     bossSendSpy.mockClear();
 
     // Simulate manual approval: select variant_a and create MessageSend
@@ -609,7 +530,7 @@ describe('pipeline full chain: enrichment → message.send', () => {
   // -----------------------------------------------------------------------
   // Stage 7: WhatsApp send via Trengo (auto-approved follow-up)
   // -----------------------------------------------------------------------
-  it('stage 7: message.generate (WhatsApp) + message.send delivers via Trengo', async () => {
+  it('stage 6: message.generate (WhatsApp) + message.send delivers via Trengo', async () => {
     bossSendSpy.mockClear();
 
     // Generate a WhatsApp follow-up message (auto-approved)
@@ -698,7 +619,6 @@ describe('pipeline full chain: enrichment → message.send', () => {
     const lead = await prisma.lead.findUniqueOrThrow({ where: { id: discoveredLeadId } });
     expect(lead.status).toBe('messaged');
     expect(lead.email).toBe(DISCOVERED_EMAIL);
-    expect(lead.phone).toBe('+971509876543');
 
     // Discovery record — pre-seeded
     const discovery = await prisma.leadDiscoveryRecord.findMany({
@@ -706,13 +626,6 @@ describe('pipeline full chain: enrichment → message.send', () => {
     });
     expect(discovery.length).toBeGreaterThanOrEqual(1);
     expect(discovery[0]!.provider).toBe('APOLLO');
-
-    // Enrichment record — created by enrichment.run
-    const enrichment = await prisma.leadEnrichmentRecord.findMany({
-      where: { leadId: discoveredLeadId, status: 'COMPLETED' },
-    });
-    expect(enrichment.length).toBeGreaterThanOrEqual(1);
-    expect(enrichment[0]!.provider).toBe('PEOPLE_DATA_LABS');
 
     // Feature snapshot — created by features.compute
     const features = await prisma.leadFeatureSnapshot.findMany({

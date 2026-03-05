@@ -123,7 +123,6 @@ describe('getProviderCostCents', () => {
 
   it('returns 0 for free providers', () => {
     expect(getProviderCostCents('COMPANY_SEARCH_FREE')).toBe(0);
-    expect(getProviderCostCents('OTHER_FREE')).toBe(0);
   });
 
   it('returns 0 for unknown providers', () => {
@@ -143,7 +142,6 @@ describe('PROVIDER_COST_CENTS', () => {
       'LINKEDIN_SCRAPE',
       'COMPANY_SEARCH_FREE',
       'CLEARBIT',
-      'OTHER_FREE',
     ];
 
     for (const provider of expectedProviders) {

@@ -7,7 +7,6 @@ export * from './enrichment/hunter.adapter.js';
 export * from './enrichment/hunterEnrichment.adapter.js';
 export * from './enrichment/normalized.types.js';
 export * from './enrichment/pdl.adapter.js';
-export * from './enrichment/publicWebLookup.adapter.js';
 export * from './enrichment/smtp-verifier.js';
 export * from './enrichment/company-profile.js';
 export * from './ai/openai.adapter.js';

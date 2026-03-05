@@ -180,11 +180,16 @@ async function finalizeDiscoveryRun(
   state: RunState,
   status: 'completed' | 'failed',
   errorMessage: string | null,
+  icpProfileId?: string | undefined,
 ): Promise<void> {
   if (state.finalized) {
     return;
   }
   state.finalized = true;
+
+  const yieldRate = state.processedTaskCount > 0
+    ? state.newBusinesses / state.processedTaskCount
+    : 0;
 
   await prisma.jobExecution.update({
     where: { id: discoveryRunId },
@@ -199,9 +204,28 @@ async function finalizeDiscoveryRun(
         newSources: state.newSources,
         serpapiRequests: state.serpapiRequests,
         durationMs: Math.max(0, Date.now() - state.startedAtMs),
+        yieldRate,
       }),
     },
   });
+
+  // 5C: Store yield rate for adaptive budget computation
+  if (icpProfileId && yieldRate > 0) {
+    try {
+      await prisma.pipelineSetting.upsert({
+        where: { key: `discovery_yield_rate:${icpProfileId}` },
+        create: {
+          key: `discovery_yield_rate:${icpProfileId}`,
+          valueJson: yieldRate,
+        },
+        update: {
+          valueJson: yieldRate,
+        },
+      });
+    } catch {
+      // Best-effort — don't fail the run finalization
+    }
+  }
 }
 
 async function finalizeJobRun(
@@ -263,7 +287,7 @@ export async function handleDiscoveryRunSearchTaskJob(
       releaseSlot(runKey, runState);
     }
     if (job.data.discoveryRunId) {
-      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'completed', null);
+      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'completed', null, job.data.icpProfileId);
       releaseSlot(runKey, runState);
     }
     logger.info(
@@ -367,7 +391,7 @@ export async function handleDiscoveryRunSearchTaskJob(
   // Update discovery run progress counters
   if (job.data.discoveryRunId) {
     if (runResult.status === 'FAILED' && effectiveMaxTasks === undefined) {
-      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'failed', runResult.error ?? 'Task failed');
+      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'failed', runResult.error ?? 'Task failed', job.data.icpProfileId);
       releaseSlot(runKey, runState);
     } else {
       await updateDiscoveryRunProgress(job.data.discoveryRunId, runState);
@@ -425,7 +449,7 @@ export async function handleDiscoveryRunSearchTaskJob(
       releaseSlot(runKey, runState);
     }
     if (job.data.discoveryRunId) {
-      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'completed', null);
+      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'completed', null, job.data.icpProfileId);
       releaseSlot(runKey, runState);
     }
     logger.info(
@@ -446,7 +470,7 @@ export async function handleDiscoveryRunSearchTaskJob(
       releaseSlot(runKey, runState);
     }
     if (job.data.discoveryRunId) {
-      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'completed', null);
+      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'completed', null, job.data.icpProfileId);
       releaseSlot(runKey, runState);
     }
     logger.info(
