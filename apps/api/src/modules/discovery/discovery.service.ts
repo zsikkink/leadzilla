@@ -12,17 +12,14 @@ import type {
 
 import type { DiscoveryRepository } from './discovery.repository.js';
 
-export interface DiscoveryRunJobPayload
-  extends Pick<
-    CreateDiscoveryRunRequest,
-    | 'icpProfileId'
-    | 'countries'
-    | 'includeWebsiteAnalysis'
-    | 'includeSocialMediaAnalysis'
-    | 'limit'
-    | 'requestedByUserId'
-  > {
+export interface DiscoveryRunJobPayload {
   runId: string;
+  icpProfileId: string;
+  countries: string[];
+  includeWebsiteAnalysis?: boolean | undefined;
+  includeSocialMediaAnalysis?: boolean | undefined;
+  limit?: number | undefined;
+  requestedByUserId?: string | undefined;
 }
 
 export interface DiscoveryServiceDependencies {
@@ -36,6 +33,20 @@ export interface DiscoveryService {
   listDiscoveryRuns(query: ListDiscoveryRunsQuery): Promise<ListDiscoveryRunsResponse>;
 }
 
+/**
+ * Resolve the ICP profile IDs from the request.
+ * Accepts either `icpProfileIds` (array) or legacy `icpProfileId` (single).
+ */
+function resolveIcpProfileIds(input: CreateDiscoveryRunRequest): string[] {
+  if (input.icpProfileIds && input.icpProfileIds.length > 0) {
+    return input.icpProfileIds;
+  }
+  if (input.icpProfileId) {
+    return [input.icpProfileId];
+  }
+  return [];
+}
+
 export function buildDiscoveryService(
   repository: DiscoveryRepository,
   dependencies: DiscoveryServiceDependencies,
@@ -45,9 +56,14 @@ export function buildDiscoveryService(
   return {
     async createDiscoveryRun(input) {
       const runId = randomUUID();
+      const icpProfileIds = resolveIcpProfileIds(input);
+
+      // Store the first ICP as the primary for backward compat in payload/display
+      const primaryIcpProfileId = icpProfileIds[0] ?? '';
+
       const payload: DiscoveryRunJobPayload = {
         runId,
-        icpProfileId: input.icpProfileId,
+        icpProfileId: primaryIcpProfileId,
         countries: input.countries,
         includeWebsiteAnalysis: input.includeWebsiteAnalysis,
         includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
@@ -58,7 +74,34 @@ export function buildDiscoveryService(
       await repository.createDiscoveryRun(runId, input, payload);
 
       try {
-        await dependencies.enqueueDiscoveryRun(payload);
+        // Split limit across ICPs: each gets an even share, remainder goes to the first
+        const totalLimit = input.limit;
+        const icpCount = icpProfileIds.length;
+        const perIcpLimit = totalLimit !== undefined
+          ? Math.floor(totalLimit / icpCount)
+          : undefined;
+        const remainderLimit = totalLimit !== undefined
+          ? totalLimit - perIcpLimit! * icpCount
+          : 0;
+
+        for (let i = 0; i < icpProfileIds.length; i++) {
+          const icpId = icpProfileIds[i]!;
+          let icpLimit = perIcpLimit;
+          // Give remainder to first ICP
+          if (icpLimit !== undefined && i === 0) {
+            icpLimit += remainderLimit;
+          }
+
+          await dependencies.enqueueDiscoveryRun({
+            runId,
+            icpProfileId: icpId,
+            countries: input.countries,
+            includeWebsiteAnalysis: input.includeWebsiteAnalysis,
+            includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
+            limit: icpLimit,
+            requestedByUserId: input.requestedByUserId,
+          });
+        }
       } catch (error: unknown) {
         const errorMessage =
           error instanceof Error ? error.message : 'Failed to enqueue discovery.run job';

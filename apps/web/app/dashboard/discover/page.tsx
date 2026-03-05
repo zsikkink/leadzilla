@@ -178,6 +178,98 @@ function IcpCheckbox({
   );
 }
 
+// ── Batch grouping — runs created within 5s = one batch ──────
+interface RunBatch {
+  batchKey: string;
+  runs: Array<{
+    runId: string;
+    status: PipelineRunStatus;
+    icpProfileId: string | null;
+    countries: string[];
+    limit: number;
+    processedItems: number;
+    failedItems: number;
+    startedAt: string | null;
+    finishedAt: string | null;
+    createdAt: string;
+    errorMessage: string | null;
+  }>;
+  icpNames: string[];
+  countries: string[];
+  totalLimit: number;
+  totalProcessed: number;
+  totalFailed: number;
+  overallStatus: PipelineRunStatus;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  errorMessages: string[];
+}
+
+const STATUS_PRIORITY: Record<string, number> = {
+  FAILED: 0,
+  RUNNING: 1,
+  QUEUED: 2,
+  PARTIAL: 3,
+  SUCCEEDED: 4,
+};
+
+function groupRunsIntoBatches(
+  runs: RunBatch['runs'],
+  icpItems: Array<{ id: string; name: string }> | undefined,
+): RunBatch[] {
+  if (runs.length === 0) return [];
+
+  const sorted = [...runs].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const batches: RunBatch[] = [];
+  let currentBatch: RunBatch['runs'] = [sorted[0]!];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = new Date(sorted[i - 1]!.createdAt).getTime();
+    const curr = new Date(sorted[i]!.createdAt).getTime();
+    if (prev - curr <= 5000) {
+      currentBatch.push(sorted[i]!);
+    } else {
+      batches.push(buildBatch(currentBatch, icpItems));
+      currentBatch = [sorted[i]!];
+    }
+  }
+  batches.push(buildBatch(currentBatch, icpItems));
+  return batches;
+}
+
+function buildBatch(
+  runs: RunBatch['runs'],
+  icpItems: Array<{ id: string; name: string }> | undefined,
+): RunBatch {
+  const icpNames = runs.map((r) => {
+    const found = icpItems?.find((i) => i.id === r.icpProfileId);
+    return found?.name ?? 'ICP';
+  });
+  const uniqueCountries = Array.from(new Set(runs.flatMap((r) => r.countries)));
+  const overallStatus = runs.reduce<PipelineRunStatus>((worst, r) => {
+    return (STATUS_PRIORITY[r.status] ?? 5) < (STATUS_PRIORITY[worst] ?? 5) ? r.status : worst;
+  }, 'SUCCEEDED');
+  const errors = runs.map((r) => r.errorMessage).filter((e): e is string => e !== null);
+  const startedAt = runs.map((r) => r.startedAt).filter((s): s is string => s !== null).sort()[0] ?? null;
+  const finishedAt = runs.every((r) => r.finishedAt) ? runs.map((r) => r.finishedAt).filter((s): s is string => s !== null).sort().reverse()[0] ?? null : null;
+
+  return {
+    batchKey: runs.map((r) => r.runId).join('-'),
+    runs,
+    icpNames,
+    countries: uniqueCountries,
+    totalLimit: runs.reduce((sum, r) => sum + r.limit, 0),
+    totalProcessed: runs.reduce((sum, r) => sum + r.processedItems, 0),
+    totalFailed: runs.reduce((sum, r) => sum + r.failedItems, 0),
+    overallStatus,
+    createdAt: runs[0]!.createdAt,
+    startedAt,
+    finishedAt,
+    errorMessages: errors,
+  };
+}
+
 // ── Main page ──────────────────────────────────────
 
 export default function DiscoverPage() {
@@ -234,6 +326,12 @@ export default function DiscoverPage() {
   // Load ICPs
   const icps = useApiQuery(
     useCallback(() => apiClient.listIcps({ page: 1, pageSize: 50, isActive: true }), [apiClient]),
+  );
+
+  // Group discovery runs into batches (runs within 5s = same batch)
+  const runBatches = useMemo(
+    () => groupRunsIntoBatches(discoveryRuns.data?.runs ?? [], icps.data?.items),
+    [discoveryRuns.data, icps.data],
   );
 
   // Derive countries from selected ICPs
@@ -609,7 +707,7 @@ export default function DiscoverPage() {
           </div>
         ) : null}
 
-        {discoveryRuns.data && discoveryRuns.data.runs.length === 0 ? (
+        {runBatches.length === 0 && discoveryRuns.data ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="mb-3 flex h-16 w-16 items-center justify-center rounded-2xl bg-zbooni-dark/60">
               <Search className="h-7 w-7 text-muted-foreground/40" />
@@ -621,9 +719,9 @@ export default function DiscoverPage() {
           </div>
         ) : null}
 
-        {discoveryRuns.data && discoveryRuns.data.runs.length > 0 ? (
+        {runBatches.length > 0 ? (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {discoveryRuns.data.runs.map((run) => {
+            {runBatches.map((batch) => {
               const statusColors: Record<string, string> = {
                 QUEUED: 'bg-gray-500/15 text-gray-400',
                 RUNNING: 'bg-zbooni-teal/15 text-zbooni-teal',
@@ -631,38 +729,43 @@ export default function DiscoverPage() {
                 FAILED: 'bg-red-500/15 text-red-400',
                 PARTIAL: 'bg-yellow-500/15 text-yellow-400',
               };
-              const isTerminal = run.status === 'SUCCEEDED' || run.status === 'FAILED' || run.status === 'PARTIAL';
-              const duration = run.startedAt
-                ? run.finishedAt
-                  ? `${Math.round((new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime()) / 1000)}s`
+              const isTerminal = batch.overallStatus === 'SUCCEEDED' || batch.overallStatus === 'FAILED' || batch.overallStatus === 'PARTIAL';
+              const duration = batch.startedAt
+                ? batch.finishedAt
+                  ? `${Math.round((new Date(batch.finishedAt).getTime() - new Date(batch.startedAt).getTime()) / 1000)}s`
                   : isTerminal
                     ? 'Completed'
                     : 'Running...'
                 : 'Queued';
-              const icpName = run.icpProfileId
-                ? (icps.data?.items.find((i) => i.id === run.icpProfileId)?.name ?? 'ICP')
-                : 'Unknown';
+              const icpLabel = batch.icpNames.length <= 2
+                ? batch.icpNames.join(' + ')
+                : `${batch.icpNames.slice(0, 2).join(' + ')} +${batch.icpNames.length - 2}`;
 
               return (
                 <div
-                  key={run.runId}
+                  key={batch.batchKey}
                   className="rounded-xl border border-border/30 bg-zbooni-dark/20 p-4 transition-colors hover:border-border/50"
                 >
                   {/* Header: status + time */}
                   <div className="mb-3 flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <StatusIcon status={run.status} />
+                      <StatusIcon status={batch.overallStatus} />
                       <span
                         className={cn(
                           'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider',
-                          statusColors[run.status] ?? 'bg-muted/20 text-muted-foreground',
+                          statusColors[batch.overallStatus] ?? 'bg-muted/20 text-muted-foreground',
                         )}
                       >
-                        {run.status}
+                        {batch.overallStatus}
                       </span>
+                      {batch.runs.length > 1 ? (
+                        <span className="text-[10px] text-muted-foreground/40">
+                          {batch.runs.length} runs
+                        </span>
+                      ) : null}
                     </div>
                     <span className="text-[10px] tabular-nums text-muted-foreground/50">
-                      {new Date(run.createdAt).toLocaleString()}
+                      {new Date(batch.createdAt).toLocaleString()}
                     </span>
                   </div>
 
@@ -670,49 +773,49 @@ export default function DiscoverPage() {
                   <div className="mb-3 space-y-1">
                     <div className="flex items-center gap-1.5">
                       <Target className="h-3 w-3 text-zbooni-teal" />
-                      <span className="text-xs font-semibold">{icpName}</span>
+                      <span className="text-xs font-semibold">{icpLabel}</span>
                     </div>
-                    {run.countries.length > 0 ? (
+                    {batch.countries.length > 0 ? (
                       <div className="flex flex-wrap gap-1">
-                        {run.countries.map((c) => (
+                        {batch.countries.map((c) => (
                           <span key={c} className="rounded bg-zbooni-teal/10 px-1.5 py-0.5 text-[10px] text-zbooni-teal">
                             {countryName(c)}
                           </span>
                         ))}
-                        {run.limit > 0 ? (
+                        {batch.totalLimit > 0 ? (
                           <span className="rounded bg-muted/20 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                            {run.limit} leads
+                            {batch.totalLimit} leads
                           </span>
                         ) : null}
                       </div>
                     ) : null}
                   </div>
 
-                  {/* Progress bar — use limit as target (totalItems counts search tasks, not leads) */}
-                  {run.limit > 0 || run.status === 'RUNNING' ? (
+                  {/* Progress bar */}
+                  {batch.totalLimit > 0 || batch.overallStatus === 'RUNNING' ? (
                     <ProgressBar
-                      processed={run.processedItems}
-                      total={run.limit || 1}
+                      processed={batch.totalProcessed}
+                      total={batch.totalLimit || 1}
                     />
                   ) : null}
 
                   {/* Stats row */}
                   <div className="mt-2 flex items-center gap-3 text-[10px] text-muted-foreground/60">
                     <span>
-                      Processed: <strong className="text-foreground">{run.processedItems}</strong>
+                      Processed: <strong className="text-foreground">{batch.totalProcessed}</strong>
                     </span>
-                    {run.failedItems > 0 ? (
+                    {batch.totalFailed > 0 ? (
                       <span>
-                        Failed: <strong className="text-red-400">{run.failedItems}</strong>
+                        Failed: <strong className="text-red-400">{batch.totalFailed}</strong>
                       </span>
                     ) : null}
                     <span className="ml-auto">{duration}</span>
                   </div>
 
-                  {/* Error */}
-                  {run.errorMessage ? (
-                    <p className="mt-2 truncate rounded bg-red-500/10 px-2 py-1 text-[10px] text-red-400" title={run.errorMessage}>
-                      {run.errorMessage}
+                  {/* Errors */}
+                  {batch.errorMessages.length > 0 ? (
+                    <p className="mt-2 truncate rounded bg-red-500/10 px-2 py-1 text-[10px] text-red-400" title={batch.errorMessages.join('; ')}>
+                      {batch.errorMessages[0]}
                     </p>
                   ) : null}
                 </div>

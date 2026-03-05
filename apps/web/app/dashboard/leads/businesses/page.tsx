@@ -168,6 +168,48 @@ interface BusinessContact {
   linkedinUrl: string | null;
 }
 
+// ── Business name cleanup ────────────────────────────────────────────────────
+
+const SLOGAN_WORDS = /\b(buying|selling|since|company in|llc|ltd|inc|corp|gmbh|pvt|services for|your|best|top|leading|premier|official|welcome to)\b/i;
+const MAX_NAME_LENGTH = 60;
+
+function cleanBusinessName(rawName: string): string {
+  let name = rawName.trim();
+
+  // Split on common separators
+  const pipeSegments = name.split(/\s*\|\s*/);
+  const dashSegments = name.split(/\s*[-–—]\s*/);
+
+  if (pipeSegments.length > 1) {
+    // For pipe separators: keep first two segments max
+    name = pipeSegments.slice(0, 2).join(' | ');
+  } else if (dashSegments.length > 1) {
+    // For dash separators: keep first segment, drop if rest looks like slogan
+    const rest = dashSegments.slice(1).join(' - ');
+    if (SLOGAN_WORDS.test(rest)) {
+      name = dashSegments[0]!;
+    } else {
+      name = dashSegments.slice(0, 2).join(' - ');
+    }
+  } else {
+    // For comma-separated service lists: keep first two items
+    const commaSegments = name.split(/\s*,\s*/);
+    if (commaSegments.length > 2) {
+      name = commaSegments.slice(0, 2).join(' | ');
+    }
+  }
+
+  // Trim trailing periods, commas, whitespace
+  name = name.replace(/[.,\s]+$/, '');
+
+  // Max length truncation
+  if (name.length > MAX_NAME_LENGTH) {
+    name = name.slice(0, MAX_NAME_LENGTH - 3).replace(/\s+\S*$/, '') + '...';
+  }
+
+  return name;
+}
+
 // ── Score badge ──────────────────────────────────────────────────────────────
 
 function ScoreBadge({ score, band, leadScore }: { score: number; band: string | null; leadScore?: number | null | undefined }) {
@@ -218,7 +260,7 @@ function BusinessCard({ biz, isSelected, onSelect }: { biz: BusinessRow; isSelec
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-bold tracking-tight truncate">{biz.name}</p>
+          <p className="text-sm font-bold tracking-tight truncate">{cleanBusinessName(biz.name)}</p>
           <p className="text-[11px] text-muted-foreground/60">{biz.category ?? 'Uncategorized'}</p>
         </div>
         <ScoreBadge score={biz.deterministic_score} band={biz.score_band} leadScore={biz.leadBlendedScore} />
@@ -276,7 +318,7 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <Building2 className="h-5 w-5 text-zbooni-teal" />
-            <h2 className="text-lg font-extrabold tracking-tight truncate">{biz.name}</h2>
+            <h2 className="text-lg font-extrabold tracking-tight truncate">{cleanBusinessName(biz.name)}</h2>
           </div>
           <p className="mt-1 text-xs text-muted-foreground/60">{biz.category ?? 'Uncategorized'} &middot; {countryName(biz.country_code)}{biz.city ? `, ${biz.city}` : ''}</p>
         </div>

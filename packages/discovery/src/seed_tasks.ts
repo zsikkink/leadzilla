@@ -4,6 +4,7 @@ import type { DiscoverySeedConfig } from './config.js';
 import { generateTasks, generateTasksV2 } from './queries/generate_tasks.js';
 import type { GenerateTasksV2Input } from './queries/generate_tasks.js';
 import { mapIcpIndustriesToCategories } from './queries/icp-category-map.js';
+import { COUNTRY_NAME_TO_ISO } from './queries/seeds.js';
 
 export interface SeedTasksResult {
   generated: number;
@@ -21,6 +22,38 @@ export interface IcpSeedConfig {
   cities?: string[] | undefined;
   maxPagesPerQuery?: number | undefined;
   searchProvider?: 'SERPAPI' | 'GOOGLE_PLACES' | undefined;
+}
+
+/**
+ * Normalize country names/abbreviations (e.g. "UAE", "KSA", "Egypt") to ISO alpha-2 codes.
+ * Passes through values that are already ISO codes. Deduplicates results.
+ */
+function normalizeCountriesToIso(countries: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const c of countries) {
+    const iso = COUNTRY_NAME_TO_ISO[c.toLowerCase()] ?? c;
+    if (!seen.has(iso)) {
+      seen.add(iso);
+      result.push(iso);
+    }
+  }
+  return result;
+}
+
+/**
+ * Resolve countries for task generation.
+ * Priority: config.countries (from API request, already filtered by ALLOWED_COUNTRIES)
+ * takes precedence. ICP targetCountries is only used as fallback when config has none.
+ */
+function resolveCountries(configCountries: string[], icpTargetCountries: string[]): string[] {
+  // API request countries are already validated/filtered — prefer them
+  if (configCountries.length > 0) {
+    return configCountries;
+  }
+  // Fallback to normalized ICP countries
+  const normalized = normalizeCountriesToIso(icpTargetCountries);
+  return normalized.length > 0 ? normalized : configCountries;
 }
 
 export async function seedSearchTasks(
@@ -43,9 +76,7 @@ export async function seedSearchTasks(
     ? generateTasksV2(
         {
           categories: mapIcpIndustriesToCategories(icpConfig.targetIndustries),
-          countries: icpConfig.targetCountries.length > 0
-            ? icpConfig.targetCountries
-            : config.countries,
+          countries: resolveCountries(config.countries, icpConfig.targetCountries),
           cities: icpConfig.cities,
           maxPagesPerQuery: icpConfig.maxPagesPerQuery ?? config.maxPagesPerQuery,
           taskTypes: config.taskTypes,

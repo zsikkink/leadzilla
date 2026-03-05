@@ -163,6 +163,42 @@ export const COUNTRY_NAMES: Record<string, string> = {
   GB: 'United Kingdom',
 };
 
+/**
+ * Common country name/abbreviation → ISO alpha-2 code.
+ * Used to normalize ICP targetCountries (which may contain "UAE", "KSA", etc.)
+ * into the ISO codes expected by generateTasksV2.
+ */
+export const COUNTRY_NAME_TO_ISO: Record<string, string> = {
+  uae: 'AE',
+  ksa: 'SA',
+  egypt: 'EG',
+  jordan: 'JO',
+  bahrain: 'BH',
+  kuwait: 'KW',
+  oman: 'OM',
+  qatar: 'QA',
+  lebanon: 'LB',
+  iraq: 'IQ',
+  morocco: 'MA',
+  tunisia: 'TN',
+  algeria: 'DZ',
+  libya: 'LY',
+  yemen: 'YE',
+  'united arab emirates': 'AE',
+  'saudi arabia': 'SA',
+  // Already ISO codes (passthrough)
+  ae: 'AE',
+  sa: 'SA',
+  eg: 'EG',
+  jo: 'JO',
+  bh: 'BH',
+  kw: 'KW',
+  om: 'OM',
+  qa: 'QA',
+  lb: 'LB',
+  iq: 'IQ',
+};
+
 /** Default cities per country code for V2 discovery. */
 export const defaultCitiesByCountry: Record<string, string[]> = {
   AE: ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman'],

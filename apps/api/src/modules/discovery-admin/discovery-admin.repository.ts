@@ -249,10 +249,14 @@ function buildLeadOrderBy(
   if (sortBy === 'recent') {
     return [{ updatedAt: 'desc' }, { id: 'desc' }];
   }
+  if (sortBy === 'score_desc') {
+    return [{ deterministicScore: 'desc' }, { updatedAt: 'desc' }, { id: 'desc' }];
+  }
   if (sortBy === 'review_count') {
     return [{ reviewCount: 'desc' }, { deterministicScore: 'desc' }, { id: 'desc' }];
   }
-  return [{ deterministicScore: 'desc' }, { updatedAt: 'desc' }, { id: 'desc' }];
+  // 'newest' or fallthrough: newest first
+  return [{ createdAt: 'desc' }, { id: 'desc' }];
 }
 
 function buildTaskOrderBy(

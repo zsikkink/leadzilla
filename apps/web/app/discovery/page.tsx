@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Clock,
   Copy,
   DollarSign,
   FileText,
@@ -154,34 +153,7 @@ const PIPELINE_SETTINGS: PipelineSetting[] = [
     defaultValue: 3,
     unit: 'follow-ups',
   },
-  {
-    type: 'number',
-    key: 'followUpIntervalHours',
-    label: 'Follow-up Interval',
-    description: 'Hours between follow-up attempts.',
-    spectrum: '12h = aggressive, 168h (7d) = patient',
-    icon: Timer,
-    iconColor: 'text-zbooni-teal',
-    min: 12,
-    max: 168,
-    step: 12,
-    defaultValue: 72,
-    unit: 'hours',
-  },
-  {
-    type: 'number',
-    key: 'coldLeadTimeoutDays',
-    label: 'Cold Lead Timeout',
-    description: 'Days with no reply before applying a negative label.',
-    spectrum: '7d = quick disqualification, 90d = very patient',
-    icon: Clock,
-    iconColor: 'text-orange-400',
-    min: 7,
-    max: 90,
-    step: 1,
-    defaultValue: 14,
-    unit: 'days',
-  },
+  // followUpIntervalHours and coldLeadTimeoutDays removed — cadence is graduated (see read-only display below settings grid)
   {
     type: 'number',
     key: 'whatsappDailyLimit',
@@ -482,8 +454,6 @@ interface SettingsState {
   enrichmentThreshold: number;
   scoreTierBands: { low: number; med: number; high: number };
   followUpMaxCount: number;
-  followUpIntervalHours: number;
-  coldLeadTimeoutDays: number;
   whatsappDailyLimit: number;
   emailDailyLimit: number;
   modelActivationAuc: number;
@@ -497,8 +467,6 @@ function getDefaultSettings(): SettingsState {
     enrichmentThreshold: 0.3,
     scoreTierBands: { low: 0.34, med: 0.67, high: 0.67 },
     followUpMaxCount: 3,
-    followUpIntervalHours: 72,
-    coldLeadTimeoutDays: 14,
     whatsappDailyLimit: 50,
     emailDailyLimit: 10,
     modelActivationAuc: 0.6,
@@ -512,8 +480,6 @@ const NUMERIC_SETTING_KEYS = new Set([
   'scoreQualificationThreshold',
   'enrichmentThreshold',
   'followUpMaxCount',
-  'followUpIntervalHours',
-  'coldLeadTimeoutDays',
   'whatsappDailyLimit',
   'emailDailyLimit',
   'modelActivationAuc',
@@ -663,7 +629,7 @@ export default function ControlsSettingsPage() {
               'inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold transition-all',
               hasChanges && !isSaving
                 ? 'bg-zbooni-teal/20 text-zbooni-teal hover:bg-zbooni-teal/30'
-                : 'bg-muted/10 text-muted-foreground/40 cursor-not-allowed',
+                : 'bg-muted/20 text-muted-foreground/60 cursor-not-allowed',
             )}
           >
             {isSaving ? (
@@ -1020,6 +986,38 @@ export default function ControlsSettingsPage() {
                 }
                 return null;
               })}
+
+              {/* Read-only follow-up cadence display */}
+              <div className="rounded-xl border border-border/30 bg-zbooni-dark/40 p-4">
+                <div className="flex items-start gap-3">
+                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.04]">
+                    <Timer className="h-4 w-4 text-zbooni-teal" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold tracking-tight">Follow-up Cadence</p>
+                    <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground/50">
+                      Graduated intervals with random jitter to avoid pattern detection
+                    </p>
+                    <div className="mt-3 space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-zbooni-teal/10 text-[10px] font-bold text-zbooni-teal">1</span>
+                        <span className="text-xs font-medium">3 days</span>
+                        <span className="text-[10px] text-muted-foreground/40">(72h + 1-3h jitter)</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-zbooni-teal/10 text-[10px] font-bold text-zbooni-teal">2</span>
+                        <span className="text-xs font-medium">7 days</span>
+                        <span className="text-[10px] text-muted-foreground/40">(168h + 1-3h jitter)</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-zbooni-teal/10 text-[10px] font-bold text-zbooni-teal">3</span>
+                        <span className="text-xs font-medium">7 days</span>
+                        <span className="text-[10px] text-muted-foreground/40">(168h + 1-3h jitter)</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </div>

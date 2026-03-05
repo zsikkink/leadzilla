@@ -9,6 +9,7 @@ import {
   MessageSquare,
   Pencil,
   Plus,
+  Shield,
   Star,
   Target,
   Trash2,
@@ -544,6 +545,116 @@ export default function IcpDetailPage() {
           </div>
         );
       })()}
+
+      {/* Scoring Rules — mirrors actual UNIVERSAL_RULES from scoring engine */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
+          <Shield className="h-4 w-4 text-zbooni-teal" />
+          Scoring Rules
+          <span className="ml-auto text-xs font-normal text-muted-foreground">Universal rules — same for all ICPs</span>
+        </h2>
+
+        {/* Hard Filters */}
+        <div className="mb-4">
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-red-400/80">Hard Filters (must all pass)</h3>
+          <div className="space-y-1.5">
+            {[
+              { field: 'country', rule: 'IN [UAE, KSA, Jordan, Egypt, Bahrain, Kuwait, Oman, Qatar]' },
+              { field: 'has_email', rule: 'Must have email contact' },
+              { field: 'data_alignment_score', rule: '>= 0.3 (cross-source validation)' },
+            ].map((r) => (
+              <div key={r.field} className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">
+                <span className="font-mono text-[11px] font-semibold text-red-400">{r.field}</span>
+                <span className="text-[11px] text-muted-foreground/60">{r.rule}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Positive Weighted Rules */}
+        <div className="mb-4">
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-zbooni-green/80">Positive Signals (total weight: 18)</h3>
+          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+            {[
+              { field: 'has_whatsapp', label: 'WhatsApp presence', weight: 3 },
+              { field: 'industry_supported', label: 'Industry match', weight: 3 },
+              { field: 'has_instagram', label: 'Instagram presence', weight: 2 },
+              { field: 'review_count', label: 'Reviews > 10', weight: 2 },
+              { field: 'custom_order_signals', label: 'Custom order signals', weight: 2 },
+              { field: 'has_booking_or_contact_form', label: 'Booking/contact form', weight: 2 },
+              { field: 'recent_activity', label: 'Recent activity', weight: 1 },
+              { field: 'apify_payment_widget_count', label: 'Payment widgets', weight: 1 },
+              { field: 'apify_has_pricing_tiers', label: 'Has pricing tiers', weight: 1 },
+              { field: 'social_link_count', label: 'Multiple social profiles', weight: 1 },
+              { field: 'instagram_has_business_email', label: 'IG business email', weight: 1 },
+            ].map((r) => (
+              <div key={r.field} className="flex items-center justify-between rounded-lg border border-zbooni-green/20 bg-zbooni-green/5 px-3 py-2">
+                <div className="min-w-0">
+                  <span className="text-[11px] font-medium">{r.label}</span>
+                  <span className="ml-1.5 font-mono text-[10px] text-muted-foreground/40">{r.field}</span>
+                </div>
+                <span className="shrink-0 rounded bg-zbooni-green/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-zbooni-green">+{r.weight}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Anti-fit Rules */}
+        <div className="mb-4">
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-yellow-400/80">Anti-fit Signals (penalty weight: -6)</h3>
+          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+            {[
+              { field: 'pure_self_serve_ecom', label: 'Pure self-serve ecommerce', weight: -3 },
+              { field: 'price_led_mindset', label: 'Price-led mindset', weight: -3 },
+            ].map((r) => (
+              <div key={r.field} className="flex items-center justify-between rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-3 py-2">
+                <div className="min-w-0">
+                  <span className="text-[11px] font-medium">{r.label}</span>
+                  <span className="ml-1.5 font-mono text-[10px] text-muted-foreground/40">{r.field}</span>
+                </div>
+                <span className="shrink-0 rounded bg-yellow-500/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-yellow-400">{r.weight}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Category Bonus System */}
+        <div className="mb-4">
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-purple-400/80">Category Bonus System</h3>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {[
+              { cat: 'Sales Motion Fit', fields: 'whatsapp, instagram, custom orders, decision makers' },
+              { cat: 'Payment Complexity', fields: 'payment widgets, pricing tiers' },
+              { cat: 'Risk & Urgency', fields: 'recent activity, booking form, contact info' },
+              { cat: 'Switching Willingness', fields: 'social links, linkedin, tech stack, IG engagement' },
+              { cat: 'General', fields: 'industry match, geo match, anti-fit signals' },
+            ].map((c) => (
+              <div key={c.cat} className="rounded-lg border border-purple-500/20 bg-purple-500/5 px-3 py-2">
+                <p className="text-[11px] font-semibold text-purple-400">{c.cat}</p>
+                <p className="mt-0.5 text-[10px] text-muted-foreground/50">{c.fields}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-3 text-[10px] text-muted-foreground/50">
+            <span><strong className="text-zbooni-green">PROCEED</strong> (Sales + Payment + 3+ cats): +10% bonus</span>
+            <span><strong className="text-zbooni-teal">SELECTIVE</strong> (2+ cats): +5% bonus</span>
+            <span><strong className="text-red-400">DISQUALIFY</strong> (&lt;2 cats): -15% penalty</span>
+          </div>
+        </div>
+
+        {/* Tier Bands */}
+        <div>
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground/60">Score Tier Bands</h3>
+          <div className="flex items-center gap-2">
+            <span className="rounded-md bg-red-500/15 px-2 py-1 text-[10px] font-bold text-red-400">LOW &lt; 0.34</span>
+            <span className="rounded-md bg-yellow-500/15 px-2 py-1 text-[10px] font-bold text-yellow-400">0.34 &le; MED &lt; 0.67</span>
+            <span className="rounded-md bg-zbooni-green/15 px-2 py-1 text-[10px] font-bold text-zbooni-green">HIGH &ge; 0.67</span>
+          </div>
+          <p className="mt-1.5 text-[10px] text-muted-foreground/40">
+            Blend: 90% rules / 10% ML (no model) → 70/30 (AUC≥0.70, 200+ samples) → 50/50 (AUC≥0.80, 500+ samples)
+          </p>
+        </div>
+      </div>
 
       {/* Danger Zone — Delete ICP */}
       <div className="rounded-2xl border border-red-500/30 bg-red-500/5 p-6">

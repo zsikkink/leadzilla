@@ -18,7 +18,7 @@ import type {
   TrendComparison,
   VariantBreakdownItem,
 } from '@lead-flood/contracts';
-import { prisma } from '@lead-flood/db';
+import { prisma, Prisma } from '@lead-flood/db';
 
 import { AnalyticsNotImplementedError } from './analytics.errors.js';
 
@@ -138,9 +138,38 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
       },
     });
 
+    // V2 pipeline: Business records don't have a direct icpProfileId relation.
+    // When ICP filtering is active, resolve matching discovery run IDs first.
+    const businessDateWhere = from || to
+      ? {
+          createdAt: {
+            ...(from ? { gte: from } : {}),
+            ...(to ? { lte: to } : {}),
+          },
+        }
+      : {};
+
+    let icpDiscoveryRunIds: string[] | null = null;
+    if (icpProfileId) {
+      const icpRuns = await prisma.jobExecution.findMany({
+        where: {
+          type: 'discovery.run',
+          payload: { path: ['icpProfileId'], equals: icpProfileId },
+        },
+        select: { id: true },
+      });
+      icpDiscoveryRunIds = icpRuns.map((r) => r.id);
+    }
+
+    const businessIcpWhere = icpDiscoveryRunIds !== null
+      ? { discoveryRunId: { in: icpDiscoveryRunIds } }
+      : {};
+
     const [
-      discoveredCount,
-      enrichedCount,
+      v2DiscoveredCount,
+      v1DiscoveredCount,
+      v2EnrichedCount,
+      v1EnrichedCount,
       scoredCount,
       messagesGeneratedCount,
       messagesSentCount,
@@ -148,6 +177,14 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
       meetingsCount,
       dealsWonCount,
     ] = await Promise.all([
+      // V2 discovered: Business records
+      prisma.business.count({
+        where: {
+          ...businessDateWhere,
+          ...businessIcpWhere,
+        },
+      }),
+      // V1 legacy discovered: LeadDiscoveryRecord
       prisma.leadDiscoveryRecord.count({
         where: {
           ...(icpProfileId ? { icpProfileId } : {}),
@@ -155,6 +192,15 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
           status: 'DISCOVERED',
         },
       }),
+      // V2 enriched: Business with website scrape data
+      prisma.business.count({
+        where: {
+          ...businessDateWhere,
+          ...businessIcpWhere,
+          apifyWebsiteScrapeJson: { not: Prisma.DbNull },
+        },
+      }),
+      // V1 legacy enriched: LeadEnrichmentRecord
       prisma.leadEnrichmentRecord.count({
         where: {
           ...enrichmentDateWhere,
@@ -240,6 +286,9 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
       }),
     ]);
 
+    // Combine v1 (legacy) + v2 (Business) counts
+    const discoveredCount = v2DiscoveredCount + v1DiscoveredCount;
+    const enrichedCount = v2EnrichedCount + v1EnrichedCount;
     const qualifiedCount = rollupAgg._sum.discoveredCount ?? discoveredCount;
 
     // Cost aggregation: sum costCents across leads matching the filter

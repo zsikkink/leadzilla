@@ -108,16 +108,26 @@ export class StubDiscoveryRepository implements DiscoveryRepository {
 export class PrismaDiscoveryRepository implements DiscoveryRepository {
   async createDiscoveryRun(
     runId: string,
-    _input: CreateDiscoveryRunRequest,
+    input: CreateDiscoveryRunRequest,
     payload: DiscoveryRunJobPayload,
   ): Promise<void> {
+    // Store the full ICP list in the payload for multi-ICP tracking
+    const icpProfileIds = input.icpProfileIds?.length
+      ? input.icpProfileIds
+      : input.icpProfileId
+        ? [input.icpProfileId]
+        : [payload.icpProfileId];
+
     await prisma.jobExecution.create({
       data: {
         id: runId,
         type: DISCOVERY_RUN_JOB_TYPE,
         status: 'queued',
         attempts: 0,
-        payload: toInputJson(payload),
+        payload: toInputJson({
+          ...payload,
+          icpProfileIds,
+        }),
         result: toInputJson({
           totalItems: 0,
           processedItems: 0,
@@ -298,6 +308,11 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
         const icpProfileId = typeof payload.icpProfileId === 'string'
           ? payload.icpProfileId
           : null;
+        const icpProfileIds = Array.isArray(payload.icpProfileIds)
+          ? (payload.icpProfileIds as string[])
+          : icpProfileId
+            ? [icpProfileId]
+            : [];
 
         return {
           runId: row.id,
@@ -309,6 +324,7 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
           startedAt: row.startedAt?.toISOString() ?? null,
           finishedAt: row.finishedAt?.toISOString() ?? null,
           icpProfileId,
+          icpProfileIds,
           countries,
           limit,
           errorMessage: row.error,

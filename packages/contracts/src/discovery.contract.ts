@@ -46,7 +46,10 @@ export const DiscoveryAdvancedSettingsSchema = z
 
 export const CreateDiscoveryRunRequestSchema = z
   .object({
-    icpProfileId: z.string().min(1),
+    /** @deprecated Use icpProfileIds instead */
+    icpProfileId: z.string().min(1).optional(),
+    /** Array of ICP profile IDs to discover for (limit is split across ICPs) */
+    icpProfileIds: z.array(z.string().min(1)).min(1).optional(),
     countries: z.array(z.string().min(1)).min(1),
     cities: z.array(z.string().min(1)).optional(),
     includeWebsiteAnalysis: z.boolean().default(true),
@@ -55,7 +58,11 @@ export const CreateDiscoveryRunRequestSchema = z
     advancedSettings: DiscoveryAdvancedSettingsSchema.optional(),
     requestedByUserId: z.string().min(1).optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (data) => data.icpProfileIds?.length || data.icpProfileId,
+    { message: 'Either icpProfileIds or icpProfileId is required' },
+  );
 
 export const CreateDiscoveryRunResponseSchema = z
   .object({
@@ -192,6 +199,7 @@ export const DiscoveryRunSummarySchema = z
     startedAt: z.string().datetime().nullable(),
     finishedAt: z.string().datetime().nullable(),
     icpProfileId: z.string().nullable(),
+    icpProfileIds: z.array(z.string()).optional(),
     countries: z.array(z.string()),
     limit: z.number().int().min(0),
     errorMessage: z.string().nullable(),

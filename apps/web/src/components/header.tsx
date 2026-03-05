@@ -19,7 +19,6 @@ const MOBILE_NAV = [
   { href: '/discovery', label: 'Controls & Settings' },
   { href: '/discovery/lifecycle', label: 'Lead Lifecycle' },
   { href: '/discovery/model', label: 'Model Inspector' },
-  { href: '/discovery/feedback', label: 'Feedback & Replies' },
   { href: '/discovery/rules', label: 'ICP & Rules' },
 ] as const;
 
@@ -38,7 +37,6 @@ function getPageTitle(pathname: string): string {
   if (pathname === '/discovery/lifecycle') return 'Lead Lifecycle Inspector';
   if (pathname.startsWith('/discovery/lifecycle/')) return 'Lead Lifecycle Inspector';
   if (pathname === '/discovery/model') return 'Model Inspector';
-  if (pathname === '/discovery/feedback') return 'Feedback & Replies';
   if (pathname === '/discovery/rules') return 'ICP & Rules Viewer';
 
   return 'Dashboard';

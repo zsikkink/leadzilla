@@ -361,7 +361,7 @@ async function main(): Promise<void> {
           enqueueRunTasks: true,
         },
         {
-          singletonKey: `discovery.seed:${payload.runId}`,
+          singletonKey: `discovery.seed:${payload.runId}:${payload.icpProfileId}`,
           retryLimit: 3,
           retryDelay: 60,
           retryBackoff: true,

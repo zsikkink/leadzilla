@@ -2,18 +2,25 @@
 
 import type { FunnelResponse } from '@lead-flood/contracts';
 import {
-  ArrowRight,
+  AlertTriangle,
   BarChart3,
+  CalendarCheck,
+  Clock,
   Cpu,
   Database,
   MessageSquare,
   Search,
   Send,
+  Tag,
+  ThumbsDown,
+  ThumbsUp,
   TrendingUp,
+  Unplug,
   Users,
 } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 
+import { cn } from '../../../src/lib/utils.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 
@@ -28,6 +35,23 @@ const DATE_RANGE_LABELS: Record<DateRange, string> = {
 
 const DATE_RANGE_OPTIONS: readonly DateRange[] = ['7d', '30d', '90d', 'all'] as const;
 
+const LABEL_CARDS = [
+  { key: 'repliedCount' as const, label: 'Replied', Icon: ThumbsUp, color: 'text-emerald-400', bg: 'bg-emerald-500/15', border: 'border-emerald-500/25' },
+  { key: 'meetingBookedCount' as const, label: 'Meeting Booked', Icon: CalendarCheck, color: 'text-zbooni-teal', bg: 'bg-zbooni-teal/15', border: 'border-zbooni-teal/25' },
+  { key: 'dealWonCount' as const, label: 'Deal Won', Icon: ThumbsUp, color: 'text-zbooni-green', bg: 'bg-zbooni-green/15', border: 'border-zbooni-green/25' },
+  { key: 'dealLostCount' as const, label: 'Deal Lost', Icon: ThumbsDown, color: 'text-red-400', bg: 'bg-red-500/15', border: 'border-red-500/25' },
+  { key: 'unsubscribedCount' as const, label: 'Unsubscribed', Icon: Unplug, color: 'text-slate-400', bg: 'bg-slate-500/15', border: 'border-slate-500/25' },
+  { key: 'bouncedCount' as const, label: 'Bounced', Icon: AlertTriangle, color: 'text-slate-500', bg: 'bg-slate-600/15', border: 'border-slate-600/25' },
+];
+
+const EVENT_TYPE_BADGES: Record<string, { className: string; label: string }> = {
+  REPLIED: { className: 'bg-emerald-500/15 text-emerald-400', label: 'Replied' },
+  MEETING_BOOKED: { className: 'bg-zbooni-teal/15 text-zbooni-teal', label: 'Meeting' },
+  DEAL_WON: { className: 'bg-zbooni-green/15 text-zbooni-green', label: 'Won' },
+  DEAL_LOST: { className: 'bg-red-500/15 text-red-400', label: 'Lost' },
+  UNSUBSCRIBED: { className: 'bg-slate-500/15 text-slate-400', label: 'Unsub' },
+  BOUNCED: { className: 'bg-slate-600/15 text-slate-500', label: 'Bounced' },
+};
 
 // ── Sub-components ───────────────────────────────────────────────────────
 
@@ -135,68 +159,41 @@ function PipelineStageCard({ stage, data }: { stage: PipelineStage; data: Funnel
   const isComplete = pending === 0;
 
   return (
-    <div className="rounded-xl border border-border/30 bg-zbooni-dark/40 p-4 transition-colors hover:border-border/50">
+    <div className="rounded-xl border border-border/30 bg-zbooni-dark/40 px-5 py-6 transition-colors hover:border-border/50">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${stage.bgClass}`}>
-            <Icon className={`h-5 w-5 ${stage.colorClass}`} />
+        <div className="flex items-center gap-3">
+          <div className={`flex h-12 w-12 items-center justify-center rounded-lg ${stage.bgClass}`}>
+            <Icon className={`h-6 w-6 ${stage.colorClass}`} />
           </div>
           <div>
-            <p className="text-sm font-bold tracking-tight">{stage.label}</p>
+            <p className="text-base font-bold tracking-tight">{stage.label}</p>
             <p className="text-[10px] text-muted-foreground/40 uppercase tracking-wider font-medium">Stage</p>
           </div>
         </div>
         <div
-          className={`h-2 w-2 rounded-full ${isComplete ? 'bg-zbooni-green' : 'bg-yellow-400 animate-pulse'}`}
+          className={`h-2.5 w-2.5 rounded-full ${isComplete ? 'bg-zbooni-green' : 'bg-yellow-400 animate-pulse'}`}
           title={isComplete ? 'All caught up' : `${pending} pending`}
         />
       </div>
-      <div className="mt-4 flex items-end justify-between">
+      <div className="mt-6 flex items-end justify-between">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Processed</p>
-          <p className={`text-2xl font-extrabold tracking-tight ${stage.colorClass}`}>{processed.toLocaleString()}</p>
+          <p className={`text-3xl font-extrabold tracking-tight ${stage.colorClass}`}>{processed.toLocaleString()}</p>
         </div>
         <div className="text-right">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Pending</p>
-          <p className={`text-lg font-bold tracking-tight ${pending > 0 ? 'text-yellow-400' : 'text-muted-foreground/30'}`}>
+          <p className={`text-2xl font-bold tracking-tight ${pending > 0 ? 'text-yellow-400' : 'text-muted-foreground/30'}`}>
             {pending.toLocaleString()}
           </p>
         </div>
       </div>
-      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-border/30">
+      <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-border/30">
         <div
           className={`h-full rounded-full transition-all duration-500 ease-out ${stage.barClass}`}
           style={{ width: `${Math.max(progressPct, processed > 0 ? 3 : 0)}%` }}
         />
       </div>
-      <p className="mt-1.5 text-[10px] text-muted-foreground/40 font-medium">{progressPct}% complete</p>
-    </div>
-  );
-}
-
-function PipelineFlowStrip({ data }: { data: FunnelResponse }) {
-  return (
-    <div className="flex items-center justify-between w-full pb-1">
-      {PIPELINE_STAGES.map((stage, i) => {
-        const processed = stage.getProcessed(data);
-        const Icon = stage.icon;
-        return (
-          <div key={stage.key} className="flex flex-1 items-center gap-1">
-            <div className="flex flex-1 items-center gap-2 rounded-lg border border-border/30 bg-zbooni-dark/40 px-3 py-2">
-              <div className={`flex h-7 w-7 items-center justify-center rounded-md ${stage.bgClass}`}>
-                <Icon className={`h-3.5 w-3.5 ${stage.colorClass}`} />
-              </div>
-              <div className="min-w-0">
-                <p className="text-[10px] font-medium text-muted-foreground/50 leading-none">{stage.label}</p>
-                <p className={`text-sm font-extrabold tracking-tight ${stage.colorClass}`}>{processed.toLocaleString()}</p>
-              </div>
-            </div>
-            {i < PIPELINE_STAGES.length - 1 ? (
-              <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/30" />
-            ) : null}
-          </div>
-        );
-      })}
+      <p className="mt-2 text-[11px] text-muted-foreground/40 font-medium">{progressPct}% complete</p>
     </div>
   );
 }
@@ -230,6 +227,10 @@ export default function AnalyticsPage() {
   const scoreDistribution = useApiQuery(
     useCallback(() => apiClient.getScoreDistribution(dateFilter), [apiClient, dateFilter]),
     [dateFilter],
+  );
+
+  const feedbackEvents = useApiQuery(
+    useCallback(() => apiClient.listFeedbackEvents({ page: 1, pageSize: 10 }), [apiClient]),
   );
 
   const totalMessaged = funnel.data?.messagesSentCount ?? 0;
@@ -305,11 +306,8 @@ export default function AnalyticsPage() {
             </div>
           </div>
 
-          {/* Flow strip */}
-          <PipelineFlowStrip data={funnel.data} />
-
           {/* Stage cards grid */}
-          <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
             {PIPELINE_STAGES.map((stage) => (
               <PipelineStageCard key={stage.key} stage={stage} data={funnel.data!} />
             ))}
@@ -370,6 +368,90 @@ export default function AnalyticsPage() {
           </div>
         ) : (
           <p className="text-sm text-muted-foreground/60">No score distribution rows yet.</p>
+        )}
+      </div>
+
+      {/* ── Training Label Summaries ──────────────────────────────── */}
+      {feedback.data ? (
+        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+          <div className="mb-4 flex items-center gap-2">
+            <Tag className="h-4 w-4 text-zbooni-teal" />
+            <h2 className="text-base font-bold tracking-tight">Training Label Summaries</h2>
+            <span className="ml-auto text-xs text-muted-foreground/50">
+              {feedback.data.totalEvents} total events
+            </span>
+          </div>
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+            {LABEL_CARDS.map((item) => {
+              const count = feedback.data![item.key];
+              return (
+                <div
+                  key={item.key}
+                  className={cn(
+                    'rounded-xl border px-4 py-4 transition-colors',
+                    item.bg,
+                    item.border,
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <item.Icon className={cn('h-4 w-4', item.color)} />
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      {item.label}
+                    </span>
+                  </div>
+                  <p className={cn('mt-2 text-3xl font-extrabold tabular-nums tracking-tight', item.color)}>
+                    {count}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Recent Feedback Events ────────────────────────────────── */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <Clock className="h-4 w-4 text-zbooni-teal" />
+          <h2 className="text-base font-bold tracking-tight">Recent Feedback Events</h2>
+        </div>
+        {feedbackEvents.isLoading ? (
+          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
+            Loading events...
+          </div>
+        ) : feedbackEvents.data && feedbackEvents.data.items.length > 0 ? (
+          <div className="space-y-2">
+            {feedbackEvents.data.items.map((event) => {
+              const badge = EVENT_TYPE_BADGES[event.eventType] ?? { className: 'bg-slate-700/40 text-slate-300', label: event.eventType };
+              return (
+                <div
+                  key={event.id}
+                  className="flex items-center gap-3 rounded-lg border border-border/20 bg-zbooni-dark/30 px-4 py-2.5"
+                >
+                  <span
+                    className={cn(
+                      'inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider',
+                      badge.className,
+                    )}
+                  >
+                    {badge.label}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+                    {event.leadId.slice(0, 16)}...
+                  </span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground/50">
+                    {new Date(event.occurredAt).toLocaleDateString('en-AE', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="flex flex-col items-center py-6 text-center">
+            <Clock className="h-6 w-6 text-muted-foreground/20" />
+            <p className="mt-2 text-sm text-muted-foreground/50">No feedback events yet</p>
+          </div>
         )}
       </div>
 
