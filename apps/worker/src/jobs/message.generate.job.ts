@@ -598,6 +598,19 @@ export async function handleMessageGenerateJob(
       }
     }
 
+    // Guard: if body looks like raw JSON, replace with fallback
+    if (
+      messageContent.bodyText.trim().startsWith('{') &&
+      (messageContent.bodyText.includes('"insights"') || messageContent.bodyText.includes('"message"'))
+    ) {
+      logger.warn(
+        { jobId: job.id, leadId },
+        'Message body contains raw JSON, replacing with fallback template',
+      );
+      messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
+      generatedByModel = 'fallback-template';
+    }
+
     // Idempotent draft creation: if a draft already exists for this lead+ICP+followUp
     // combination (e.g. from a retry), reuse it instead of creating a duplicate.
     const existingDraftForRetry = await prisma.messageDraft.findFirst({

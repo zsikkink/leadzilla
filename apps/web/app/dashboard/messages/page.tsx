@@ -123,7 +123,9 @@ export default function MessagesPage() {
           const fullName = `${lead.firstName} ${lead.lastName}`.trim();
           const enrichment = lead.enrichmentData as Record<string, unknown> | null | undefined;
           const companyName = (enrichment?.companyName as string) ?? '';
-          dataMap[leadId] = { name: fullName || leadId.slice(0, 8), company: companyName };
+          const emailLocal = lead.email?.split('@')[0] ?? '';
+          const displayName = fullName || companyName || emailLocal || `Lead ${leadId.slice(0, 8)}`;
+          dataMap[leadId] = { name: displayName, company: companyName };
         }
       }
 

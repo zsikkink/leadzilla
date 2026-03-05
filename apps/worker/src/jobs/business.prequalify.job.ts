@@ -2,6 +2,8 @@ import { prisma } from '@lead-flood/db';
 import { promises as dns } from 'node:dns';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { classifyError } from '../errors.js';
+
 export const BUSINESS_PREQUALIFY_JOB_NAME = 'business.prequalify';
 
 export const BUSINESS_PREQUALIFY_RETRY_OPTIONS: Pick<
@@ -196,6 +198,7 @@ export async function handleBusinessPrequalifyJob(
     'Started business.prequalify job',
   );
 
+  try {
   // ── Load business ──────────────────────────────────────────────────
   const business = await prisma.business.findUnique({
     where: { id: businessId },
@@ -283,6 +286,10 @@ export async function handleBusinessPrequalifyJob(
     { ...logCtx, reviewCount },
     'Completed business.prequalify job — business qualified',
   );
+  } catch (error: unknown) {
+    logger.error({ ...logCtx, error }, 'Failed business.prequalify job');
+    throw classifyError(error);
+  }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────

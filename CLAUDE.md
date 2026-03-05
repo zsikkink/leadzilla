@@ -26,6 +26,9 @@ Quality: `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
 - **PATH for pnpm scripts** — Child processes need `/bin` in PATH. Use: `export PATH="/Users/os_architect/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"`. Without `/bin`, pnpm scripts fail with `spawn sh ENOENT`
 - **TypeScript `||` and `??` mixing** — `A || B ?? C` is a compile error (TS5076). Always wrap: `A || (B ?? C)`
 - **Always give maximum effort**: Don't build MVP when comprehensive is feasible. Ask "how can this be better?" before calling anything done. Half-measures cost more in rework than doing it right the first time.
+- **Frontend agent**: Always spawn `frontend-designer` agent for UI tasks involving new pages, component redesigns, or layout overhauls. Direct edits OK for single-property CSS fixes.
+- **Ripple-effect check**: Before completing any change, ask: "What other components/pages display the same data or are affected by this change?" Check sibling pages, shared components, API consumers, and settings displays. Don't just make the change — think about what it touches.
+- **Supabase must be running**: API and Worker connect to Supabase at `:54322`, NOT the Docker postgres at `:5434`. Run `supabase status` to verify. If dead, `supabase start` before doing anything.
 
 ## Verify (run after every change)
 ```bash

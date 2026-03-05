@@ -1,6 +1,7 @@
 import { prisma, toInputJson } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { classifyError } from '../errors.js';
 import {
   evaluateDeterministicScore,
   toScoreBand,
@@ -46,6 +47,7 @@ export interface ScoringBatchJobDependencies {
     leadId: string;
     icpProfileId: string;
     scorePredictionId: string;
+    channel?: string | undefined;
   }) => Promise<void>) | undefined;
 }
 
@@ -87,6 +89,8 @@ export async function handleScoringBatchJob(
       select: {
         id: true,
         status: true,
+        phone: true,
+        decisionMakerPhone: true,
       },
     });
 
@@ -259,10 +263,13 @@ export async function handleScoringBatchJob(
 
         // Enqueue message generation for qualified leads
         if (blendedScore >= qualificationThreshold && deps?.enqueueMessageGenerate) {
+          const hasPhone = Boolean(lead.decisionMakerPhone || lead.phone);
+          const channel = blendedScore >= 0.67 && hasPhone ? 'WHATSAPP' : 'EMAIL';
           await deps.enqueueMessageGenerate({
             leadId: lead.id,
             icpProfileId: targetIcpId,
             scorePredictionId: prediction.id,
+            channel,
           });
           qualified += 1;
         } else if (blendedScore >= qualificationThreshold) {
@@ -299,6 +306,6 @@ export async function handleScoringBatchJob(
       'Failed scoring.batch job',
     );
 
-    throw error;
+    throw classifyError(error);
   }
 }

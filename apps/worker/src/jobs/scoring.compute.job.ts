@@ -3,6 +3,7 @@ import { prisma, toInputJson } from '@lead-flood/db';
 import type { OpenAiAdapter } from '@lead-flood/providers';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { classifyError } from '../errors.js';
 import {
   evaluateDeterministicScore,
   toScoreBand,
@@ -53,6 +54,7 @@ export interface ScoringComputeJobDependencies {
     scorePredictionId: string;
     runId: string;
     correlationId?: string | undefined;
+    channel?: string | undefined;
   }) => Promise<void>) | undefined;
 }
 
@@ -121,6 +123,18 @@ export async function handleScoringComputeJob(
               select: { id: true },
             })
           ).map((lead) => lead.id);
+
+    // Pre-load phone data for channel resolution
+    const leadPhoneMap = new Map<string, { phone: string | null; decisionMakerPhone: string | null }>();
+    if (deps?.enqueueMessageGenerate && targetLeadIds.length > 0) {
+      const leadsWithPhone = await prisma.lead.findMany({
+        where: { id: { in: targetLeadIds } },
+        select: { id: true, phone: true, decisionMakerPhone: true },
+      });
+      for (const l of leadsWithPhone) {
+        leadPhoneMap.set(l.id, { phone: l.phone, decisionMakerPhone: l.decisionMakerPhone });
+      }
+    }
 
     const rulesByIcp = new Map<string, DeterministicRule[]>();
     for (const icpId of targetIcpIds) {
@@ -275,12 +289,16 @@ export async function handleScoringComputeJob(
         persistedPredictions += 1;
 
         if (deps?.enqueueMessageGenerate && blendedScore >= qualificationThreshold) {
+          const phoneData = leadPhoneMap.get(targetLeadId);
+          const hasPhone = Boolean(phoneData?.decisionMakerPhone || phoneData?.phone);
+          const channel = blendedScore >= 0.67 && hasPhone ? 'WHATSAPP' : 'EMAIL';
           await deps.enqueueMessageGenerate({
             leadId: targetLeadId,
             icpProfileId: targetIcpId,
             scorePredictionId: prediction.id,
             runId,
             correlationId: effectiveCorrelationId,
+            channel,
           });
           logger.info(
             { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, blendedScore },
@@ -313,6 +331,6 @@ export async function handleScoringComputeJob(
       'Failed scoring.compute job',
     );
 
-    throw error;
+    throw classifyError(error);
   }
 }

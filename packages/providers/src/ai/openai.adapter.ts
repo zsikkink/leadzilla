@@ -254,7 +254,8 @@ export class OpenAiAdapter {
       `ICP description: ${context.icpDescription}`,
       context.businessIntelligence
         ? `\nBusiness Intelligence:\n${context.businessIntelligence}`
-        : `Features: ${JSON.stringify(context.featuresJson)}`,
+        : 'No structured business intelligence available.',
+      '\nIMPORTANT: Write only natural language in the message body. Never include JSON, code, or raw data structures.',
     ]
       .filter(Boolean)
       .join('\n');

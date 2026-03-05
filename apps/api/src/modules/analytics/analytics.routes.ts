@@ -55,6 +55,21 @@ export function registerAnalyticsRoutes(
     enqueueAnalyticsRollup: dependencies?.enqueueAnalyticsRollup,
   });
 
+  app.get('/v1/analytics/overview', async (request, reply) => {
+    try {
+      const [funnel, scoreDistribution] = await Promise.all([
+        service.getFunnel({}),
+        service.getScoreDistribution({}),
+      ]);
+      return { funnel, scoreDistribution };
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
   app.get('/v1/analytics/funnel', async (request, reply) => {
     const parsedQuery = FunnelQuerySchema.safeParse(request.query);
     if (!parsedQuery.success) {

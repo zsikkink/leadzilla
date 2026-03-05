@@ -47,6 +47,23 @@ import { registerSettingsRoutes } from './modules/settings/settings.routes.js';
 import { registerStatsRoutes } from './modules/stats/stats.routes.js';
 import { registerWebhookRoutes } from './modules/webhook/webhook.routes.js';
 
+// ── Email normalization (API can't import @lead-flood/providers) ──
+
+const SIMPLE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function normalizeLeadEmail(raw: string): string {
+  let email: string;
+  try {
+    email = decodeURIComponent(raw);
+  } catch {
+    email = raw;
+  }
+  email = email.trim().replace(/\s+/g, '');
+  if (SIMPLE_EMAIL_RE.test(email)) return email;
+  // If still invalid after normalization, return a safe fallback
+  return email.includes('@') ? email : 'unknown@lead.local';
+}
+
 // ── Generic email filter (inline — API can't import @lead-flood/providers) ──
 const GENERIC_PREFIXES = new Set([
   'info', 'contact', 'hello', 'support', 'admin', 'sales', 'office',
@@ -293,7 +310,14 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 
       try {
         const result = await options.listLeads(parsedQuery.data);
-        return ListLeadsResponseSchema.parse(result);
+        const normalized = {
+          ...result,
+          items: result.items.map((item) => ({
+            ...item,
+            email: normalizeLeadEmail(item.email),
+          })),
+        };
+        return ListLeadsResponseSchema.parse(normalized);
       } catch (error: unknown) {
         request.log.error({ error }, 'Failed to list leads');
         reply.status(500);
@@ -327,6 +351,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 
       return GetLeadResponseSchema.parse({
         ...lead,
+        email: normalizeLeadEmail(lead.email),
         createdAt: lead.createdAt.toISOString(),
         updatedAt: lead.updatedAt.toISOString(),
       });
