@@ -353,11 +353,12 @@ async function main(): Promise<void> {
           reason: 'api',
           correlationId: payload.runId,
           countries: payload.countries,
+          ...(payload.cities !== undefined ? { cities: payload.cities } : {}),
           discoveryRunId: payload.runId,
           icpProfileId: payload.icpProfileId,
           includeWebsiteAnalysis: payload.includeWebsiteAnalysis,
           includeSocialMediaAnalysis: payload.includeSocialMediaAnalysis,
-          ...(payload.limit !== undefined ? { maxTasks: payload.limit } : {}),
+          ...(payload.limit !== undefined ? { maxTasks: Math.max(payload.limit * 3, 15) } : {}),
           enqueueRunTasks: true,
         },
         {

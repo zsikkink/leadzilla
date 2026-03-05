@@ -48,8 +48,8 @@ interface RequestExecutionConfig {
 }
 
 const DEFAULT_BASE_URL = 'https://serpapi.com/search.json';
-const DEFAULT_MAX_ATTEMPTS = 5;
-const DEFAULT_BACKOFF_BASE_SECONDS = 30;
+const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_BACKOFF_BASE_SECONDS = 5;
 const DEFAULT_TIMEOUT_MS = 30000;
 const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 
@@ -514,6 +514,12 @@ function isTransientStatus(statusCode: number): boolean {
   return TRANSIENT_STATUSES.has(statusCode);
 }
 
+function isTerminalError(error: SerpApiRequestError): boolean {
+  if (error.statusCode === 402 || error.statusCode === 403) return true;
+  if (error.statusCode === 429 && error.serpApiError?.includes('run out of searches')) return true;
+  return false;
+}
+
 async function readResponseText(response: Response): Promise<string | null> {
   try {
     const text = await response.text();
@@ -652,6 +658,17 @@ export class SerpApiDiscoveryProvider implements DiscoveryProvider {
             throw error;
           }
 
+          // SerpAPI returns 429 for both rate limiting AND "out of searches".
+          // "Out of searches" is terminal — retrying won't help.
+          if (response.status === 429 && serpApiError?.includes('run out of searches')) {
+            console.error(
+              '[serpapi] QUOTA EXHAUSTED — SerpAPI account has run out of searches. ' +
+                `status=429 ${formatRequestContext(requestContext)}` +
+                `. error=${serpApiError}`,
+            );
+            throw error;
+          }
+
           if (isTransientStatus(response.status) && attempt < this.executionConfig.maxAttempts) {
             await this.waitBackoff(attempt);
             lastError = error;
@@ -703,6 +720,11 @@ export class SerpApiDiscoveryProvider implements DiscoveryProvider {
                   cause: error,
                 },
               );
+
+        // Terminal errors should NOT be retried — bubble up immediately
+        if (isTerminalError(wrapped)) {
+          throw wrapped;
+        }
 
         if (attempt < this.executionConfig.maxAttempts) {
           await this.waitBackoff(attempt);

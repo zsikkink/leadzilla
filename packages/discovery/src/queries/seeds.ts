@@ -1,19 +1,5 @@
 import type { DiscoverySeedProfile } from '../config.js';
-import type { DiscoveryCountryCode, DiscoveryLanguageCode } from '../providers/types.js';
-
-export const initialCitiesByCountry: Record<DiscoveryCountryCode, string[]> = {
-  JO: ['Amman', 'Irbid', 'Zarqa', 'Aqaba'],
-  SA: ['Riyadh', 'Jeddah', 'Dammam', 'Mecca'],
-  AE: ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman'],
-  EG: ['Cairo', 'Alexandria', 'Giza', 'Mansoura'],
-};
-
-export const smallInitialCitiesByCountry: Record<DiscoveryCountryCode, string[]> = {
-  JO: ['Amman'],
-  SA: ['Riyadh', 'Jeddah'],
-  AE: ['Dubai', 'Abu Dhabi'],
-  EG: ['Cairo'],
-};
+import type { DiscoveryLanguageCode } from '../providers/types.js';
 
 export const categoryTaxonomyEN: string[] = [
   'bakery',
@@ -111,12 +97,6 @@ export const smallQueryTemplatesAR: string[] = [
   '{category} في {city} {country} تواصل معنا واتساب',
 ];
 
-export function getInitialCitiesByCountry(
-  profile: DiscoverySeedProfile,
-): Record<DiscoveryCountryCode, string[]> {
-  return profile === 'small' ? smallInitialCitiesByCountry : initialCitiesByCountry;
-}
-
 export function getCategoryTaxonomy(
   language: DiscoveryLanguageCode,
   profile: DiscoverySeedProfile = 'default',
@@ -159,6 +139,15 @@ export const COUNTRY_NAMES: Record<string, string> = {
   KW: 'Kuwait',
   OM: 'Oman',
   LB: 'Lebanon',
+  IQ: 'Iraq',
+  MA: 'Morocco',
+  TN: 'Tunisia',
+  DZ: 'Algeria',
+  LY: 'Libya',
+  YE: 'Yemen',
+  SY: 'Syria',
+  PS: 'Palestine',
+  SD: 'Sudan',
   US: 'United States',
   GB: 'United Kingdom',
 };
@@ -210,4 +199,13 @@ export const defaultCitiesByCountry: Record<string, string[]> = {
   KW: ['Kuwait City'],
   OM: ['Muscat'],
   LB: ['Beirut'],
+  IQ: ['Baghdad', 'Erbil', 'Basra'],
+  MA: ['Casablanca', 'Rabat', 'Marrakech'],
+  TN: ['Tunis', 'Sfax'],
+  DZ: ['Algiers', 'Oran'],
+  LY: ['Tripoli', 'Benghazi'],
+  YE: ['Sanaa', 'Aden'],
+  SY: ['Damascus', 'Aleppo'],
+  PS: ['Ramallah', 'Gaza'],
+  SD: ['Khartoum'],
 };

@@ -68,6 +68,8 @@ interface RunState {
   serpapiRequests: number;
   startedAtMs: number;
   finalized: boolean;
+  /** Number of concurrent slots actively using this state. */
+  activeSlots: number;
 }
 
 function getRunKey(job: Job<DiscoveryRunSearchTaskJobPayload>): string {
@@ -97,9 +99,27 @@ function getRunState(runKey: string): RunState {
     serpapiRequests: 0,
     startedAtMs: Date.now(),
     finalized: false,
+    activeSlots: 0,
   };
   runStates.set(runKey, created);
   return created;
+}
+
+/**
+ * Release a slot from the run state. Cleans up the Map entry only when
+ * no more concurrent slots are using it (with a grace period).
+ */
+function releaseSlot(runKey: string, state: RunState): void {
+  state.activeSlots = Math.max(0, state.activeSlots - 1);
+  if (state.finalized && state.activeSlots === 0) {
+    // Grace period: let any in-flight slot finish before removing
+    setTimeout(() => {
+      const current = runStates.get(runKey);
+      if (current && current.finalized && current.activeSlots === 0) {
+        runStates.delete(runKey);
+      }
+    }, 30_000);
+  }
 }
 
 function nextPollDelaySeconds(status: 'EMPTY' | 'DONE' | 'FAILED' | 'SKIPPED'): number {
@@ -229,21 +249,22 @@ export async function handleDiscoveryRunSearchTaskJob(
   job: Job<DiscoveryRunSearchTaskJobPayload>,
   dependencies: DiscoveryRunSearchTaskDependencies,
 ): Promise<void> {
-  try {
   const slot = job.data.slot ?? 0;
   const correlationId = job.data.correlationId ?? job.id;
   const runKey = getRunKey(job);
   const runState = getRunState(runKey);
+  runState.activeSlots += 1;
   const effectiveMaxTasks = job.data.maxTasks ?? dependencies.maxTasks;
+  try {
 
   if (effectiveMaxTasks !== undefined && runState.processedTaskCount >= effectiveMaxTasks) {
     if (job.data.jobRunId) {
       await finalizeJobRun(job.data.jobRunId, runState, 'SUCCESS', null);
-      runStates.delete(runKey);
+      releaseSlot(runKey, runState);
     }
     if (job.data.discoveryRunId) {
       await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'completed', null);
-      runStates.delete(runKey);
+      releaseSlot(runKey, runState);
     }
     logger.info(
       {
@@ -337,7 +358,7 @@ export async function handleDiscoveryRunSearchTaskJob(
   if (job.data.jobRunId) {
     if (runResult.status === 'FAILED' && effectiveMaxTasks === undefined) {
       await finalizeJobRun(job.data.jobRunId, runState, 'FAILED', runResult.error ?? 'Task failed');
-      runStates.delete(runKey);
+      releaseSlot(runKey, runState);
     } else {
       await updateJobRunProgress(job.data.jobRunId, runState);
     }
@@ -347,7 +368,7 @@ export async function handleDiscoveryRunSearchTaskJob(
   if (job.data.discoveryRunId) {
     if (runResult.status === 'FAILED' && effectiveMaxTasks === undefined) {
       await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'failed', runResult.error ?? 'Task failed');
-      runStates.delete(runKey);
+      releaseSlot(runKey, runState);
     } else {
       await updateDiscoveryRunProgress(job.data.discoveryRunId, runState);
     }
@@ -401,11 +422,11 @@ export async function handleDiscoveryRunSearchTaskJob(
   if (effectiveMaxTasks !== undefined && runState.processedTaskCount >= effectiveMaxTasks) {
     if (job.data.jobRunId) {
       await finalizeJobRun(job.data.jobRunId, runState, 'SUCCESS', null);
-      runStates.delete(runKey);
+      releaseSlot(runKey, runState);
     }
     if (job.data.discoveryRunId) {
       await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'completed', null);
-      runStates.delete(runKey);
+      releaseSlot(runKey, runState);
     }
     logger.info(
       {
@@ -422,11 +443,11 @@ export async function handleDiscoveryRunSearchTaskJob(
   if (effectiveMaxTasks !== undefined && runResult.status === 'EMPTY') {
     if (job.data.jobRunId) {
       await finalizeJobRun(job.data.jobRunId, runState, 'SUCCESS', null);
-      runStates.delete(runKey);
+      releaseSlot(runKey, runState);
     }
     if (job.data.discoveryRunId) {
       await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'completed', null);
-      runStates.delete(runKey);
+      releaseSlot(runKey, runState);
     }
     logger.info(
       {
@@ -465,16 +486,18 @@ export async function handleDiscoveryRunSearchTaskJob(
     },
   );
   } catch (error: unknown) {
+    releaseSlot(runKey, runState);
     logger.error(
       {
         jobId: job.id,
         queue: job.name,
-        slot: job.data.slot ?? 0,
-        correlationId: job.data.correlationId ?? job.id,
+        slot,
+        correlationId,
         error,
       },
       'Failed discovery.run_search_task job',
     );
     throw classifyError(error);
   }
+  releaseSlot(runKey, runState);
 }

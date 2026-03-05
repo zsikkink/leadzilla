@@ -16,6 +16,7 @@ export interface DiscoveryRunJobPayload {
   runId: string;
   icpProfileId: string;
   countries: string[];
+  cities?: string[] | undefined;
   includeWebsiteAnalysis?: boolean | undefined;
   includeSocialMediaAnalysis?: boolean | undefined;
   limit?: number | undefined;
@@ -65,6 +66,7 @@ export function buildDiscoveryService(
         runId,
         icpProfileId: primaryIcpProfileId,
         countries: input.countries,
+        cities: input.cities,
         includeWebsiteAnalysis: input.includeWebsiteAnalysis,
         includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
         limit: input.limit,

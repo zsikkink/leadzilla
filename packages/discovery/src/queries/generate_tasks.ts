@@ -11,25 +11,48 @@ import type {
 import {
   COUNTRY_NAMES,
   defaultCitiesByCountry,
-  getCategoryTaxonomy,
-  getInitialCitiesByCountry,
-  getQueryTemplates,
   queryTemplatesV2EN,
 } from './seeds.js';
 
-function toCountrySearchName(countryCode: DiscoveryCountryCode): string {
-  switch (countryCode) {
-    case 'JO':
-      return 'Jordan';
-    case 'SA':
-      return 'Saudi Arabia';
-    case 'AE':
-      return 'United Arab Emirates';
-    case 'EG':
-      return 'Egypt';
-    default:
-      return countryCode;
+/**
+ * Normalise country names/abbreviations from ICP profiles to ISO 3166-1 alpha-2.
+ * Handles common variants: "UAE" → "AE", "KSA" → "SA", "Egypt" → "EG", etc.
+ */
+const COUNTRY_NAME_TO_ISO: Record<string, string> = {
+  uae: 'AE',
+  'united arab emirates': 'AE',
+  ksa: 'SA',
+  'saudi arabia': 'SA',
+  egypt: 'EG',
+  jordan: 'JO',
+  qatar: 'QA',
+  bahrain: 'BH',
+  kuwait: 'KW',
+  oman: 'OM',
+  lebanon: 'LB',
+  iraq: 'IQ',
+  morocco: 'MA',
+  tunisia: 'TN',
+  algeria: 'DZ',
+  libya: 'LY',
+  yemen: 'YE',
+  syria: 'SY',
+  palestine: 'PS',
+  sudan: 'SD',
+  'united states': 'US',
+  'united kingdom': 'GB',
+};
+
+function normalizeCountryCode(input: string): string {
+  // Already a 2-letter ISO code?
+  if (input.length === 2 && input === input.toUpperCase()) {
+    return input;
   }
+  return COUNTRY_NAME_TO_ISO[input.toLowerCase().trim()] ?? input;
+}
+
+function toCountrySearchName(countryCode: DiscoveryCountryCode): string {
+  return COUNTRY_NAMES[countryCode] ?? countryCode;
 }
 
 function renderTemplate(
@@ -159,135 +182,6 @@ export function createGeneratedTask(
   };
 }
 
-function generateDefaultTasks(
-  config: Pick<
-    DiscoverySeedConfig,
-    'countries' | 'languages' | 'maxPagesPerQuery' | 'taskTypes'
-  >,
-  timeBucket: string,
-): GeneratedSearchTask[] {
-  const tasks: GeneratedSearchTask[] = [];
-
-  for (const countryCode of config.countries) {
-    const countryName = toCountrySearchName(countryCode);
-    const cities = getInitialCitiesByCountry('default')[countryCode] ?? [];
-
-    for (const language of config.languages) {
-      const categories = getCategoryTaxonomy(language, 'default');
-      const templates = getQueryTemplates(language, 'default');
-
-      for (const cityRaw of cities) {
-        const city = normalizeCity(cityRaw);
-        if (!city) {
-          continue;
-        }
-
-        for (const category of categories) {
-          for (const template of templates) {
-            const queryText = renderTemplate(template, {
-              category,
-              city: cityRaw,
-              country: countryName,
-            });
-            for (let page = 1; page <= config.maxPagesPerQuery; page += 1) {
-              for (const taskType of config.taskTypes) {
-                tasks.push(
-                  createGeneratedTask(
-                    taskType,
-                    countryCode,
-                    language,
-                    cityRaw,
-                    queryText,
-                    page,
-                    timeBucket,
-                  ),
-                );
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  return tasks;
-}
-
-function generateSmallTasks(
-  config: Pick<
-    DiscoverySeedConfig,
-    'countries' | 'languages' | 'maxPagesPerQuery' | 'taskTypes'
-  >,
-  timeBucket: string,
-): GeneratedSearchTask[] {
-  const tasks: GeneratedSearchTask[] = [];
-  const categoryCursorByLanguage: Record<DiscoveryLanguageCode, number> = {
-    en: 0,
-    ar: 0,
-  };
-
-  for (const countryCode of config.countries) {
-    const countryName = toCountrySearchName(countryCode);
-    const cities = getInitialCitiesByCountry('small')[countryCode] ?? [];
-
-    for (const cityRaw of cities) {
-      for (const language of config.languages) {
-        const categories = getCategoryTaxonomy(language, 'small');
-        const template = getQueryTemplates(language, 'small')[0];
-        if (!template || categories.length === 0) {
-          continue;
-        }
-
-        for (let page = 1; page <= config.maxPagesPerQuery; page += 1) {
-          for (const taskType of config.taskTypes) {
-            const category = categories[categoryCursorByLanguage[language] % categories.length];
-            categoryCursorByLanguage[language] += 1;
-
-            if (!category) {
-              continue;
-            }
-
-            const queryText = renderTemplate(template, {
-              category,
-              city: cityRaw,
-              country: countryName,
-            });
-
-            tasks.push(
-              createGeneratedTask(taskType, countryCode, language, cityRaw, queryText, page, timeBucket),
-            );
-          }
-        }
-      }
-    }
-  }
-
-  return tasks;
-}
-
-export function generateTasks(
-  config: Pick<
-    DiscoverySeedConfig,
-    | 'countries'
-    | 'languages'
-    | 'maxPagesPerQuery'
-    | 'refreshBucket'
-    | 'seedProfile'
-    | 'taskTypes'
-    | 'seedBucket'
-  >,
-  options: GenerateTasksOptions = {},
-): GeneratedSearchTask[] {
-  const now = options.now ?? new Date();
-  const timeBucket = buildTimeBucket(now, config.refreshBucket, config.seedBucket);
-
-  if (config.seedProfile === 'small') {
-    return generateSmallTasks(config, timeBucket);
-  }
-
-  return generateDefaultTasks(config, timeBucket);
-}
-
 /* ------------------------------------------------------------------ */
 /* V2 — ICP-driven task generation                                    */
 /* ------------------------------------------------------------------ */
@@ -352,7 +246,8 @@ export function generateTasksV2(
 
   const tasks: GeneratedSearchTask[] = [];
 
-  for (const countryCode of input.countries) {
+  for (const rawCountry of input.countries) {
+    const countryCode = normalizeCountryCode(rawCountry);
     const countryName = COUNTRY_NAMES[countryCode] ?? countryCode;
     const cities = resolveCitiesForCountry(countryCode, input.cities);
 

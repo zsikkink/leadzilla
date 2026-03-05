@@ -109,6 +109,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         if (error || !data.session || !data.session.user) {
+          // Clear stale Supabase-internal tokens (e.g. after Supabase restart)
+          void supabase!.auth.signOut().catch(() => {});
           clearAuthState();
           setToken(null);
           setUser(null);

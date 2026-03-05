@@ -54,11 +54,16 @@ interface BoundingBox {
   high: { latitude: number; longitude: number };
 }
 
-const COUNTRY_BOUNDING_BOXES: Record<DiscoveryCountryCode, BoundingBox> = {
+const COUNTRY_BOUNDING_BOXES: Partial<Record<DiscoveryCountryCode, BoundingBox>> = {
   AE: { low: { latitude: 22.63, longitude: 51.50 }, high: { latitude: 26.08, longitude: 56.38 } },
   SA: { low: { latitude: 16.38, longitude: 34.57 }, high: { latitude: 32.15, longitude: 55.67 } },
   JO: { low: { latitude: 29.18, longitude: 34.96 }, high: { latitude: 33.37, longitude: 39.30 } },
   EG: { low: { latitude: 22.00, longitude: 24.70 }, high: { latitude: 31.67, longitude: 36.90 } },
+  QA: { low: { latitude: 24.47, longitude: 50.75 }, high: { latitude: 26.18, longitude: 51.64 } },
+  BH: { low: { latitude: 25.79, longitude: 50.38 }, high: { latitude: 26.33, longitude: 50.82 } },
+  KW: { low: { latitude: 28.53, longitude: 46.55 }, high: { latitude: 30.10, longitude: 48.42 } },
+  OM: { low: { latitude: 16.65, longitude: 51.88 }, high: { latitude: 26.39, longitude: 59.84 } },
+  LB: { low: { latitude: 33.05, longitude: 35.10 }, high: { latitude: 34.69, longitude: 36.62 } },
 };
 
 /* ------------------------------------------------------------------ */

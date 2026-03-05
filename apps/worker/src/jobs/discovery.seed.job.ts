@@ -37,6 +37,8 @@ export interface DiscoverySeedJobPayload {
   bucket?: string;
   taskTypes?: SearchTaskType[];
   countries?: DiscoveryCountryCode[];
+  /** User-selected cities override. When provided, only these cities are searched. */
+  cities?: string[] | undefined;
   languages?: DiscoveryLanguageCode[];
   enqueueRunTasks?: boolean;
   /** Pipeline v2 fields — forwarded to search task workers for business.prequalify chaining. */
@@ -57,7 +59,10 @@ export interface DiscoverySeedDependencies {
   config: DiscoveryRuntimeConfig;
 }
 
-const ALLOWED_COUNTRIES = new Set<DiscoveryCountryCode>(['JO', 'SA', 'AE', 'EG']);
+const ALLOWED_COUNTRIES = new Set<DiscoveryCountryCode>([
+  'JO', 'SA', 'AE', 'EG', 'QA', 'BH', 'KW', 'OM', 'LB',
+  'IQ', 'MA', 'TN', 'DZ', 'LY', 'YE', 'SY', 'PS', 'SD',
+]);
 const ALLOWED_LANGUAGES = new Set<DiscoveryLanguageCode>(['en', 'ar']);
 const ALLOWED_TASK_TYPES = new Set<SearchTaskType>([
   'SERP_GOOGLE',
@@ -163,9 +168,17 @@ export async function handleDiscoverySeedJob(
       });
 
       if (icpProfile && icpProfile.targetIndustries.length > 0) {
+        // User-selected countries/cities override ICP profile defaults.
+        // The job payload carries the user's filter from the API request.
+        const userCountries = job.data.countries ?? [];
+        const effectiveCountries = userCountries.length > 0
+          ? userCountries
+          : icpProfile.targetCountries;
+
         icpSeedConfig = {
           targetIndustries: icpProfile.targetIndustries,
-          targetCountries: icpProfile.targetCountries,
+          targetCountries: effectiveCountries,
+          ...(job.data.cities !== undefined ? { cities: job.data.cities } : {}),
         };
         logger.info(
           {
@@ -174,7 +187,8 @@ export async function handleDiscoverySeedJob(
             correlationId,
             icpProfileId: job.data.icpProfileId,
             targetIndustries: icpProfile.targetIndustries,
-            targetCountries: icpProfile.targetCountries,
+            effectiveCountries,
+            userCities: job.data.cities,
           },
           'Using ICP v2 category mapping for task generation',
         );
@@ -200,6 +214,33 @@ export async function handleDiscoverySeedJob(
       'Completed discovery frontier seed job',
     );
 
+    // If 0 tasks were generated, finalize the run immediately instead of
+    // enqueuing empty run_search_task slots that race with this update.
+    if (seedResult.generated === 0) {
+      if (job.data.discoveryRunId) {
+        await prisma.jobExecution.update({
+          where: { id: job.data.discoveryRunId },
+          data: {
+            status: 'failed',
+            startedAt: new Date(),
+            finishedAt: new Date(),
+            error: 'Seed generated 0 search tasks. Check ICP industry mapping and country codes.',
+            result: toInputJson({
+              totalItems: 0,
+              processedItems: 0,
+              failedItems: 0,
+              searchTasksInserted: 0,
+            }),
+          },
+        });
+      }
+      logger.warn(
+        { jobId: job.id, queue: job.name, correlationId },
+        'Seed generated 0 tasks — skipping run_search_task enqueue and marking run as failed',
+      );
+      return;
+    }
+
     if (shouldEnqueueRunTasks) {
       for (let slot = 0; slot < dependencies.config.concurrency; slot += 1) {
         await dependencies.boss.send(
@@ -217,6 +258,7 @@ export async function handleDiscoverySeedJob(
           },
           {
             ...DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,
+            singletonKey: `discovery.run_search_task:${job.data.discoveryRunId ?? correlationId}:slot-${slot}`,
           },
         );
       }

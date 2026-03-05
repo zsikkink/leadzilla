@@ -149,12 +149,12 @@ function loadBaseSeedConfig(source: NodeJS.ProcessEnv): DiscoverySeedConfig {
   const maxPagesPerQuery =
     seedProfile === 'small'
       ? parsePositiveInt(source.DISCOVERY_SEED_MAX_PAGES, 1)
-      : parsePositiveInt(source.DISCOVERY_MAX_PAGES_PER_QUERY, 3);
+      : parsePositiveInt(source.DISCOVERY_MAX_PAGES_PER_QUERY, 1);
 
   const taskTypes: SearchTaskType[] =
     seedProfile === 'small'
       ? normalizedSeedTaskTypes
-      : (['SERP_GOOGLE', 'SERP_GOOGLE_LOCAL', 'SERP_MAPS_LOCAL'] satisfies SearchTaskType[]);
+      : (['SERP_GOOGLE_LOCAL', 'SERP_MAPS_LOCAL'] satisfies SearchTaskType[]);
 
   const seedBucket = source.DISCOVERY_SEED_BUCKET?.trim() || null;
 
@@ -168,7 +168,7 @@ function loadBaseSeedConfig(source: NodeJS.ProcessEnv): DiscoverySeedConfig {
     maxPagesPerQuery,
     refreshBucket,
     seedProfile,
-    maxTasks: parsePositiveInt(source.DISCOVERY_SEED_MAX_TASKS, 40),
+    maxTasks: parsePositiveInt(source.DISCOVERY_SEED_MAX_TASKS, 75),
     taskTypes: Array.from(new Set<SearchTaskType>(taskTypes)),
     seedBucket,
   };

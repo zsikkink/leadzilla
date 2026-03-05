@@ -575,6 +575,7 @@ async function main(): Promise<void> {
         websiteScraperAdapter,
         instagramScraperAdapter,
         smtpVerifier: new SmtpVerifier(),
+        openAiAdapter: openAiAdapter.isConfigured ? openAiAdapter : undefined,
         enqueueEnrichmentRun: async (payload) => {
           const enrichmentPayload: EnrichmentRunJobPayload = {
             runId: payload.runId,

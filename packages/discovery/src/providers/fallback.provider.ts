@@ -79,7 +79,7 @@ function isQuotaExhaustedError(error: unknown): boolean {
 
   // Check for statusCode property (SerpApiRequestError, etc.)
   const statusCode = (error as unknown as Record<string, unknown>).statusCode;
-  if (statusCode === 402) return true;
+  if (statusCode === 402 || statusCode === 403) return true;
 
   // Check error message for quota/credit keywords
   const message = error.message.toLowerCase();
@@ -87,8 +87,9 @@ function isQuotaExhaustedError(error: unknown): boolean {
     message.includes('quota exhausted') ||
     message.includes('credits depleted') ||
     message.includes('quota exceeded') ||
+    message.includes('run out of searches') ||
     message.includes('billing') ||
-    (statusCode === 429 && (message.includes('quota') || message.includes('limit')))
+    (statusCode === 429 && (message.includes('quota') || message.includes('limit') || message.includes('run out')))
   ) {
     return true;
   }

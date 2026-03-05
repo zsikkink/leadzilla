@@ -1,7 +1,7 @@
 import { prisma } from '@lead-flood/db';
 
 import type { DiscoverySeedConfig } from './config.js';
-import { generateTasks, generateTasksV2 } from './queries/generate_tasks.js';
+import { generateTasksV2 } from './queries/generate_tasks.js';
 import type { GenerateTasksV2Input } from './queries/generate_tasks.js';
 import { mapIcpIndustriesToCategories } from './queries/icp-category-map.js';
 import { COUNTRY_NAME_TO_ISO } from './queries/seeds.js';
@@ -71,30 +71,43 @@ export async function seedSearchTasks(
   now: Date = new Date(),
   icpConfig?: IcpSeedConfig | undefined,
 ): Promise<SeedTasksResult> {
-  // Use v2 generation if ICP config is provided with target industries
-  const generatedTasks = icpConfig
-    ? generateTasksV2(
-        {
-          categories: mapIcpIndustriesToCategories(icpConfig.targetIndustries),
-          countries: resolveCountries(config.countries, icpConfig.targetCountries),
-          cities: icpConfig.cities,
-          maxPagesPerQuery: icpConfig.maxPagesPerQuery ?? config.maxPagesPerQuery,
-          taskTypes: config.taskTypes,
-          searchProvider: icpConfig.searchProvider,
-        } satisfies GenerateTasksV2Input,
-        { now },
-      )
-    : generateTasks(config, { now });
-
-  if (config.seedProfile === 'small' && generatedTasks.length > config.maxTasks) {
+  if (!icpConfig) {
     throw new Error(
-      `Discovery seed generated ${generatedTasks.length} tasks, which exceeds DISCOVERY_SEED_MAX_TASKS=${config.maxTasks}. Reduce seed scope or increase the cap.`,
+      'ICP config with targetIndustries is required for task generation. ' +
+      'The v1 generateTasks path has been removed — ensure the ICP profile has targetIndustries set.',
     );
+  }
+
+  const generatedTasks = generateTasksV2(
+    {
+      categories: mapIcpIndustriesToCategories(icpConfig.targetIndustries),
+      countries: resolveCountries(config.countries, icpConfig.targetCountries),
+      cities: icpConfig.cities,
+      maxPagesPerQuery: icpConfig.maxPagesPerQuery ?? config.maxPagesPerQuery,
+      taskTypes: config.taskTypes,
+      searchProvider: icpConfig.searchProvider,
+    } satisfies GenerateTasksV2Input,
+    { now },
+  );
+
+  // When generated tasks exceed the budget, randomly sample down instead of failing.
+  // This makes maxTasks a budget cap, not a hard error.
+  let tasksToInsert = generatedTasks;
+  if (generatedTasks.length > config.maxTasks) {
+    // Fisher-Yates shuffle, then take first maxTasks
+    const shuffled = [...generatedTasks];
+    for (let i = shuffled.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = shuffled[i]!;
+      shuffled[i] = shuffled[j]!;
+      shuffled[j] = tmp;
+    }
+    tasksToInsert = shuffled.slice(0, config.maxTasks);
   }
 
   let inserted = 0;
 
-  for (const task of generatedTasks) {
+  for (const task of tasksToInsert) {
     const result = await prisma.$executeRaw`
       INSERT INTO "search_tasks" (
         "id",
@@ -139,7 +152,7 @@ export async function seedSearchTasks(
   }
 
   return {
-    generated: generatedTasks.length,
+    generated: tasksToInsert.length,
     inserted,
   };
 }

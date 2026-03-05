@@ -2,12 +2,15 @@ import { categoryTaxonomyEN } from './seeds.js';
 
 /**
  * Mapping from ICP target industry keys to relevant search categories.
- * Keys must be lowercase. Includes both generic keys (luxury_retail)
- * and the actual ICP targetIndustry strings from seed data (luxury services).
+ *
+ * Keys should be lowercase. The lookup normalises input by lowercasing and
+ * replacing spaces with underscores so both "Luxury Services" and
+ * "luxury_services" resolve correctly.
  */
 export const ICP_INDUSTRY_CATEGORY_MAP: Record<string, string[]> = {
-  // Generic keys
+  // Underscore-separated canonical keys
   luxury_retail: ['fashion boutique', 'jewelry store', 'home decor', 'watch store', 'luxury goods'],
+  luxury_services: ['fashion boutique', 'jewelry store', 'home decor', 'watch store', 'luxury goods', 'event planner', 'spa'],
   food_beverage: ['restaurant', 'coffee shop', 'bakery', 'catering service'],
   beauty_wellness: ['beauty salon', 'barbershop', 'spa', 'nail salon'],
   health_medical: ['dental clinic', 'medical clinic', 'pharmacy', 'optical store'],
@@ -22,61 +25,36 @@ export const ICP_INDUSTRY_CATEGORY_MAP: Record<string, string[]> = {
   ecommerce: ['online store', 'dropshipping', 'marketplace seller'],
   professional_services: ['accounting firm', 'law firm', 'consulting agency', 'recruitment agency'],
 
-  // Segment A: Luxury & High-Ticket Services
-  'luxury services': ['fashion boutique', 'home decor', 'flower shop'],
-  'yacht charter': ['yacht charter', 'luxury boat rental'],
-  'private aviation': ['private jet charter'],
-  'luxury travel': ['luxury travel agency', 'boutique hotel'],
-  'personal shopping': ['fashion boutique', 'personal stylist'],
-
-  // Segment B: Gifting & Seasonal Commerce
-  'corporate gifting': ['gift shop', 'corporate gifting'],
-  'florists': ['flower shop'],
-  'gift boxes': ['gift shop', 'gift boxes'],
-  'experience platforms': ['event planner', 'experience platform'],
-  'bespoke events': ['event planner', 'catering service'],
-
-  // Segment C: Events & Experiences
-  'wedding planning': ['event planner', 'wedding planner', 'catering service'],
-  'event production': ['event planner', 'event production'],
-  'exhibitions': ['event planner', 'exhibition organizer'],
-  'pop-up markets': ['event planner', 'pop-up market'],
-  'festivals': ['event planner', 'catering service', 'festival organizer'],
-
-  // Segment D: Home & Design Projects
-  'interior design': ['interior design', 'home decor', 'furniture store'],
-  'renovation': ['renovation contractor', 'home decor'],
-  'architecture': ['architecture firm', 'interior design'],
-  'contracting': ['contractor', 'renovation contractor'],
-  'landscape design': ['landscaping', 'garden design'],
-
-  // Segment E: Hospitality & Accommodation
-  'boutique hotels': ['boutique hotel', 'hotel'],
-  'holiday homes': ['holiday home rental', 'serviced apartment'],
-  'serviced residences': ['serviced apartment'],
-  'property management': ['property management', 'real estate'],
-  // 'hospitality' already mapped above
-
-  // Segment F: Health & Wellness Premium
-  'wellness clinics': ['wellness clinic', 'beauty salon', 'medical clinic'],
-  'aesthetic medicine': ['aesthetic clinic', 'beauty salon', 'medical clinic'],
-  'longevity': ['wellness clinic', 'medical clinic'],
-  'iv therapy': ['wellness clinic', 'medical clinic'],
-  'medical tourism': ['medical clinic', 'dental clinic'],
-
-  // Segment G: Coaching & Advisory
-  'executive coaching': ['business coaching', 'consulting'],
-  'business advisory': ['consulting', 'business advisory'],
-  'masterminds': ['business coaching', 'training institute'],
-  'memberships': ['gym', 'membership club'],
-  'consulting': ['consulting', 'business advisory'],
-
-  // Segment H: Education & Training
-  'private education': ['private school', 'training institute'],
-  'professional training': ['training institute', 'professional training'],
-  'bootcamps': ['coding bootcamp', 'training institute'],
-  'certifications': ['training institute', 'certification center'],
-  'cohort programs': ['training institute', 'online course'],
+  // ICP profile industry names (underscore-canonical, auto-matched from DB values)
+  yacht_charter: ['yacht charter', 'boat rental', 'luxury travel', 'marina'],
+  private_aviation: ['private jet charter', 'aviation services', 'luxury travel'],
+  luxury_travel: ['luxury travel agency', 'travel agency', 'hotel', 'resort', 'serviced apartment'],
+  personal_shopping: ['fashion boutique', 'personal stylist', 'luxury goods', 'jewelry store'],
+  corporate_gifting: ['gift shop', 'corporate gifting'],
+  florists: ['flower shop'],
+  gift_boxes: ['gift shop', 'gift boxes'],
+  experience_platforms: ['event planner', 'experience platform'],
+  bespoke_events: ['event planner', 'catering service'],
+  wedding_planning: ['event planner', 'wedding planner', 'catering service'],
+  event_production: ['event planner', 'event production'],
+  exhibitions: ['event planner', 'exhibition organizer'],
+  interior_design: ['interior design', 'home decor', 'furniture store'],
+  renovation: ['renovation contractor', 'home decor'],
+  architecture: ['architecture firm', 'interior design'],
+  landscape_design: ['landscaping', 'garden design'],
+  boutique_hotels: ['boutique hotel', 'hotel'],
+  holiday_homes: ['holiday home rental', 'serviced apartment'],
+  serviced_residences: ['serviced apartment'],
+  property_management: ['property management', 'real estate'],
+  wellness_clinics: ['wellness clinic', 'beauty salon', 'medical clinic'],
+  aesthetic_medicine: ['aesthetic clinic', 'beauty salon', 'medical clinic'],
+  medical_tourism: ['medical clinic', 'dental clinic'],
+  executive_coaching: ['business coaching', 'consulting'],
+  business_advisory: ['consulting', 'business advisory'],
+  private_education: ['private school', 'training institute'],
+  professional_training: ['training institute', 'professional training'],
+  bootcamps: ['coding bootcamp', 'training institute'],
+  certifications: ['training institute', 'certification center'],
 };
 
 /**
@@ -111,7 +89,9 @@ export function mapIcpIndustriesToCategories(targetIndustries: string[]): string
   const result: string[] = [];
 
   for (const industry of targetIndustries) {
-    const key = industry.toLowerCase().trim();
+    // Normalise: lowercase, trim, and replace spaces with underscores
+    // so "Luxury Services" matches the "luxury_services" key.
+    const key = industry.toLowerCase().trim().replaceAll(' ', '_');
     const mapped = ICP_INDUSTRY_CATEGORY_MAP[key];
 
     const categories = mapped ?? fuzzyMatchCategories(key);
