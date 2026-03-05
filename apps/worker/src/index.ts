@@ -550,6 +550,7 @@ async function main(): Promise<void> {
       handleBusinessConvertJob(jobLogger, job, {
         apolloAdapter: {
           searchContactsByDomain: (domain) => apolloAdapter.searchContactsByDomain(domain),
+          preScreenDomain: (domain) => apolloAdapter.preScreenDomain(domain),
           isConfigured: Boolean(env.APOLLO_API_KEY),
         },
         hunterAdapter: {

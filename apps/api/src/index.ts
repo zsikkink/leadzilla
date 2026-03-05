@@ -14,7 +14,6 @@ import type { ReplyClassifyJobPayload } from '@lead-flood/contracts';
 
 import type { AnalyticsRollupJobPayload } from './modules/analytics/analytics.service.js';
 import type { DiscoveryRunJobPayload } from './modules/discovery/discovery.service.js';
-import type { EnrichmentRunJobPayload } from './modules/enrichment/enrichment.service.js';
 import type { MessageGenerateJobPayload, MessagingSendJobPayload } from './modules/messaging/messaging.service.js';
 import type { ScoringRunJobPayload } from './modules/scoring/scoring.service.js';
 import { buildServer, LeadAlreadyExistsError } from './server.js';
@@ -50,7 +49,7 @@ async function main(): Promise<void> {
   });
 
   await boss.start();
-  await boss.createQueue('enrichment.run');
+  await boss.createQueue('features.compute');
   await boss.createQueue('scoring.compute');
   await boss.createQueue('message.send');
   await boss.createQueue('message.generate');
@@ -238,7 +237,7 @@ async function main(): Promise<void> {
           select: { id: true },
           orderBy: { createdAt: 'asc' },
         });
-        const icpProfileId = activeIcp?.id ?? undefined;
+        const icpProfileId = input.icpProfileId ?? activeIcp?.id ?? undefined;
 
         const { lead, jobExecution, outboxEvent } = await prisma.$transaction(async (tx) => {
           const lead = await tx.lead.create({
@@ -253,12 +252,12 @@ async function main(): Promise<void> {
 
           const jobExecution = await tx.jobExecution.create({
             data: {
-              type: 'enrichment.run',
+              type: 'features.compute',
               status: 'queued',
               payload: {
                 leadId: lead.id,
-                source: input.source,
                 icpProfileId,
+                snapshotVersion: 1,
               },
               leadId: lead.id,
             },
@@ -266,12 +265,12 @@ async function main(): Promise<void> {
 
           const outboxEvent = await tx.outboxEvent.create({
             data: {
-              type: 'enrichment.run',
+              type: 'features.compute',
               payload: {
                 leadId: lead.id,
-                jobExecutionId: jobExecution.id,
-                source: input.source,
                 icpProfileId,
+                snapshotVersion: 1,
+                runId: jobExecution.id,
               },
               status: 'pending',
             },
@@ -286,15 +285,15 @@ async function main(): Promise<void> {
 
         try {
           await boss.send(
-            'enrichment.run',
+            'features.compute',
             {
               leadId: lead.id,
-              jobExecutionId: jobExecution.id,
-              source: input.source,
               icpProfileId,
+              snapshotVersion: 1,
+              runId: jobExecution.id,
             },
             {
-              singletonKey: `enrichment.run:${lead.id}`,
+              singletonKey: `features.compute:${lead.id}`,
               retryLimit: 3,
               retryDelay: 5,
               retryBackoff: true,
@@ -315,7 +314,7 @@ async function main(): Promise<void> {
           });
         } catch (error: unknown) {
           const errorMessage =
-            error instanceof Error ? error.message : 'Failed to enqueue enrichment job';
+            error instanceof Error ? error.message : 'Failed to enqueue features.compute job';
           logger.error(
             { error, leadId: lead.id, outboxEventId: outboxEvent.id },
             'Immediate queue publish failed; outbox retry will handle dispatch',
@@ -358,7 +357,7 @@ async function main(): Promise<void> {
           icpProfileId: payload.icpProfileId,
           includeWebsiteAnalysis: payload.includeWebsiteAnalysis,
           includeSocialMediaAnalysis: payload.includeSocialMediaAnalysis,
-          ...(payload.limit !== undefined ? { maxTasks: Math.max(payload.limit * 3, 15) } : {}),
+          ...(payload.limit !== undefined ? { maxTasks: payload.limit } : {}),
           enqueueRunTasks: true,
         },
         {
@@ -368,14 +367,6 @@ async function main(): Promise<void> {
           retryBackoff: true,
         },
       );
-    },
-    enqueueEnrichmentRun: async (payload: EnrichmentRunJobPayload) => {
-      await boss.send('enrichment.run', payload, {
-        singletonKey: `enrichment.run:${payload.runId}`,
-        retryLimit: 5,
-        retryDelay: 60,
-        retryBackoff: true,
-      });
     },
     enqueueScoringRun: async (payload: ScoringRunJobPayload) => {
       await boss.send('scoring.compute', payload, {

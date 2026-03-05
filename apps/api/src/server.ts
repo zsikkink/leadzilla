@@ -35,7 +35,6 @@ import { registerDiscoveryRoutes } from './modules/discovery/discovery.routes.js
 import { registerDiscoveryAdminRoutes } from './modules/discovery-admin/discovery-admin.routes.js';
 import type { DiscoveryRunJobPayload } from './modules/discovery/discovery.service.js';
 import { registerEnrichmentRoutes } from './modules/enrichment/enrichment.routes.js';
-import type { EnrichmentRunJobPayload } from './modules/enrichment/enrichment.service.js';
 import { registerFeedbackRoutes } from './modules/feedback/feedback.routes.js';
 import { registerIcpRoutes } from './modules/icp/icp.routes.js';
 import { registerLearningRoutes } from './modules/learning/learning.routes.js';
@@ -156,7 +155,6 @@ export interface BuildServerOptions {
   authenticateUser?: ((input: LoginRequest) => Promise<LoginResponse | null>) | undefined;
   createLeadAndEnqueue: (input: CreateLeadRequest) => Promise<{ leadId: string; jobId: string }>;
   enqueueDiscoveryRun?: (payload: DiscoveryRunJobPayload) => Promise<void>;
-  enqueueEnrichmentRun?: (payload: EnrichmentRunJobPayload) => Promise<void>;
   enqueueScoringRun?: (payload: ScoringRunJobPayload) => Promise<void>;
   enqueueMessageSend?: (payload: MessagingSendJobPayload) => Promise<void>;
   enqueueMessageGenerate?: ((payload: MessageGenerateJobPayload) => Promise<void>) | undefined;
@@ -430,11 +428,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     } else {
       registerDiscoveryRoutes(api);
     }
-    if (options.enqueueEnrichmentRun) {
-      registerEnrichmentRoutes(api, { enqueueEnrichmentRun: options.enqueueEnrichmentRun });
-    } else {
-      registerEnrichmentRoutes(api);
-    }
+    registerEnrichmentRoutes(api);
     if (options.enqueueScoringRun) {
       registerScoringRoutes(api, { enqueueScoringRun: options.enqueueScoringRun });
     } else {

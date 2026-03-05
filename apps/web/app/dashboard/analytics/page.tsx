@@ -403,7 +403,15 @@ export default function AnalyticsPage() {
             })}
           </div>
         </div>
-      ) : null}
+      ) : (
+        <div className="rounded-2xl border border-border/30 bg-card/50 px-4 py-6 text-center">
+          <Target className="h-6 w-6 text-muted-foreground/30 mx-auto mb-2" />
+          <p className="text-sm font-medium text-muted-foreground/60">No yield data yet</p>
+          <p className="mt-1 text-xs text-muted-foreground/40">
+            Complete a discovery run to track yield rates by ICP.
+          </p>
+        </div>
+      )}
 
       {/* ── Top-level KPI cards ───────────────────────────────────── */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">

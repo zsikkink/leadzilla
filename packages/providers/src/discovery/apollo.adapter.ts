@@ -246,6 +246,10 @@ export class ApolloDiscoveryAdapter {
     this.fetchImpl = config.fetchImpl ?? fetch;
   }
 
+  get isConfigured(): boolean {
+    return Boolean(this.apiKey && this.apiKey.length > 0);
+  }
+
   async discoverLeads(input: ApolloDiscoveryRequest): Promise<ApolloDiscoveryResult> {
     await this.waitForRateLimit();
 
@@ -475,6 +479,13 @@ export class ApolloDiscoveryAdapter {
     | { status: 'retryable_error'; failure: { classification: 'retryable'; statusCode: number | null; message: string; raw: unknown } }
     | { status: 'terminal_error'; failure: { classification: 'terminal'; statusCode: number | null; message: string; raw: unknown } }
   > {
+    if (!this.isConfigured) {
+      return {
+        status: 'terminal_error',
+        failure: { classification: 'terminal', statusCode: null, message: 'Apollo API key not configured', raw: null },
+      };
+    }
+
     await this.waitForRateLimit();
 
     const controller = new AbortController();

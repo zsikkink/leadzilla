@@ -209,17 +209,23 @@ async function finalizeDiscoveryRun(
     },
   });
 
-  // 5C: Store yield rate for adaptive budget computation
+  // 5C: Store yield rate for adaptive budget computation (EMA smoothing)
   if (icpProfileId && yieldRate > 0) {
     try {
+      const setting = await prisma.pipelineSetting.findUnique({
+        where: { key: `discovery_yield_rate:${icpProfileId}` },
+      });
+      const historicalRate = setting?.valueJson ? Number(setting.valueJson) : yieldRate;
+      const smoothedRate = 0.3 * yieldRate + 0.7 * historicalRate;
+
       await prisma.pipelineSetting.upsert({
         where: { key: `discovery_yield_rate:${icpProfileId}` },
         create: {
           key: `discovery_yield_rate:${icpProfileId}`,
-          valueJson: yieldRate,
+          valueJson: smoothedRate,
         },
         update: {
-          valueJson: yieldRate,
+          valueJson: smoothedRate,
         },
       });
     } catch {

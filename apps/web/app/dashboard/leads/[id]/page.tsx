@@ -475,14 +475,16 @@ export default function LeadDetailPage() {
         // Find business linked to this lead
         const { data: conversions } = await supabase
           .from('business_conversions')
-          .select('business_id')
-          .eq('lead_id', id)
+          .select('businessId, icpProfileId')
+          .eq('leadId', id)
           .limit(1);
 
-        const bizId = conversions?.[0]?.business_id;
+        const bizId = conversions?.[0]?.businessId;
+        const convIcpProfileId = conversions?.[0]?.icpProfileId as string | null | undefined;
         if (!bizId || cancelled) return;
 
         setBusinessId(bizId);
+        if (convIcpProfileId) setLeadIcpProfileId(convIcpProfileId);
 
         const { data: biz } = await supabase
           .from('businesses')
@@ -560,6 +562,7 @@ export default function LeadDetailPage() {
   }, [id]);
 
   // Backup contact rotation
+  const [leadIcpProfileId, setLeadIcpProfileId] = useState<string | null>(null);
   const [isCreatingBackup, setIsCreatingBackup] = useState(false);
   const [backupSuccess, setBackupSuccess] = useState<string | null>(null);
 
@@ -582,6 +585,19 @@ export default function LeadDetailPage() {
     if (!contact.email) return;
     setIsCreatingBackup(true);
     try {
+      // Dedup check — don't create duplicate leads for same email
+      const supabase = getSupabaseBrowserClient();
+      const { data: existing } = await supabase
+        .from('Lead')
+        .select('id')
+        .eq('email', contact.email.toLowerCase())
+        .is('deletedAt', null)
+        .limit(1);
+      if (existing && existing.length > 0) {
+        setBackupSuccess(`Lead already exists for ${contact.email}.`);
+        return;
+      }
+
       const nameParts = contact.fullName.split(' ');
       const firstName = nameParts[0] ?? contact.fullName;
       const lastName = nameParts.slice(1).join(' ') || 'Unknown';
@@ -590,6 +606,7 @@ export default function LeadDetailPage() {
         lastName,
         email: contact.email,
         source: 'BACKUP_CONTACT_ROTATION',
+        ...(leadIcpProfileId ? { icpProfileId: leadIcpProfileId } : {}),
       });
       setBackupSuccess(`New lead created for ${contact.fullName}. Message generation will start automatically.`);
     } catch (err) {

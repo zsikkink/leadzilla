@@ -689,8 +689,9 @@ export default function DiscoverPage() {
               : 0.15; // default 15%
             const hasHistoricalData = selectedRates.length > 0;
             const searchBudget = Math.ceil(desiredLeads / avgYieldRate * 1.5);
-            const hunterLookups = Math.ceil(searchBudget * 0.7);
-            const estLeads = Math.round(searchBudget * avgYieldRate);
+            // ~50% of discovered businesses pass prequalification and reach Hunter
+            const hunterLookups = Math.ceil(searchBudget * 0.5);
+            const estLeads = desiredLeads;
             return (
               <div className="rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 px-4 py-3">
                 <div className="flex items-center gap-2 mb-2">

@@ -114,8 +114,8 @@ describe('lead pipeline e2e', () => {
       schema: env.PG_BOSS_SCHEMA,
     });
     await queueBoss.start();
-    await queueBoss.createQueue('enrichment.run');
-    await queueBoss.work<LeadEnrichJobPayload>('enrichment.run', async (jobs) => {
+    await queueBoss.createQueue('features.compute');
+    await queueBoss.work<LeadEnrichJobPayload>('features.compute', async (jobs) => {
       for (const job of jobs) {
         await processLeadEnrichJob(job);
       }
@@ -150,7 +150,7 @@ describe('lead pipeline e2e', () => {
 
             const jobExecution = await tx.jobExecution.create({
               data: {
-                type: 'enrichment.run',
+                type: 'features.compute',
                 status: 'queued',
                 payload: {
                   leadId: lead.id,
@@ -166,7 +166,7 @@ describe('lead pipeline e2e', () => {
             };
           });
 
-          await queueBoss.send('enrichment.run', {
+          await queueBoss.send('features.compute', {
             leadId: lead.id,
             jobExecutionId: jobExecution.id,
             source: input.source,

@@ -229,7 +229,7 @@ export async function handleDiscoverySeedJob(
     }
 
       // 5B: Adaptive maxTasks — if user set maxTasks (desired leads), compute search budget
-    if (seedConfig.maxTasks > 0 && job.data.icpProfileId) {
+    if (seedConfig.maxTasks > 0 && job.data.icpProfileId && job.data.reason === 'api') {
       const adaptiveBudget = await computeAdaptiveSearchTaskBudget(
         seedConfig.maxTasks,
         job.data.icpProfileId,

@@ -9,6 +9,7 @@ export const CreateLeadRequestSchema = z.object({
   lastName: z.string().min(1),
   email: z.string().email(),
   source: z.string().min(1),
+  icpProfileId: z.string().optional(),
 });
 
 export const CreateLeadResponseSchema = z.object({

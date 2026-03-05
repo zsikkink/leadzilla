@@ -5,11 +5,11 @@ import type { LogisticModel } from './logistic.js';
 
 export const BASELINE_MODEL_VERSION_TAG = 'deterministic-baseline-v1';
 
-const DEFAULT_QUALIFICATION_THRESHOLD = 0.3;
+const DEFAULT_QUALIFICATION_THRESHOLD = 0.34;
 
 /**
  * Read the qualification threshold from PipelineSetting table.
- * Falls back to DEFAULT_QUALIFICATION_THRESHOLD (0.3) if not set.
+ * Falls back to DEFAULT_QUALIFICATION_THRESHOLD (0.34) if not set.
  */
 export async function getQualificationThreshold(): Promise<number> {
   try {
