@@ -3,7 +3,10 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Clock,
+  Copy,
   DollarSign,
   FileText,
   Gauge,
@@ -20,6 +23,7 @@ import {
   Sliders,
   Target,
   Timer,
+  UserCog,
   Zap,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -27,6 +31,10 @@ import { toast } from 'sonner';
 
 import { useApiQuery } from '../../src/hooks/use-api-query.js';
 import { useAuth } from '../../src/hooks/use-auth.js';
+import {
+  DEFAULT_MESSAGING_ROLE,
+  DEFAULT_MESSAGING_SYSTEM_PROMPT,
+} from '../../src/lib/messaging-defaults.js';
 import { cn } from '../../src/lib/utils.js';
 
 // ── Setting types ──────────────────────────────────────────────────────
@@ -517,6 +525,10 @@ const NUMERIC_SETTING_KEYS = new Set([
 export default function ControlsSettingsPage() {
   const { apiClient } = useAuth();
   const [settings, setSettings] = useState<SettingsState>(getDefaultSettings);
+  const [messagingRole, setMessagingRole] = useState('');
+  const [messagingRoleExpanded, setMessagingRoleExpanded] = useState(false);
+  const [messagingSystemPrompt, setMessagingSystemPrompt] = useState('');
+  const [messagingSystemPromptExpanded, setMessagingSystemPromptExpanded] = useState(false);
   const [messagingInstructions, setMessagingInstructions] = useState('');
   const [hasChanges, setHasChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -533,7 +545,11 @@ export default function ControlsSettingsPage() {
       .then(({ items }) => {
         const newSettings = { ...getDefaultSettings() };
         for (const item of items) {
-          if (item.key === 'messagingInstructions') {
+          if (item.key === 'messagingRole') {
+            setMessagingRole(String(item.value ?? ''));
+          } else if (item.key === 'messagingSystemPrompt') {
+            setMessagingSystemPrompt(String(item.value ?? ''));
+          } else if (item.key === 'messagingInstructions') {
             setMessagingInstructions(String(item.value ?? ''));
           } else if (item.key === 'scoreTierBands') {
             const val = item.value as {
@@ -592,8 +608,10 @@ export default function ControlsSettingsPage() {
       const promises = settingEntries.map(([key, value]) =>
         apiClient.updatePipelineSetting(key, value),
       );
-      // Also save messaging instructions
+      // Also save messaging role, system prompt, and instructions
       promises.push(
+        apiClient.updatePipelineSetting('messagingRole', messagingRole),
+        apiClient.updatePipelineSetting('messagingSystemPrompt', messagingSystemPrompt),
         apiClient.updatePipelineSetting('messagingInstructions', messagingInstructions),
       );
 
@@ -605,10 +623,14 @@ export default function ControlsSettingsPage() {
     } finally {
       setIsSaving(false);
     }
-  }, [apiClient, settings, messagingInstructions]);
+  }, [apiClient, settings, messagingRole, messagingSystemPrompt, messagingInstructions]);
 
   const handleReset = useCallback(() => {
     setSettings(getDefaultSettings());
+    setMessagingRole('');
+    setMessagingRoleExpanded(false);
+    setMessagingSystemPrompt('');
+    setMessagingSystemPromptExpanded(false);
     setMessagingInstructions('');
     setHasChanges(true);
     toast.info('Settings reset to defaults — click Save to persist');
@@ -750,6 +772,160 @@ export default function ControlsSettingsPage() {
         </StatusCard>
       </div>
 
+      {/* ── AI Role / Identity ──────────────────────────────────────── */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-500/10">
+            <UserCog className="h-4 w-4 text-purple-400" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold tracking-tight">AI Role / Identity</h2>
+            <p className="text-[11px] text-muted-foreground/50">
+              Defines who the AI is, its persona, and behavior when writing messages
+            </p>
+          </div>
+        </div>
+        {isLoadingSettings ? (
+          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground/50">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading...
+          </div>
+        ) : messagingRole ? (
+          <div className="space-y-3">
+            <textarea
+              value={messagingRole}
+              onChange={(e) => {
+                setMessagingRole(e.target.value);
+                setHasChanges(true);
+              }}
+              rows={6}
+              className="w-full resize-y rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none"
+              aria-label="AI Role"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setMessagingRole('');
+                setHasChanges(true);
+                toast.info('Role reset to default — click Save to persist');
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
+            >
+              <RotateCcw className="h-3 w-3" />
+              Reset to Default
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-[11px] font-medium text-zbooni-green/70">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Using default role
+            </div>
+            <button
+              type="button"
+              onClick={() => setMessagingRoleExpanded(!messagingRoleExpanded)}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground/50 transition-colors hover:text-muted-foreground/80"
+            >
+              {messagingRoleExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              Preview default
+            </button>
+            {messagingRoleExpanded ? (
+              <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-xl border border-border/20 bg-muted/10 px-4 py-3 text-[11px] leading-relaxed text-muted-foreground/60">
+                {DEFAULT_MESSAGING_ROLE}
+              </pre>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                setMessagingRole(DEFAULT_MESSAGING_ROLE);
+                setHasChanges(true);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
+            >
+              <Copy className="h-3 w-3" />
+              Customize
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── AI System Prompt ──────────────────────────────────────────── */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-teal/10">
+            <Sliders className="h-4 w-4 text-zbooni-teal" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold tracking-tight">AI System Prompt</h2>
+            <p className="text-[11px] text-muted-foreground/50">
+              Message structure, templates, ICP features, rules, and tone
+            </p>
+          </div>
+        </div>
+        {isLoadingSettings ? (
+          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground/50">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading...
+          </div>
+        ) : messagingSystemPrompt ? (
+          <div className="space-y-3">
+            <textarea
+              value={messagingSystemPrompt}
+              onChange={(e) => {
+                setMessagingSystemPrompt(e.target.value);
+                setHasChanges(true);
+              }}
+              rows={12}
+              className="w-full resize-y rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none font-mono text-[12px] leading-relaxed"
+              aria-label="AI System Prompt"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setMessagingSystemPrompt('');
+                setHasChanges(true);
+                toast.info('System prompt reset to default — click Save to persist');
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
+            >
+              <RotateCcw className="h-3 w-3" />
+              Reset to Default
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-[11px] font-medium text-zbooni-green/70">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Using default system prompt
+            </div>
+            <button
+              type="button"
+              onClick={() => setMessagingSystemPromptExpanded(!messagingSystemPromptExpanded)}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground/50 transition-colors hover:text-muted-foreground/80"
+            >
+              {messagingSystemPromptExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              Preview default
+            </button>
+            {messagingSystemPromptExpanded ? (
+              <pre className="max-h-60 overflow-y-auto whitespace-pre-wrap rounded-xl border border-border/20 bg-muted/10 px-4 py-3 text-[11px] leading-relaxed text-muted-foreground/60 font-mono">
+                {DEFAULT_MESSAGING_SYSTEM_PROMPT}
+              </pre>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                setMessagingSystemPrompt(DEFAULT_MESSAGING_SYSTEM_PROMPT);
+                setHasChanges(true);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
+            >
+              <Copy className="h-3 w-3" />
+              Customize
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* ── Messaging Instructions ────────────────────────────────────── */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
         <div className="mb-4 flex items-center gap-2">
@@ -759,7 +935,7 @@ export default function ControlsSettingsPage() {
           <div>
             <h2 className="text-base font-bold tracking-tight">Messaging Instructions</h2>
             <p className="text-[11px] text-muted-foreground/50">
-              Custom instructions included every time the AI generates outreach messages
+              Per-campaign tweaks appended after the system prompt (e.g. "Focus on hospitality ICPs this week")
             </p>
           </div>
         </div>
@@ -776,7 +952,7 @@ export default function ControlsSettingsPage() {
               setHasChanges(true);
             }}
             rows={6}
-            placeholder="Enter custom instructions for the AI message generator. These instructions will be included every time a new outreach message is created. Example: 'Always mention our payment link feature. Keep tone professional but warm. Reference UAE market growth.'"
+            placeholder="Enter per-campaign instructions appended after the system prompt. Example: 'Always mention our payment link feature this week. Focus on hospitality ICPs. Reference UAE market growth.'"
             className="w-full resize-y rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none"
             aria-label="Messaging Instructions"
           />

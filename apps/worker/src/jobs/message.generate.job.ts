@@ -382,12 +382,15 @@ export async function handleMessageGenerateJob(
     if (messageContext.teamSignal) intelligenceParts.push(`Team: ${messageContext.teamSignal}`);
     const businessIntelligence = intelligenceParts.length > 0 ? intelligenceParts.join('\n') : null;
 
-    // Load custom messaging instructions from PipelineSetting (CONTRACT 4)
-    const instrSetting = await prisma.pipelineSetting.findUnique({
-      where: { key: 'messagingInstructions' },
-    });
-    const rawInstr = instrSetting?.valueJson;
-    const messagingInstructions = typeof rawInstr === 'string' ? rawInstr : null;
+    // Load custom messaging settings from PipelineSetting (role, system prompt, instructions)
+    const [roleSetting, systemPromptSetting, instrSetting] = await Promise.all([
+      prisma.pipelineSetting.findUnique({ where: { key: 'messagingRole' } }),
+      prisma.pipelineSetting.findUnique({ where: { key: 'messagingSystemPrompt' } }),
+      prisma.pipelineSetting.findUnique({ where: { key: 'messagingInstructions' } }),
+    ]);
+    const customRole = typeof roleSetting?.valueJson === 'string' ? roleSetting.valueJson : null;
+    const customSystemPrompt = typeof systemPromptSetting?.valueJson === 'string' ? systemPromptSetting.valueJson : null;
+    const messagingInstructions = typeof instrSetting?.valueJson === 'string' ? instrSetting.valueJson : null;
 
     const groundingContext = {
       leadName: `${lead.firstName} ${lead.lastName}`,
@@ -400,6 +403,8 @@ export async function handleMessageGenerateJob(
       blendedScore: latestScore?.blendedScore ?? 0,
       icpDescription: icpProfile?.description ?? 'No ICP description available',
       businessIntelligence,
+      customRole,
+      customSystemPrompt,
       messagingInstructions,
     };
 
