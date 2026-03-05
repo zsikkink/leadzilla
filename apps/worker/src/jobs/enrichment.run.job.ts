@@ -350,6 +350,9 @@ async function executeWithRotation(
   const failedProviders: string[] = skipProviders ? [...skipProviders] : [];
   let currentProvider: EnrichmentProvider | null = initialProvider;
 
+  // Track the best sparse success result so we can fall back to it if all providers exhaust
+  let bestSparseResult: RotationResult | null = null;
+
   while (currentProvider) {
     const result = await executeEnrichmentProvider(
       currentProvider,
@@ -375,7 +378,8 @@ async function executeWithRotation(
           },
           `Provider ${currentProvider} returned sparse data — escalating to next tier`,
         );
-        // Still record this as a success but try the next provider for more complete data
+        // Remember this successful-but-sparse result as fallback
+        bestSparseResult = { provider: currentProvider, result };
         // Only escalate forward (toward more expensive/richer providers)
         failedProviders.push(currentProvider);
         const currentIdx = rotator.getPriorityIndex(currentProvider);
@@ -415,7 +419,22 @@ async function executeWithRotation(
     return { provider: currentProvider, result };
   }
 
-  // All providers exhausted
+  // All providers exhausted — but if we had a successful sparse result, use it
+  if (bestSparseResult) {
+    logger.info(
+      {
+        jobId,
+        runId,
+        leadId,
+        provider: bestSparseResult.provider,
+        failedProviders,
+      },
+      'All richer providers exhausted — falling back to best sparse result',
+    );
+    rotator.recordSuccess(bestSparseResult.provider);
+    return bestSparseResult;
+  }
+
   return {
     provider: initialProvider,
     result: {
