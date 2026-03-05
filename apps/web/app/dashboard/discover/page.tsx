@@ -402,20 +402,17 @@ export default function DiscoverPage() {
       : undefined;
 
     try {
-      // Launch a discovery run for each selected ICP
-      const allIds = Array.from(selectedIcpIds);
-      for (const icpId of allIds) {
-        await apiClient.createDiscoveryRun({
-          icpProfileId: icpId,
-          countries: derivedCountries,
-          ...(cities ? { cities } : {}),
-          includeWebsiteAnalysis,
-          includeSocialMediaAnalysis,
-          ...(advancedSettings ? { advancedSettings } : {}),
-          limit: parseInt(limit, 10),
-          ...(user?.id ? { requestedByUserId: user.id } : {}),
-        });
-      }
+      // Single API call with all selected ICPs — limit is split server-side
+      await apiClient.createDiscoveryRun({
+        icpProfileIds: Array.from(selectedIcpIds),
+        countries: derivedCountries,
+        ...(cities ? { cities } : {}),
+        includeWebsiteAnalysis,
+        includeSocialMediaAnalysis,
+        ...(advancedSettings ? { advancedSettings } : {}),
+        limit: parseInt(limit, 10),
+        ...(user?.id ? { requestedByUserId: user.id } : {}),
+      });
 
       // Refresh run list to show new runs
       setRunsRefreshKey((k) => k + 1);
