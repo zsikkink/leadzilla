@@ -93,7 +93,6 @@ describe('features.compute helpers', () => {
       'seasonal_signals',
       'bank_transfer_reliance',
       'upsell_signals',
-      'price_led_mindset',
       // v2 features
       'apify_payment_widget_count',
       'apify_has_shopify',
@@ -127,6 +126,6 @@ describe('features.compute helpers', () => {
       // v2.2 data quality
       'data_alignment_score',
     ]);
-    expect(FEATURE_KEYS.length).toBe(67);
+    expect(FEATURE_KEYS.length).toBe(66);
   });
 });

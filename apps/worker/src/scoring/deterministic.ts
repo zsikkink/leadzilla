@@ -38,6 +38,9 @@ const FIELD_KEY_CATEGORY_MAP: Record<string, QualificationCategory> = {
   // Payment Complexity — "High ticket, deposits, irregular amounts, international"
   apify_payment_widget_count: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
   apify_has_pricing_tiers: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
+  high_ticket_signals: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
+  deposit_milestone_signals: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
+  bank_transfer_reliance: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
 
   // Risk & Urgency — "Failed payment kills deal, timing matters, reachability"
   recent_activity: QUALIFICATION_CATEGORIES.RISK_URGENCY,
@@ -56,8 +59,6 @@ const FIELD_KEY_CATEGORY_MAP: Record<string, QualificationCategory> = {
   pure_self_serve_ecom: QUALIFICATION_CATEGORIES.GENERAL,
   shopify_detected: QUALIFICATION_CATEGORIES.GENERAL,
   subscription_billing_detected: QUALIFICATION_CATEGORIES.GENERAL,
-  price_led_mindset: QUALIFICATION_CATEGORIES.GENERAL,
-
   // Match signals
   industry_match: QUALIFICATION_CATEGORIES.GENERAL,
   geo_match: QUALIFICATION_CATEGORIES.GENERAL,

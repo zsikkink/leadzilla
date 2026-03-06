@@ -201,7 +201,7 @@ export function registerScoringRoutes(
     'apollo_has_direct_phone', 'website_email_count', 'website_phone_count', 'social_link_count',
     'has_linkedin', 'tech_stack_size', 'has_crm', 'has_live_chat', 'has_analytics',
     'estimated_employees', 'certification_count', 'instagram_has_business_email',
-    'data_alignment_score', 'price_led_mindset',
+    'data_alignment_score',
   ]);
 
   // POST /v1/scoring/rules — includes icpProfileId in body (unlike ICP module where it's a URL param)

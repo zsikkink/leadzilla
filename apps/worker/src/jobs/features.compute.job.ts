@@ -89,7 +89,6 @@ export const FEATURE_KEYS = [
   'seasonal_signals',
   'bank_transfer_reliance',
   'upsell_signals',
-  'price_led_mindset',
   // ── v2 features (Apify + Instagram + Apollo) ──
   'apify_payment_widget_count',
   'apify_has_shopify',
@@ -332,7 +331,6 @@ function buildFeaturePayload(input: {
   seasonalSignals: boolean;
   bankTransferReliance: boolean;
   upsellSignals: boolean;
-  priceLedMindset: boolean;
   // v2 features
   apifyPaymentWidgetCount: number;
   apifyHasShopify: boolean;
@@ -404,7 +402,6 @@ function buildFeaturePayload(input: {
     seasonal_signals: input.seasonalSignals,
     bank_transfer_reliance: input.bankTransferReliance,
     upsell_signals: input.upsellSignals,
-    price_led_mindset: input.priceLedMindset,
     // v2 features
     apify_payment_widget_count: input.apifyPaymentWidgetCount,
     apify_has_shopify: input.apifyHasShopify,
@@ -1029,14 +1026,6 @@ export async function handleFeaturesComputeJob(
         'add-on service', 'package upgrade',
       ]);
 
-    const priceLedMindset =
-      extractBooleanFromSources(featureSources, ['priceLedMindset']) ??
-      includesAnyKeyword(featureSources, [
-        'lowest price', 'cheapest', 'budget-friendly',
-        'best price guarantee', 'price match', 'compare prices',
-        'bargain', 'wholesale pricing', 'economy',
-      ]);
-
     const targetIndustries = new Set(icp.targetIndustries.map((entry) => entry.toLowerCase()));
     const targetCountries = new Set(
       icp.targetCountries
@@ -1107,7 +1096,6 @@ export async function handleFeaturesComputeJob(
       seasonalSignals,
       bankTransferReliance,
       upsellSignals,
-      priceLedMindset,
       // v2 features
       apifyPaymentWidgetCount,
       apifyHasShopify,

@@ -26,25 +26,28 @@ interface QualificationRuleDef {
 // ── Universal Qualification Rules (identical for all 8 segments) ──────
 // Zero conversion data → no basis for segment-specific weights. Start uniform, let ML learn.
 const UNIVERSAL_RULES: QualificationRuleDef[] = [
-  // HARD_FILTERs (3)
+  // HARD_FILTERs (5)
   { name: 'Country in supported MENA region', fieldKey: 'country', operator: 'IN', expectedValue: [...SUPPORTED_COUNTRIES], isRequired: true, weight: 0, orderIndex: 1 },
   { name: 'Has email contact', fieldKey: 'has_email', operator: 'EQ', expectedValue: true, isRequired: true, weight: 0, orderIndex: 2 },
   { name: 'Data alignment score above threshold', fieldKey: 'data_alignment_score', operator: 'GTE', expectedValue: 0.3, isRequired: true, weight: 0, orderIndex: 3 },
-  // Positive rules (11, total weight = 18)
-  { name: 'Has WhatsApp presence', fieldKey: 'has_whatsapp', operator: 'EQ', expectedValue: true, isRequired: false, weight: 3, orderIndex: 3 },
-  { name: 'Industry is supported', fieldKey: 'industry_supported', operator: 'EQ', expectedValue: true, isRequired: false, weight: 3, orderIndex: 4 },
-  { name: 'Has Instagram presence', fieldKey: 'has_instagram', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 5 },
-  { name: 'Review count above 10', fieldKey: 'review_count', operator: 'GT', expectedValue: 10, isRequired: false, weight: 2, orderIndex: 6 },
-  { name: 'Custom order signals', fieldKey: 'custom_order_signals', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 7 },
-  { name: 'Has booking or contact form', fieldKey: 'has_booking_or_contact_form', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 8 },
-  { name: 'Recent activity detected', fieldKey: 'recent_activity', operator: 'EQ', expectedValue: true, isRequired: false, weight: 1, orderIndex: 9 },
-  { name: 'Payment widgets detected', fieldKey: 'apify_payment_widget_count', operator: 'GT', expectedValue: 0, isRequired: false, weight: 1, orderIndex: 10 },
-  { name: 'Has pricing tiers', fieldKey: 'apify_has_pricing_tiers', operator: 'EQ', expectedValue: true, isRequired: false, weight: 1, orderIndex: 11 },
-  { name: 'Multiple social profiles', fieldKey: 'social_link_count', operator: 'GT', expectedValue: 2, isRequired: false, weight: 1, orderIndex: 12 },
-  { name: 'Instagram has business email', fieldKey: 'instagram_has_business_email', operator: 'EQ', expectedValue: true, isRequired: false, weight: 1, orderIndex: 13 },
-  // Anti-fit rules (2, total weight = -6)
-  { name: 'Pure self-serve ecom (anti-fit)', fieldKey: 'pure_self_serve_ecom', operator: 'EQ', expectedValue: true, isRequired: false, weight: -3, orderIndex: 14 },
-  { name: 'Price-led mindset (anti-fit)', fieldKey: 'price_led_mindset', operator: 'EQ', expectedValue: true, isRequired: false, weight: -3, orderIndex: 15 },
+  { name: 'Pure self-serve ecom (disqualify)', fieldKey: 'pure_self_serve_ecom', operator: 'NEQ', expectedValue: true, isRequired: true, weight: 0, orderIndex: 4 },
+  { name: 'Subscription or recurring billing (disqualify)', fieldKey: 'subscription_billing_detected', operator: 'NEQ', expectedValue: true, isRequired: true, weight: 0, orderIndex: 5 },
+  // Positive rules (15, total weight = 26)
+  { name: 'Has WhatsApp presence', fieldKey: 'has_whatsapp', operator: 'EQ', expectedValue: true, isRequired: false, weight: 3, orderIndex: 6 },
+  { name: 'Industry is supported', fieldKey: 'industry_supported', operator: 'EQ', expectedValue: true, isRequired: false, weight: 3, orderIndex: 7 },
+  { name: 'Has Instagram presence', fieldKey: 'has_instagram', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 8 },
+  { name: 'Review count above 10', fieldKey: 'review_count', operator: 'GT', expectedValue: 10, isRequired: false, weight: 2, orderIndex: 9 },
+  { name: 'Custom order signals', fieldKey: 'custom_order_signals', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 10 },
+  { name: 'Has booking or contact form', fieldKey: 'has_booking_or_contact_form', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 11 },
+  { name: 'Recent activity detected', fieldKey: 'recent_activity', operator: 'EQ', expectedValue: true, isRequired: false, weight: 1, orderIndex: 12 },
+  { name: 'Payment widgets detected', fieldKey: 'apify_payment_widget_count', operator: 'GT', expectedValue: 0, isRequired: false, weight: 1, orderIndex: 13 },
+  { name: 'Has pricing tiers', fieldKey: 'apify_has_pricing_tiers', operator: 'EQ', expectedValue: true, isRequired: false, weight: 1, orderIndex: 14 },
+  { name: 'Multiple social profiles', fieldKey: 'social_link_count', operator: 'GT', expectedValue: 2, isRequired: false, weight: 1, orderIndex: 15 },
+  { name: 'Instagram has business email', fieldKey: 'instagram_has_business_email', operator: 'EQ', expectedValue: true, isRequired: false, weight: 1, orderIndex: 16 },
+  { name: 'High-ticket signals', fieldKey: 'high_ticket_signals', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 17 },
+  { name: 'Deposit or milestone payment signals', fieldKey: 'deposit_milestone_signals', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 18 },
+  { name: 'Bank transfer reliance (pain signal)', fieldKey: 'bank_transfer_reliance', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 19 },
+  { name: 'P1 priority segment', fieldKey: 'icp_segment_priority', operator: 'GTE', expectedValue: 2, isRequired: false, weight: 2, orderIndex: 20 },
 ];
 
 // ── 8 ICP Segments from Zbooni Sales Onboarding Deck ──────────

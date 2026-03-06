@@ -76,7 +76,11 @@ interface SimFormState {
   paymentWidgetCount: number;
   hasPricingTiers: boolean;
   pureSelfServeEcom: boolean;
-  priceLedMindset: boolean;
+  subscriptionBillingDetected: boolean;
+  highTicketSignals: boolean;
+  depositMilestoneSignals: boolean;
+  bankTransferReliance: boolean;
+  icpSegmentPriority: number;
 }
 
 const DEFAULT_SIM: SimFormState = {
@@ -114,7 +118,11 @@ const DEFAULT_SIM: SimFormState = {
   paymentWidgetCount: 1,
   hasPricingTiers: false,
   pureSelfServeEcom: false,
-  priceLedMindset: false,
+  subscriptionBillingDetected: false,
+  highTicketSignals: false,
+  depositMilestoneSignals: false,
+  bankTransferReliance: false,
+  icpSegmentPriority: 2,
 };
 
 const COUNTRY_OPTIONS = ['AE', 'SA', 'JO', 'EG', 'KW', 'BH', 'QA', 'OM', 'Other'];
@@ -160,7 +168,11 @@ const FIELD_KEY_MAP: Record<string, (form: SimFormState) => unknown> = {
   apify_payment_widget_count: (f) => f.paymentWidgetCount,
   apify_has_pricing_tiers: (f) => f.hasPricingTiers,
   pure_self_serve_ecom: (f) => f.pureSelfServeEcom,
-  price_led_mindset: (f) => f.priceLedMindset,
+  subscription_billing_detected: (f) => f.subscriptionBillingDetected,
+  high_ticket_signals: (f) => f.highTicketSignals,
+  deposit_milestone_signals: (f) => f.depositMilestoneSignals,
+  bank_transfer_reliance: (f) => f.bankTransferReliance,
+  icp_segment_priority: (f) => f.icpSegmentPriority,
 };
 
 /* ------------------------------------------------------------------ */
@@ -900,8 +912,20 @@ export default function ICPRulesPage() {
                   Pure Self-Serve Ecom
                 </label>
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.priceLedMindset} onChange={(e) => setSimForm((prev) => ({ ...prev, priceLedMindset: e.target.checked }))} />
-                  Price-Led Mindset
+                  <input type="checkbox" checked={simForm.subscriptionBillingDetected} onChange={(e) => setSimForm((prev) => ({ ...prev, subscriptionBillingDetected: e.target.checked }))} />
+                  Subscription Billing
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.highTicketSignals} onChange={(e) => setSimForm((prev) => ({ ...prev, highTicketSignals: e.target.checked }))} />
+                  High-Ticket Signals
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.depositMilestoneSignals} onChange={(e) => setSimForm((prev) => ({ ...prev, depositMilestoneSignals: e.target.checked }))} />
+                  Deposit/Milestone Signals
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.bankTransferReliance} onChange={(e) => setSimForm((prev) => ({ ...prev, bankTransferReliance: e.target.checked }))} />
+                  Bank Transfer Reliance
                 </label>
               </div>
 

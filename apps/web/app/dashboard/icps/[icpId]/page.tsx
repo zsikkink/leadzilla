@@ -562,6 +562,8 @@ export default function IcpDetailPage() {
               { field: 'country', rule: 'IN [UAE, KSA, Jordan, Egypt, Bahrain, Kuwait, Oman, Qatar]' },
               { field: 'has_email', rule: 'Must have email contact' },
               { field: 'data_alignment_score', rule: '>= 0.3 (cross-source validation)' },
+              { field: 'pure_self_serve_ecom', rule: 'NEQ true (disqualify pure self-serve ecommerce)' },
+              { field: 'subscription_billing_detected', rule: 'NEQ true (disqualify subscription/recurring billing)' },
             ].map((r) => (
               <div key={r.field} className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">
                 <span className="font-mono text-[11px] font-semibold text-red-400">{r.field}</span>
@@ -573,7 +575,7 @@ export default function IcpDetailPage() {
 
         {/* Positive Weighted Rules */}
         <div className="mb-4">
-          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-zbooni-green/80">Positive Signals (total weight: 18)</h3>
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-zbooni-green/80">Positive Signals (total weight: 26)</h3>
           <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
             {[
               { field: 'has_whatsapp', label: 'WhatsApp presence', weight: 3 },
@@ -582,6 +584,10 @@ export default function IcpDetailPage() {
               { field: 'review_count', label: 'Reviews > 10', weight: 2 },
               { field: 'custom_order_signals', label: 'Custom order signals', weight: 2 },
               { field: 'has_booking_or_contact_form', label: 'Booking/contact form', weight: 2 },
+              { field: 'high_ticket_signals', label: 'High-ticket signals', weight: 2 },
+              { field: 'deposit_milestone_signals', label: 'Deposit/milestone payments', weight: 2 },
+              { field: 'bank_transfer_reliance', label: 'Bank transfer reliance', weight: 2 },
+              { field: 'icp_segment_priority', label: 'P1 priority segment', weight: 2 },
               { field: 'recent_activity', label: 'Recent activity', weight: 1 },
               { field: 'apify_payment_widget_count', label: 'Payment widgets', weight: 1 },
               { field: 'apify_has_pricing_tiers', label: 'Has pricing tiers', weight: 1 },
@@ -599,35 +605,16 @@ export default function IcpDetailPage() {
           </div>
         </div>
 
-        {/* Anti-fit Rules */}
-        <div className="mb-4">
-          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-yellow-400/80">Anti-fit Signals (penalty weight: -6)</h3>
-          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-            {[
-              { field: 'pure_self_serve_ecom', label: 'Pure self-serve ecommerce', weight: -3 },
-              { field: 'price_led_mindset', label: 'Price-led mindset', weight: -3 },
-            ].map((r) => (
-              <div key={r.field} className="flex items-center justify-between rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-3 py-2">
-                <div className="min-w-0">
-                  <span className="text-[11px] font-medium">{r.label}</span>
-                  <span className="ml-1.5 font-mono text-[10px] text-muted-foreground/40">{r.field}</span>
-                </div>
-                <span className="shrink-0 rounded bg-yellow-500/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-yellow-400">{r.weight}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
         {/* Category Bonus System */}
         <div className="mb-4">
           <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-purple-400/80">Category Bonus System</h3>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {[
               { cat: 'Sales Motion Fit', fields: 'whatsapp, instagram, custom orders, decision makers' },
-              { cat: 'Payment Complexity', fields: 'payment widgets, pricing tiers' },
+              { cat: 'Payment Complexity', fields: 'payment widgets, pricing tiers, high-ticket, deposits, bank transfer' },
               { cat: 'Risk & Urgency', fields: 'recent activity, booking form, contact info' },
               { cat: 'Switching Willingness', fields: 'social links, linkedin, tech stack, IG engagement' },
-              { cat: 'General', fields: 'industry match, geo match, anti-fit signals' },
+              { cat: 'General', fields: 'industry match, geo match, ICP priority' },
             ].map((c) => (
               <div key={c.cat} className="rounded-lg border border-purple-500/20 bg-purple-500/5 px-3 py-2">
                 <p className="text-[11px] font-semibold text-purple-400">{c.cat}</p>
