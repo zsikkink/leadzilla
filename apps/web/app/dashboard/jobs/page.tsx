@@ -126,6 +126,9 @@ function RunCard({
               minute: '2-digit',
             })}
           </p>
+          <p className="mt-0.5 text-[10px] font-mono text-muted-foreground/30">
+            {run.runId.slice(0, 12)}…
+          </p>
         </div>
         <StatusBadge status={run.status} />
       </div>
