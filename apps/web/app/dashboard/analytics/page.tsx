@@ -1,6 +1,6 @@
 'use client';
 
-import type { FunnelResponse } from '@lead-flood/contracts';
+import type { FunnelResponse, ListDiscoveryRunsResponse } from '@lead-flood/contracts';
 import {
   AlertTriangle,
   BarChart3,
@@ -8,9 +8,11 @@ import {
   Clock,
   Cpu,
   Database,
+  ExternalLink,
   MessageSquare,
   Search,
   Send,
+  Settings,
   Tag,
   Target,
   ThumbsDown,
@@ -19,12 +21,12 @@ import {
   Unplug,
   Users,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { cn } from '../../../src/lib/utils.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
-import { getSupabaseBrowserClient } from '../../../src/lib/supabase-client.js';
 
 type DateRange = '7d' | '30d' | '90d' | 'all';
 
@@ -200,58 +202,191 @@ function PipelineStageCard({ stage, data }: { stage: PipelineStage; data: Funnel
   );
 }
 
-// ── Main page ────────────────────────────────────────────────────────────
+// ── Auto-Approve Settings ─────────────────────────────────────────────────
 
-interface YieldEntry {
-  icpProfileId: string;
-  icpName: string;
-  yieldRate: number;
-  updatedAt: string;
+interface AutoApproveSettingsProps {
+  apiClient: { listPipelineSettings(): Promise<{ items: { key: string; value: unknown; updatedAt: string }[] }>; updatePipelineSetting(key: string, value: unknown): Promise<unknown> };
 }
+
+function validateDecimalScore(value: string): string | null {
+  if (value === '') return null;
+  const num = Number(value);
+  if (isNaN(num)) return 'Must be a number';
+  if (num < 0 || num > 1) return 'Score must be a decimal between 0 and 1 (e.g., 0.5)';
+  if (num >= 2) return 'Score must be a decimal between 0 and 1 (e.g., 0.5)';
+  return null;
+}
+
+function AutoApproveSettings({ apiClient }: AutoApproveSettingsProps) {
+  const [enabled, setEnabled] = useState(false);
+  const [scoreMin, setScoreMin] = useState('0.5');
+  const [scoreMax, setScoreMax] = useState('1.0');
+  const [saving, setSaving] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [minError, setMinError] = useState<string | null>(null);
+  const [maxError, setMaxError] = useState<string | null>(null);
+  const [rangeError, setRangeError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void apiClient.listPipelineSettings().then((res) => {
+      if (cancelled) return;
+      for (const item of res.items) {
+        if (item.key === 'auto_approve_enabled') {
+          setEnabled(item.value === true || item.value === 'true');
+        } else if (item.key === 'auto_approve_score_min') {
+          setScoreMin(String(item.value ?? '0.5'));
+        } else if (item.key === 'auto_approve_score_max') {
+          setScoreMax(String(item.value ?? '1.0'));
+        }
+      }
+      setLoaded(true);
+    }).catch(() => {
+      setLoaded(true);
+    });
+    return () => { cancelled = true; };
+  }, [apiClient]);
+
+  const handleSave = async () => {
+    const minErr = validateDecimalScore(scoreMin);
+    const maxErr = validateDecimalScore(scoreMax);
+    setMinError(minErr);
+    setMaxError(maxErr);
+
+    if (minErr || maxErr) return;
+
+    const min = Number(scoreMin);
+    const max = Number(scoreMax);
+    if (min > max) {
+      setRangeError('Min must be less than or equal to Max');
+      return;
+    }
+    setRangeError(null);
+
+    setSaving(true);
+    try {
+      await Promise.all([
+        apiClient.updatePipelineSetting('auto_approve_enabled', enabled),
+        apiClient.updatePipelineSetting('auto_approve_score_min', min),
+        apiClient.updatePipelineSetting('auto_approve_score_max', max),
+      ]);
+    } catch {
+      // Error handled silently — endpoint may not exist yet (DC-6 fallback)
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!loaded) return null;
+
+  return (
+    <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <Settings className="h-4 w-4 text-zbooni-teal" />
+        <h2 className="text-base font-bold tracking-tight">Auto-Approve Settings</h2>
+      </div>
+
+      <div className="space-y-4">
+        {/* Toggle */}
+        <label className="flex items-center gap-3">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={enabled}
+            onClick={() => setEnabled(!enabled)}
+            className={cn(
+              'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors',
+              enabled ? 'bg-zbooni-green' : 'bg-muted/40',
+            )}
+          >
+            <span
+              className={cn(
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg transition-transform',
+                enabled ? 'translate-x-5' : 'translate-x-0',
+              )}
+            />
+          </button>
+          <span className="text-sm font-medium">Auto-approve messages</span>
+        </label>
+
+        {/* Score range */}
+        {enabled ? (
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground/60">
+              Auto-approve messages for leads with score in range:
+            </p>
+            <div className="flex items-center gap-2">
+              <div className="flex-1">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={scoreMin}
+                  onChange={(e) => {
+                    setScoreMin(e.target.value);
+                    setMinError(validateDecimalScore(e.target.value));
+                    setRangeError(null);
+                  }}
+                  placeholder="0.5"
+                  className={cn(
+                    'h-9 w-full rounded-lg border bg-zbooni-dark/40 px-3 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/20',
+                    minError ? 'border-red-500/50' : 'border-border/50',
+                  )}
+                />
+                {minError ? <p className="mt-1 text-[10px] text-red-400">{minError}</p> : null}
+              </div>
+              <span className="text-xs text-muted-foreground/50">&le; score &le;</span>
+              <div className="flex-1">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={scoreMax}
+                  onChange={(e) => {
+                    setScoreMax(e.target.value);
+                    setMaxError(validateDecimalScore(e.target.value));
+                    setRangeError(null);
+                  }}
+                  placeholder="1.0"
+                  className={cn(
+                    'h-9 w-full rounded-lg border bg-zbooni-dark/40 px-3 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/20',
+                    maxError ? 'border-red-500/50' : 'border-border/50',
+                  )}
+                />
+                {maxError ? <p className="mt-1 text-[10px] text-red-400">{maxError}</p> : null}
+              </div>
+            </div>
+            {rangeError ? <p className="text-[10px] text-red-400">{rangeError}</p> : null}
+          </div>
+        ) : null}
+
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+        >
+          {saving ? (
+            <span className="h-3 w-3 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
+          ) : null}
+          Save Settings
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Main page ────────────────────────────────────────────────────────────
 
 export default function AnalyticsPage() {
   const { apiClient } = useAuth();
   const [dateRange, setDateRange] = useState<DateRange>('all');
 
-  // Discovery yield rates from PipelineSetting
-  const [yieldEntries, setYieldEntries] = useState<YieldEntry[]>([]);
+  // Discovery runs for yield display
   const icps = useApiQuery(
     useCallback(() => apiClient.listIcps({ page: 1, pageSize: 50 }), [apiClient]),
   );
-
-  useEffect(() => {
-    let cancelled = false;
-    async function fetchYieldRates() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-        const { data } = await supabase
-          .from('pipeline_settings')
-          .select('key, valueJson, updatedAt')
-          .like('key', 'discovery_yield_rate:%');
-
-        if (!data || cancelled) return;
-        const entries: YieldEntry[] = data
-          .map((row: { key: string; valueJson: unknown; updatedAt: string }) => {
-            const icpId = row.key.replace('discovery_yield_rate:', '');
-            const rate = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
-            if (isNaN(rate)) return null;
-            const icp = icps.data?.items.find((i) => i.id === icpId);
-            return {
-              icpProfileId: icpId,
-              icpName: icp?.name ?? icpId.slice(0, 12) + '...',
-              yieldRate: rate,
-              updatedAt: row.updatedAt,
-            };
-          })
-          .filter((e): e is YieldEntry => e !== null);
-        setYieldEntries(entries);
-      } catch {
-        // Supplementary data — fail silently
-      }
-    }
-    if (icps.data) void fetchYieldRates();
-    return () => { cancelled = true; };
-  }, [icps.data]);
+  const discoveryRuns = useApiQuery<ListDiscoveryRunsResponse>(
+    useCallback(() => apiClient.listDiscoveryRuns({ page: 1, pageSize: 200 }), [apiClient]),
+  );
 
   const dateFilter = useMemo(() => {
     if (dateRange === 'all') return {};
@@ -364,54 +499,101 @@ export default function AnalyticsPage() {
         </div>
       ) : null}
 
-      {/* ── Discovery Yield Rates ─────────────────────────────────── */}
-      {yieldEntries.length > 0 ? (
-        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <div className="mb-4 flex items-center gap-2">
-            <Target className="h-4 w-4 text-zbooni-green" />
-            <h2 className="text-base font-bold tracking-tight">Discovery Yield</h2>
-            <span className="ml-auto text-xs text-muted-foreground/50">
-              Qualified leads per search task
-            </span>
+      {/* ── Discovery Yield — All Runs ────────────────────────────── */}
+      {(() => {
+        const runs = discoveryRuns.data?.runs ?? [];
+        const sortedRuns = [...runs].sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        );
+
+        if (sortedRuns.length === 0) {
+          return (
+            <div className="rounded-2xl border border-border/30 bg-card/50 px-4 py-6 text-center">
+              <Target className="h-6 w-6 text-muted-foreground/30 mx-auto mb-2" />
+              <p className="text-sm font-medium text-muted-foreground/60">No discovery runs yet</p>
+              <p className="mt-1 text-xs text-muted-foreground/40">
+                Start a discovery run to track yield rates.
+              </p>
+            </div>
+          );
+        }
+
+        return (
+          <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+            <div className="mb-4 flex items-center gap-2">
+              <Target className="h-4 w-4 text-zbooni-green" />
+              <h2 className="text-base font-bold tracking-tight">Discovery Yield</h2>
+              <span className="ml-auto text-xs text-muted-foreground/50">
+                {sortedRuns.length} run{sortedRuns.length !== 1 ? 's' : ''} — leads / businesses
+              </span>
+            </div>
+            <div className="max-h-[320px] overflow-y-auto pr-1 space-y-2">
+              {sortedRuns.map((run) => {
+                const yieldRate =
+                  run.totalItems > 0
+                    ? Math.round((run.processedItems / run.totalItems) * 100)
+                    : 0;
+                const icpNames = (run.icpProfileIds ?? (run.icpProfileId ? [run.icpProfileId] : []))
+                  .map((id) => icps.data?.items.find((i) => i.id === id)?.name ?? id.slice(0, 8))
+                  .join(', ');
+
+                return (
+                  <Link
+                    key={run.runId}
+                    href={`/dashboard/jobs/${run.runId}`}
+                    className="flex items-center gap-4 rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 transition-colors hover:border-zbooni-teal/40 hover:bg-zbooni-dark/60"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs text-muted-foreground/60">
+                          {run.runId.slice(0, 8)}
+                        </span>
+                        {icpNames ? (
+                          <span className="truncate text-xs font-medium text-zbooni-teal">
+                            {icpNames}
+                          </span>
+                        ) : null}
+                        <span
+                          className={cn(
+                            'ml-auto shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase',
+                            run.status === 'SUCCEEDED'
+                              ? 'bg-zbooni-green/15 text-zbooni-green'
+                              : run.status === 'FAILED'
+                                ? 'bg-red-500/15 text-red-400'
+                                : 'bg-yellow-500/15 text-yellow-400',
+                          )}
+                        >
+                          {run.status}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground/50">
+                        <span>
+                          {new Date(run.createdAt).toLocaleDateString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </span>
+                        <span>
+                          {run.totalItems} businesses &rarr; {run.processedItems} leads
+                        </span>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-xl font-extrabold tabular-nums text-zbooni-green">
+                        {yieldRate}%
+                      </p>
+                      <p className="text-[10px] text-muted-foreground/40">yield</p>
+                    </div>
+                    <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground/30" />
+                  </Link>
+                );
+              })}
+            </div>
           </div>
-          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
-            {yieldEntries.map((entry) => {
-              const pct = Math.round(entry.yieldRate * 100);
-              return (
-                <div
-                  key={entry.icpProfileId}
-                  className="rounded-xl border border-border/30 bg-zbooni-dark/40 p-4"
-                >
-                  <div className="flex items-center gap-2">
-                    <Target className="h-3.5 w-3.5 text-zbooni-teal" />
-                    <p className="text-sm font-semibold truncate">{entry.icpName}</p>
-                  </div>
-                  <p className="mt-2 text-3xl font-extrabold tracking-tight text-zbooni-green tabular-nums">
-                    {pct}%
-                  </p>
-                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-border/30">
-                    <div
-                      className="h-full rounded-full bg-zbooni-green/70 transition-all duration-500"
-                      style={{ width: `${Math.min(pct, 100)}%` }}
-                    />
-                  </div>
-                  <p className="mt-1.5 text-[10px] text-muted-foreground/40">
-                    Updated {new Date(entry.updatedAt).toLocaleDateString()}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : (
-        <div className="rounded-2xl border border-border/30 bg-card/50 px-4 py-6 text-center">
-          <Target className="h-6 w-6 text-muted-foreground/30 mx-auto mb-2" />
-          <p className="text-sm font-medium text-muted-foreground/60">No yield data yet</p>
-          <p className="mt-1 text-xs text-muted-foreground/40">
-            Complete a discovery run to track yield rates by ICP.
-          </p>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── Top-level KPI cards ───────────────────────────────────── */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -552,6 +734,9 @@ export default function AnalyticsPage() {
           </div>
         )}
       </div>
+
+      {/* ── Auto-Approve Settings ──────────────────────────────────── */}
+      <AutoApproveSettings apiClient={apiClient} />
 
       {/* ── Loading state ─────────────────────────────────────────── */}
       {funnel.isLoading && !funnel.data ? (

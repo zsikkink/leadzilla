@@ -1048,3 +1048,37 @@ export async function triggerDiscoveryRun(
 ): Promise<TriggerJobRequestResponse> {
   return createJobRequest('DISCOVERY_RUN', payload);
 }
+
+// ── Scoring Rules ─────────────────────────────────────────────────────────
+
+export interface CreateScoringRulePayload {
+  icpProfileId: string;
+  name: string;
+  fieldKey: string;
+  ruleType: 'WEIGHTED' | 'HARD_FILTER';
+  operator: string;
+  valueJson: unknown;
+  weight: number;
+}
+
+/**
+ * Known field keys accepted by POST /v1/scoring/rules.
+ * Source: apps/api/src/modules/scoring/scoring.routes.ts → KNOWN_FIELD_KEYS
+ */
+export const KNOWN_SCORING_FIELD_KEYS = [
+  'industry_supported', 'has_whatsapp', 'has_instagram', 'accepts_online_payments',
+  'review_count', 'follower_count', 'physical_address_present', 'recent_activity',
+  'custom_order_signals', 'pure_self_serve_ecom', 'shopify_detected', 'multi_staff_detected',
+  'follower_growth_signal', 'high_engagement_signal', 'has_booking_or_contact_form',
+  'variable_pricing_detected', 'industry_match', 'geo_match', 'high_ticket_signals',
+  'deposit_milestone_signals', 'subscription_billing_detected', 'international_customer_signals',
+  'icp_segment_priority', 'review_count_tier', 'follower_count_tier', 'bank_transfer_reliance',
+  'upsell_signals', 'apify_payment_widget_count', 'apify_has_shopify', 'apify_has_booking_form',
+  'apify_has_pricing_tiers', 'apify_has_product_catalog', 'instagram_follower_count',
+  'instagram_engagement_rate', 'instagram_is_business_account', 'instagram_days_since_last_post',
+  'instagram_has_bio_link', 'has_decision_maker_phone', 'decision_maker_count',
+  'apollo_has_direct_phone', 'website_email_count', 'website_phone_count', 'social_link_count',
+  'has_linkedin', 'tech_stack_size', 'has_crm', 'has_live_chat', 'has_analytics',
+  'estimated_employees', 'certification_count', 'instagram_has_business_email',
+  'data_alignment_score', 'price_led_mindset',
+] as const;

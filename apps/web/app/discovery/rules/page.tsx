@@ -13,11 +13,17 @@ import {
   Calculator,
   RotateCcw,
   Loader2,
+  Plus,
+  Trash2,
+  X,
 } from 'lucide-react';
+import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils.js';
+import { getWebEnv } from '@/lib/env.js';
 import { useAuth } from '@/hooks/use-auth.js';
 import { useApiQuery } from '@/hooks/use-api-query.js';
+import { KNOWN_SCORING_FIELD_KEYS } from '@/lib/discovery-admin.js';
 
 import type {
   QualificationRuleResponse,
@@ -281,11 +287,35 @@ function simulateScore(
 }
 
 /* ------------------------------------------------------------------ */
+/*  Add Rule types                                                     */
+/* ------------------------------------------------------------------ */
+
+const OPERATORS = ['EQ', 'NEQ', 'GT', 'GTE', 'LT', 'LTE', 'IN', 'NOT_IN', 'CONTAINS'] as const;
+
+interface StagedRule {
+  name: string;
+  fieldKey: string;
+  ruleType: 'WEIGHTED' | 'HARD_FILTER';
+  operator: string;
+  valueJson: unknown;
+  weight: number;
+}
+
+const EMPTY_RULE: StagedRule = {
+  name: '',
+  fieldKey: '',
+  ruleType: 'WEIGHTED',
+  operator: 'EQ',
+  valueJson: '',
+  weight: 1,
+};
+
+/* ------------------------------------------------------------------ */
 /*  Page component                                                     */
 /* ------------------------------------------------------------------ */
 
 export default function ICPRulesPage() {
-  const { apiClient } = useAuth();
+  const { apiClient, token } = useAuth();
 
   const icpQuery = useApiQuery(
     useCallback(() => apiClient.listIcps({ page: 1, pageSize: 100 }), [apiClient]),
@@ -294,6 +324,12 @@ export default function ICPRulesPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [simForm, setSimForm] = useState<SimFormState>(DEFAULT_SIM);
   const [showSimulation, setShowSimulation] = useState(false);
+
+  // Add Rule state
+  const [showAddRule, setShowAddRule] = useState(false);
+  const [stagedRules, setStagedRules] = useState<StagedRule[]>([]);
+  const [currentRule, setCurrentRule] = useState<StagedRule>(EMPTY_RULE);
+  const [submittingRules, setSubmittingRules] = useState(false);
 
   const profiles = icpQuery.data?.items ?? [];
 
@@ -305,6 +341,64 @@ export default function ICPRulesPage() {
   const hardFilterRules = rules.filter((r) => categorizeRule(r) === 'HARD_FILTER');
   const weightedRules = rules.filter((r) => categorizeRule(r) === 'WEIGHTED');
   const antiFitRules = rules.filter((r) => categorizeRule(r) === 'ANTI_FIT');
+
+  // Field keys available for new rules (exclude already used ones)
+  const existingFieldKeys = new Set(rules.map((r) => r.fieldKey));
+  const stagedFieldKeys = new Set(stagedRules.map((r) => r.fieldKey));
+  const availableFieldKeys = KNOWN_SCORING_FIELD_KEYS.filter(
+    (k) => !existingFieldKeys.has(k) && !stagedFieldKeys.has(k),
+  );
+
+  const addToStaging = () => {
+    if (!currentRule.name.trim() || !currentRule.fieldKey) return;
+    setStagedRules((prev) => [...prev, { ...currentRule }]);
+    setCurrentRule({ ...EMPTY_RULE, fieldKey: availableFieldKeys[0] ?? '' });
+  };
+
+  const removeFromStaging = (idx: number) => {
+    setStagedRules((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const submitStagedRules = async () => {
+    if (!effectiveSelectedId || stagedRules.length === 0) return;
+    setSubmittingRules(true);
+    let successCount = 0;
+    for (const rule of stagedRules) {
+      try {
+        const res = await fetch(`${getWebEnv().NEXT_PUBLIC_API_BASE_URL}/v1/scoring/rules`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(token ? { authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            icpProfileId: effectiveSelectedId,
+            name: rule.name,
+            fieldKey: rule.fieldKey,
+            ruleType: rule.ruleType,
+            operator: rule.operator,
+            valueJson: rule.valueJson,
+            weight: rule.weight,
+          }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error((body as { message?: string }).message ?? `HTTP ${res.status}`);
+        }
+        successCount++;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Failed to create rule';
+        toast.error(`Rule "${rule.name}": ${msg}`);
+      }
+    }
+    if (successCount > 0) {
+      toast.success(`${successCount} rule${successCount > 1 ? 's' : ''} created`);
+      setStagedRules([]);
+      setShowAddRule(false);
+      icpQuery.refetch();
+    }
+    setSubmittingRules(false);
+  };
 
   const simResult = useMemo(
     () => (selectedProfile ? simulateScore(rules, simForm) : null),
@@ -436,6 +530,17 @@ export default function ICPRulesPage() {
                     : ''}
                 </p>
               </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCurrentRule({ ...EMPTY_RULE, fieldKey: availableFieldKeys[0] ?? '' });
+                  setShowAddRule(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-zbooni-green/15 px-3 py-1.5 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/25"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add Rule
+              </button>
             </div>
 
             {/* Formula explanation */}
@@ -894,6 +999,176 @@ export default function ICPRulesPage() {
               ) : null}
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {/* ── Add Rule Modal ──────────────────────────────────────── */}
+      {showAddRule && selectedProfile ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowAddRule(false); }}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-rule-title"
+        >
+          <div className="w-full max-w-xl rounded-2xl border border-border/50 bg-card p-6 shadow-xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 id="add-rule-title" className="text-lg font-extrabold tracking-tight">
+                Add Rules to {selectedProfile.name}
+              </h2>
+              <button type="button" onClick={() => setShowAddRule(false)} className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent/50">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* New rule form */}
+            <div className="space-y-3 rounded-xl border border-border/30 bg-zbooni-dark/30 p-4">
+              <div className="grid grid-cols-2 gap-3">
+                <label className="text-xs">
+                  <span className="mb-1 block font-semibold text-muted-foreground/70">Rule Name</span>
+                  <input
+                    value={currentRule.name}
+                    onChange={(e) => setCurrentRule((prev) => ({ ...prev, name: e.target.value }))}
+                    placeholder="e.g. Has WhatsApp"
+                    className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </label>
+                <label className="text-xs">
+                  <span className="mb-1 block font-semibold text-muted-foreground/70">Feature Key</span>
+                  <select
+                    value={currentRule.fieldKey}
+                    onChange={(e) => setCurrentRule((prev) => ({ ...prev, fieldKey: e.target.value }))}
+                    className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  >
+                    {availableFieldKeys.length === 0 ? (
+                      <option value="">No keys available</option>
+                    ) : null}
+                    {availableFieldKeys.map((k) => (
+                      <option key={k} value={k}>{k}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <label className="text-xs">
+                  <span className="mb-1 block font-semibold text-muted-foreground/70">Rule Type</span>
+                  <select
+                    value={currentRule.ruleType}
+                    onChange={(e) => setCurrentRule((prev) => ({ ...prev, ruleType: e.target.value as 'WEIGHTED' | 'HARD_FILTER' }))}
+                    className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  >
+                    <option value="WEIGHTED">Weighted</option>
+                    <option value="HARD_FILTER">Hard Filter</option>
+                  </select>
+                </label>
+                <label className="text-xs">
+                  <span className="mb-1 block font-semibold text-muted-foreground/70">Operator</span>
+                  <select
+                    value={currentRule.operator}
+                    onChange={(e) => setCurrentRule((prev) => ({ ...prev, operator: e.target.value }))}
+                    className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  >
+                    {OPERATORS.map((op) => (
+                      <option key={op} value={op}>{op}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs">
+                  <span className="mb-1 block font-semibold text-muted-foreground/70">Expected Value</span>
+                  <input
+                    value={typeof currentRule.valueJson === 'string' ? currentRule.valueJson : JSON.stringify(currentRule.valueJson)}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      // Try to parse as JSON (number, boolean, array), fall back to string
+                      let parsed: unknown = raw;
+                      try { parsed = JSON.parse(raw); } catch { /* keep as string */ }
+                      setCurrentRule((prev) => ({ ...prev, valueJson: parsed }));
+                    }}
+                    placeholder='true, 0.5, ["AE","SA"]'
+                    className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </label>
+              </div>
+              {currentRule.ruleType === 'WEIGHTED' ? (
+                <label className="text-xs">
+                  <span className="mb-1 block font-semibold text-muted-foreground/70">Weight (-10 to 10)</span>
+                  <input
+                    type="number"
+                    min={-10}
+                    max={10}
+                    step={0.5}
+                    value={currentRule.weight}
+                    onChange={(e) => setCurrentRule((prev) => ({ ...prev, weight: Number(e.target.value) || 0 }))}
+                    className="h-8 w-24 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm tabular-nums focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </label>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={addToStaging}
+                disabled={!currentRule.name.trim() || !currentRule.fieldKey}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-zbooni-teal/15 px-3 py-1.5 text-xs font-semibold text-zbooni-teal transition-colors hover:bg-zbooni-teal/25 disabled:opacity-40"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add to Batch
+              </button>
+            </div>
+
+            {/* Staged rules list */}
+            {stagedRules.length > 0 ? (
+              <div className="mt-4">
+                <p className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground/60">
+                  Staged Rules ({stagedRules.length})
+                </p>
+                <div className="space-y-1.5">
+                  {stagedRules.map((rule, idx) => (
+                    <div key={idx} className="flex items-center justify-between rounded-lg border border-border/30 bg-zbooni-dark/30 px-3 py-2">
+                      <div>
+                        <span className="text-sm font-semibold">{rule.name}</span>
+                        <span className="ml-2 font-mono text-[10px] text-muted-foreground/50">
+                          {rule.fieldKey} {rule.operator} {typeof rule.valueJson === 'string' ? rule.valueJson : JSON.stringify(rule.valueJson)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={cn(
+                          'rounded px-1.5 py-0.5 text-[10px] font-bold',
+                          rule.ruleType === 'HARD_FILTER' ? 'bg-red-500/15 text-red-400' : 'bg-blue-500/15 text-blue-400',
+                        )}>
+                          {rule.ruleType === 'HARD_FILTER' ? 'HARD' : `w=${rule.weight}`}
+                        </span>
+                        <button type="button" onClick={() => removeFromStaging(idx)} className="rounded p-1 text-muted-foreground/40 hover:text-red-400">
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {/* Submit */}
+            <div className="mt-4 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setShowAddRule(false)}
+                className="flex-1 rounded-xl border border-input py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitStagedRules}
+                disabled={stagedRules.length === 0 || submittingRules}
+                className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-zbooni-green px-4 py-2.5 text-sm font-semibold text-black shadow-lg shadow-zbooni-green/20 transition-all hover:bg-zbooni-green/90 disabled:opacity-50"
+              >
+                {submittingRules ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : null}
+                Save {stagedRules.length} Rule{stagedRules.length !== 1 ? 's' : ''}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

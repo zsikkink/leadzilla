@@ -18,11 +18,13 @@ import {
   Target,
   Users,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
+import { getWebEnv } from '../../../../src/lib/env.js';
 
 // ── Status badge (reused from list page) ─────────────────────────────────
 const STATUS_CONFIG: Record<
@@ -58,6 +60,12 @@ const STATUS_CONFIG: Record<
     dotClass: 'bg-yellow-400',
     bgClass: 'bg-yellow-500/10',
     textClass: 'text-yellow-400',
+  },
+  CANCELLED: {
+    label: 'Cancelled',
+    dotClass: 'bg-muted-foreground/50',
+    bgClass: 'bg-muted-foreground/10',
+    textClass: 'text-muted-foreground',
   },
 };
 
@@ -291,12 +299,15 @@ function aggregateCosts(events: CostEventData[]) {
 
 // ── Main page ────────────────────────────────────────────────────────────
 export default function DiscoveryRunDetailPage() {
-  const { apiClient } = useAuth();
+  const { apiClient, token } = useAuth();
   const router = useRouter();
   const params = useParams();
   const runId = params.runId as string;
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [errorsExpanded, setErrorsExpanded] = useState(false);
+  const [cancelPending, setCancelPending] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   // Fetch run status
   const run = useApiQuery<DiscoveryRunStatusResponse>(
@@ -346,6 +357,30 @@ export default function DiscoveryRunDetailPage() {
       }
     };
   }, [isActive, run.refetch, details.refetch]);
+
+  const handleCancelRun = async () => {
+    setCancelPending(true);
+    setCancelError(null);
+    try {
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      if (token) headers.authorization = `Bearer ${token}`;
+      const res = await fetch(`${getWebEnv().NEXT_PUBLIC_API_BASE_URL}/v1/discovery-admin/runs/${runId}/cancel`, {
+        method: 'POST',
+        headers,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { message?: string } | null;
+        throw new Error(body?.message ?? `Cancel failed (${res.status})`);
+      }
+      run.refetch();
+      details.refetch();
+      setShowCancelConfirm(false);
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : 'Failed to cancel run');
+    } finally {
+      setCancelPending(false);
+    }
+  };
 
   // Derived data from real API response
   const searchTasks = (details.data?.searchTasks ?? []) as SearchTaskData[];
@@ -447,15 +482,53 @@ export default function DiscoveryRunDetailPage() {
               </span>
             </div>
           </div>
-          {isActive && (
-            <div className="flex items-center gap-1.5 rounded-full bg-blue-500/10 px-3 py-1.5">
-              <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-400" />
-              <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
-                Live
-              </span>
-            </div>
-          )}
+          <div className="flex items-center gap-2">
+            {isActive && (
+              <div className="flex items-center gap-1.5 rounded-full bg-blue-500/10 px-3 py-1.5">
+                <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-400" />
+                <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
+                  Live
+                </span>
+              </div>
+            )}
+            {(run.data.status === 'RUNNING' || run.data.status === 'QUEUED') && !showCancelConfirm && (
+              <button
+                type="button"
+                onClick={() => setShowCancelConfirm(true)}
+                className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-[11px] font-bold text-red-400 transition-colors hover:bg-red-500/20"
+              >
+                Cancel Run
+              </button>
+            )}
+            {showCancelConfirm && (
+              <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1.5">
+                <span className="text-[11px] text-red-400">Cancel this run?</span>
+                <button
+                  type="button"
+                  onClick={() => void handleCancelRun()}
+                  disabled={cancelPending}
+                  className="rounded-md bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-300 transition-colors hover:bg-red-500/30 disabled:opacity-50"
+                >
+                  {cancelPending ? 'Cancelling...' : 'Yes, Cancel'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowCancelConfirm(false); setCancelError(null); }}
+                  className="text-[10px] font-medium text-muted-foreground hover:text-foreground"
+                >
+                  No
+                </button>
+              </div>
+            )}
+          </div>
         </div>
+
+        {/* Cancel error */}
+        {cancelError && (
+          <div className="mt-3 rounded-lg bg-red-500/10 px-3 py-2 text-[11px] text-red-400">
+            {cancelError}
+          </div>
+        )}
 
         {/* Progress bar for active runs */}
         {isActive && run.data.totalItems > 0 && (
@@ -511,6 +584,56 @@ export default function DiscoveryRunDetailPage() {
           bgColor="bg-yellow-500/10"
         />
       </div>
+
+      {/* Converted Leads */}
+      {leads.length > 0 && (
+        <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
+          <div className="mb-4 flex items-center gap-2">
+            <Users className="h-4 w-4 text-zbooni-green" />
+            <h2 className="text-base font-bold tracking-tight">Converted Leads</h2>
+            <span className="ml-auto rounded-md bg-white/[0.04] px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums text-muted-foreground/60">
+              {leads.length}
+            </span>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {leads.map((lead) => {
+              const leadId = (lead as Record<string, unknown>).id as string | undefined;
+              const firstName = (lead as Record<string, unknown>).firstName as string | undefined;
+              const lastName = (lead as Record<string, unknown>).lastName as string | undefined;
+              const companyName = (lead as Record<string, unknown>).companyName as string | null | undefined;
+              const displayName = [firstName, lastName].filter(Boolean).join(' ') || 'Unknown';
+
+              return (
+                <Link
+                  key={leadId ?? Math.random().toString()}
+                  href={leadId ? `/dashboard/leads/${leadId}` : '#'}
+                  className="flex items-center gap-3 rounded-lg border border-border/20 bg-zbooni-dark/20 px-3 py-2.5 transition-colors hover:border-border/40 hover:bg-zbooni-dark/30"
+                >
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zbooni-green/10">
+                    <Users className="h-3.5 w-3.5 text-zbooni-green" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-semibold">{displayName}</p>
+                    {companyName ? (
+                      <p className="truncate text-[10px] text-muted-foreground/50">{companyName}</p>
+                    ) : null}
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {details.data && leads.length === 0 && (
+        <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
+          <div className="mb-2 flex items-center gap-2">
+            <Users className="h-4 w-4 text-muted-foreground/40" />
+            <h2 className="text-base font-bold tracking-tight">Converted Leads</h2>
+          </div>
+          <p className="text-[11px] text-muted-foreground/40">No leads converted yet</p>
+        </div>
+      )}
 
       {/* Details loading indicator */}
       {details.isLoading && !details.data && (

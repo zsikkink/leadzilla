@@ -179,7 +179,7 @@ function CustomLegendContent({ payload }: { payload?: { color: string; value: st
 }
 
 export function FunnelChart({ data }: FunnelChartProps) {
-  const [dateRange, setDateRange] = useState<DateRange>('30d');
+  const [dateRange, setDateRange] = useState<DateRange>('7d');
 
   const chartData = useMemo(() => generateTimeSeriesData(data, dateRange), [data, dateRange]);
 

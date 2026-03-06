@@ -17,6 +17,7 @@ import {
   TrendingUp,
   Zap,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
@@ -800,14 +801,18 @@ export default function DiscoverPage() {
                     ? 'Completed'
                     : 'Running...'
                 : 'Queued';
-              const icpLabel = batch.icpNames.length <= 2
-                ? batch.icpNames.join(' + ')
-                : `${batch.icpNames.slice(0, 2).join(' + ')} +${batch.icpNames.length - 2}`;
+              const firstWords = batch.icpNames.map((n) => n.split(/\s+/)[0] ?? n);
+              const icpLabel = firstWords.length <= 3
+                ? firstWords.join(' & ')
+                : `${firstWords.slice(0, 2).join(' & ')} +${firstWords.length - 2}`;
+
+              const primaryRunId = batch.runs[0]?.runId;
 
               return (
-                <div
+                <Link
                   key={batch.batchKey}
-                  className="rounded-xl border border-border/30 bg-zbooni-dark/20 p-4 transition-colors hover:border-border/50"
+                  href={primaryRunId ? `/dashboard/jobs/${primaryRunId}` : '#'}
+                  className="block rounded-xl border border-border/30 bg-zbooni-dark/20 p-4 transition-colors hover:border-border/50 hover:bg-zbooni-dark/30"
                 >
                   {/* Header: status + time */}
                   <div className="mb-3 flex items-center justify-between">
@@ -881,7 +886,7 @@ export default function DiscoverPage() {
                       {batch.errorMessages[0]}
                     </p>
                   ) : null}
-                </div>
+                </Link>
               );
             })}
           </div>

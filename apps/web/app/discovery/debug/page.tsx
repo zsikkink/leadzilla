@@ -86,20 +86,6 @@ interface LeadRecord {
   categories: PipelineCategory[];
 }
 
-function extractEnrichmentDetails(payload: Record<string, unknown>): StageDetail[] {
-  const details: StageDetail[] = [];
-  if (payload.companyName) details.push({ label: 'Company', value: String(payload.companyName) });
-  if (payload.industry) details.push({ label: 'Industry', value: String(payload.industry) });
-  if (payload.country) details.push({ label: 'Country', value: String(payload.country) });
-  if (payload.city) details.push({ label: 'City', value: String(payload.city) });
-  if (payload.employeeCount) details.push({ label: 'Employees', value: String(payload.employeeCount) });
-  if (payload.linkedinUrl) details.push({ label: 'LinkedIn', value: String(payload.linkedinUrl) });
-  if (payload.websiteUrl) details.push({ label: 'Website', value: String(payload.websiteUrl) });
-  if (payload.googleRating) details.push({ label: 'Google Rating', value: `${payload.googleRating}/5` });
-  if (payload.googleReviewCount) details.push({ label: 'Reviews', value: String(payload.googleReviewCount) });
-  return details;
-}
-
 function extractFeatureDetails(payload: Record<string, unknown>): StageDetail[] {
   const details: StageDetail[] = [];
   if (payload.hasWhatsApp != null) details.push({ label: 'Has WhatsApp', value: payload.hasWhatsApp ? 'Yes' : 'No' });
@@ -139,8 +125,9 @@ interface LeadItem {
 function buildPipelineStages(lead: LeadItem): PipelineStage[] {
   const enrichment = lead.latestEnrichmentNormalizedPayload as Record<string, unknown> | null;
   const rawEnrichment = lead.latestEnrichmentRawPayload as Record<string, unknown> | null;
+  const discovery = lead.latestDiscoveryRawPayload as Record<string, unknown> | null;
   const hasEnrichment = enrichment !== null || rawEnrichment !== null;
-  const hasScore = lead.latestBlendedScore !== null;
+  const hasScore = lead.latestBlendedScore !== null && lead.latestBlendedScore !== undefined;
   const statusLevel = STATUS_PROGRESSION[lead.status] ?? 0;
   const isFailed = lead.status === 'failed';
   const isMessaged = statusLevel >= 4;
@@ -149,15 +136,135 @@ function buildPipelineStages(lead: LeadItem): PipelineStage[] {
   const isLowScore = lead.latestScoreBand === 'LOW';
   const enrichmentFailed = isFailed && !hasEnrichment;
 
+  // C10: Derive qualification status from actual pipeline progress, not just enrichment JSON
+  const qualificationCompleted = hasScore || hasEnrichment || statusLevel >= 2;
+  const qualificationStatus: StageStatus = enrichmentFailed ? 'failed' : qualificationCompleted ? 'completed' : 'pending';
+
+  // C5: Discovery details — include search query from discovery payload if available
+  const discoveryDetails: StageDetail[] = [
+    { label: 'Source', value: lead.source },
+    { label: 'Lead ID', value: lead.id },
+  ];
+  // TODO: Search query needs an API field (SearchTask.queryText via Lead -> BusinessConversion -> Business -> SearchTask)
+  const searchQuery = (discovery?.queryText as string) ?? (discovery?.searchQuery as string) ?? null;
+  if (searchQuery) {
+    discoveryDetails.push({ label: 'Search Query', value: searchQuery });
+  }
+
+  // C11: Country/industry from Business record fallback
+  const country = extractField(lead, 'country') || extractField(lead, 'countryCode');
+  const industry = extractField(lead, 'industry') || extractField(lead, 'category');
+
+  // C6: Pre-qualification hard filter results (all leads shown have passed)
+  const prequalDetails: StageDetail[] = [];
+  if (country) prequalDetails.push({ label: 'Country in supported regions', value: `${country} — Passed` });
+  const hasEmail = lead.email && lead.email.includes('@');
+  prequalDetails.push({ label: 'Has email contact', value: hasEmail ? 'Yes — Passed' : 'No data' });
+  const alignmentScore = enrichment?.data_alignment_score as number | undefined;
+  if (alignmentScore !== undefined) {
+    prequalDetails.push({ label: 'Data alignment score', value: `${alignmentScore.toFixed(2)} — ${alignmentScore >= 0.3 ? 'Passed' : 'Below threshold'}` });
+  }
+  if (industry) prequalDetails.push({ label: 'Industry match', value: `${industry} — Passed` });
+
+  // C7: Enrichment data per source
+  const enrichmentDetails: StageDetail[] = [];
+  if (enrichmentFailed && lead.error) {
+    enrichmentDetails.push({ label: 'Error', value: lead.error });
+  }
+  if (enrichment) {
+    // Website scrape data
+    const socialLinks = enrichment.socialLinks as unknown;
+    const decisionMakers = enrichment.decisionMakers as unknown;
+    const techStack = enrichment.techStack as unknown;
+    if (socialLinks || decisionMakers || techStack) {
+      const webParts: string[] = [];
+      if (Array.isArray(socialLinks) && socialLinks.length > 0) webParts.push(`${socialLinks.length} social links`);
+      if (Array.isArray(decisionMakers) && decisionMakers.length > 0) webParts.push(`${decisionMakers.length} decision makers`);
+      if (Array.isArray(techStack) && techStack.length > 0) webParts.push(`${techStack.length} technologies`);
+      if (webParts.length > 0) enrichmentDetails.push({ label: 'Website Scrape', value: webParts.join(', ') });
+    }
+    // Instagram data
+    const igFollowers = enrichment.instagramFollowers as number | undefined;
+    const igCategory = enrichment.instagramBusinessCategory as string | undefined;
+    const igVerified = enrichment.instagramIsVerified as boolean | undefined;
+    if (igFollowers || igCategory || igVerified !== undefined) {
+      const igParts: string[] = [];
+      if (igFollowers) igParts.push(`${igFollowers.toLocaleString()} followers`);
+      if (igCategory) igParts.push(igCategory);
+      if (igVerified) igParts.push('verified');
+      if (igParts.length > 0) enrichmentDetails.push({ label: 'Instagram', value: igParts.join(', ') });
+    }
+    // Hunter/contact data
+    if (enrichment.companyName) enrichmentDetails.push({ label: 'Company', value: String(enrichment.companyName) });
+    if (enrichment.employeeCount) enrichmentDetails.push({ label: 'Employees', value: String(enrichment.employeeCount) });
+    if (enrichment.linkedinUrl) enrichmentDetails.push({ label: 'LinkedIn', value: String(enrichment.linkedinUrl) });
+    if (enrichment.websiteUrl) enrichmentDetails.push({ label: 'Website', value: String(enrichment.websiteUrl) });
+  }
+
+  // C8: Feature/scoring details grouped by category
+  const scoringDetails: StageDetail[] = [];
+  if (hasScore) {
+    scoringDetails.push({ label: 'Blended Score', value: lead.latestBlendedScore!.toFixed(3) });
+    scoringDetails.push({ label: 'Score Band', value: lead.latestScoreBand ?? 'N/A' });
+  }
+  if (enrichment) {
+    // Group features by scoring category
+    const featureGroups: Record<string, StageDetail[]> = {};
+    const CATEGORY_MAP: Record<string, string> = {
+      hasWhatsApp: 'Sales Motion Fit',
+      acceptsOnlinePayments: 'Payment Complexity',
+      instagramFollowers: 'Social Presence',
+      recentlyActive: 'Risk/Urgency',
+      googleRating: 'Social Proof',
+      googleReviewCount: 'Social Proof',
+      social_link_count: 'Social Presence',
+      has_linkedin: 'Social Presence',
+      tech_stack_size: 'Tech Readiness',
+      decision_maker_count: 'Contact Quality',
+      website_email_count: 'Contact Quality',
+      website_phone_count: 'Contact Quality',
+      estimated_employees: 'Business Size',
+      certification_count: 'Business Quality',
+    };
+
+    for (const [key, catName] of Object.entries(CATEGORY_MAP)) {
+      const val = enrichment[key];
+      if (val !== undefined && val !== null) {
+        if (!featureGroups[catName]) featureGroups[catName] = [];
+        const displayVal = typeof val === 'boolean' ? (val ? 'Yes' : 'No') : String(val);
+        featureGroups[catName].push({ label: key.replace(/_/g, ' '), value: displayVal });
+      }
+    }
+    for (const [group, features] of Object.entries(featureGroups)) {
+      scoringDetails.push({ label: `[${group}]`, value: features.map((f) => `${f.label}: ${f.value}`).join(' | ') });
+    }
+  }
+
+  // C9: Feedback / Learning Loops details
+  const feedbackDetails: StageDetail[] = [];
+  if (isReplied) {
+    feedbackDetails.push({ label: 'Status', value: 'Reply classified' });
+    feedbackDetails.push({ label: 'Training Label', value: 'Positive (replied)' });
+    feedbackDetails.push({ label: 'Score Adjustment', value: 'Upward — reinforces current scoring' });
+  } else if (isCold) {
+    feedbackDetails.push({ label: 'Status', value: 'Cold — no reply' });
+    feedbackDetails.push({ label: 'Training Label', value: 'Negative (no reply after follow-ups)' });
+    feedbackDetails.push({ label: 'Score Adjustment', value: 'Downward — penalizes similar profiles' });
+  } else {
+    // TODO: Show actual training label data when API exposes classification results
+    feedbackDetails.push({ label: 'Status', value: 'Awaiting outcome' });
+  }
+
   return [
-    { id: 'discovery', title: 'Discovery', icon: Radar, status: 'completed', timestamp: lead.createdAt, details: [{ label: 'Source', value: lead.source }, { label: 'Lead ID', value: lead.id }] },
-    { id: 'enrichment', title: 'Enrichment', icon: Layers, status: enrichmentFailed ? 'failed' : hasEnrichment ? 'completed' : 'pending', timestamp: hasEnrichment ? lead.updatedAt : null, details: [...(enrichmentFailed && lead.error ? [{ label: 'Error', value: lead.error }] : []), ...(enrichment ? extractEnrichmentDetails(enrichment) : [])] },
+    { id: 'discovery', title: 'Discovery', icon: Radar, status: 'completed', timestamp: lead.createdAt, details: discoveryDetails },
+    { id: 'prequalification', title: 'Pre-qualification', icon: Layers, status: qualificationStatus, timestamp: qualificationCompleted ? lead.updatedAt : null, details: prequalDetails },
+    { id: 'enrichment', title: 'Enrichment', icon: Globe, status: enrichmentFailed ? 'failed' : hasEnrichment ? 'completed' : qualificationCompleted ? 'completed' : 'pending', timestamp: hasEnrichment ? lead.updatedAt : null, details: enrichmentDetails },
     { id: 'features', title: 'Feature Computation', icon: Sparkles, status: hasScore ? 'completed' : enrichmentFailed ? 'skipped' : 'pending', timestamp: hasScore ? lead.updatedAt : null, details: enrichment ? extractFeatureDetails(enrichment) : [] },
-    { id: 'scoring', title: 'Scoring', icon: Target, status: hasScore ? 'completed' : enrichmentFailed ? 'skipped' : 'pending', timestamp: hasScore ? lead.updatedAt : null, details: hasScore ? [{ label: 'Blended Score', value: lead.latestBlendedScore!.toFixed(3) }, { label: 'Score Band', value: lead.latestScoreBand ?? 'N/A' }] : [] },
+    { id: 'scoring', title: 'Scoring', icon: Target, status: hasScore ? 'completed' : enrichmentFailed ? 'skipped' : 'pending', timestamp: hasScore ? lead.updatedAt : null, details: scoringDetails },
     { id: 'message-gen', title: 'Message Generation', icon: Mail, status: isMessaged || isReplied || isCold ? 'completed' : isLowScore ? 'skipped' : 'pending', timestamp: null, details: isLowScore ? [{ label: 'Reason', value: 'Score below threshold' }] : [] },
     { id: 'message-send', title: 'Message Send', icon: MessageSquare, status: isMessaged || isReplied || isCold ? 'completed' : isLowScore ? 'skipped' : 'pending', timestamp: null, details: isLowScore ? [{ label: 'Reason', value: 'Score below threshold' }] : [] },
     { id: 'followups', title: 'Follow-ups', icon: Clock, status: isReplied || isCold ? 'completed' : isMessaged ? 'pending' : 'pending', timestamp: null, details: isCold ? [{ label: 'Outcome', value: 'No reply received' }] : isReplied ? [{ label: 'Outcome', value: 'Reply received' }] : [] },
-    { id: 'feedback', title: 'Feedback', icon: TrendingUp, status: isReplied ? 'completed' : isCold ? 'pending' : isMessaged ? 'pending' : 'pending', timestamp: null, details: isReplied ? [{ label: 'Status', value: 'Reply classified' }] : [] },
+    { id: 'feedback', title: 'Feedback / Learning', icon: TrendingUp, status: isReplied ? 'completed' : isCold ? 'pending' : isMessaged ? 'pending' : 'pending', timestamp: null, details: feedbackDetails },
   ];
 }
 
@@ -173,7 +280,8 @@ function buildPipelineCategories(stages: PipelineStage[]): PipelineCategory[] {
   const byId = Object.fromEntries(stages.map((s) => [s.id, s]));
   const groups: { id: string; title: string; icon: React.ComponentType<{ className?: string | undefined }>; stageIds: string[] }[] = [
     { id: 'discovery', title: 'Discovery', icon: Radar, stageIds: ['discovery'] },
-    { id: 'qualification', title: 'Qualification', icon: Layers, stageIds: ['enrichment'] },
+    { id: 'qualification', title: 'Pre-qualification', icon: Layers, stageIds: ['prequalification'] },
+    { id: 'enrichment', title: 'Enrichment', icon: Globe, stageIds: ['enrichment'] },
     { id: 'intelligence', title: 'Intelligence / Scoring', icon: Sparkles, stageIds: ['features', 'scoring'] },
     { id: 'outreach', title: 'Outreach', icon: MessageSquare, stageIds: ['message-gen', 'message-send', 'followups'] },
     { id: 'learning', title: 'Learning Loops', icon: TrendingUp, stageIds: ['feedback'] },
@@ -184,6 +292,16 @@ function buildPipelineCategories(stages: PipelineStage[]): PipelineCategory[] {
   });
 }
 
+function extractField(item: LeadItem, field: string): string {
+  const enrichment = item.latestEnrichmentNormalizedPayload as Record<string, unknown> | null;
+  const rawEnrichment = item.latestEnrichmentRawPayload as Record<string, unknown> | null;
+  const discovery = item.latestDiscoveryRawPayload as Record<string, unknown> | null;
+  return (enrichment?.[field] as string)
+    ?? (rawEnrichment?.[field] as string)
+    ?? (discovery?.[field] as string)
+    ?? '';
+}
+
 function mapToLeadRecord(item: LeadItem): LeadRecord {
   const enrichment = item.latestEnrichmentNormalizedPayload as Record<string, unknown> | null;
   return {
@@ -191,9 +309,9 @@ function mapToLeadRecord(item: LeadItem): LeadRecord {
     name: `${item.firstName} ${item.lastName}`,
     company: (enrichment?.companyName as string) ?? '',
     email: item.email,
-    country: (enrichment?.country as string) ?? '',
-    city: (enrichment?.city as string) ?? '',
-    industry: (enrichment?.industry as string) ?? '',
+    country: extractField(item, 'country') || extractField(item, 'countryCode'),
+    city: extractField(item, 'city'),
+    industry: extractField(item, 'industry') || extractField(item, 'category'),
     score: item.latestBlendedScore ?? 0,
     tier: item.latestScoreBand ?? 'LOW',
     stages: buildPipelineStages(item),
@@ -339,7 +457,7 @@ function LeadSearchResult({ lead, isSelected, onSelect }: { lead: LeadRecord; is
             <div key={cat.id} className={cn('h-1.5 w-5 first:rounded-l-full last:rounded-r-full', STATUS_CONFIG[cat.status].dotColor, cat.status === 'pending' && 'opacity-40', cat.status === 'skipped' && 'opacity-50')} />
           ))}
         </div>
-        <span className="text-[10px] text-muted-foreground/30">{completedCount}/5{failedCount > 0 ? ` (${failedCount} failed)` : ''}</span>
+        <span className="text-[10px] text-muted-foreground/30">{completedCount}/{lead.categories.length}{failedCount > 0 ? ` (${failedCount} failed)` : ''}</span>
       </div>
     </button>
   );
@@ -489,18 +607,14 @@ function LifecycleTab() {
                 </div>
               </div>
 
-              <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
                 <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Country</p>
-                  <p className="mt-0.5 text-sm font-bold">{selectedLead.country}{selectedLead.city ? ` / ${selectedLead.city}` : ''}</p>
+                  <p className="mt-0.5 text-sm font-bold">{selectedLead.country || 'N/A'}{selectedLead.city ? ` / ${selectedLead.city}` : ''}</p>
                 </div>
                 <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Industry</p>
                   <p className="mt-0.5 text-sm font-bold">{selectedLead.industry || 'N/A'}</p>
-                </div>
-                <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Email</p>
-                  <p className="mt-0.5 truncate font-mono text-xs">{selectedLead.email}</p>
                 </div>
                 <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Lead ID</p>

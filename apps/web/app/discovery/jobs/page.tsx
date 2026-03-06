@@ -69,7 +69,7 @@ const PIPELINE_CATEGORIES: CategoryDef[] = [
     icon: Sparkles,
     iconColor: 'text-yellow-400',
     bgColor: 'bg-yellow-500/10',
-    jobNames: ['features.compute', 'scoring.batch'],
+    jobNames: ['features.compute', 'scoring.batch', 'scoring.compute'],
   },
   {
     id: 'outreach',
@@ -77,7 +77,7 @@ const PIPELINE_CATEGORIES: CategoryDef[] = [
     icon: MessageSquare,
     iconColor: 'text-zbooni-green',
     bgColor: 'bg-zbooni-green/10',
-    jobNames: ['message.generate', 'message.send', 'followup.schedule'],
+    jobNames: ['message.generate', 'message.send', 'followup.check'],
   },
   {
     id: 'learning',
@@ -86,7 +86,8 @@ const PIPELINE_CATEGORIES: CategoryDef[] = [
     iconColor: 'text-blue-400',
     bgColor: 'bg-blue-500/10',
     jobNames: [
-      'reply.classify', 'labels.generate', 'model.train', 'manager.analyze',
+      'reply.classify', 'labels.generate', 'model.train', 'model.evaluate',
+      'manager.analyze', 'analytics.rollup',
       'notify.sales', 'model.drift', 'data.retention', 'lead.recovery', 'pipeline.health',
     ],
   },

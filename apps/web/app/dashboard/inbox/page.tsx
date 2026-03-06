@@ -279,8 +279,23 @@ export default function InboxPage() {
               ) : null}
 
               {conversation.data?.entries.map((entry: ConversationEntry, i: number) => (
+                <div key={i}>
+                  {/* Visual separator between messages */}
+                  {i > 0 ? (
+                    <div className="my-4 flex items-center gap-3">
+                      <div className="h-px flex-1 bg-border/30" />
+                      <span className="text-[10px] text-muted-foreground/40">
+                        {new Date(entry.timestamp).toLocaleDateString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                      <div className="h-px flex-1 bg-border/30" />
+                    </div>
+                  ) : null}
                 <div
-                  key={i}
                   className={`flex ${entry.type === 'sent' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div
@@ -295,7 +310,18 @@ export default function InboxPage() {
                         Subject: {entry.subject}
                       </p>
                     ) : null}
-                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{entry.bodyText}</p>
+                    <div className="text-sm leading-relaxed">
+                      {entry.bodyText.split('\n\n').map((paragraph, pIdx) => (
+                        <p key={pIdx} className={pIdx > 0 ? 'mt-3' : ''}>
+                          {paragraph.split('\n').map((line, lIdx, arr) => (
+                            <span key={lIdx}>
+                              {line}
+                              {lIdx < arr.length - 1 ? <br /> : null}
+                            </span>
+                          ))}
+                        </p>
+                      ))}
+                    </div>
                     <div className="mt-2 flex items-center gap-2">
                       <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${channelBadge(entry.channel)}`}>
                         {entry.channel}
@@ -313,6 +339,7 @@ export default function InboxPage() {
                       </span>
                     </div>
                   </div>
+                </div>
                 </div>
               ))}
             </div>
