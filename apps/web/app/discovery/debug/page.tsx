@@ -64,6 +64,14 @@ interface PipelineStage {
   details: StageDetail[];
 }
 
+interface PipelineCategory {
+  id: string;
+  title: string;
+  icon: React.ComponentType<{ className?: string | undefined }>;
+  stages: PipelineStage[];
+  status: StageStatus;
+}
+
 interface LeadRecord {
   id: string;
   name: string;
@@ -75,6 +83,7 @@ interface LeadRecord {
   score: number;
   tier: string;
   stages: PipelineStage[];
+  categories: PipelineCategory[];
 }
 
 function extractEnrichmentDetails(payload: Record<string, unknown>): StageDetail[] {
@@ -152,6 +161,29 @@ function buildPipelineStages(lead: LeadItem): PipelineStage[] {
   ];
 }
 
+function deriveCategoryStatus(stages: PipelineStage[]): StageStatus {
+  if (stages.some((s) => s.status === 'failed')) return 'failed';
+  if (stages.every((s) => s.status === 'completed')) return 'completed';
+  if (stages.every((s) => s.status === 'skipped')) return 'skipped';
+  if (stages.some((s) => s.status === 'completed')) return 'pending';
+  return 'pending';
+}
+
+function buildPipelineCategories(stages: PipelineStage[]): PipelineCategory[] {
+  const byId = Object.fromEntries(stages.map((s) => [s.id, s]));
+  const groups: { id: string; title: string; icon: React.ComponentType<{ className?: string | undefined }>; stageIds: string[] }[] = [
+    { id: 'discovery', title: 'Discovery', icon: Radar, stageIds: ['discovery'] },
+    { id: 'qualification', title: 'Qualification', icon: Layers, stageIds: ['enrichment'] },
+    { id: 'intelligence', title: 'Intelligence / Scoring', icon: Sparkles, stageIds: ['features', 'scoring'] },
+    { id: 'outreach', title: 'Outreach', icon: MessageSquare, stageIds: ['message-gen', 'message-send', 'followups'] },
+    { id: 'learning', title: 'Learning Loops', icon: TrendingUp, stageIds: ['feedback'] },
+  ];
+  return groups.map((g) => {
+    const groupStages = g.stageIds.map((sid) => byId[sid]).filter((s): s is PipelineStage => s != null);
+    return { id: g.id, title: g.title, icon: g.icon, stages: groupStages, status: deriveCategoryStatus(groupStages) };
+  });
+}
+
 function mapToLeadRecord(item: LeadItem): LeadRecord {
   const enrichment = item.latestEnrichmentNormalizedPayload as Record<string, unknown> | null;
   return {
@@ -165,6 +197,7 @@ function mapToLeadRecord(item: LeadItem): LeadRecord {
     score: item.latestBlendedScore ?? 0,
     tier: item.latestScoreBand ?? 'LOW',
     stages: buildPipelineStages(item),
+    categories: buildPipelineCategories(buildPipelineStages(item)),
   };
 }
 
@@ -231,10 +264,60 @@ function TimelineStage({ stage, isLast, index }: { stage: PipelineStage; isLast:
   );
 }
 
+function CategorySection({ category, index }: { category: PipelineCategory; index: number }) {
+  const [expanded, setExpanded] = useState(category.status === 'failed');
+  const config = STATUS_CONFIG[category.status];
+  const Icon = category.icon;
+  const completedCount = category.stages.filter((s) => s.status === 'completed').length;
+
+  return (
+    <div className="rounded-xl border border-border/30 bg-zbooni-dark/20 overflow-hidden" style={{ animationDelay: `${index * 80}ms` }}>
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-white/[0.02]"
+      >
+        <div className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border', config.borderColor, config.bg)}>
+          <Icon className={cn('h-4 w-4', config.color)} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-bold tracking-tight">{category.title}</h3>
+            <span className={cn('rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider', config.bg, config.color)}>
+              {config.label}
+            </span>
+          </div>
+          <p className="mt-0.5 text-[11px] text-muted-foreground/40">
+            {completedCount}/{category.stages.length} stage{category.stages.length !== 1 ? 's' : ''} completed
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex -space-x-0.5">
+            {category.stages.map((s) => (
+              <div key={s.id} className={cn('h-1.5 w-5 first:rounded-l-full last:rounded-r-full', STATUS_CONFIG[s.status].dotColor, s.status === 'pending' && 'opacity-40', s.status === 'skipped' && 'opacity-50')} />
+            ))}
+          </div>
+          <span className="text-muted-foreground/30">
+            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          </span>
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-border/20 px-4 py-3 space-y-0">
+          {category.stages.map((stage, i) => (
+            <TimelineStage key={stage.id} stage={stage} isLast={i === category.stages.length - 1} index={i} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LeadSearchResult({ lead, isSelected, onSelect }: { lead: LeadRecord; isSelected: boolean; onSelect: () => void }) {
   const tierColor = lead.tier === 'HIGH' ? 'text-zbooni-green bg-zbooni-green/10' : lead.tier === 'MEDIUM' ? 'text-yellow-400 bg-yellow-400/10' : 'text-red-400 bg-red-400/10';
-  const completedCount = lead.stages.filter((s) => s.status === 'completed').length;
-  const failedCount = lead.stages.filter((s) => s.status === 'failed').length;
+  const completedCount = lead.categories.filter((c) => c.status === 'completed').length;
+  const failedCount = lead.categories.filter((c) => c.status === 'failed').length;
 
   return (
     <button type="button" onClick={onSelect} className={cn('w-full rounded-xl border p-4 text-left transition-all duration-200', isSelected ? 'border-zbooni-green/40 bg-zbooni-green/[0.04] shadow-[0_0_20px_rgba(123,255,107,0.06)]' : 'border-border/30 bg-zbooni-dark/20 hover:border-border/50 hover:bg-zbooni-dark/40')}>
@@ -252,11 +335,11 @@ function LeadSearchResult({ lead, isSelected, onSelect }: { lead: LeadRecord; is
       </div>
       <div className="mt-2 flex items-center gap-2">
         <div className="flex -space-x-0.5">
-          {lead.stages.map((stage) => (
-            <div key={stage.id} className={cn('h-1.5 w-4 first:rounded-l-full last:rounded-r-full', STATUS_CONFIG[stage.status].dotColor, stage.status === 'pending' && 'opacity-40', stage.status === 'skipped' && 'opacity-50')} />
+          {lead.categories.map((cat) => (
+            <div key={cat.id} className={cn('h-1.5 w-5 first:rounded-l-full last:rounded-r-full', STATUS_CONFIG[cat.status].dotColor, cat.status === 'pending' && 'opacity-40', cat.status === 'skipped' && 'opacity-50')} />
           ))}
         </div>
-        <span className="text-[10px] text-muted-foreground/30">{completedCount}/8{failedCount > 0 ? ` (${failedCount} failed)` : ''}</span>
+        <span className="text-[10px] text-muted-foreground/30">{completedCount}/5{failedCount > 0 ? ` (${failedCount} failed)` : ''}</span>
       </div>
     </button>
   );
@@ -427,13 +510,13 @@ function LifecycleTab() {
 
               <div className="mb-6 flex items-center gap-4">
                 <div className="flex -space-x-0.5 flex-1">
-                  {selectedLead.stages.map((stage) => (
-                    <div key={stage.id} className={cn('h-2 flex-1 first:rounded-l-full last:rounded-r-full transition-all', STATUS_CONFIG[stage.status].dotColor, stage.status === 'pending' && 'opacity-30', stage.status === 'skipped' && 'opacity-40')} />
+                  {selectedLead.categories.map((cat) => (
+                    <div key={cat.id} className={cn('h-2 flex-1 first:rounded-l-full last:rounded-r-full transition-all', STATUS_CONFIG[cat.status].dotColor, cat.status === 'pending' && 'opacity-30', cat.status === 'skipped' && 'opacity-40')} />
                   ))}
                 </div>
                 <div className="flex items-center gap-4 text-[10px]">
                   {(['completed', 'pending', 'failed', 'skipped'] as const).map((status) => {
-                    const count = selectedLead.stages.filter((s) => s.status === status).length;
+                    const count = selectedLead.categories.filter((c) => c.status === status).length;
                     if (count === 0) return null;
                     return (
                       <span key={status} className="flex items-center gap-1.5">
@@ -445,9 +528,9 @@ function LifecycleTab() {
                 </div>
               </div>
 
-              <div className="space-y-0">
-                {selectedLead.stages.map((stage, i) => (
-                  <TimelineStage key={stage.id} stage={stage} isLast={i === selectedLead.stages.length - 1} index={i} />
+              <div className="space-y-3">
+                {selectedLead.categories.map((category, i) => (
+                  <CategorySection key={category.id} category={category} index={i} />
                 ))}
               </div>
             </>

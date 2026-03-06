@@ -177,7 +177,7 @@ export default function InboxPage() {
   return (
     <div className="flex h-[calc(100vh-4rem)] gap-0 overflow-hidden rounded-2xl border border-border/50 bg-card shadow-sm">
       {/* Left panel: conversation list */}
-      <div className="flex w-[360px] shrink-0 flex-col border-r border-border/50">
+      <div className="flex w-[360px] min-h-0 shrink-0 flex-col border-r border-border/50">
         {/* Search + filter */}
         <div className="space-y-2 border-b border-border/50 p-4">
           <div className="relative">
