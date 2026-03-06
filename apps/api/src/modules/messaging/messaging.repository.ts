@@ -428,7 +428,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
       where: { leadId },
       include: {
         messageVariant: {
-          select: { bodyText: true, subject: true },
+          select: { bodyText: true, bodyHtml: true, subject: true },
         },
       },
       orderBy: { createdAt: 'asc' },
@@ -448,6 +448,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
         timestamp: (send.sentAt ?? send.createdAt).toISOString(),
         channel: send.channel as 'EMAIL' | 'WHATSAPP',
         bodyText: send.messageVariant.bodyText,
+        bodyHtml: send.messageVariant.bodyHtml ?? null,
         subject: send.messageVariant.subject ?? null,
         replyClassification: null,
         status: send.status as MessageSendStatus,
@@ -461,6 +462,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
         timestamp: reply.occurredAt.toISOString(),
         channel: 'WHATSAPP', // Default — can refine later by looking at the linked MessageSend
         bodyText: reply.replyText ?? '(no text)',
+        bodyHtml: null,
         subject: null,
         replyClassification: reply.replyClassification,
         status: null,

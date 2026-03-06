@@ -9,6 +9,7 @@
  */
 
 import type { ConversationEntry, ConversationResponse, GetLeadResponse, MessageSendResponse } from '@lead-flood/contracts';
+import DOMPurify from 'dompurify';
 import {
   Inbox as InboxIcon,
   Mail,
@@ -311,16 +312,24 @@ export default function InboxPage() {
                       </p>
                     ) : null}
                     <div className="text-sm leading-relaxed">
-                      {entry.bodyText.split('\n\n').map((paragraph, pIdx) => (
-                        <p key={pIdx} className={pIdx > 0 ? 'mt-3' : ''}>
-                          {paragraph.split('\n').map((line, lIdx, arr) => (
-                            <span key={lIdx}>
-                              {line}
-                              {lIdx < arr.length - 1 ? <br /> : null}
-                            </span>
-                          ))}
-                        </p>
-                      ))}
+                      {entry.bodyHtml ? (
+                        <div
+                          dangerouslySetInnerHTML={{
+                            __html: DOMPurify.sanitize(entry.bodyHtml),
+                          }}
+                        />
+                      ) : (
+                        entry.bodyText.split('\n\n').map((paragraph, pIdx) => (
+                          <p key={pIdx} className={pIdx > 0 ? 'mt-3' : ''}>
+                            {paragraph.split('\n').map((line, lIdx, arr) => (
+                              <span key={lIdx}>
+                                {line}
+                                {lIdx < arr.length - 1 ? <br /> : null}
+                              </span>
+                            ))}
+                          </p>
+                        ))
+                      )}
                     </div>
                     <div className="mt-2 flex items-center gap-2">
                       <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${channelBadge(entry.channel)}`}>
