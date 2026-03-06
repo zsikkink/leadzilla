@@ -6,6 +6,7 @@ import type { Job, SendOptions } from 'pg-boss';
 
 import { classifyError } from '../errors.js';
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
+import { loadAutoApproveConfig, shouldAutoApprove } from '../utils/pipeline-settings.js';
 
 import {
   validateMessageVariant,
@@ -410,7 +411,16 @@ export async function handleMessageGenerateJob(
     };
 
     const previouslyPitchedFeatures = job.data.previouslyPitchedFeatures ?? [];
-    const autoApprove = job.data.autoApprove ?? false;
+
+    // Auto-approve: if payload has explicit value, use it; otherwise compute from PipelineSetting
+    let autoApprove: boolean;
+    if (job.data.autoApprove !== undefined) {
+      autoApprove = job.data.autoApprove;
+    } else {
+      const autoApproveConfig = await loadAutoApproveConfig();
+      const blendedScore = latestScore?.blendedScore ?? 0;
+      autoApprove = shouldAutoApprove(autoApproveConfig, blendedScore);
+    }
 
     // Select feature to pitch for follow-ups
     let pitchedFeature: string | null = null;

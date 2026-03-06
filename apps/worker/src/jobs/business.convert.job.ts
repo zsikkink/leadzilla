@@ -226,31 +226,33 @@ function isGenericEmail(email: string): boolean {
   return GENERIC_EMAIL_PREFIXES.has(prefix);
 }
 
+/** Pages that indicate a person-specific context for phone numbers. */
+const TEAM_PAGE_PATTERNS = ['/team', '/about', '/about-us', '/our-team', '/people', '/staff'];
+
 /**
  * Determine if a phone number is a generic business line (not a DM's personal line).
- * - If associated with a named person (from team page scrape), it's personal → false
- * - If from a /contact page with no person context, it's a business line → true
- * - If it's the only phone and business is small (≤2 employees), likely owner → false
+ * - If associated with a named person AND found on a team/about page → personal (false)
+ * - If no person context → always generic (true), regardless of business size
+ * - If person context but from a non-team page → generic (true)
  */
 function isGenericPhone(
-  phone: string,
+  _phone: string,
   hasPersonContext: boolean,
-  estimatedEmployees: number | null,
+  _estimatedEmployees: number | null,
   pageUrl: string | null,
 ): boolean {
-  // Phone associated with a named decision maker = personal
-  if (hasPersonContext) return false;
+  // No person context = always generic, regardless of business size
+  if (!hasPersonContext) return true;
 
-  // Small business (≤2 employees) — only phone is likely the owner's
-  if (estimatedEmployees !== null && estimatedEmployees <= 2) return false;
-
-  // Phone from /contact or /contact-us page with no person context = business line
+  // Person context exists — only trust phones from team/about pages
   if (pageUrl) {
     const path = pageUrl.toLowerCase();
-    if (path.includes('/contact')) return true;
+    if (TEAM_PAGE_PATTERNS.some((p) => path.includes(p))) {
+      return false; // Named person on a team/about page → personal
+    }
   }
 
-  // Default: if no person context, assume business line
+  // Person context but not from a team/about page → treat as generic
   return true;
 }
 
@@ -754,7 +756,7 @@ export async function handleBusinessConvertJob(
       name: business.name,
       title: null,
       email: igEmailValid ? instagramData.businessEmail : null,
-      phone: instagramData.businessPhone ?? null,
+      phone: null, // Instagram businessPhone is the company's phone, not a decision maker's personal phone
       linkedinUrl: null,
       seniority: 'other',
       positionRank: 99,

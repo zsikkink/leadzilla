@@ -477,6 +477,23 @@ export async function handleDiscoveryRunSearchTaskJob(
     return;
   }
 
+  // ── Cancel check: stop loop gracefully if the run was cancelled ──
+  if (job.data.discoveryRunId) {
+    const execution = await prisma.jobExecution.findUnique({
+      where: { id: job.data.discoveryRunId },
+      select: { status: true },
+    });
+    if (execution?.status === 'cancelled') {
+      logger.warn(
+        { jobId: job.id, queue: job.name, discoveryRunId: job.data.discoveryRunId, slot },
+        'Discovery run cancelled — stopping search task loop',
+      );
+      await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
+      releaseSlot(runKey, runState);
+      return;
+    }
+  }
+
   const startAfterSeconds = nextPollDelaySeconds(runResult.status);
   // singletonKey prevents duplicate loops if pg-boss retries while self-enqueue is pending
   const runId = job.data.discoveryRunId ?? job.data.jobRunId ?? correlationId;

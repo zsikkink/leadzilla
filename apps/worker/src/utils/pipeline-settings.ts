@@ -77,3 +77,61 @@ export async function getPipelineSettings(): Promise<PipelineSettings> {
     return { ...DEFAULTS };
   }
 }
+
+// ── Auto-approve configuration ────────────────────────────────────────
+
+export interface AutoApproveConfig {
+  enabled: boolean;
+  scoreMin: number;
+  scoreMax: number;
+}
+
+const AUTO_APPROVE_DEFAULTS: AutoApproveConfig = {
+  enabled: false,
+  scoreMin: 0,
+  scoreMax: 1,
+};
+
+const AUTO_APPROVE_KEYS = [
+  'auto_approve_enabled',
+  'auto_approve_score_min',
+  'auto_approve_score_max',
+] as const;
+
+/**
+ * Load auto-approve configuration from PipelineSetting.
+ * Returns { enabled: false } if settings are missing (OFF by default).
+ * Never throws.
+ */
+export async function loadAutoApproveConfig(): Promise<AutoApproveConfig> {
+  try {
+    const rows = await prisma.pipelineSetting.findMany({
+      where: { key: { in: [...AUTO_APPROVE_KEYS] } },
+      select: { key: true, valueJson: true },
+    });
+
+    const config = { ...AUTO_APPROVE_DEFAULTS };
+
+    for (const row of rows) {
+      if (row.key === 'auto_approve_enabled' && typeof row.valueJson === 'boolean') {
+        config.enabled = row.valueJson;
+      } else if (row.key === 'auto_approve_score_min' && typeof row.valueJson === 'number') {
+        config.scoreMin = row.valueJson;
+      } else if (row.key === 'auto_approve_score_max' && typeof row.valueJson === 'number') {
+        config.scoreMax = row.valueJson;
+      }
+    }
+
+    return config;
+  } catch {
+    return { ...AUTO_APPROVE_DEFAULTS };
+  }
+}
+
+/**
+ * Compute whether a lead should be auto-approved based on PipelineSetting config
+ * and the lead's blended score.
+ */
+export function shouldAutoApprove(config: AutoApproveConfig, blendedScore: number): boolean {
+  return config.enabled && blendedScore >= config.scoreMin && blendedScore <= config.scoreMax;
+}

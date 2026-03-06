@@ -251,6 +251,23 @@ describe('pipeline full lifecycle', () => {
       },
     });
 
+    // Seed auto-approve pipeline settings (ON, score range 0-1)
+    await prisma.pipelineSetting.upsert({
+      where: { key: 'auto_approve_enabled' },
+      create: { key: 'auto_approve_enabled', valueJson: true },
+      update: { valueJson: true },
+    });
+    await prisma.pipelineSetting.upsert({
+      where: { key: 'auto_approve_score_min' },
+      create: { key: 'auto_approve_score_min', valueJson: 0 },
+      update: { valueJson: 0 },
+    });
+    await prisma.pipelineSetting.upsert({
+      where: { key: 'auto_approve_score_max' },
+      create: { key: 'auto_approve_score_max', valueJson: 1 },
+      update: { valueJson: 1 },
+    });
+
     // Seed LeadDiscoveryRecord (simulates discovery pipeline output)
     await prisma.leadDiscoveryRecord.create({
       data: {
@@ -315,6 +332,9 @@ describe('pipeline full lifecycle', () => {
     }).catch(() => { /* may already exist */ });
     await prisma.icpProfile.deleteMany({
       where: { id: ICP_ID },
+    });
+    await prisma.pipelineSetting.deleteMany({
+      where: { key: { in: ['auto_approve_enabled', 'auto_approve_score_min', 'auto_approve_score_max'] } },
     });
   });
 

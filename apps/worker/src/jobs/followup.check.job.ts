@@ -7,6 +7,7 @@ import {
   MESSAGE_GENERATE_RETRY_OPTIONS,
   type MessageGenerateJobPayload,
 } from './message.generate.job.js';
+import { loadAutoApproveConfig, shouldAutoApprove } from '../utils/pipeline-settings.js';
 
 export const FOLLOWUP_CHECK_JOB_NAME = 'followup.check';
 
@@ -49,6 +50,7 @@ export async function handleFollowupCheckJob(
 
   try {
     const now = new Date();
+    const autoApproveConfig = await loadAutoApproveConfig();
 
     // Find all MessageSends eligible for follow-up
     const eligibleSends = await prisma.messageSend.findMany({
@@ -72,6 +74,11 @@ export async function handleFollowupCheckJob(
             feedbackEvents: {
               where: { eventType: { in: ['REPLIED', 'UNSUBSCRIBED', 'MEETING_BOOKED', 'DEAL_WON', 'BOUNCED'] } },
               select: { id: true },
+              take: 1,
+            },
+            scorePredictions: {
+              select: { id: true, blendedScore: true },
+              orderBy: { predictedAt: 'desc' },
               take: 1,
             },
           },
@@ -127,6 +134,11 @@ export async function handleFollowupCheckJob(
         data: { nextFollowUpAfter: null },
       });
 
+      // Compute auto-approve based on PipelineSetting + lead's blended score
+      const latestScore = send.lead.scorePredictions[0];
+      const blendedScore = latestScore?.blendedScore ?? 0;
+      const autoApprove = shouldAutoApprove(autoApproveConfig, blendedScore);
+
       // Enqueue message.generate in follow-up mode
       await deps.boss.send(
         MESSAGE_GENERATE_JOB_NAME,
@@ -137,10 +149,11 @@ export async function handleFollowupCheckJob(
           followUpNumber: send.followUpNumber + 1,
           parentMessageSendId: send.id,
           previouslyPitchedFeatures,
-          autoApprove: true,
+          autoApprove,
           channel: send.channel,
           knowledgeEntryIds: [],
           promptVersion: 'v1-followup',
+          scorePredictionId: latestScore?.id,
           correlationId: correlationId ?? job.id,
         } satisfies MessageGenerateJobPayload,
         {

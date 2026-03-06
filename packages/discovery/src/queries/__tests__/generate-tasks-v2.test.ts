@@ -130,7 +130,7 @@ describe('generateTasksV2', () => {
     expect(pages).toEqual(new Set([1, 2, 3]));
   });
 
-  it('resolves country name in query text', () => {
+  it('does not include country name in query text', () => {
     const input: GenerateTasksV2Input = {
       categories: ['bakery'],
       countries: ['AE'],
@@ -139,14 +139,13 @@ describe('generateTasksV2', () => {
 
     const tasks = generateTasksV2(input, { now: fixedDate });
 
-    // Should contain "United Arab Emirates" not "AE"
     const firstTask = tasks[0]!;
-    expect(firstTask.queryText).toContain('United Arab Emirates');
+    expect(firstTask.queryText).not.toContain('United Arab Emirates');
     expect(firstTask.queryText).toContain('Dubai');
     expect(firstTask.queryText).toContain('bakery');
   });
 
-  it('falls back to country code when no name mapping exists', () => {
+  it('does not include unknown country code in query text', () => {
     const input: GenerateTasksV2Input = {
       categories: ['bakery'],
       countries: ['XX'],
@@ -156,7 +155,8 @@ describe('generateTasksV2', () => {
     const tasks = generateTasksV2(input, { now: fixedDate });
 
     const firstTask = tasks[0]!;
-    expect(firstTask.queryText).toContain('XX');
+    expect(firstTask.queryText).not.toContain('XX');
+    expect(firstTask.queryText).toContain('TestCity');
   });
 
   it('includes v2 in the timeBucket', () => {

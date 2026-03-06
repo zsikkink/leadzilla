@@ -2,6 +2,7 @@ import { prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
+import { loadAutoApproveConfig, shouldAutoApprove } from '../utils/pipeline-settings.js';
 
 // ── Constants ──────────────────────────────────────────────────────────
 export const APOLLO_ENRICH_JOB_NAME = 'apollo.enrich';
@@ -93,6 +94,17 @@ export async function handleApolloEnrichJob(
 
   logger.info(logCtx, 'Started apollo.enrich job');
 
+  // Load auto-approve config once for this job
+  const autoApproveConfig = await loadAutoApproveConfig();
+
+  // Load blended score for auto-approve decision
+  const scorePrediction = await prisma.leadScorePrediction.findUnique({
+    where: { id: scorePredictionId },
+    select: { blendedScore: true },
+  });
+  const blendedScore = scorePrediction?.blendedScore ?? 0;
+  const autoApprove = shouldAutoApprove(autoApproveConfig, blendedScore);
+
   // LOW → skip entirely, do not enqueue message.generate
   if (scoreBand === 'LOW') {
     logger.info(logCtx, 'LOW score band — skipping apollo.enrich entirely');
@@ -160,7 +172,7 @@ export async function handleApolloEnrichJob(
         runId,
         correlationId: effectiveCorrelationId,
         channel,
-        autoApprove: true,
+        autoApprove,
       });
     }
     return;
@@ -189,7 +201,7 @@ export async function handleApolloEnrichJob(
         runId,
         correlationId: effectiveCorrelationId,
         channel: 'EMAIL',
-        autoApprove: true,
+        autoApprove,
       });
     } else {
       await tryFinalizeDiscoveryRun(runId, logger);
@@ -207,7 +219,7 @@ export async function handleApolloEnrichJob(
         runId,
         correlationId: effectiveCorrelationId,
         channel: 'EMAIL',
-        autoApprove: true,
+        autoApprove,
       });
     } else {
       await tryFinalizeDiscoveryRun(runId, logger);
@@ -231,7 +243,7 @@ export async function handleApolloEnrichJob(
         runId,
         correlationId: effectiveCorrelationId,
         channel: 'EMAIL',
-        autoApprove: true,
+        autoApprove,
       });
     } else {
       await tryFinalizeDiscoveryRun(runId, logger);

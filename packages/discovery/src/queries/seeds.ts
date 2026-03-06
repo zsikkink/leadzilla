@@ -78,23 +78,23 @@ export const smallCategoryTaxonomyAR: string[] = [
 ];
 
 export const queryTemplatesEN: string[] = [
-  '{category} in {city} {country} contact us WhatsApp',
-  '{category} in {city} {country} DM for orders Instagram',
-  '{category} in {city} {country} order now send payment link',
+  '{category} in {city} contact us WhatsApp',
+  '{category} in {city} DM for orders Instagram',
+  '{category} in {city} order now send payment link',
 ];
 
 export const smallQueryTemplatesEN: string[] = [
-  '{category} in {city} {country} contact us WhatsApp',
+  '{category} in {city} contact us WhatsApp',
 ];
 
 export const queryTemplatesAR: string[] = [
-  '{category} في {city} {country} تواصل معنا واتساب',
-  '{category} في {city} {country} اطلب عبر انستقرام',
-  '{category} في {city} {country} اطلب الآن رابط دفع',
+  '{category} في {city} تواصل معنا واتساب',
+  '{category} في {city} اطلب عبر انستقرام',
+  '{category} في {city} اطلب الآن رابط دفع',
 ];
 
 export const smallQueryTemplatesAR: string[] = [
-  '{category} في {city} {country} تواصل معنا واتساب',
+  '{category} في {city} تواصل معنا واتساب',
 ];
 
 export function getCategoryTaxonomy(
@@ -123,9 +123,9 @@ export function getQueryTemplates(
 
 /** V2 query templates (English). Use with generateTasksV2. */
 export const queryTemplatesV2EN: string[] = [
-  '{category} in {city} {country}',
-  '{category} in {city} {country} order online',
-  '{category} in {city} {country} request quote custom',
+  '{category} in {city}',
+  '{category} in {city} order online',
+  '{category} in {city} request quote custom',
 ];
 
 /** ISO 3166-1 alpha-2 → human-readable country name. */
