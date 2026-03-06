@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const LeadStatusSchema = z.enum(['new', 'processing', 'enriched', 'failed', 'messaged', 'replied', 'cold']);
-export const JobStatusSchema = z.enum(['queued', 'running', 'completed', 'failed']);
+export const JobStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']);
 export const LeadScoreBandSchema = z.enum(['LOW', 'MEDIUM', 'HIGH']);
 
 export const CreateLeadRequestSchema = z.object({
@@ -83,6 +83,10 @@ export const LeadInspectionResponseSchema = z
     latestDiscoveryRawPayload: z.unknown().nullable(),
     latestEnrichmentNormalizedPayload: z.unknown().nullable(),
     latestEnrichmentRawPayload: z.unknown().nullable(),
+    businessCountryCode: z.string().nullable(),
+    businessCountry: z.string().nullable(),
+    businessCity: z.string().nullable(),
+    businessCategory: z.string().nullable(),
   })
   .strict();
 

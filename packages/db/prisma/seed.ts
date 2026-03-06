@@ -459,6 +459,21 @@ async function main(): Promise<void> {
     }
   }
 
+  // Seed auto-approve pipeline settings defaults
+  const autoApproveDefaults = [
+    { key: 'auto_approve_enabled', valueJson: false },
+    { key: 'auto_approve_score_min', valueJson: 0 },
+    { key: 'auto_approve_score_max', valueJson: 1 },
+  ];
+  for (const setting of autoApproveDefaults) {
+    await prisma.pipelineSetting.upsert({
+      where: { key: setting.key },
+      create: { key: setting.key, valueJson: setting.valueJson },
+      update: {},
+    });
+  }
+  console.log('Seeded 3 auto-approve pipeline settings');
+
   console.log(`Seeded ${ICP_SEGMENTS.length} ICPs with qualification rules, ${FAKE_LEADS.length} leads, and message drafts.`);
   console.log('Priority boost: P1 segments +0.15, P2 segments +0.0');
 }

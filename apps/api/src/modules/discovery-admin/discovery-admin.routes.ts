@@ -301,10 +301,7 @@ export function registerDiscoveryAdminRoutes(
 
   // ── B1: Cancel a discovery run (JobExecution) ──
   app.post('/v1/discovery-admin/runs/:id/cancel', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies.adminApiKey)) {
-      return;
-    }
-
+    // Auth is handled by the protectedRoutes plugin (JWT guard)
     const parsedParams = DiscoveryRunIdParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid run id');

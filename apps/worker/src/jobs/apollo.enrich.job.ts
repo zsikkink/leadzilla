@@ -295,7 +295,7 @@ export async function handleApolloEnrichJob(
       runId,
       correlationId: effectiveCorrelationId,
       channel,
-      autoApprove: true,
+      autoApprove,
     });
     logger.info(
       { ...logCtx, channel, revealedEmail, revealedPhone },

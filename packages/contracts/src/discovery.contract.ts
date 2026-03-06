@@ -29,6 +29,7 @@ export const DiscoveryPipelineRunStatusSchema = z.enum([
   'SUCCEEDED',
   'FAILED',
   'PARTIAL',
+  'CANCELLED',
 ]);
 
 export const DiscoveryRunIdParamsSchema = z

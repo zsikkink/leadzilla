@@ -283,6 +283,10 @@ describe('inspection endpoints integration', () => {
             latestDiscoveryRawPayload: row.discoveryRecords[0]?.rawPayload ?? null,
             latestEnrichmentNormalizedPayload: row.enrichmentRecords[0]?.normalizedPayload ?? null,
             latestEnrichmentRawPayload: row.enrichmentRecords[0]?.rawPayload ?? null,
+            businessCountryCode: null,
+            businessCountry: null,
+            businessCity: null,
+            businessCategory: null,
           })),
           qualityMetrics: {
             validEmailCount: 1,

@@ -120,6 +120,10 @@ interface LeadItem {
   latestEnrichmentNormalizedPayload?: unknown | undefined;
   latestEnrichmentRawPayload?: unknown | undefined;
   latestDiscoveryRawPayload?: unknown | undefined;
+  businessCountryCode?: string | null | undefined;
+  businessCountry?: string | null | undefined;
+  businessCity?: string | null | undefined;
+  businessCategory?: string | null | undefined;
 }
 
 function buildPipelineStages(lead: LeadItem): PipelineStage[] {
@@ -309,9 +313,9 @@ function mapToLeadRecord(item: LeadItem): LeadRecord {
     name: `${item.firstName} ${item.lastName}`,
     company: (enrichment?.companyName as string) ?? '',
     email: item.email,
-    country: extractField(item, 'country') || extractField(item, 'countryCode'),
-    city: extractField(item, 'city'),
-    industry: extractField(item, 'industry') || extractField(item, 'category'),
+    country: extractField(item, 'country') || extractField(item, 'countryCode') || item.businessCountry || item.businessCountryCode || '',
+    city: extractField(item, 'city') || item.businessCity || '',
+    industry: extractField(item, 'industry') || extractField(item, 'category') || item.businessCategory || '',
     score: item.latestBlendedScore ?? 0,
     tier: item.latestScoreBand ?? 'LOW',
     stages: buildPipelineStages(item),

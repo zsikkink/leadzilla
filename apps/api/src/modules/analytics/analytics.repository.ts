@@ -526,6 +526,17 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
           .then((profiles) => profiles.map((profile) => profile.id));
 
     for (const icpProfileId of icpProfilesToProcess) {
+      // V2: resolve discovery run IDs for this ICP to filter Business→Lead chain
+      const icpDiscoveryRunIds = await prisma.jobExecution
+        .findMany({
+          where: {
+            type: 'discovery.run',
+            payload: { path: ['icpProfileId'], equals: icpProfileId },
+          },
+          select: { id: true },
+        })
+        .then((runs) => runs.map((r) => r.id));
+
       const [discoveredCount, enrichedCount, scoredCount] = await Promise.all([
         prisma.leadDiscoveryRecord.count({
           where: {
@@ -534,14 +545,14 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
             status: 'DISCOVERED',
           },
         }),
-        prisma.leadEnrichmentRecord.count({
+        // V2: count Leads with a BusinessConversion (went through V2 pipeline)
+        prisma.lead.count({
           where: {
-            status: 'COMPLETED',
-            enrichedAt: { gte: dayStart, lte: dayEnd },
-            lead: {
-              discoveryRecords: {
-                some: { icpProfileId },
-              },
+            deletedAt: null,
+            businessConversions: { some: {} },
+            createdAt: { gte: dayStart, lte: dayEnd },
+            business: {
+              discoveryRunId: { in: icpDiscoveryRunIds },
             },
           },
         }),

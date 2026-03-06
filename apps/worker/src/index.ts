@@ -156,6 +156,7 @@ import { buildDefaultWorkerId, startJobRequestDispatcher } from './job-requests/
 import { EmailRateLimiter } from './messaging/email-rate-limiter.js';
 import { WhatsAppRateLimiter } from './messaging/rate-limiter.js';
 import { dispatchPendingOutboxEvents } from './outbox-dispatcher.js';
+import { checkStaleDiscoveryRuns } from './utils/discovery-run-tracker.js';
 import { ensureWorkerQueues, HEARTBEAT_QUEUE_NAME } from './queues.js';
 import { registerWorkerSchedules } from './schedules.js';
 
@@ -419,6 +420,11 @@ async function main(): Promise<void> {
   const outboxInterval = setInterval(() => {
     void runOutboxDispatch();
   }, 5000);
+
+  // Periodic check for stale discovery runs (safety timeout enforcement)
+  const staleRunCheckInterval = setInterval(() => {
+    void checkStaleDiscoveryRuns(logger);
+  }, 15 * 60 * 1000); // every 15 minutes
 
   await registerWorker<HeartbeatJobPayload>(boss, logger, HEARTBEAT_QUEUE_NAME, handleHeartbeatJob);
 
@@ -827,6 +833,7 @@ async function main(): Promise<void> {
       stopJobRequestDispatcher = null;
     }
     clearInterval(outboxInterval);
+    clearInterval(staleRunCheckInterval);
     await boss.stop({ graceful: true, timeout: 30_000 });
   };
 

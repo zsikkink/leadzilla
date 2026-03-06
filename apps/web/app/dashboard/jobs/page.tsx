@@ -64,6 +64,12 @@ const STATUS_CONFIG: Record<
     bgClass: 'bg-yellow-500/10',
     textClass: 'text-yellow-400',
   },
+  CANCELLED: {
+    label: 'Cancelled',
+    dotClass: 'bg-muted-foreground/50',
+    bgClass: 'bg-muted-foreground/10',
+    textClass: 'text-muted-foreground',
+  },
 };
 
 // ── Status badge ─────────────────────────────────────────────────────────
@@ -217,6 +223,18 @@ function RunCardSkeleton() {
   );
 }
 
+// ── Multi-ICP label builder ──────────────────────────────────────────────
+function buildIcpLabel(run: DiscoveryRunSummary, nameMap: Map<string, string>): string {
+  const ids = run.icpProfileIds?.length ? run.icpProfileIds : (run.icpProfileId ? [run.icpProfileId] : []);
+  if (ids.length === 0) return 'All Profiles';
+  const firstWords = ids.map((id) => {
+    const name = nameMap.get(id) ?? 'Unknown';
+    return name.split(/\s+/)[0] ?? name;
+  });
+  if (firstWords.length <= 3) return firstWords.join(' & ');
+  return `${firstWords.slice(0, 2).join(' & ')} +${firstWords.length - 2}`;
+}
+
 // ── Main page ────────────────────────────────────────────────────────────
 export default function DiscoveryRunsPage() {
   const { apiClient } = useAuth();
@@ -337,11 +355,7 @@ export default function DiscoveryRunsPage() {
               <RunCard
                 key={run.runId}
                 run={run}
-                icpName={
-                  run.icpProfileId
-                    ? (icpNameMap.get(run.icpProfileId) ?? 'Unknown Profile')
-                    : 'All Profiles'
-                }
+                icpName={buildIcpLabel(run, icpNameMap)}
                 onClick={() => router.push(`/dashboard/jobs/${run.runId}`)}
               />
             ))}

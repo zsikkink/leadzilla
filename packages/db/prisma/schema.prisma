@@ -23,6 +23,7 @@ enum JobStatus {
   running
   completed
   failed
+  cancelled
 }
 
 enum OutboxStatus {

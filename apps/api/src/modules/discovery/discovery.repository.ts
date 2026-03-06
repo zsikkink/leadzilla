@@ -51,7 +51,7 @@ function readRunProgress(result: unknown): DiscoveryRunProgress {
 }
 
 function mapJobStatusToPipelineStatus(
-  status: 'queued' | 'running' | 'completed' | 'failed',
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled',
   failedItems: number,
 ): PipelineRunStatus {
   switch (status) {
@@ -61,6 +61,8 @@ function mapJobStatusToPipelineStatus(
       return 'RUNNING';
     case 'failed':
       return 'FAILED';
+    case 'cancelled':
+      return 'CANCELLED';
     case 'completed':
     default:
       return failedItems > 0 ? 'PARTIAL' : 'SUCCEEDED';

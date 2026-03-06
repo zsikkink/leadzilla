@@ -14,6 +14,7 @@ export const EnrichmentPipelineRunStatusSchema = z.enum([
   'SUCCEEDED',
   'FAILED',
   'PARTIAL',
+  'CANCELLED',
 ]);
 
 export const EnrichmentRunIdParamsSchema = z

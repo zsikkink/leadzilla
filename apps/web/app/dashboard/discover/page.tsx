@@ -187,6 +187,7 @@ interface RunBatch {
     runId: string;
     status: PipelineRunStatus;
     icpProfileId: string | null;
+    icpProfileIds?: string[] | undefined;
     countries: string[];
     limit: number;
     processedItems: number;
@@ -244,10 +245,12 @@ function buildBatch(
   runs: RunBatch['runs'],
   icpItems: Array<{ id: string; name: string }> | undefined,
 ): RunBatch {
-  const icpNames = runs.map((r) => {
-    const found = icpItems?.find((i) => i.id === r.icpProfileId);
-    return found?.name ?? 'ICP';
-  });
+  const icpNames = Array.from(new Set(runs.flatMap((r) => {
+    const ids = r.icpProfileIds?.length
+      ? r.icpProfileIds
+      : (r.icpProfileId ? [r.icpProfileId] : []);
+    return ids.map((id) => icpItems?.find((i) => i.id === id)?.name ?? 'ICP');
+  })));
   const uniqueCountries = Array.from(new Set(runs.flatMap((r) => r.countries)));
   const overallStatus = runs.reduce<PipelineRunStatus>((worst, r) => {
     return (STATUS_PRIORITY[r.status] ?? 5) < (STATUS_PRIORITY[worst] ?? 5) ? r.status : worst;

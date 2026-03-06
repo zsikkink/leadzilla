@@ -483,6 +483,9 @@ async function main(): Promise<void> {
               orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
               take: 1,
             },
+            business: {
+              select: { countryCode: true, country: true, city: true, category: true },
+            },
           },
         }),
       ]);
@@ -562,6 +565,10 @@ async function main(): Promise<void> {
             latestDiscoveryRawPayload: lead.discoveryRecords[0]?.rawPayload ?? null,
             latestEnrichmentNormalizedPayload: lead.enrichmentRecords[0]?.normalizedPayload ?? enrichmentFallback ?? null,
             latestEnrichmentRawPayload: lead.enrichmentRecords[0]?.rawPayload ?? null,
+            businessCountryCode: lead.business?.countryCode ?? null,
+            businessCountry: lead.business?.country ?? null,
+            businessCity: lead.business?.city ?? null,
+            businessCategory: lead.business?.category ?? null,
           };
         }),
         qualityMetrics,

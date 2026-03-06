@@ -4,6 +4,7 @@ import type { OpenAiAdapter } from '@lead-flood/providers';
 import type { Job, SendOptions } from 'pg-boss';
 
 import { classifyError } from '../errors.js';
+import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
 import {
   evaluateDeterministicScore,
   toScoreBand,
@@ -340,6 +341,9 @@ export async function handleScoringComputeJob(
               'Enqueued message.generate for qualifying lead (no apollo.enrich)',
             );
           }
+        } else {
+          // Below qualification threshold — this lead is terminal, check if run can finalize
+          await tryFinalizeDiscoveryRun(runId, logger);
         }
       }
     }
