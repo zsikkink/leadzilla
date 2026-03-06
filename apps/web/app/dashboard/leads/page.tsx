@@ -21,6 +21,7 @@ const STATUS_OPTIONS = [
   { value: 'messaged', label: 'Messaged' },
   { value: 'replied', label: 'Replied' },
   { value: 'cold', label: 'Cold' },
+  { value: 'stuck', label: 'Stuck' },
   { value: 'failed', label: 'Failed' },
 ];
 

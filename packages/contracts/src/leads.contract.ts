@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const LeadStatusSchema = z.enum(['new', 'processing', 'enriched', 'failed', 'messaged', 'replied', 'cold']);
+export const LeadStatusSchema = z.enum(['new', 'processing', 'enriched', 'stuck', 'failed', 'messaged', 'replied', 'cold']);
 export const JobStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']);
 export const LeadScoreBandSchema = z.enum(['LOW', 'MEDIUM', 'HIGH']);
 

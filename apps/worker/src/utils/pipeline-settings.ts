@@ -7,7 +7,7 @@ import { prisma } from '@lead-flood/db';
 export interface PipelineSettings {
   /** Days to retain completed outbox events before cleanup (default: 30). */
   outboxRetentionDays: number;
-  /** Milliseconds before a 'processing' lead is considered stuck (default: 3600000 = 1h). */
+  /** Milliseconds before a 'processing' lead is moved to 'stuck' (default: 3600000 = 1h). */
   stuckLeadThresholdMs: number;
   /** Max DLQ retries before permanent failure (default: 3). */
   dlqMaxRetries: number;

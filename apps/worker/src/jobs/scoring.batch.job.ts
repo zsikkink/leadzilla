@@ -83,7 +83,7 @@ export async function handleScoringBatchJob(
         deletedAt: null,
         featureSnapshots: { some: {} },
         scorePredictions: { none: {} },
-        status: { in: ['enriched', 'new'] },
+        status: { in: ['new', 'processing'] },
       },
       take: effectiveBatchSize,
       select: {
@@ -260,6 +260,9 @@ export async function handleScoringBatchJob(
         });
 
         scored += 1;
+
+        // Transition lead to enriched now that it has a score
+        await prisma.lead.update({ where: { id: lead.id }, data: { status: 'enriched' } });
 
         // Enqueue message generation for qualified leads
         if (blendedScore >= qualificationThreshold && deps?.enqueueMessageGenerate) {

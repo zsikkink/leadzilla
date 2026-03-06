@@ -59,7 +59,7 @@ export async function handleLeadRecoveryJob(
         await prisma.lead.update({
           where: { id: lead.id },
           data: {
-            status: 'failed',
+            status: 'stuck',
             error: 'Stuck in processing for >1h, auto-recovered',
           },
         });
@@ -71,7 +71,7 @@ export async function handleLeadRecoveryJob(
           stage: 'LEAD_RECOVERY',
           status: 'RECOVERED',
           jobId: job.id,
-          metadata: { previousStatus: 'processing', thresholdMs: settings.stuckLeadThresholdMs },
+          metadata: { previousStatus: 'processing', newStatus: 'stuck', thresholdMs: settings.stuckLeadThresholdMs },
         });
 
         logger.info(

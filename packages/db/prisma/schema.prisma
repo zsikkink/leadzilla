@@ -12,6 +12,7 @@ enum LeadStatus {
   new
   processing
   enriched
+  stuck
   failed
   messaged
   replied

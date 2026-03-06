@@ -648,6 +648,11 @@ export async function handleFeaturesComputeJob(
       return;
     }
 
+    // Mark lead as actively being processed in the pipeline
+    if (lead.status === 'new') {
+      await prisma.lead.update({ where: { id: leadId }, data: { status: 'processing' } });
+    }
+
     const icp = await prisma.icpProfile.findUnique({
       where: { id: icpProfileId },
     });

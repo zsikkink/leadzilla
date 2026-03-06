@@ -28,6 +28,7 @@ export function registerStatsRoutes(app: FastifyInstance): void {
         switch (row.status) {
           case 'new':
           case 'processing':
+          case 'stuck':
             distribution.discovered += count;
             break;
           case 'enriched':
