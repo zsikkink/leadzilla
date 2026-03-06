@@ -28,6 +28,10 @@ export const GetLeadResponseSchema = z.object({
   error: z.string().nullable(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
+  businessCountryCode: z.string().nullable().optional(),
+  businessCountry: z.string().nullable().optional(),
+  businessCity: z.string().nullable().optional(),
+  businessCategory: z.string().nullable().optional(),
 });
 
 export const GetJobStatusResponseSchema = z.object({

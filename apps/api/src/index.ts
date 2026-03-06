@@ -407,9 +407,29 @@ async function main(): Promise<void> {
     triggerDiscoveryTaskRun,
     ...(env.ADMIN_API_KEY ? { adminApiKey: env.ADMIN_API_KEY } : {}),
     getLeadById: async (leadId) => {
-      return prisma.lead.findUnique({
+      const lead = await prisma.lead.findUnique({
         where: { id: leadId, deletedAt: null },
+        include: {
+          businessConversions: {
+            take: 1,
+            orderBy: { createdAt: 'desc' },
+            include: {
+              business: {
+                select: { countryCode: true, country: true, city: true, category: true },
+              },
+            },
+          },
+        },
       });
+      if (!lead) return null;
+      const biz = lead.businessConversions[0]?.business;
+      return {
+        ...lead,
+        businessCountryCode: biz?.countryCode ?? null,
+        businessCountry: biz?.country ?? null,
+        businessCity: biz?.city ?? null,
+        businessCategory: biz?.category ?? null,
+      };
     },
     softDeleteLead: async (leadId) => {
       const lead = await prisma.lead.findUnique({

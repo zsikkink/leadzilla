@@ -131,6 +131,10 @@ export interface LeadRecord {
   error: string | null;
   createdAt: Date;
   updatedAt: Date;
+  businessCountryCode?: string | null | undefined;
+  businessCountry?: string | null | undefined;
+  businessCity?: string | null | undefined;
+  businessCategory?: string | null | undefined;
 }
 
 export interface JobRecord {
@@ -352,6 +356,10 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         email: normalizeLeadEmail(lead.email),
         createdAt: lead.createdAt.toISOString(),
         updatedAt: lead.updatedAt.toISOString(),
+        businessCountryCode: lead.businessCountryCode ?? null,
+        businessCountry: lead.businessCountry ?? null,
+        businessCity: lead.businessCity ?? null,
+        businessCategory: lead.businessCategory ?? null,
       });
     });
 
