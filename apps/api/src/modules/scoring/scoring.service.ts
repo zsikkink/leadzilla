@@ -7,10 +7,11 @@ import type {
   LatestLeadScoreQuery,
   ListScorePredictionsQuery,
   ListScorePredictionsResponse,
+  QualificationRuleResponse,
   ScoringRunStatusResponse,
 } from '@lead-flood/contracts';
 
-import type { ScoringRepository } from './scoring.repository.js';
+import type { CreateScoringRuleInput, ScoringRepository } from './scoring.repository.js';
 
 export interface ScoringRunJobPayload {
   runId: string;
@@ -38,6 +39,7 @@ export interface ScoringService {
     leadId: string,
     query: LatestLeadScoreQuery,
   ): Promise<LatestLeadDeterministicScoreResponse>;
+  createQualificationRule(input: CreateScoringRuleInput): Promise<QualificationRuleResponse>;
 }
 
 export function buildScoringService(
@@ -82,6 +84,9 @@ export function buildScoringService(
     },
     async getLatestLeadDeterministicScore(leadId, query) {
       return repository.getLatestLeadDeterministicScore(leadId, query);
+    },
+    async createQualificationRule(input) {
+      return repository.createQualificationRule(input);
     },
   };
 }

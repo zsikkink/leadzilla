@@ -10,11 +10,24 @@ import type {
   ListScorePredictionsQuery,
   ListScorePredictionsResponse,
   PipelineRunStatus,
+  QualificationRuleResponse,
+  QualificationRuleType,
+  QualificationOperator,
   ScoringRunStatusResponse,
 } from '@lead-flood/contracts';
 import { prisma, toInputJson } from '@lead-flood/db';
 
 import { ScoringNotImplementedError, ScoringRunNotFoundError } from './scoring.errors.js';
+
+export interface CreateScoringRuleInput {
+  icpProfileId: string;
+  fieldKey: string;
+  operator: QualificationOperator;
+  valueJson?: unknown | undefined;
+  weight: number;
+  ruleType: QualificationRuleType;
+  name: string;
+}
 
 const SCORING_RUN_JOB_TYPE = 'scoring.compute';
 
@@ -50,7 +63,7 @@ function readRunProgress(result: unknown): ScoringRunProgress {
 }
 
 function mapJobStatusToPipelineStatus(
-  status: 'queued' | 'running' | 'completed' | 'failed',
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled',
   failedItems: number,
 ): PipelineRunStatus {
   switch (status) {
@@ -60,6 +73,8 @@ function mapJobStatusToPipelineStatus(
       return 'RUNNING';
     case 'failed':
       return 'FAILED';
+    case 'cancelled':
+      return 'CANCELLED';
     case 'completed':
     default:
       return failedItems > 0 ? 'PARTIAL' : 'SUCCEEDED';
@@ -80,6 +95,7 @@ export interface ScoringRepository {
     leadId: string,
     query: LatestLeadScoreQuery,
   ): Promise<LatestLeadDeterministicScoreResponse>;
+  createQualificationRule(input: CreateScoringRuleInput): Promise<QualificationRuleResponse>;
 }
 
 export class StubScoringRepository implements ScoringRepository {
@@ -115,6 +131,10 @@ export class StubScoringRepository implements ScoringRepository {
     _query: LatestLeadScoreQuery,
   ): Promise<LatestLeadDeterministicScoreResponse> {
     throw new ScoringNotImplementedError('TODO: get latest lead deterministic score persistence');
+  }
+
+  async createQualificationRule(_input: CreateScoringRuleInput): Promise<QualificationRuleResponse> {
+    throw new ScoringNotImplementedError('TODO: create qualification rule persistence');
   }
 }
 
@@ -333,6 +353,46 @@ export class PrismaScoringRepository extends StubScoringRepository {
       reasonCodes,
       ruleEvaluation,
       predictedAt: prediction?.predictedAt.toISOString() ?? null,
+    };
+  }
+
+  override async createQualificationRule(input: CreateScoringRuleInput): Promise<QualificationRuleResponse> {
+    // Get the max orderIndex for this ICP to place the new rule at the end
+    const maxOrder = await prisma.qualificationRule.aggregate({
+      where: { icpProfileId: input.icpProfileId },
+      _max: { orderIndex: true },
+    });
+    const nextOrderIndex = (maxOrder._max.orderIndex ?? 0) + 1;
+
+    const rule = await prisma.qualificationRule.create({
+      data: {
+        icpProfileId: input.icpProfileId,
+        name: input.name,
+        ruleType: input.ruleType,
+        fieldKey: input.fieldKey,
+        operator: input.operator,
+        valueJson: toInputJson(input.valueJson),
+        weight: input.weight,
+        orderIndex: nextOrderIndex,
+        isActive: true,
+      },
+    });
+
+    return {
+      id: rule.id,
+      icpProfileId: rule.icpProfileId,
+      name: rule.name,
+      ruleType: rule.ruleType,
+      fieldKey: rule.fieldKey,
+      operator: rule.operator,
+      valueJson: rule.valueJson,
+      weight: rule.weight,
+      isRequired: rule.isRequired,
+      priority: rule.priority,
+      orderIndex: rule.orderIndex,
+      isActive: rule.isActive,
+      createdAt: rule.createdAt.toISOString(),
+      updatedAt: rule.updatedAt.toISOString(),
     };
   }
 }

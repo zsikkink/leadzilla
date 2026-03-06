@@ -18,7 +18,7 @@ import type {
   TrendComparison,
   VariantBreakdownItem,
 } from '@lead-flood/contracts';
-import { prisma, Prisma } from '@lead-flood/db';
+import { prisma } from '@lead-flood/db';
 
 import { AnalyticsNotImplementedError } from './analytics.errors.js';
 
@@ -192,12 +192,26 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
           status: 'DISCOVERED',
         },
       }),
-      // V2 enriched: Business with website scrape data
-      prisma.business.count({
+      // V2 enriched: Leads with a BusinessConversion record (went through V2 pipeline)
+      prisma.lead.count({
         where: {
-          ...businessDateWhere,
-          ...businessIcpWhere,
-          apifyWebsiteScrapeJson: { not: Prisma.DbNull },
+          deletedAt: null,
+          businessConversions: { some: {} },
+          ...(from || to
+            ? {
+                createdAt: {
+                  ...(from ? { gte: from } : {}),
+                  ...(to ? { lte: to } : {}),
+                },
+              }
+            : {}),
+          ...(icpDiscoveryRunIds !== null
+            ? {
+                business: {
+                  discoveryRunId: { in: icpDiscoveryRunIds },
+                },
+              }
+            : {}),
         },
       }),
       // V1 legacy enriched: LeadEnrichmentRecord

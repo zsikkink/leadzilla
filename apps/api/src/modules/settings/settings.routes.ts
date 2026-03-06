@@ -91,6 +91,56 @@ export function registerSettingsRoutes(app: FastifyInstance) {
       });
     }
 
+    // Auto-approve settings validation
+    const { value } = parseResult.data;
+
+    if (key === 'auto_approve_enabled') {
+      if (typeof value !== 'boolean') {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'auto_approve_enabled must be a boolean',
+          requestId: request.id,
+        });
+      }
+    }
+
+    if (key === 'auto_approve_score_min' || key === 'auto_approve_score_max') {
+      if (typeof value !== 'number') {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'Score values must be numbers',
+          requestId: request.id,
+        });
+      }
+      if (value >= 1 || value < 0) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'Score values must be decimals between 0 and 1',
+          requestId: request.id,
+        });
+      }
+    }
+
+    // Cross-validate min <= max when setting either
+    if (key === 'auto_approve_score_min' || key === 'auto_approve_score_max') {
+      const numValue = value as number;
+      const otherKey = key === 'auto_approve_score_min' ? 'auto_approve_score_max' : 'auto_approve_score_min';
+      const otherSetting = await prisma.pipelineSetting.findUnique({ where: { key: otherKey } });
+      const otherValue = otherSetting ? (otherSetting.valueJson as number) : null;
+
+      if (otherValue !== null && typeof otherValue === 'number') {
+        const min = key === 'auto_approve_score_min' ? numValue : otherValue;
+        const max = key === 'auto_approve_score_max' ? numValue : otherValue;
+        if (min > max) {
+          reply.status(400);
+          return ErrorResponseSchema.parse({
+            error: 'auto_approve_score_min must be <= auto_approve_score_max',
+            requestId: request.id,
+          });
+        }
+      }
+    }
+
     try {
       const setting = await prisma.pipelineSetting.upsert({
         where: { key },

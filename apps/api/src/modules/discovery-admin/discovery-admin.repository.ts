@@ -12,7 +12,7 @@ import type {
 } from '@lead-flood/contracts';
 import { prisma, type Prisma } from '@lead-flood/db';
 
-import { DiscoveryAdminNotFoundError } from './discovery-admin.errors.js';
+import { DiscoveryAdminBadRequestError, DiscoveryAdminNotFoundError } from './discovery-admin.errors.js';
 
 const SCORE_WEIGHTS = {
   hasWhatsapp: 0.2,
@@ -312,6 +312,13 @@ function readDerivedTaskParams(paramsJson: unknown): {
   };
 }
 
+export interface DiscoveryRunLeadItem {
+  id: string;
+  firstName: string;
+  lastName: string;
+  companyName: string | null;
+}
+
 export interface DiscoveryAdminRepository {
   listLeads(query: AdminListLeadsQuery): Promise<AdminListLeadsResponse>;
   getLeadById(id: string): Promise<AdminLeadDetailResponse>;
@@ -319,6 +326,23 @@ export interface DiscoveryAdminRepository {
   getSearchTaskById(id: string): Promise<AdminSearchTaskDetailResponse>;
   listJobRuns(query: JobRunListQuery): Promise<ListJobRunsResponse>;
   getJobRunById(id: string): Promise<JobRunDetailResponse>;
+  cancelDiscoveryRun(id: string): Promise<{ success: true }>;
+  getDiscoveryRunDetail(id: string): Promise<{
+    run: {
+      id: string;
+      type: string;
+      status: string;
+      attempts: number;
+      payload: unknown;
+      result: unknown;
+      error: string | null;
+      createdAt: string;
+      startedAt: string | null;
+      finishedAt: string | null;
+      updatedAt: string;
+    };
+    leads: DiscoveryRunLeadItem[];
+  }>;
 }
 
 export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository {
@@ -555,6 +579,108 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
       },
+    };
+  }
+
+  async cancelDiscoveryRun(id: string): Promise<{ success: true }> {
+    const run = await prisma.jobExecution.findUnique({
+      where: { id },
+      select: { status: true },
+    });
+
+    if (!run) {
+      throw new DiscoveryAdminNotFoundError('Discovery run not found');
+    }
+
+    const terminalStatuses = ['completed', 'failed', 'cancelled'] as const;
+    if (terminalStatuses.includes(run.status as (typeof terminalStatuses)[number])) {
+      throw new DiscoveryAdminBadRequestError('Run already in terminal state');
+    }
+
+    await prisma.jobExecution.update({
+      where: { id },
+      data: {
+        status: 'cancelled',
+        finishedAt: new Date(),
+      },
+    });
+
+    return { success: true };
+  }
+
+  async getDiscoveryRunDetail(id: string) {
+    const run = await prisma.jobExecution.findUnique({
+      where: { id },
+    });
+
+    if (!run) {
+      throw new DiscoveryAdminNotFoundError('Discovery run not found');
+    }
+
+    // Join: DiscoveryCostEvent (discoveryRunId, apiCallType='prequalify_check')
+    //   → Business (via businessId) → BusinessConversion (via businessId) → Lead (via leadId)
+    const costEvents = await prisma.discoveryCostEvent.findMany({
+      where: {
+        discoveryRunId: id,
+        apiCallType: 'prequalify_check',
+        businessId: { not: null },
+      },
+      select: {
+        business: {
+          select: {
+            id: true,
+            name: true,
+            businessConversions: {
+              select: {
+                lead: {
+                  select: {
+                    id: true,
+                    firstName: true,
+                    lastName: true,
+                    business: {
+                      select: { name: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const seen = new Set<string>();
+    const leads: DiscoveryRunLeadItem[] = [];
+
+    for (const event of costEvents) {
+      if (!event.business) continue;
+      for (const conversion of event.business.businessConversions) {
+        if (seen.has(conversion.lead.id)) continue;
+        seen.add(conversion.lead.id);
+        leads.push({
+          id: conversion.lead.id,
+          firstName: conversion.lead.firstName,
+          lastName: conversion.lead.lastName,
+          companyName: conversion.lead.business?.name ?? event.business.name,
+        });
+      }
+    }
+
+    return {
+      run: {
+        id: run.id,
+        type: run.type,
+        status: run.status,
+        attempts: run.attempts,
+        payload: run.payload,
+        result: run.result,
+        error: run.error,
+        createdAt: run.createdAt.toISOString(),
+        startedAt: run.startedAt?.toISOString() ?? null,
+        finishedAt: run.finishedAt?.toISOString() ?? null,
+        updatedAt: run.updatedAt.toISOString(),
+      },
+      leads,
     };
   }
 }

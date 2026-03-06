@@ -22,7 +22,9 @@ import {
   TriggerJobRunResponseSchema,
 } from '@lead-flood/contracts';
 
+import { z } from 'zod';
 import {
+  DiscoveryAdminBadRequestError,
   DiscoveryAdminNotFoundError,
   DiscoveryAdminNotImplementedError,
 } from './discovery-admin.errors.js';
@@ -77,9 +79,21 @@ function requireAdminKey(
   return false;
 }
 
+const DiscoveryRunIdParamsSchema = z.object({ id: z.string().min(1) }).strict();
+
 function handleModuleError(error: unknown, request: FastifyRequest, reply: FastifyReply): boolean {
   if (error instanceof DiscoveryAdminNotFoundError) {
     reply.status(404).send(
+      ErrorResponseSchema.parse({
+        error: error.message,
+        requestId: request.id,
+      }),
+    );
+    return true;
+  }
+
+  if (error instanceof DiscoveryAdminBadRequestError) {
+    reply.status(400).send(
       ErrorResponseSchema.parse({
         error: error.message,
         requestId: request.id,
@@ -277,6 +291,50 @@ export function registerDiscoveryAdminRoutes(
     try {
       const result = await service.getJobRunById(parsedParams.data.id);
       return JobRunDetailResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  // ── B1: Cancel a discovery run (JobExecution) ──
+  app.post('/v1/discovery-admin/runs/:id/cancel', async (request, reply) => {
+    if (!requireAdminKey(request, reply, dependencies.adminApiKey)) {
+      return;
+    }
+
+    const parsedParams = DiscoveryRunIdParamsSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return sendValidationError(reply, request.id, 'Invalid run id');
+    }
+
+    try {
+      const result = await service.cancelDiscoveryRun(parsedParams.data.id);
+      return result;
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  // ── B5: Get discovery run detail with converted leads ──
+  app.get('/v1/discovery-admin/runs/:id', async (request, reply) => {
+    if (!requireAdminKey(request, reply, dependencies.adminApiKey)) {
+      return;
+    }
+
+    const parsedParams = DiscoveryRunIdParamsSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return sendValidationError(reply, request.id, 'Invalid run id');
+    }
+
+    try {
+      const result = await service.getDiscoveryRunDetail(parsedParams.data.id);
+      return result;
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;

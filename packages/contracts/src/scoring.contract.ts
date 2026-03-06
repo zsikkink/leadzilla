@@ -6,6 +6,7 @@ export const ScoringPipelineRunStatusSchema = z.enum([
   'SUCCEEDED',
   'FAILED',
   'PARTIAL',
+  'CANCELLED',
 ]);
 
 export const ScoreBandSchema = z.enum(['LOW', 'MEDIUM', 'HIGH']);
@@ -186,3 +187,5 @@ export type LatestLeadFeatureSnapshotResponse = z.infer<
 export type LatestLeadDeterministicScoreResponse = z.infer<
   typeof LatestLeadDeterministicScoreResponseSchema
 >;
+
+// Qualification rule types are re-exported from icp.contract.ts
