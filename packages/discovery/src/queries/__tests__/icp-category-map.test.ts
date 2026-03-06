@@ -40,9 +40,9 @@ describe('mapIcpIndustriesToCategories', () => {
     expect(result).toContain('veterinary clinic');
   });
 
-  it('returns empty array for a completely unknown industry', () => {
+  it('uses raw industry name as direct search category for completely unknown industry', () => {
     const result = mapIcpIndustriesToCategories(['quantum_computing']);
-    expect(result).toEqual([]);
+    expect(result).toEqual(['quantum_computing']);
   });
 
   it('fuzzy-matches an unknown industry against the taxonomy', () => {
@@ -58,8 +58,9 @@ describe('mapIcpIndustriesToCategories', () => {
 
   it('handles mixed known and unknown industries', () => {
     const result = mapIcpIndustriesToCategories(['fitness', 'unknown_xyz']);
-    // Should include fitness categories, unknown_xyz contributes nothing
+    // Should include fitness categories + unknown_xyz as direct category
     expect(result).toContain('gym');
-    expect(result.length).toBe(ICP_INDUSTRY_CATEGORY_MAP['fitness']!.length);
+    expect(result).toContain('unknown_xyz');
+    expect(result.length).toBe(ICP_INDUSTRY_CATEGORY_MAP['fitness']!.length + 1);
   });
 });

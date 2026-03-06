@@ -21,6 +21,74 @@ import {
   type DiscoveryRunJobPayload,
 } from './discovery.service.js';
 
+// ── Inline category mapping (mirrors @lead-flood/discovery icp-category-map) ──
+// API can't import @lead-flood/discovery (not a dependency), so we inline the
+// read-only mapping data needed for the preview endpoint.
+
+const INLINE_CATEGORY_TAXONOMY_EN = [
+  'bakery', 'coffee shop', 'restaurant', 'beauty salon', 'barbershop', 'gym',
+  'dental clinic', 'medical clinic', 'fashion boutique', 'grocery store',
+  'electronics store', 'bookstore', 'home decor', 'flower shop', 'cleaning service',
+  'moving service', 'car repair', 'auto accessories', 'pet shop', 'event planner',
+  'catering service', 'furniture store', 'kids clothing', 'optical store',
+];
+
+const ICP_INDUSTRY_CATEGORY_MAP: Record<string, string[]> = {
+  luxury_retail: ['fashion boutique', 'jewelry store', 'home decor', 'watch store', 'luxury goods'],
+  luxury_services: ['fashion boutique', 'jewelry store', 'home decor', 'watch store', 'luxury goods', 'event planner', 'spa'],
+  food_beverage: ['restaurant', 'coffee shop', 'bakery', 'catering service'],
+  beauty_wellness: ['beauty salon', 'barbershop', 'spa', 'nail salon'],
+  health_medical: ['dental clinic', 'medical clinic', 'pharmacy', 'optical store'],
+  fitness: ['gym', 'fitness center', 'yoga studio', 'personal trainer'],
+  events: ['event planner', 'wedding venue', 'catering service', 'party supplies'],
+  automotive: ['car repair', 'auto accessories', 'car wash', 'car dealership'],
+  education: ['tutoring center', 'language school', 'training institute', 'nursery'],
+  home_services: ['cleaning service', 'moving service', 'plumber', 'electrician'],
+  pets: ['pet shop', 'veterinary clinic', 'pet grooming'],
+  retail: ['grocery store', 'electronics store', 'bookstore', 'furniture store', 'kids clothing'],
+  hospitality: ['hotel', 'resort', 'serviced apartment', 'guest house'],
+  ecommerce: ['online store', 'dropshipping', 'marketplace seller'],
+  professional_services: ['accounting firm', 'law firm', 'consulting agency', 'recruitment agency'],
+  yacht_charter: ['yacht charter', 'boat rental', 'luxury travel', 'marina'],
+  private_aviation: ['private jet charter', 'aviation services', 'luxury travel'],
+  luxury_travel: ['luxury travel agency', 'travel agency', 'hotel', 'resort', 'serviced apartment'],
+  personal_shopping: ['fashion boutique', 'personal stylist', 'luxury goods', 'jewelry store'],
+  corporate_gifting: ['gift shop', 'corporate gifting'],
+  florists: ['flower shop'],
+  gift_boxes: ['gift shop', 'gift boxes'],
+  experience_platforms: ['event planner', 'experience platform'],
+  bespoke_events: ['event planner', 'catering service'],
+  wedding_planning: ['event planner', 'wedding planner', 'catering service'],
+  event_production: ['event planner', 'event production'],
+  exhibitions: ['event planner', 'exhibition organizer'],
+  interior_design: ['interior design', 'home decor', 'furniture store'],
+  renovation: ['renovation contractor', 'home decor'],
+  architecture: ['architecture firm', 'interior design'],
+  landscape_design: ['landscaping', 'garden design'],
+  boutique_hotels: ['boutique hotel', 'hotel'],
+  holiday_homes: ['holiday home rental', 'serviced apartment'],
+  serviced_residences: ['serviced apartment'],
+  property_management: ['property management', 'real estate'],
+  wellness_clinics: ['wellness clinic', 'beauty salon', 'medical clinic'],
+  aesthetic_medicine: ['aesthetic clinic', 'beauty salon', 'medical clinic'],
+  medical_tourism: ['medical clinic', 'dental clinic'],
+  executive_coaching: ['business coaching', 'consulting'],
+  business_advisory: ['consulting', 'business advisory'],
+  private_education: ['private school', 'training institute'],
+  professional_training: ['training institute', 'professional training'],
+  bootcamps: ['coding bootcamp', 'training institute'],
+  certifications: ['training institute', 'certification center'],
+};
+
+function fuzzyMatchInlineCategories(industry: string): string[] {
+  const tokens = industry.toLowerCase().split(/[_\s]+/).filter((t) => t.length > 0);
+  if (tokens.length === 0) return [];
+  return INLINE_CATEGORY_TAXONOMY_EN.filter((category) => {
+    const categoryWords = category.toLowerCase().split(/\s+/);
+    return tokens.some((token) => categoryWords.includes(token));
+  });
+}
+
 const DiscoveryLimitsSchema = z.object({
   DISCOVERY_MAX_RUNS_PER_DAY: z.coerce.number().int().min(1).default(10),
   DISCOVERY_MAX_CONCURRENT_RUNS: z.coerce.number().int().min(1).default(3),
@@ -369,6 +437,34 @@ export function registerDiscoveryRoutes(
       }
       throw error;
     }
+  });
+
+  const PreviewCategoriesBodySchema = z.object({
+    industries: z.array(z.string()).min(1).max(50),
+  });
+
+  app.post('/v1/discovery/preview-categories', async (request, reply) => {
+    const parsed = PreviewCategoriesBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return sendValidationError(reply, request.id, 'Invalid preview-categories payload');
+    }
+
+    // Inline preview logic — API can't import @lead-flood/discovery directly.
+    // This mirrors previewIndustryMappings() from icp-category-map.ts.
+    const mappings = parsed.data.industries.map((industry) => {
+      const key = industry.toLowerCase().trim().replaceAll(' ', '_');
+      const mapped = ICP_INDUSTRY_CATEGORY_MAP[key];
+      if (mapped) {
+        return { industry, categories: [...mapped], source: 'mapped' as const };
+      }
+      const fuzzy = fuzzyMatchInlineCategories(key);
+      if (fuzzy.length > 0) {
+        return { industry, categories: fuzzy, source: 'fuzzy' as const };
+      }
+      return { industry, categories: [industry.trim()], source: 'direct' as const };
+    });
+
+    return { mappings };
   });
 
   app.get('/v1/discovery/records', async (request, reply) => {

@@ -14,6 +14,39 @@ const TASK_TYPE_SET = new Set<SearchTaskType>([
   'SERP_MAPS_LOCAL',
 ]);
 
+/**
+ * Hard safety ceiling on search tasks per lead-count tier.
+ * Prevents runaway loops regardless of formula output.
+ * Key = desired lead count, Value = max search tasks allowed.
+ */
+export const LEAD_TIER_TASK_CAPS: Record<number, number> = {
+  5: 15,
+  10: 25,
+  25: 50,
+  50: 80,
+  100: 150,
+  250: 350,
+  500: 600,
+  1000: 1000,
+};
+
+/** Fallback: 2x desired leads, capped at 1500. */
+export function getTaskCapForLeadTarget(desiredLeads: number): number {
+  const exact = LEAD_TIER_TASK_CAPS[desiredLeads];
+  if (exact !== undefined) return exact;
+
+  // Find the nearest tier above
+  const tiers = Object.keys(LEAD_TIER_TASK_CAPS)
+    .map(Number)
+    .sort((a, b) => a - b);
+  for (const tier of tiers) {
+    if (tier >= desiredLeads) return LEAD_TIER_TASK_CAPS[tier]!;
+  }
+
+  // Above all tiers — linear cap
+  return Math.min(desiredLeads * 2, 1500);
+}
+
 function parseCsv(source: string | undefined): string[] {
   if (!source) {
     return [];
@@ -144,7 +177,7 @@ function loadBaseSeedConfig(source: NodeJS.ProcessEnv): DiscoverySeedConfig {
     .map((value) => normalizeTaskType(value))
     .filter((value): value is SearchTaskType => value !== null);
   const normalizedSeedTaskTypes: SearchTaskType[] =
-    seedTaskTypes.length > 0 ? seedTaskTypes : ['SERP_MAPS_LOCAL', 'SERP_GOOGLE_LOCAL'];
+    seedTaskTypes.length > 0 ? seedTaskTypes : ['SERP_MAPS_LOCAL'];
 
   const maxPagesPerQuery =
     seedProfile === 'small'
@@ -154,7 +187,7 @@ function loadBaseSeedConfig(source: NodeJS.ProcessEnv): DiscoverySeedConfig {
   const taskTypes: SearchTaskType[] =
     seedProfile === 'small'
       ? normalizedSeedTaskTypes
-      : (['SERP_GOOGLE_LOCAL', 'SERP_MAPS_LOCAL'] satisfies SearchTaskType[]);
+      : (['SERP_MAPS_LOCAL'] satisfies SearchTaskType[]);
 
   const seedBucket = source.DISCOVERY_SEED_BUCKET?.trim() || null;
 
@@ -168,7 +201,7 @@ function loadBaseSeedConfig(source: NodeJS.ProcessEnv): DiscoverySeedConfig {
     maxPagesPerQuery,
     refreshBucket,
     seedProfile,
-    maxTasks: parsePositiveInt(source.DISCOVERY_SEED_MAX_TASKS, 75),
+    maxTasks: parsePositiveInt(source.DISCOVERY_SEED_MAX_TASKS, 40),
     taskTypes: Array.from(new Set<SearchTaskType>(taskTypes)),
     seedBucket,
   };

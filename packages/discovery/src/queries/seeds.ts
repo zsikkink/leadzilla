@@ -124,8 +124,6 @@ export function getQueryTemplates(
 /** V2 query templates (English). Use with generateTasksV2. */
 export const queryTemplatesV2EN: string[] = [
   '{category} in {city}',
-  '{category} in {city} order online',
-  '{category} in {city} request quote custom',
 ];
 
 /** ISO 3166-1 alpha-2 → human-readable country name. */

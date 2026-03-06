@@ -39,6 +39,8 @@ export interface DiscoveryRunSearchTaskJobPayload {
   icpProfileId?: string | undefined;
   includeWebsiteAnalysis?: boolean | undefined;
   includeSocialMediaAnalysis?: boolean | undefined;
+  /** Early-stop: stop searching when this many unique businesses are found. */
+  targetUniqueBusinesses?: number | undefined;
 }
 
 export interface DiscoveryRunSearchTaskLogger {
@@ -456,6 +458,29 @@ export async function handleDiscoveryRunSearchTaskJob(
     return;
   }
 
+  // Early-stop: enough unique businesses found for the lead target
+  const targetBiz = job.data.targetUniqueBusinesses;
+  if (targetBiz !== undefined && runState.newBusinesses >= targetBiz) {
+    if (job.data.discoveryRunId) {
+      await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
+      releaseSlot(runKey, runState);
+    }
+    if (job.data.jobRunId) {
+      await finalizeJobRun(job.data.jobRunId, runState, 'SUCCESS', null);
+      releaseSlot(runKey, runState);
+    }
+    logger.info(
+      {
+        slot,
+        correlationId,
+        newBusinesses: runState.newBusinesses,
+        targetUniqueBusinesses: targetBiz,
+      },
+      'Early-stop: reached target unique business count',
+    );
+    return;
+  }
+
   if (effectiveMaxTasks !== undefined && runResult.status === 'EMPTY') {
     if (job.data.jobRunId) {
       await finalizeJobRun(job.data.jobRunId, runState, 'SUCCESS', null);
@@ -511,6 +536,7 @@ export async function handleDiscoveryRunSearchTaskJob(
       icpProfileId: job.data.icpProfileId,
       includeWebsiteAnalysis: job.data.includeWebsiteAnalysis,
       includeSocialMediaAnalysis: job.data.includeSocialMediaAnalysis,
+      targetUniqueBusinesses: job.data.targetUniqueBusinesses,
     },
     {
       startAfter: startAfterSeconds,

@@ -1,10 +1,11 @@
-import { seedSearchTasks } from '@lead-flood/discovery';
+import { getTaskCapForLeadTarget, seedSearchTasks } from '@lead-flood/discovery';
 import type { IcpSeedConfig, DiscoveryRuntimeConfig } from '@lead-flood/discovery';
 import type {
   DiscoveryCountryCode,
   DiscoveryLanguageCode,
   SearchTaskType,
 } from '@lead-flood/discovery';
+import { loadConversionRate, loadSearchEfficiency } from '../utils/pipeline-settings.js';
 import { prisma, toInputJson } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
@@ -70,37 +71,35 @@ const ALLOWED_TASK_TYPES = new Set<SearchTaskType>([
   'SERP_MAPS_LOCAL',
 ]);
 
-const DEFAULT_YIELD_RATE = 0.15;
+const DEFAULT_CONVERSION_RATE = 0.10; // conservative cold-start
+const DEFAULT_SEARCH_EFFICIENCY = 10; // businesses per task (post R1+R2)
 
 /**
- * Compute an adaptive search task budget based on historical yield rates.
- * Formula: ceil(desiredLeads / yieldRate) * 1.5
- * Reads from PipelineSetting key `discovery_yield_rate:{icpProfileId}`.
+ * Compute an adaptive search task budget using two rates:
+ * - conversionRate: qualified leads per unique business
+ * - searchEfficiency: unique businesses per search task
  */
 async function computeAdaptiveSearchTaskBudget(
   desiredLeads: number,
   icpProfileId: string | undefined,
-): Promise<number> {
-  let yieldRate = DEFAULT_YIELD_RATE;
+): Promise<{ maxTasks: number; targetUniqueBusinesses: number }> {
+  let conversionRate = DEFAULT_CONVERSION_RATE;
+  let searchEfficiency = DEFAULT_SEARCH_EFFICIENCY;
+
   if (icpProfileId) {
-    try {
-      const setting = await prisma.pipelineSetting.findUnique({
-        where: { key: `discovery_yield_rate:${icpProfileId}` },
-        select: { valueJson: true },
-      });
-      if (setting?.valueJson !== null && setting?.valueJson !== undefined) {
-        const stored = typeof setting.valueJson === 'number'
-          ? setting.valueJson
-          : Number(setting.valueJson);
-        if (Number.isFinite(stored) && stored > 0 && stored <= 1) {
-          yieldRate = stored;
-        }
-      }
-    } catch {
-      // DB failure — use default
-    }
+    const [storedConversion, storedEfficiency] = await Promise.all([
+      loadConversionRate(icpProfileId),
+      loadSearchEfficiency(icpProfileId),
+    ]);
+    if (storedConversion !== null) conversionRate = storedConversion;
+    if (storedEfficiency !== null) searchEfficiency = storedEfficiency;
   }
-  return Math.ceil((desiredLeads / yieldRate) * 1.5);
+
+  const targetBusinesses = Math.ceil(desiredLeads / conversionRate) * 1.5;
+  const maxTasks = Math.ceil(targetBusinesses / searchEfficiency);
+  const targetUniqueBusinesses = Math.ceil(targetBusinesses);
+
+  return { maxTasks, targetUniqueBusinesses };
 }
 
 function withSeedOverrides(
@@ -197,7 +196,7 @@ export async function handleDiscoverySeedJob(
     if (job.data.icpProfileId) {
       const icpProfile = await prisma.icpProfile.findUnique({
         where: { id: job.data.icpProfileId },
-        select: { targetIndustries: true, targetCountries: true },
+        select: { targetIndustries: true, targetCountries: true, metadataJson: true },
       });
 
       if (icpProfile && icpProfile.targetIndustries.length > 0) {
@@ -208,10 +207,22 @@ export async function handleDiscoverySeedJob(
           ? userCountries
           : icpProfile.targetCountries;
 
+        // Extract categoryOverrides from ICP metadataJson (Change 7C)
+        const metadata = icpProfile.metadataJson && typeof icpProfile.metadataJson === 'object'
+          && !Array.isArray(icpProfile.metadataJson)
+          ? icpProfile.metadataJson as Record<string, unknown>
+          : {};
+        const categoryOverrides = metadata.categoryOverrides &&
+          typeof metadata.categoryOverrides === 'object' &&
+          !Array.isArray(metadata.categoryOverrides)
+          ? metadata.categoryOverrides as Record<string, { add?: string[]; remove?: string[] }>
+          : undefined;
+
         icpSeedConfig = {
           targetIndustries: icpProfile.targetIndustries,
           targetCountries: effectiveCountries,
           ...(job.data.cities !== undefined ? { cities: job.data.cities } : {}),
+          ...(categoryOverrides ? { categoryOverrides } : {}),
         };
         logger.info(
           {
@@ -229,22 +240,44 @@ export async function handleDiscoverySeedJob(
     }
 
       // 5B: Adaptive maxTasks — if user set maxTasks (desired leads), compute search budget
+    let targetUniqueBusinesses: number | undefined;
     if (seedConfig.maxTasks > 0 && job.data.icpProfileId && job.data.reason === 'api') {
-      const adaptiveBudget = await computeAdaptiveSearchTaskBudget(
+      const adaptive = await computeAdaptiveSearchTaskBudget(
         seedConfig.maxTasks,
         job.data.icpProfileId,
       );
-      seedConfig = { ...seedConfig, maxTasks: adaptiveBudget };
+      targetUniqueBusinesses = adaptive.targetUniqueBusinesses;
+      seedConfig = { ...seedConfig, maxTasks: adaptive.maxTasks };
+
+      // Change 3: Clamp to per-tier safety cap
+      const tierCap = getTaskCapForLeadTarget(job.data.maxTasks ?? 75);
+      if (seedConfig.maxTasks > tierCap) {
+        logger.warn(
+          {
+            jobId: job.id,
+            queue: job.name,
+            computedBudget: seedConfig.maxTasks,
+            tierCap,
+            desiredLeads: job.data.maxTasks,
+          },
+          'Adaptive budget exceeds tier safety cap — clamping',
+        );
+        seedConfig = { ...seedConfig, maxTasks: tierCap };
+      }
+
       logger.info(
         {
           jobId: job.id,
           queue: job.name,
           correlationId,
           desiredLeads: job.data.maxTasks,
-          adaptiveBudget,
+          adaptiveBudget: adaptive.maxTasks,
+          targetUniqueBusinesses,
+          tierCap,
+          finalMaxTasks: seedConfig.maxTasks,
           icpProfileId: job.data.icpProfileId,
         },
-        'Computed adaptive search task budget from historical yield',
+        'Computed adaptive search task budget from historical rates',
       );
     }
 
@@ -307,7 +340,8 @@ export async function handleDiscoverySeedJob(
             icpProfileId: job.data.icpProfileId,
             includeWebsiteAnalysis: job.data.includeWebsiteAnalysis,
             includeSocialMediaAnalysis: job.data.includeSocialMediaAnalysis,
-            ...(job.data.maxTasks !== undefined ? { maxTasks: job.data.maxTasks } : {}),
+            ...(job.data.maxTasks !== undefined ? { maxTasks: seedConfig.maxTasks } : {}),
+            ...(targetUniqueBusinesses !== undefined ? { targetUniqueBusinesses } : {}),
           },
           {
             ...DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,

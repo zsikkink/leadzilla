@@ -236,6 +236,19 @@ export class ApiClient {
   }
 
   // ── Discovery ───────────────────────────────────
+  previewCategories(industries: string[]): Promise<{
+    mappings: Array<{
+      industry: string;
+      categories: string[];
+      source: 'mapped' | 'fuzzy' | 'direct';
+    }>;
+  }> {
+    return this.request('/v1/discovery/preview-categories', {
+      method: 'POST',
+      body: JSON.stringify({ industries }),
+    });
+  }
+
   createDiscoveryRun(data: CreateDiscoveryRunRequest): Promise<CreateDiscoveryRunResponse> {
     return this.request('/v1/discovery/runs', {
       method: 'POST',

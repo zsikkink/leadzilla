@@ -1,5 +1,7 @@
 import { prisma, toInputJson } from '@lead-flood/db';
 
+import { getQualificationThreshold } from '../scoring/shared.js';
+
 /**
  * Discovery Run Pipeline Tracker
  *
@@ -119,9 +121,16 @@ export async function tryFinalizeDiscoveryRun(
     .map((e) => e.businessId)
     .filter((id): id is string => id !== null);
 
-  // Zero businesses → finalize immediately (all failed prequalify or no tasks)
+  // Zero DiscoveryCostEvents — but check whether prequalify has even run yet.
+  // If newBusinesses > 0 but no cost events exist, prequalify jobs haven't fired.
   if (businessIds.length === 0) {
-    await finalizeRun(possibleRunId, result, 'completed', 0, 0, logger);
+    const newBusinesses = typeof result.newBusinesses === 'number' ? result.newBusinesses : 0;
+    if (newBusinesses === 0 || isTimedOut) {
+      // Truly zero businesses found, or timed out waiting — finalize
+      await finalizeRun(possibleRunId, result, 'completed', 0, 0, logger);
+      return;
+    }
+    // Prequalify events don't exist yet — return without finalizing
     return;
   }
 
@@ -138,6 +147,7 @@ export async function tryFinalizeDiscoveryRun(
   const qualifiedOrPendingIds = businessIds.filter((id) => !disqualifiedIds.has(id));
 
   // 4. For qualified/pending businesses, check lead pipeline status
+  const qualificationThreshold = await getQualificationThreshold();
   let completedLeads = 0;
   let failedLeads = 0;
   let inFlightItems = 0;
@@ -167,7 +177,7 @@ export async function tryFinalizeDiscoveryRun(
           deletedAt: true,
           messageDrafts: { select: { id: true }, take: 1 },
           scorePredictions: {
-            select: { scoreBand: true },
+            select: { scoreBand: true, blendedScore: true },
             orderBy: { predictedAt: 'desc' },
             take: 1,
           },
@@ -180,14 +190,17 @@ export async function tryFinalizeDiscoveryRun(
         } else if (lead.messageDrafts.length > 0) {
           // message.generate completed — terminal success
           completedLeads++;
-        } else if (
-          lead.scorePredictions.length > 0 &&
-          lead.scorePredictions[0]!.scoreBand === 'LOW'
-        ) {
-          // Scored LOW → won't get message.generate, terminal
-          completedLeads++;
+        } else if (lead.scorePredictions.length > 0) {
+          const latest = lead.scorePredictions[0]!;
+          if (latest.scoreBand === 'LOW' || latest.blendedScore < qualificationThreshold) {
+            // Scored LOW or below qualification threshold → no downstream enqueued, terminal
+            completedLeads++;
+          } else {
+            // Scored above threshold — waiting for apollo.enrich → message.generate
+            inFlightItems++;
+          }
         } else {
-          // Still in flight (waiting for features, scoring, apollo, or message.generate)
+          // No score yet — still in flight (waiting for features, scoring, etc.)
           inFlightItems++;
         }
       }
@@ -218,6 +231,31 @@ export async function tryFinalizeDiscoveryRun(
         timeoutNote,
       );
     }
+  }
+}
+
+/**
+ * Periodic check for stale discovery runs. Call from a cron/interval to
+ * ensure the safety timeout fires even when no pipeline events trigger it.
+ */
+export async function checkStaleDiscoveryRuns(logger: TrackerLogger): Promise<void> {
+  const staleRuns = await prisma.jobExecution.findMany({
+    where: {
+      type: 'discovery.run',
+      status: 'running',
+    },
+    select: { id: true },
+  });
+
+  for (const run of staleRuns) {
+    await tryFinalizeDiscoveryRun(run.id, logger);
+  }
+
+  if (staleRuns.length > 0) {
+    logger.info(
+      { checkedCount: staleRuns.length },
+      'Checked stale discovery runs for finalization',
+    );
   }
 }
 
@@ -271,6 +309,7 @@ async function finalizeRun(
   if (icpProfileId && processedItems > 0) {
     const yieldRate = newBusinesses / processedItems;
     try {
+      // Store smoothed yield rate (legacy)
       const setting = await prisma.pipelineSetting.findUnique({
         where: { key: `discovery_yield_rate:${icpProfileId}` },
       });
@@ -287,6 +326,21 @@ async function finalizeRun(
           valueJson: smoothedRate,
         },
       });
+
+      // Store search efficiency (businesses per task) for new two-rate formula
+      if (newBusinesses > 0) {
+        const searchEfficiency = newBusinesses / processedItems;
+        await prisma.pipelineSetting.upsert({
+          where: { key: `discovery_search_efficiency:${icpProfileId}` },
+          create: {
+            key: `discovery_search_efficiency:${icpProfileId}`,
+            valueJson: searchEfficiency,
+          },
+          update: {
+            valueJson: searchEfficiency,
+          },
+        });
+      }
     } catch {
       // Best-effort — don't fail the finalization
     }

@@ -2,8 +2,8 @@ import { prisma } from '@lead-flood/db';
 
 import type { DiscoverySeedConfig } from './config.js';
 import { generateTasksV2 } from './queries/generate_tasks.js';
-import type { GenerateTasksV2Input } from './queries/generate_tasks.js';
-import { mapIcpIndustriesToCategories } from './queries/icp-category-map.js';
+import type { GenerateTasksV2Input, GeneratedSearchTask } from './queries/generate_tasks.js';
+import { mapIcpIndustriesWithOverrides } from './queries/icp-category-map.js';
 import { COUNTRY_NAME_TO_ISO } from './queries/seeds.js';
 
 export interface SeedTasksResult {
@@ -22,6 +22,7 @@ export interface IcpSeedConfig {
   cities?: string[] | undefined;
   maxPagesPerQuery?: number | undefined;
   searchProvider?: 'SERPAPI' | 'GOOGLE_PLACES' | undefined;
+  categoryOverrides?: Record<string, { add?: string[]; remove?: string[] }> | undefined;
 }
 
 /**
@@ -56,6 +57,78 @@ function resolveCountries(configCountries: string[], icpTargetCountries: string[
   return normalized.length > 0 ? normalized : configCountries;
 }
 
+/**
+ * Extract the search category from a query like "bakery in Dubai".
+ */
+function extractCategory(queryText: string): string {
+  const match = queryText.match(/^(.+?)\s+in\s+/i);
+  return match?.[1]?.trim().toLowerCase() ?? queryText.toLowerCase();
+}
+
+/**
+ * Stratified sample: guarantee at least 1 task per (category, city) stratum,
+ * then distribute remaining budget randomly. Final shuffle for FIFO fairness.
+ */
+function stratifiedSample(
+  tasks: GeneratedSearchTask[],
+  maxTasks: number,
+): GeneratedSearchTask[] {
+  // Group by (category, city) — the meaningful diversity dimensions
+  const strata = new Map<string, GeneratedSearchTask[]>();
+  for (const task of tasks) {
+    const cat = extractCategory(task.queryText);
+    const city = (task.city ?? 'unknown').toLowerCase();
+    const key = `${city}::${cat}`;
+    const group = strata.get(key) ?? [];
+    group.push(task);
+    strata.set(key, group);
+  }
+
+  const result: GeneratedSearchTask[] = [];
+  const strataList = [...strata.values()];
+
+  // If we can't even fit 1 per stratum, fall back to pure random
+  if (maxTasks < strataList.length) {
+    const shuffled = [...tasks];
+    for (let i = shuffled.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = shuffled[i]!;
+      shuffled[i] = shuffled[j]!;
+      shuffled[j] = tmp;
+    }
+    return shuffled.slice(0, maxTasks);
+  }
+
+  // Round 1: 1 random task per stratum
+  for (const group of strataList) {
+    const idx = Math.floor(Math.random() * group.length);
+    result.push(group.splice(idx, 1)[0]!);
+  }
+
+  // Round 2: Fill remaining budget randomly from leftover tasks
+  if (result.length < maxTasks) {
+    const remaining = strataList.flatMap((g) => g);
+    for (let i = remaining.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = remaining[i]!;
+      remaining[i] = remaining[j]!;
+      remaining[j] = tmp;
+    }
+    const needed = maxTasks - result.length;
+    result.push(...remaining.slice(0, needed));
+  }
+
+  // Final shuffle so DB insertion order is random (prevents FIFO bias)
+  for (let i = result.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = result[i]!;
+    result[i] = result[j]!;
+    result[j] = tmp;
+  }
+
+  return result.slice(0, maxTasks);
+}
+
 export async function seedSearchTasks(
   config: Pick<
     DiscoverySeedConfig,
@@ -80,7 +153,10 @@ export async function seedSearchTasks(
 
   const generatedTasks = generateTasksV2(
     {
-      categories: mapIcpIndustriesToCategories(icpConfig.targetIndustries),
+      categories: mapIcpIndustriesWithOverrides(
+        icpConfig.targetIndustries,
+        icpConfig.categoryOverrides,
+      ),
       countries: resolveCountries(config.countries, icpConfig.targetCountries),
       cities: icpConfig.cities,
       maxPagesPerQuery: icpConfig.maxPagesPerQuery ?? config.maxPagesPerQuery,
@@ -90,19 +166,11 @@ export async function seedSearchTasks(
     { now },
   );
 
-  // When generated tasks exceed the budget, randomly sample down instead of failing.
-  // This makes maxTasks a budget cap, not a hard error.
+  // When generated tasks exceed the budget, use stratified sampling to guarantee
+  // at least 1 task per (category, city) pair before distributing remaining budget.
   let tasksToInsert = generatedTasks;
   if (generatedTasks.length > config.maxTasks) {
-    // Fisher-Yates shuffle, then take first maxTasks
-    const shuffled = [...generatedTasks];
-    for (let i = shuffled.length - 1; i > 0; i -= 1) {
-      const j = Math.floor(Math.random() * (i + 1));
-      const tmp = shuffled[i]!;
-      shuffled[i] = shuffled[j]!;
-      shuffled[j] = tmp;
-    }
-    tasksToInsert = shuffled.slice(0, config.maxTasks);
+    tasksToInsert = stratifiedSample(generatedTasks, config.maxTasks);
   }
 
   let inserted = 0;

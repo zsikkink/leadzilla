@@ -77,6 +77,7 @@ function fuzzyMatchCategories(industry: string): string[] {
  *
  * - Known industries are mapped via `ICP_INDUSTRY_CATEGORY_MAP`.
  * - Unknown industries fall back to fuzzy matching against the full taxonomy.
+ * - If fuzzy matching also fails, the raw industry name is used as a search category.
  * - Empty or missing input returns the full `categoryTaxonomyEN`.
  * - Results are deduplicated.
  */
@@ -89,16 +90,104 @@ export function mapIcpIndustriesToCategories(targetIndustries: string[]): string
   const result: string[] = [];
 
   for (const industry of targetIndustries) {
-    // Normalise: lowercase, trim, and replace spaces with underscores
-    // so "Luxury Services" matches the "luxury_services" key.
     const key = industry.toLowerCase().trim().replaceAll(' ', '_');
     const mapped = ICP_INDUSTRY_CATEGORY_MAP[key];
 
-    const categories = mapped ?? fuzzyMatchCategories(key);
+    if (mapped) {
+      for (const cat of mapped) {
+        if (!seen.has(cat)) {
+          seen.add(cat);
+          result.push(cat);
+        }
+      }
+      continue;
+    }
+
+    const fuzzy = fuzzyMatchCategories(key);
+    if (fuzzy.length > 0) {
+      for (const cat of fuzzy) {
+        if (!seen.has(cat)) {
+          seen.add(cat);
+          result.push(cat);
+        }
+      }
+      continue;
+    }
+
+    // No match — use the raw industry name as a search category.
+    // "kite surfing" becomes a query: "kite surfing in Dubai"
+    const rawCategory = industry.trim();
+    if (rawCategory.length > 0 && !seen.has(rawCategory.toLowerCase())) {
+      seen.add(rawCategory.toLowerCase());
+      result.push(rawCategory);
+      console.warn(
+        `[icp-category-map] No mapping for industry "${industry}" — using as direct search category`,
+      );
+    }
+  }
+
+  return result;
+}
+
+// ── Preview & Override helpers ────────────────────────────────────────
+
+export interface IndustryMappingPreview {
+  industry: string;
+  categories: string[];
+  source: 'mapped' | 'fuzzy' | 'direct';
+}
+
+/**
+ * Preview the category mapping for each industry individually.
+ * Used by the UI to show what each industry expands to.
+ */
+export function previewIndustryMappings(targetIndustries: string[]): IndustryMappingPreview[] {
+  return targetIndustries.map((industry) => {
+    const key = industry.toLowerCase().trim().replaceAll(' ', '_');
+    const mapped = ICP_INDUSTRY_CATEGORY_MAP[key];
+
+    if (mapped) {
+      return { industry, categories: [...mapped], source: 'mapped' as const };
+    }
+
+    const fuzzy = fuzzyMatchCategories(key);
+    if (fuzzy.length > 0) {
+      return { industry, categories: fuzzy, source: 'fuzzy' as const };
+    }
+
+    return { industry, categories: [industry.trim()], source: 'direct' as const };
+  });
+}
+
+/**
+ * Apply user overrides (added/removed categories per industry) on top of
+ * the base industry→category mapping. Used at discovery seed time.
+ */
+export function mapIcpIndustriesWithOverrides(
+  targetIndustries: string[],
+  overrides?: Record<string, { add?: string[]; remove?: string[] }> | undefined,
+): string[] {
+  const previews = previewIndustryMappings(targetIndustries);
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const preview of previews) {
+    const key = preview.industry.toLowerCase().trim().replaceAll(' ', '_');
+    const override = overrides?.[key];
+    let categories = [...preview.categories];
+
+    if (override?.remove) {
+      const removeSet = new Set(override.remove.map((r) => r.toLowerCase()));
+      categories = categories.filter((c) => !removeSet.has(c.toLowerCase()));
+    }
+    if (override?.add) {
+      categories.push(...override.add);
+    }
 
     for (const cat of categories) {
-      if (!seen.has(cat)) {
-        seen.add(cat);
+      const lower = cat.toLowerCase();
+      if (!seen.has(lower)) {
+        seen.add(lower);
         result.push(cat);
       }
     }

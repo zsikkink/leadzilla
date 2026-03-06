@@ -135,3 +135,45 @@ export async function loadAutoApproveConfig(): Promise<AutoApproveConfig> {
 export function shouldAutoApprove(config: AutoApproveConfig, blendedScore: number): boolean {
   return config.enabled && blendedScore >= config.scoreMin && blendedScore <= config.scoreMax;
 }
+
+// ── Discovery rate helpers ────────────────────────────────────────────
+
+/**
+ * Load the historical conversion rate (qualified leads / unique businesses)
+ * for an ICP. Returns null if no historical data exists.
+ */
+export async function loadConversionRate(icpProfileId: string): Promise<number | null> {
+  try {
+    const setting = await prisma.pipelineSetting.findUnique({
+      where: { key: `discovery_conversion_rate:${icpProfileId}` },
+      select: { valueJson: true },
+    });
+    if (setting?.valueJson === null || setting?.valueJson === undefined) return null;
+    const value = typeof setting.valueJson === 'number'
+      ? setting.valueJson
+      : Number(setting.valueJson);
+    return Number.isFinite(value) && value > 0 && value <= 1 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load the historical search efficiency (unique businesses / search task)
+ * for an ICP. Returns null if no historical data exists.
+ */
+export async function loadSearchEfficiency(icpProfileId: string): Promise<number | null> {
+  try {
+    const setting = await prisma.pipelineSetting.findUnique({
+      where: { key: `discovery_search_efficiency:${icpProfileId}` },
+      select: { valueJson: true },
+    });
+    if (setting?.valueJson === null || setting?.valueJson === undefined) return null;
+    const value = typeof setting.valueJson === 'number'
+      ? setting.valueJson
+      : Number(setting.valueJson);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}

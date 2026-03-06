@@ -16,11 +16,11 @@ describe('generateTasksV2', () => {
 
     const tasks = generateTasksV2(input, { now: fixedDate });
 
-    // 1 country × 1 city × 2 categories × 3 templates × 1 page × 2 taskTypes = 12
+    // 1 country × 1 city × 2 categories × 1 template × 1 page × 1 taskType = 2
     const expectedCount =
-      1 * 1 * input.categories.length * queryTemplatesV2EN.length * 1 * 2;
+      1 * 1 * input.categories.length * queryTemplatesV2EN.length * 1 * 1;
     expect(tasks.length).toBe(expectedCount);
-    expect(expectedCount).toBe(12);
+    expect(expectedCount).toBe(2);
   });
 
   it('uses default cities when cities is omitted', () => {
@@ -32,10 +32,10 @@ describe('generateTasksV2', () => {
     const tasks = generateTasksV2(input, { now: fixedDate });
 
     // QA has 1 default city (Doha)
-    // 1 country × 1 city × 1 category × 3 templates × 1 page × 2 taskTypes = 6
+    // 1 country × 1 city × 1 category × 1 template × 1 page × 1 taskType = 1
     const defaultCities = defaultCitiesByCountry['QA']!;
     expect(defaultCities).toEqual(['Doha']);
-    expect(tasks.length).toBe(defaultCities.length * 1 * queryTemplatesV2EN.length * 1 * 2);
+    expect(tasks.length).toBe(defaultCities.length * 1 * queryTemplatesV2EN.length * 1 * 1);
 
     // All tasks should reference Doha
     for (const task of tasks) {
@@ -57,7 +57,7 @@ describe('generateTasksV2', () => {
     expect(aeCities.length).toBe(4);
 
     const expectedCount =
-      aeCities.length * 1 * queryTemplatesV2EN.length * 1 * 2;
+      aeCities.length * 1 * queryTemplatesV2EN.length * 1 * 1;
     expect(tasks.length).toBe(expectedCount);
 
     // Verify all default cities are present
@@ -76,14 +76,14 @@ describe('generateTasksV2', () => {
 
     const tasks = generateTasksV2(input, { now: fixedDate });
 
-    // 1 country × 2 cities × 1 category × 3 templates × 1 page × 2 taskTypes = 12
-    expect(tasks.length).toBe(12);
+    // 1 country × 2 cities × 1 category × 1 template × 1 page × 1 taskType = 2
+    expect(tasks.length).toBe(2);
 
     const taskCities = new Set(tasks.map((t) => t.city));
     expect(taskCities).toEqual(new Set(['Riyadh', 'Jeddah']));
   });
 
-  it('defaults to SERP_GOOGLE_LOCAL and SERP_MAPS_LOCAL task types', () => {
+  it('defaults to SERP_MAPS_LOCAL task type only', () => {
     const input: GenerateTasksV2Input = {
       categories: ['bakery'],
       countries: ['AE'],
@@ -93,7 +93,7 @@ describe('generateTasksV2', () => {
     const tasks = generateTasksV2(input, { now: fixedDate });
 
     const taskTypes = new Set(tasks.map((t) => t.taskType));
-    expect(taskTypes).toEqual(new Set(['SERP_GOOGLE_LOCAL', 'SERP_MAPS_LOCAL']));
+    expect(taskTypes).toEqual(new Set(['SERP_MAPS_LOCAL']));
   });
 
   it('uses custom task types when provided', () => {
@@ -106,8 +106,8 @@ describe('generateTasksV2', () => {
 
     const tasks = generateTasksV2(input, { now: fixedDate });
 
-    // 1 country × 1 city × 1 category × 3 templates × 1 page × 1 taskType = 3
-    expect(tasks.length).toBe(3);
+    // 1 country × 1 city × 1 category × 1 template × 1 page × 1 taskType = 1
+    expect(tasks.length).toBe(1);
     for (const task of tasks) {
       expect(task.taskType).toBe('SERP_GOOGLE');
     }
@@ -123,8 +123,8 @@ describe('generateTasksV2', () => {
 
     const tasks = generateTasksV2(input, { now: fixedDate });
 
-    // 1 country × 1 city × 1 category × 3 templates × 3 pages × 2 taskTypes = 18
-    expect(tasks.length).toBe(18);
+    // 1 country × 1 city × 1 category × 1 template × 3 pages × 1 taskType = 3
+    expect(tasks.length).toBe(3);
 
     const pages = new Set(tasks.map((t) => t.page));
     expect(pages).toEqual(new Set([1, 2, 3]));

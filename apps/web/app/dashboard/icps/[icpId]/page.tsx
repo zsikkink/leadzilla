@@ -4,8 +4,12 @@ import {
   ArrowLeft,
   BarChart3,
   Check,
+  ChevronDown,
+  ChevronRight,
   DollarSign,
+  Info,
   Lightbulb,
+  Loader2,
   MessageSquare,
   Pencil,
   Plus,
@@ -18,7 +22,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
@@ -163,6 +167,400 @@ function EditableTags({ label, tags, onSave, tagClassName }: EditableTagsProps) 
           </button>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// ── Industry key normalization ─────────────────────
+function industryKey(name: string): string {
+  return name.toLowerCase().trim().replaceAll(' ', '_');
+}
+
+// ── Category Overrides type ────────────────────────
+interface CategoryOverrides {
+  [industryKey: string]: {
+    add?: string[] | undefined;
+    remove?: string[] | undefined;
+  };
+}
+
+// ── IndustryMappingEditor ──────────────────────────
+interface IndustryMapping {
+  industry: string;
+  categories: string[];
+  source: 'mapped' | 'fuzzy' | 'direct';
+}
+
+interface IndustryMappingEditorProps {
+  industries: string[];
+  metadataJson: Record<string, unknown> | null | undefined;
+  onSaveIndustries: (industries: string[]) => void;
+  onSaveMetadata: (meta: Record<string, unknown>) => void;
+  apiClient: { previewCategories: (industries: string[]) => Promise<{ mappings: IndustryMapping[] }> };
+}
+
+function IndustryMappingEditor({
+  industries,
+  metadataJson,
+  onSaveIndustries,
+  onSaveMetadata,
+  apiClient,
+}: IndustryMappingEditorProps) {
+  const [mappings, setMappings] = useState<IndustryMapping[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [newIndustry, setNewIndustry] = useState('');
+  const [addingIndustry, setAddingIndustry] = useState(false);
+  const [newCategoryInputs, setNewCategoryInputs] = useState<Record<string, string>>({});
+
+  // Read existing overrides from metadataJson
+  const existingOverrides: CategoryOverrides =
+    (metadataJson && typeof metadataJson === 'object' && 'categoryOverrides' in metadataJson
+      ? (metadataJson as Record<string, unknown>).categoryOverrides as CategoryOverrides
+      : null) ?? {};
+
+  // Fetch mappings whenever industries change
+  useEffect(() => {
+    if (industries.length === 0) {
+      setMappings([]);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+
+    apiClient
+      .previewCategories(industries)
+      .then((result) => {
+        if (!cancelled) {
+          setMappings(result.mappings);
+        }
+      })
+      .catch(() => {
+        // silently fail — user sees empty categories
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [industries, apiClient]);
+
+  // Apply overrides to get the effective categories for an industry
+  function getEffectiveCategories(mapping: IndustryMapping): string[] {
+    const key = industryKey(mapping.industry);
+    const override = existingOverrides[key];
+    let cats = [...mapping.categories];
+    if (override?.remove) {
+      cats = cats.filter((c) => !override.remove!.includes(c));
+    }
+    if (override?.add) {
+      for (const a of override.add) {
+        if (!cats.includes(a)) cats.push(a);
+      }
+    }
+    return cats;
+  }
+
+  function toggleCollapse(industry: string) {
+    setCollapsed((prev) => ({ ...prev, [industry]: !prev[industry] }));
+  }
+
+  function removeIndustry(industry: string) {
+    const updated = industries.filter((i) => i !== industry);
+    onSaveIndustries(updated);
+    // Also clean up any overrides for this industry
+    const key = industryKey(industry);
+    if (existingOverrides[key]) {
+      const newOverrides = { ...existingOverrides };
+      delete newOverrides[key];
+      onSaveMetadata({ ...(metadataJson ?? {}), categoryOverrides: newOverrides });
+    }
+  }
+
+  function addIndustry() {
+    const trimmed = newIndustry.trim();
+    if (trimmed && !industries.includes(trimmed)) {
+      onSaveIndustries([...industries, trimmed]);
+      setNewIndustry('');
+      setAddingIndustry(false);
+    }
+  }
+
+  function removeCategory(industry: string, category: string) {
+    const key = industryKey(industry);
+    const mapping = mappings.find((m) => m.industry === industry);
+    const baseCategories = mapping?.categories ?? [];
+    const current = existingOverrides[key] ?? {};
+
+    // If it's a base category, add to remove list
+    if (baseCategories.includes(category)) {
+      const removeList = [...(current.remove ?? [])];
+      if (!removeList.includes(category)) removeList.push(category);
+      const newOverrides: CategoryOverrides = {
+        ...existingOverrides,
+        [key]: { ...current, remove: removeList },
+      };
+      onSaveMetadata({ ...(metadataJson ?? {}), categoryOverrides: newOverrides });
+    } else {
+      // It's a user-added category — remove from add list
+      const addList = (current.add ?? []).filter((a) => a !== category);
+      const newOverrides: CategoryOverrides = {
+        ...existingOverrides,
+        [key]: { ...current, add: addList.length > 0 ? addList : undefined },
+      };
+      // Clean up empty override entries
+      if (!newOverrides[key]?.add?.length && !newOverrides[key]?.remove?.length) {
+        delete newOverrides[key];
+      }
+      onSaveMetadata({ ...(metadataJson ?? {}), categoryOverrides: newOverrides });
+    }
+  }
+
+  function addCategory(industry: string) {
+    const key = industryKey(industry);
+    const input = (newCategoryInputs[industry] ?? '').trim();
+    if (!input) return;
+
+    const current = existingOverrides[key] ?? {};
+    const effective = getEffectiveCategories(
+      mappings.find((m) => m.industry === industry) ?? { industry, categories: [], source: 'direct' },
+    );
+
+    if (effective.includes(input)) return; // already exists
+
+    // If it was previously removed, un-remove it
+    const mapping = mappings.find((m) => m.industry === industry);
+    const baseCategories = mapping?.categories ?? [];
+    if (baseCategories.includes(input) && current.remove?.includes(input)) {
+      const removeList = current.remove.filter((r) => r !== input);
+      const newOverrides: CategoryOverrides = {
+        ...existingOverrides,
+        [key]: { ...current, remove: removeList.length > 0 ? removeList : undefined },
+      };
+      if (!newOverrides[key]?.add?.length && !newOverrides[key]?.remove?.length) {
+        delete newOverrides[key];
+      }
+      onSaveMetadata({ ...(metadataJson ?? {}), categoryOverrides: newOverrides });
+    } else {
+      // Add as user-added category
+      const addList = [...(current.add ?? []), input];
+      const newOverrides: CategoryOverrides = {
+        ...existingOverrides,
+        [key]: { ...current, add: addList },
+      };
+      onSaveMetadata({ ...(metadataJson ?? {}), categoryOverrides: newOverrides });
+    }
+
+    setNewCategoryInputs((prev) => ({ ...prev, [industry]: '' }));
+  }
+
+  const sourceBadge = (source: 'mapped' | 'fuzzy' | 'direct') => {
+    switch (source) {
+      case 'mapped':
+        return (
+          <span className="inline-flex items-center rounded-full bg-zbooni-green/15 px-2 py-0.5 text-[10px] font-semibold text-zbooni-green">
+            mapped
+          </span>
+        );
+      case 'fuzzy':
+        return (
+          <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-400">
+            approximate match
+          </span>
+        );
+      case 'direct':
+        return (
+          <span className="inline-flex items-center rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] font-semibold text-blue-400">
+            searched as-is
+          </span>
+        );
+    }
+  };
+
+  return (
+    <div>
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+        Target Industries & Search Categories
+      </p>
+
+      {loading ? (
+        <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading category mappings...
+        </div>
+      ) : (
+        <div className="mt-3 space-y-2">
+          {mappings.map((mapping) => {
+            const isCollapsed = collapsed[mapping.industry] === true;
+            const effectiveCats = getEffectiveCategories(mapping);
+            const key = industryKey(mapping.industry);
+            const catInput = newCategoryInputs[mapping.industry] ?? '';
+
+            return (
+              <div
+                key={mapping.industry}
+                className={`rounded-xl border p-3 transition-colors ${
+                  mapping.source === 'fuzzy'
+                    ? 'border-amber-500/30 bg-amber-500/5'
+                    : mapping.source === 'direct'
+                      ? 'border-blue-500/30 bg-blue-500/5'
+                      : 'border-border/50 bg-card'
+                }`}
+              >
+                {/* Industry header row */}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => toggleCollapse(mapping.industry)}
+                    className="flex items-center gap-1.5 text-sm font-semibold transition-colors hover:text-zbooni-teal cursor-pointer"
+                  >
+                    {isCollapsed ? (
+                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60" />
+                    ) : (
+                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/60" />
+                    )}
+                    {mapping.industry}
+                  </button>
+                  {sourceBadge(mapping.source)}
+                  <span className="ml-auto text-[10px] text-muted-foreground/40">
+                    {effectiveCats.length} {effectiveCats.length === 1 ? 'term' : 'terms'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeIndustry(mapping.industry)}
+                    className="rounded p-1 text-muted-foreground/40 transition-colors hover:bg-red-500/10 hover:text-red-400 cursor-pointer"
+                    title="Remove industry"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+
+                {/* Expanded: categories + add input */}
+                {!isCollapsed ? (
+                  <div className="mt-2.5">
+                    {effectiveCats.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {effectiveCats.map((cat) => {
+                          const isUserAdded = existingOverrides[key]?.add?.includes(cat);
+                          return (
+                            <span
+                              key={cat}
+                              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs ${
+                                isUserAdded
+                                  ? 'bg-zbooni-teal/15 text-zbooni-teal'
+                                  : 'bg-zbooni-dark/60 text-muted-foreground'
+                              }`}
+                            >
+                              {cat}
+                              <button
+                                type="button"
+                                onClick={() => removeCategory(mapping.industry, cat)}
+                                className="ml-1.5 rounded-full transition-colors hover:text-red-400 cursor-pointer"
+                              >
+                                <X className="h-2.5 w-2.5" />
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+
+                    {/* Direct source hint */}
+                    {mapping.source === 'direct' ? (
+                      <div className="mt-2 flex items-start gap-1.5 text-[11px] text-blue-400/70">
+                        <Info className="mt-0.5 h-3 w-3 shrink-0" />
+                        <span>
+                          No mapping found — will search Google Maps directly for &ldquo;{mapping.industry} in {'{'}{' '}
+                          city {'}'}&rdquo;
+                        </span>
+                      </div>
+                    ) : null}
+
+                    {/* Add category input */}
+                    <div className="mt-2 flex items-center gap-1.5">
+                      <input
+                        value={catInput}
+                        onChange={(e) =>
+                          setNewCategoryInputs((prev) => ({ ...prev, [mapping.industry]: e.target.value }))
+                        }
+                        placeholder="Add search term..."
+                        className="h-7 w-44 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-xs focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') addCategory(mapping.industry);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => addCategory(mapping.industry)}
+                        className="rounded-lg p-1 text-zbooni-teal transition-colors hover:bg-zbooni-teal/10 cursor-pointer"
+                        title="Add search term"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+
+          {/* Industries with no mapping yet (if industries exist but API hasn't returned) */}
+          {!loading && industries.length === 0 ? (
+            <p className="text-xs text-muted-foreground/40 italic">No industries configured</p>
+          ) : null}
+        </div>
+      )}
+
+      {/* Add Industry button / input */}
+      <div className="mt-3">
+        {addingIndustry ? (
+          <div className="flex items-center gap-1.5">
+            <input
+              value={newIndustry}
+              onChange={(e) => setNewIndustry(e.target.value)}
+              placeholder="Industry name..."
+              className="h-8 w-52 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') addIndustry();
+                if (e.key === 'Escape') {
+                  setAddingIndustry(false);
+                  setNewIndustry('');
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={addIndustry}
+              className="rounded-lg p-1.5 text-zbooni-green transition-colors hover:bg-zbooni-green/10 cursor-pointer"
+            >
+              <Check className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAddingIndustry(false);
+                setNewIndustry('');
+              }}
+              className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent/50 cursor-pointer"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setAddingIndustry(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:bg-zbooni-teal/10 cursor-pointer"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add Industry
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -357,12 +755,19 @@ export default function IcpDetailPage() {
           </div>
         ) : null}
 
-        <div className="mt-5 grid grid-cols-2 gap-4 text-sm sm:grid-cols-3">
-          <EditableTags
-            label="Target Industries"
-            tags={profile.targetIndustries}
-            onSave={(val) => handleUpdate('targetIndustries', val)}
+        {/* Industry Mapping Editor — full width */}
+        <div className="mt-5 text-sm">
+          <IndustryMappingEditor
+            industries={profile.targetIndustries}
+            metadataJson={profile.metadataJson}
+            onSaveIndustries={(val) => handleUpdate('targetIndustries', val)}
+            onSaveMetadata={(meta) => handleUpdate('metadataJson', meta)}
+            apiClient={apiClient}
           />
+        </div>
+
+        {/* Target Countries + Logic */}
+        <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
           <EditableTags
             label="Target Countries"
             tags={profile.targetCountries}

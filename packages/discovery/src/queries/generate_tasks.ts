@@ -239,7 +239,7 @@ export function generateTasksV2(
 
   const defaultTaskTypes: SearchTaskType[] = isGooglePlaces
     ? ['SERP_GOOGLE_LOCAL']
-    : ['SERP_GOOGLE_LOCAL', 'SERP_MAPS_LOCAL'];
+    : ['SERP_MAPS_LOCAL'];
   const taskTypes: SearchTaskType[] = input.taskTypes ?? defaultTaskTypes;
   const templates = queryTemplatesV2EN;
   const language: DiscoveryLanguageCode = 'en';
