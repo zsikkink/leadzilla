@@ -9,6 +9,28 @@ import type {
   SerpApiCommonRequest,
 } from './types.js';
 
+/** Full country-code → name map for SerpAPI location parameter. */
+const COUNTRY_NAMES: Record<string, string> = {
+  AE: 'United Arab Emirates',
+  SA: 'Saudi Arabia',
+  JO: 'Jordan',
+  EG: 'Egypt',
+  QA: 'Qatar',
+  BH: 'Bahrain',
+  KW: 'Kuwait',
+  OM: 'Oman',
+  LB: 'Lebanon',
+  IQ: 'Iraq',
+  MA: 'Morocco',
+  TN: 'Tunisia',
+  DZ: 'Algeria',
+  LY: 'Libya',
+  YE: 'Yemen',
+  SY: 'Syria',
+  PS: 'Palestine',
+  SD: 'Sudan',
+};
+
 interface SerpApiResponseRoot {
   error?: unknown;
   organic_results?: unknown[];
@@ -114,18 +136,7 @@ function normalizeNumber(value: unknown): number | null {
 }
 
 function toCountryName(countryCode: DiscoveryCountryCode): string {
-  switch (countryCode) {
-    case 'JO':
-      return 'Jordan';
-    case 'SA':
-      return 'Saudi Arabia';
-    case 'AE':
-      return 'United Arab Emirates';
-    case 'EG':
-      return 'Egypt';
-    default:
-      return countryCode;
-  }
+  return COUNTRY_NAMES[countryCode] ?? countryCode;
 }
 
 function buildLocation(city: string | null | undefined, countryCode: DiscoveryCountryCode): string {
