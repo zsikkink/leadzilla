@@ -3,6 +3,7 @@ import { promises as dns } from 'node:dns';
 import type { Job, SendOptions } from 'pg-boss';
 
 import { classifyError } from '../errors.js';
+import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
 
 export const BUSINESS_PREQUALIFY_JOB_NAME = 'business.prequalify';
 
@@ -316,6 +317,9 @@ async function disqualify(
     { ...logCtx, reason, ...extra },
     `Business disqualified — ${reason}`,
   );
+
+  // Check if this was the last pending item for the discovery run
+  await tryFinalizeDiscoveryRun(discoveryRunId, logger);
 }
 
 async function recordCostEvent(

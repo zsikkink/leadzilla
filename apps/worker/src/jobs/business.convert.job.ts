@@ -2,6 +2,7 @@ import { Prisma, prisma, toInputJson } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
 import { RetryableError } from '../errors.js';
+import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
 
 // ── Constants ──────────────────────────────────────────────────────────
 export const BUSINESS_CONVERT_JOB_NAME = 'business.convert';
@@ -452,6 +453,7 @@ export async function handleBusinessConvertJob(
 
   if (!business) {
     logger.warn(logCtx, 'Business not found — skipping conversion');
+    await tryFinalizeDiscoveryRun(discoveryRunId, logger);
     return;
   }
 
@@ -461,6 +463,7 @@ export async function handleBusinessConvertJob(
       { ...logCtx, reason: 'NO_DOMAIN' },
       'Business has no website domain — cannot find contacts, skipping',
     );
+    await tryFinalizeDiscoveryRun(discoveryRunId, logger);
     return;
   }
 
@@ -1015,6 +1018,7 @@ export async function handleBusinessConvertJob(
       { ...logCtx, reason: 'NO_CONTACTS_FOUND', candidateCount: allCandidates.length },
       'No decision-maker contacts with valid email found — cannot create lead',
     );
+    await tryFinalizeDiscoveryRun(discoveryRunId, logger);
     return;
   }
 
@@ -1063,6 +1067,7 @@ export async function handleBusinessConvertJob(
             : Prisma.JsonNull,
           apolloHasEmail,
           apolloHasDirectPhone,
+          metadata: toInputJson({ discoveryRunId }),
           ...(businessInsights !== null ? { businessInsights } : {}),
         },
       }).catch((err: unknown) => {
@@ -1144,7 +1149,7 @@ export async function handleBusinessConvertJob(
           : Prisma.JsonNull,
         apolloHasEmail,
         apolloHasDirectPhone,
-        metadata: toInputJson({ contactSource: resolvedContact.source }),
+        metadata: toInputJson({ contactSource: resolvedContact.source, discoveryRunId }),
         ...(businessInsights !== null ? { businessInsights } : {}),
       },
     });

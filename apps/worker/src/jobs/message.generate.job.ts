@@ -5,6 +5,7 @@ import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
 import { classifyError } from '../errors.js';
+import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
 
 import {
   validateMessageVariant,
@@ -716,6 +717,9 @@ export async function handleMessageGenerateJob(
       },
       'Completed message.generate job',
     );
+
+    // Check if this was the last lead for a discovery run pipeline
+    await tryFinalizeDiscoveryRun(runId, logger);
   } catch (error: unknown) {
     logger.error(
       {

@@ -8,6 +8,10 @@ import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
 import { classifyError } from '../errors.js';
+import {
+  markSearchTasksComplete,
+  tryFinalizeDiscoveryRun,
+} from '../utils/discovery-run-tracker.js';
 
 export const DISCOVERY_RUN_SEARCH_TASK_JOB_NAME = 'discovery.run_search_task';
 export const DISCOVERY_RUN_SEARCH_TASK_IDEMPOTENCY_KEY_PATTERN =
@@ -175,11 +179,15 @@ async function updateDiscoveryRunProgress(discoveryRunId: string, state: RunStat
   });
 }
 
-async function finalizeDiscoveryRun(
+/**
+ * Mark search tasks as complete and check if the pipeline can be finalized.
+ * The run stays in 'running' until ALL leads reach a terminal pipeline state
+ * (message drafted, scored LOW, or failed).
+ */
+async function completeSearchPhase(
   discoveryRunId: string,
   state: RunState,
-  status: 'completed' | 'failed',
-  errorMessage: string | null,
+  logger: DiscoveryRunSearchTaskLogger,
   icpProfileId?: string | undefined,
 ): Promise<void> {
   if (state.finalized) {
@@ -191,47 +199,23 @@ async function finalizeDiscoveryRun(
     ? state.newBusinesses / state.processedTaskCount
     : 0;
 
-  await prisma.jobExecution.update({
-    where: { id: discoveryRunId },
-    data: {
-      status,
-      finishedAt: new Date(),
-      ...(errorMessage ? { error: errorMessage } : {}),
-      result: toInputJson({
-        processedItems: state.processedTaskCount,
-        failedItems: state.failedCount,
-        newBusinesses: state.newBusinesses,
-        newSources: state.newSources,
-        serpapiRequests: state.serpapiRequests,
-        durationMs: Math.max(0, Date.now() - state.startedAtMs),
-        yieldRate,
-      }),
+  await markSearchTasksComplete(
+    discoveryRunId,
+    {
+      processedItems: state.processedTaskCount,
+      failedItems: state.failedCount,
+      newBusinesses: state.newBusinesses,
+      newSources: state.newSources,
+      serpapiRequests: state.serpapiRequests,
+      durationMs: Math.max(0, Date.now() - state.startedAtMs),
+      yieldRate,
     },
-  });
+    icpProfileId,
+    logger,
+  );
 
-  // 5C: Store yield rate for adaptive budget computation (EMA smoothing)
-  if (icpProfileId && yieldRate > 0) {
-    try {
-      const setting = await prisma.pipelineSetting.findUnique({
-        where: { key: `discovery_yield_rate:${icpProfileId}` },
-      });
-      const historicalRate = setting?.valueJson ? Number(setting.valueJson) : yieldRate;
-      const smoothedRate = 0.3 * yieldRate + 0.7 * historicalRate;
-
-      await prisma.pipelineSetting.upsert({
-        where: { key: `discovery_yield_rate:${icpProfileId}` },
-        create: {
-          key: `discovery_yield_rate:${icpProfileId}`,
-          valueJson: smoothedRate,
-        },
-        update: {
-          valueJson: smoothedRate,
-        },
-      });
-    } catch {
-      // Best-effort — don't fail the run finalization
-    }
-  }
+  // Check if the pipeline is already complete (e.g. zero businesses found)
+  await tryFinalizeDiscoveryRun(discoveryRunId, logger);
 }
 
 async function finalizeJobRun(
@@ -293,7 +277,7 @@ export async function handleDiscoveryRunSearchTaskJob(
       releaseSlot(runKey, runState);
     }
     if (job.data.discoveryRunId) {
-      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'completed', null, job.data.icpProfileId);
+      await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
       releaseSlot(runKey, runState);
     }
     logger.info(
@@ -397,7 +381,9 @@ export async function handleDiscoveryRunSearchTaskJob(
   // Update discovery run progress counters
   if (job.data.discoveryRunId) {
     if (runResult.status === 'FAILED' && effectiveMaxTasks === undefined) {
-      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'failed', runResult.error ?? 'Task failed', job.data.icpProfileId);
+      // Search task failed in unbounded mode — mark search phase complete
+      // and let tryFinalizeDiscoveryRun decide if pipeline items are still in flight
+      await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
       releaseSlot(runKey, runState);
     } else {
       await updateDiscoveryRunProgress(job.data.discoveryRunId, runState);
@@ -455,7 +441,7 @@ export async function handleDiscoveryRunSearchTaskJob(
       releaseSlot(runKey, runState);
     }
     if (job.data.discoveryRunId) {
-      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'completed', null, job.data.icpProfileId);
+      await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
       releaseSlot(runKey, runState);
     }
     logger.info(
@@ -476,7 +462,7 @@ export async function handleDiscoveryRunSearchTaskJob(
       releaseSlot(runKey, runState);
     }
     if (job.data.discoveryRunId) {
-      await finalizeDiscoveryRun(job.data.discoveryRunId, runState, 'completed', null, job.data.icpProfileId);
+      await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
       releaseSlot(runKey, runState);
     }
     logger.info(

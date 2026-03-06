@@ -1,6 +1,8 @@
 import { prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
+
 // ── Constants ──────────────────────────────────────────────────────────
 export const APOLLO_ENRICH_JOB_NAME = 'apollo.enrich';
 
@@ -94,6 +96,7 @@ export async function handleApolloEnrichJob(
   // LOW → skip entirely, do not enqueue message.generate
   if (scoreBand === 'LOW') {
     logger.info(logCtx, 'LOW score band — skipping apollo.enrich entirely');
+    await tryFinalizeDiscoveryRun(runId, logger);
     return;
   }
 
@@ -111,6 +114,7 @@ export async function handleApolloEnrichJob(
 
   if (!lead) {
     logger.warn(logCtx, 'Lead not found — skipping apollo.enrich');
+    await tryFinalizeDiscoveryRun(runId, logger);
     return;
   }
 
@@ -187,6 +191,8 @@ export async function handleApolloEnrichJob(
         channel: 'EMAIL',
         autoApprove: true,
       });
+    } else {
+      await tryFinalizeDiscoveryRun(runId, logger);
     }
     return;
   }
@@ -203,6 +209,8 @@ export async function handleApolloEnrichJob(
         channel: 'EMAIL',
         autoApprove: true,
       });
+    } else {
+      await tryFinalizeDiscoveryRun(runId, logger);
     }
     return;
   }
@@ -225,6 +233,8 @@ export async function handleApolloEnrichJob(
         channel: 'EMAIL',
         autoApprove: true,
       });
+    } else {
+      await tryFinalizeDiscoveryRun(runId, logger);
     }
     return;
   }
@@ -281,6 +291,8 @@ export async function handleApolloEnrichJob(
     );
   } else if (!finalHasEmail) {
     logger.warn(logCtx, 'Lead still has no email after Apollo reveal — cannot enqueue message.generate');
+    // Terminal: lead can't get a message without email
+    await tryFinalizeDiscoveryRun(runId, logger);
   }
 
   logger.info(logCtx, 'Completed apollo.enrich job');
