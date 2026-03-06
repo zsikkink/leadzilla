@@ -177,3 +177,194 @@ export async function loadSearchEfficiency(icpProfileId: string): Promise<number
     return null;
   }
 }
+
+// ── UI-configured pipeline settings ──────────────────────────────────────
+// These are saved by the Settings UI (PUT /v1/settings/pipeline/{key})
+// and read at runtime by worker jobs. Every getter has a sensible default
+// so the pipeline works even if the setting was never explicitly saved.
+
+/**
+ * Deterministic/AI blend weight override (saved as 0–100 = percent deterministic).
+ * Returns as a 0–1 fraction, or null if not set (meaning: use dynamic auto-blending).
+ */
+export async function getDeterministicAiBlend(): Promise<number | null> {
+  try {
+    const row = await prisma.pipelineSetting.findUnique({
+      where: { key: 'deterministicAiBlend' },
+      select: { valueJson: true },
+    });
+    if (row?.valueJson !== null && row?.valueJson !== undefined) {
+      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
+      if (Number.isFinite(val) && val >= 0 && val <= 100) {
+        return val / 100;
+      }
+    }
+  } catch { /* DB failure — use dynamic blending */ }
+  return null;
+}
+
+/**
+ * Minimum blended score to justify paid enrichment (Apollo reveal).
+ * Leads scoring below this skip paid API calls. Default: 0.3.
+ */
+export async function getEnrichmentThreshold(): Promise<number> {
+  try {
+    const row = await prisma.pipelineSetting.findUnique({
+      where: { key: 'enrichmentThreshold' },
+      select: { valueJson: true },
+    });
+    if (row?.valueJson !== null && row?.valueJson !== undefined) {
+      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
+      if (Number.isFinite(val) && val >= 0 && val <= 1) {
+        return val;
+      }
+    }
+  } catch { /* fall through */ }
+  return 0.3;
+}
+
+/**
+ * Score tier band thresholds { low, high }.
+ * Scores < low → LOW, low..high → MEDIUM, ≥ high → HIGH.
+ * Default: { low: 0.34, high: 0.67 }.
+ */
+export async function getScoreTierBands(): Promise<{ low: number; high: number }> {
+  try {
+    const row = await prisma.pipelineSetting.findUnique({
+      where: { key: 'scoreTierBands' },
+      select: { valueJson: true },
+    });
+    if (row?.valueJson && typeof row.valueJson === 'object') {
+      const val = row.valueJson as Record<string, unknown>;
+      const low = typeof val.low === 'number' ? val.low : 0.34;
+      const high = typeof val.high === 'number' ? val.high : 0.67;
+      if (Number.isFinite(low) && Number.isFinite(high) && low >= 0 && high >= low && high <= 1) {
+        return { low, high };
+      }
+    }
+  } catch { /* fall through */ }
+  return { low: 0.34, high: 0.67 };
+}
+
+/**
+ * Maximum follow-ups per lead before stopping outreach. Default: 3.
+ */
+export async function getFollowUpMaxCount(): Promise<number> {
+  try {
+    const row = await prisma.pipelineSetting.findUnique({
+      where: { key: 'followUpMaxCount' },
+      select: { valueJson: true },
+    });
+    if (row?.valueJson !== null && row?.valueJson !== undefined) {
+      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
+      if (Number.isFinite(val) && val >= 0 && val <= 100) {
+        return val;
+      }
+    }
+  } catch { /* fall through */ }
+  return 3;
+}
+
+/**
+ * WhatsApp daily send limit. Default: 50.
+ */
+export async function getWhatsappDailyLimit(): Promise<number> {
+  try {
+    const row = await prisma.pipelineSetting.findUnique({
+      where: { key: 'whatsappDailyLimit' },
+      select: { valueJson: true },
+    });
+    if (row?.valueJson !== null && row?.valueJson !== undefined) {
+      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
+      if (Number.isFinite(val) && val >= 1) {
+        return val;
+      }
+    }
+  } catch { /* fall through */ }
+  return 50;
+}
+
+/**
+ * Email daily send cap (overrides warmup maxDaily). Default: 100.
+ */
+export async function getEmailDailyLimit(): Promise<number> {
+  try {
+    const row = await prisma.pipelineSetting.findUnique({
+      where: { key: 'emailDailyLimit' },
+      select: { valueJson: true },
+    });
+    if (row?.valueJson !== null && row?.valueJson !== undefined) {
+      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
+      if (Number.isFinite(val) && val >= 1) {
+        return val;
+      }
+    }
+  } catch { /* fall through */ }
+  return 100;
+}
+
+/**
+ * Minimum AUC required to activate a newly trained ML model. Default: 0.60.
+ */
+export async function getModelActivationAuc(): Promise<number> {
+  try {
+    const row = await prisma.pipelineSetting.findUnique({
+      where: { key: 'modelActivationAuc' },
+      select: { valueJson: true },
+    });
+    if (row?.valueJson !== null && row?.valueJson !== undefined) {
+      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
+      if (Number.isFinite(val) && val >= 0 && val <= 1) {
+        return val;
+      }
+    }
+  } catch { /* fall through */ }
+  return 0.60;
+}
+
+/**
+ * Daily spend ceiling per provider in dollars. Default: null (no ceiling).
+ * Returns ceiling in cents for comparison with DiscoveryCostEvent.costCents.
+ */
+export async function getProviderBudgetCeiling(): Promise<number | null> {
+  try {
+    const row = await prisma.pipelineSetting.findUnique({
+      where: { key: 'providerBudgetCeiling' },
+      select: { valueJson: true },
+    });
+    if (row?.valueJson !== null && row?.valueJson !== undefined) {
+      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
+      if (Number.isFinite(val) && val > 0) {
+        return val * 100; // dollars → cents
+      }
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+
+/**
+ * Check if a provider has exceeded its daily budget ceiling.
+ * Returns true if within budget (or no ceiling configured), false if over.
+ */
+export async function isProviderWithinBudget(
+  provider: 'APOLLO' | 'HUNTER' | 'SERPAPI',
+): Promise<boolean> {
+  const ceiling = await getProviderBudgetCeiling();
+  if (ceiling === null) return true;
+
+  try {
+    const dayStart = new Date();
+    dayStart.setUTCHours(0, 0, 0, 0);
+
+    const result = await prisma.discoveryCostEvent.aggregate({
+      where: {
+        provider,
+        createdAt: { gte: dayStart },
+      },
+      _sum: { costCents: true },
+    });
+    return (result._sum.costCents ?? 0) < ceiling;
+  } catch {
+    return true; // DB failure → allow (don't block pipeline)
+  }
+}

@@ -65,12 +65,13 @@ export class EmailRateLimiter {
   /**
    * Compute the current daily send limit based on warmup week and bounce rate.
    */
-  async computeDailyLimit(): Promise<{ limit: number; week: number; throttled: boolean }> {
+  async computeDailyLimit(overrideMaxDaily?: number | undefined): Promise<{ limit: number; week: number; throttled: boolean }> {
+    const effectiveMax = overrideMaxDaily ?? this.maxDaily;
     const week = computeWarmupWeek(this.warmupStartDate);
     // Progressive ramp: week 1 = base, week 2 = base + increment, etc.
     let limit = Math.min(
       this.baseDaily + (week - 1) * this.weeklyIncrement,
-      this.maxDaily,
+      effectiveMax,
     );
 
     // Auto-throttle: if bounce rate in last 24h exceeds threshold, halve the limit
@@ -103,8 +104,8 @@ export class EmailRateLimiter {
     return { limit, week, throttled };
   }
 
-  async canSend(): Promise<RateLimitResult> {
-    const { limit, week, throttled } = await this.computeDailyLimit();
+  async canSend(overrideMaxDaily?: number | undefined): Promise<RateLimitResult> {
+    const { limit, week, throttled } = await this.computeDailyLimit(overrideMaxDaily);
 
     // Count today's email sends (UTC day boundary, all terminal statuses)
     const dayStartUtc = getStartOfDayUtc();

@@ -2,7 +2,12 @@ import { prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
-import { loadAutoApproveConfig, shouldAutoApprove } from '../utils/pipeline-settings.js';
+import {
+  getEnrichmentThreshold,
+  isProviderWithinBudget,
+  loadAutoApproveConfig,
+  shouldAutoApprove,
+} from '../utils/pipeline-settings.js';
 
 // ── Constants ──────────────────────────────────────────────────────────
 export const APOLLO_ENRICH_JOB_NAME = 'apollo.enrich';
@@ -109,6 +114,67 @@ export async function handleApolloEnrichJob(
   if (scoreBand === 'LOW') {
     logger.info(logCtx, 'LOW score band — skipping apollo.enrich entirely');
     await tryFinalizeDiscoveryRun(runId, logger);
+    return;
+  }
+
+  // Enrichment threshold gate: skip paid Apollo reveal if score is too low
+  const enrichmentThreshold = await getEnrichmentThreshold();
+  if (blendedScore < enrichmentThreshold) {
+    logger.info(
+      { ...logCtx, blendedScore, enrichmentThreshold },
+      'Score below enrichment threshold — skipping paid Apollo reveal',
+    );
+    // Still proceed to message.generate with existing data if email exists
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { email: true, phone: true, decisionMakerPhone: true },
+    });
+    const hasEmail = Boolean(lead?.email && lead.email.includes('@'));
+    const hasPhone = Boolean(lead?.decisionMakerPhone || lead?.phone);
+    if (deps?.enqueueMessageGenerate && hasEmail) {
+      const channel = scoreBand === 'HIGH' && hasPhone ? 'WHATSAPP' : 'EMAIL';
+      await deps.enqueueMessageGenerate({
+        leadId,
+        icpProfileId,
+        scorePredictionId,
+        runId,
+        correlationId: effectiveCorrelationId,
+        channel,
+        autoApprove,
+      });
+    } else {
+      await tryFinalizeDiscoveryRun(runId, logger);
+    }
+    return;
+  }
+
+  // Provider budget ceiling gate: skip if Apollo has exceeded daily budget
+  const apolloWithinBudget = await isProviderWithinBudget('APOLLO');
+  if (!apolloWithinBudget) {
+    logger.warn(
+      logCtx,
+      'Apollo daily budget ceiling exceeded — skipping paid reveal',
+    );
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { email: true, phone: true, decisionMakerPhone: true },
+    });
+    const hasEmail = Boolean(lead?.email && lead.email.includes('@'));
+    const hasPhone = Boolean(lead?.decisionMakerPhone || lead?.phone);
+    if (deps?.enqueueMessageGenerate && hasEmail) {
+      const channel = scoreBand === 'HIGH' && hasPhone ? 'WHATSAPP' : 'EMAIL';
+      await deps.enqueueMessageGenerate({
+        leadId,
+        icpProfileId,
+        scorePredictionId,
+        runId,
+        correlationId: effectiveCorrelationId,
+        channel,
+        autoApprove,
+      });
+    } else {
+      await tryFinalizeDiscoveryRun(runId, logger);
+    }
     return;
   }
 

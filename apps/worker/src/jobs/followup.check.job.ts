@@ -7,7 +7,7 @@ import {
   MESSAGE_GENERATE_RETRY_OPTIONS,
   type MessageGenerateJobPayload,
 } from './message.generate.job.js';
-import { loadAutoApproveConfig, shouldAutoApprove } from '../utils/pipeline-settings.js';
+import { getFollowUpMaxCount, loadAutoApproveConfig, shouldAutoApprove } from '../utils/pipeline-settings.js';
 
 export const FOLLOWUP_CHECK_JOB_NAME = 'followup.check';
 
@@ -51,12 +51,13 @@ export async function handleFollowupCheckJob(
   try {
     const now = new Date();
     const autoApproveConfig = await loadAutoApproveConfig();
+    const maxFollowUps = await getFollowUpMaxCount();
 
     // Find all MessageSends eligible for follow-up
     const eligibleSends = await prisma.messageSend.findMany({
       where: {
         status: { in: ['SENT', 'REPLIED'] },
-        followUpNumber: { lt: 3 },
+        followUpNumber: { lt: maxFollowUps },
         nextFollowUpAfter: { not: null, lte: now },
         lead: {
           deletedAt: null,

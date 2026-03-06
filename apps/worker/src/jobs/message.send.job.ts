@@ -8,6 +8,7 @@ import { RetryableError, classifyError } from '../errors.js';
 import type { EmailRateLimiter } from '../messaging/email-rate-limiter.js';
 import type { WhatsAppRateLimiter } from '../messaging/rate-limiter.js';
 import { computeNextFollowUpAfter } from '../utils/jitter.js';
+import { getEmailDailyLimit, getWhatsappDailyLimit } from '../utils/pipeline-settings.js';
 
 export const MESSAGE_SEND_JOB_NAME = 'message.send';
 export const MESSAGE_SEND_IDEMPOTENCY_KEY_PATTERN = 'message.send:${messageVariantId}';
@@ -138,9 +139,10 @@ export async function handleMessageSendJob(
         return;
       }
 
-      // Email rate limit check
+      // Email rate limit check (read dynamic ceiling from pipeline settings)
       if (deps.emailRateLimiter) {
-        const rateCheck = await deps.emailRateLimiter.canSend();
+        const emailLimit = await getEmailDailyLimit();
+        const rateCheck = await deps.emailRateLimiter.canSend(emailLimit);
         if (!rateCheck.allowed) {
           // Re-enqueue for next send window instead of failing
           if (deps.boss && rateCheck.nextWindowAt) {
@@ -229,9 +231,10 @@ export async function handleMessageSendJob(
         return;
       }
 
-      // Rate limit check
+      // WhatsApp rate limit check (read dynamic ceiling from pipeline settings)
       if (deps.rateLimiter) {
-        const rateCheck = await deps.rateLimiter.canSend();
+        const waLimit = await getWhatsappDailyLimit();
+        const rateCheck = await deps.rateLimiter.canSend(waLimit);
         if (!rateCheck.allowed) {
           // Re-enqueue for next send window instead of failing
           if (deps.boss && rateCheck.nextWindowAt) {

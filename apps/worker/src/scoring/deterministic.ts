@@ -254,11 +254,16 @@ function classifyWeightedReason(score: number): DeterministicReasonCode {
   return DETERMINISTIC_REASON_CODES.lowWeightedMatch;
 }
 
-export function toScoreBand(score: number): 'LOW' | 'MEDIUM' | 'HIGH' {
-  if (score < 0.34) {
+export function toScoreBand(
+  score: number,
+  bands?: { low: number; high: number } | undefined,
+): 'LOW' | 'MEDIUM' | 'HIGH' {
+  const lowThreshold = bands?.low ?? 0.34;
+  const highThreshold = bands?.high ?? 0.67;
+  if (score < lowThreshold) {
     return 'LOW';
   }
-  if (score < 0.67) {
+  if (score < highThreshold) {
     return 'MEDIUM';
   }
   return 'HIGH';

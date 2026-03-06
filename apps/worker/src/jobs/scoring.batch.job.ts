@@ -16,6 +16,7 @@ import {
   findActiveTrainedModel,
   getQualificationThreshold,
 } from '../scoring/shared.js';
+import { getDeterministicAiBlend, getScoreTierBands } from '../utils/pipeline-settings.js';
 
 export const SCORING_BATCH_JOB_NAME = 'scoring.batch';
 
@@ -146,8 +147,14 @@ export async function handleScoringBatchJob(
     // Ensure baseline model version exists and find active trained model
     const effectiveModelVersionId = await ensureBaselineModelVersion();
     const trainedModel = await findActiveTrainedModel();
-    const blendRatio = await computeBlendRatio();
     const qualificationThreshold = await getQualificationThreshold();
+
+    // Read UI-configured blend override and tier bands
+    const deterministicAiBlend = await getDeterministicAiBlend();
+    const blendRatio = deterministicAiBlend !== null
+      ? { deterministicWeight: deterministicAiBlend, aiWeight: 1 - deterministicAiBlend }
+      : await computeBlendRatio();
+    const scoreTierBands = await getScoreTierBands();
 
     let scored = 0;
     let qualified = 0;
@@ -209,7 +216,7 @@ export async function handleScoringBatchJob(
             ? blendRatio.deterministicWeight * deterministicScore +
               blendRatio.aiWeight * logisticScore
             : deterministicScore;
-        const scoreBand = toScoreBand(blendedScore);
+        const scoreBand = toScoreBand(blendedScore, scoreTierBands);
 
         // Persist prediction
         const prediction = await prisma.leadScorePrediction.upsert({

@@ -3,6 +3,7 @@ import type { Job, SendOptions } from 'pg-boss';
 
 import { RetryableError } from '../errors.js';
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
+import { isProviderWithinBudget } from '../utils/pipeline-settings.js';
 
 // ── Constants ──────────────────────────────────────────────────────────
 export const BUSINESS_CONVERT_JOB_NAME = 'business.convert';
@@ -881,8 +882,12 @@ export async function handleBusinessConvertJob(
   if (!hasValidEmail) {
     logger.info(logCtx, 'No valid email from scrape data — falling back to paid providers');
 
-    // Hunter (cheaper)
-    if (deps.hunterAdapter.isConfigured) {
+    // Hunter (cheaper) — check budget ceiling first
+    const hunterWithinBudget = await isProviderWithinBudget('HUNTER');
+    if (!hunterWithinBudget) {
+      logger.warn(logCtx, 'Hunter daily budget ceiling exceeded — skipping paid lookup');
+    }
+    if (deps.hunterAdapter.isConfigured && hunterWithinBudget) {
       const hunterResult = await deps.hunterAdapter.searchDomainContacts(domain);
       if (hunterResult.status === 'success' && hunterResult.contacts.length > 0) {
         hunterContactJson = hunterResult.contacts;
@@ -943,9 +948,13 @@ export async function handleBusinessConvertJob(
       );
     }
 
-    // Apollo (more expensive — only if pre-screen says email exists)
+    // Apollo (more expensive — only if pre-screen says email exists + within budget)
     const hasEmailAfterHunter = allCandidates.some((c) => c.email !== null);
-    if (!hasEmailAfterHunter && deps.apolloAdapter.isConfigured && apolloHasEmail) {
+    const apolloWithinBudget = await isProviderWithinBudget('APOLLO');
+    if (!hasEmailAfterHunter && !apolloWithinBudget) {
+      logger.warn(logCtx, 'Apollo daily budget ceiling exceeded — skipping paid lookup');
+    }
+    if (!hasEmailAfterHunter && deps.apolloAdapter.isConfigured && apolloHasEmail && apolloWithinBudget) {
       const apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
       if (apolloResult.status === 'success' && apolloResult.contacts.length > 0) {
         for (const ac of apolloResult.contacts) {
