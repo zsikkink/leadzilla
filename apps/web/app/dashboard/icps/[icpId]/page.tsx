@@ -33,9 +33,10 @@ interface EditableFieldProps {
   value: string;
   onSave: (val: string) => void;
   multiline?: boolean | undefined;
+  textClassName?: string | undefined;
 }
 
-function EditableField({ label, value, onSave, multiline }: EditableFieldProps) {
+function EditableField({ label, value, onSave, multiline, textClassName }: EditableFieldProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
 
@@ -80,7 +81,7 @@ function EditableField({ label, value, onSave, multiline }: EditableFieldProps) 
     <div className="group">
       <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">{label}</p>
       <div className="mt-0.5 flex items-start gap-1.5">
-        <p className={multiline ? 'font-medium whitespace-pre-line leading-relaxed' : 'font-medium'}>
+        <p className={textClassName ?? (multiline ? 'font-medium whitespace-pre-line leading-relaxed' : 'font-medium')}>
           {value || <span className="text-muted-foreground/40 italic">Not set</span>}
         </p>
         <button
@@ -717,6 +718,7 @@ export default function IcpDetailPage() {
                 value={profile.description ?? ''}
                 onSave={(val) => handleUpdate('description', val)}
                 multiline
+                textClassName="text-sm font-normal text-muted-foreground whitespace-pre-line leading-relaxed"
               />
             </div>
           </div>

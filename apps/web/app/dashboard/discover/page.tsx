@@ -1,6 +1,6 @@
 'use client';
 
-import type { IcpProfileResponse, PipelineRunStatus } from '@lead-flood/contracts';
+import type { DiscoveryCountryCodeContract, IcpProfileResponse, PipelineRunStatus } from '@lead-flood/contracts';
 import {
   AlertCircle,
   CheckCircle2,
@@ -37,6 +37,15 @@ const COUNTRY_CITIES: Record<string, string[]> = {
   EG: ['Cairo', 'Alexandria', 'Giza', 'Sharm El Sheikh'],
   JO: ['Amman', 'Irbid', 'Zarqa', 'Aqaba'],
   LB: ['Beirut', 'Tripoli', 'Sidon', 'Jounieh'],
+  IQ: ['Baghdad', 'Erbil', 'Basra', 'Sulaymaniyah'],
+  MA: ['Casablanca', 'Rabat', 'Marrakech', 'Fez', 'Tangier'],
+  TN: ['Tunis', 'Sfax', 'Sousse', 'Kairouan'],
+  DZ: ['Algiers', 'Oran', 'Constantine', 'Annaba'],
+  LY: ['Tripoli', 'Benghazi', 'Misrata', 'Sabha'],
+  YE: ['Sanaa', 'Aden', 'Taiz', 'Hodeidah'],
+  SY: ['Damascus', 'Aleppo', 'Homs', 'Latakia'],
+  PS: ['Ramallah', 'Gaza', 'Nablus', 'Hebron', 'Bethlehem'],
+  SD: ['Khartoum', 'Omdurman', 'Port Sudan', 'Kassala'],
 };
 
 const LIMIT_OPTIONS = [
@@ -437,7 +446,7 @@ export default function DiscoverPage() {
       // Single API call with all selected ICPs — limit is split server-side
       await apiClient.createDiscoveryRun({
         icpProfileIds: Array.from(selectedIcpIds),
-        countries: derivedCountries,
+        countries: derivedCountries as DiscoveryCountryCodeContract[],
         ...(cities ? { cities } : {}),
         includeWebsiteAnalysis,
         includeSocialMediaAnalysis,
@@ -696,6 +705,10 @@ export default function DiscoverPage() {
             // ~50% of discovered businesses pass prequalification and reach Hunter
             const hunterLookups = Math.ceil(searchBudget * 0.5);
             const estLeads = desiredLeads;
+            // Dollar cost: SerpAPI $0.01/search, Hunter $0.03/lookup (Starter plan: 2000 credits @ ~$49)
+            const serpApiCost = searchBudget * 0.01;
+            const hunterCost = hunterLookups * 0.03;
+            const totalCost = serpApiCost + hunterCost;
             return (
               <div className="rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 px-4 py-3">
                 <div className="flex items-center gap-2 mb-2">
@@ -705,16 +718,24 @@ export default function DiscoverPage() {
                     <span className="text-[10px] text-muted-foreground/50">(using default 15% yield)</span>
                   ) : null}
                 </div>
-                <p className="text-sm text-muted-foreground">
-                  ~<strong className="text-foreground">{searchBudget}</strong> search tasks
-                  {' + ~'}<strong className="text-foreground">{hunterLookups}</strong> Hunter lookups
-                  {' → est. '}<strong className="text-zbooni-green">{estLeads}</strong> leads
-                  {hasHistoricalData ? (
-                    <span className="text-muted-foreground/60">
-                      {' '}(based on {Math.round(avgYieldRate * 100)}% yield)
+                <div className="space-y-1.5">
+                  <p className="text-sm text-muted-foreground">
+                    ~<strong className="text-foreground">{searchBudget}</strong> search tasks
+                    {' + ~'}<strong className="text-foreground">{hunterLookups}</strong> Hunter lookups
+                    {' → est. '}<strong className="text-zbooni-green">{estLeads}</strong> leads
+                    {hasHistoricalData ? (
+                      <span className="text-muted-foreground/60">
+                        {' '}(based on {Math.round(avgYieldRate * 100)}% yield)
+                      </span>
+                    ) : null}
+                  </p>
+                  <p className="text-xs text-muted-foreground/70">
+                    Est. cost: <strong className="text-foreground">~${totalCost.toFixed(2)}</strong>
+                    <span className="text-muted-foreground/50">
+                      {' '}(SerpAPI ${serpApiCost.toFixed(2)} + Hunter ${hunterCost.toFixed(2)})
                     </span>
-                  ) : null}
-                </p>
+                  </p>
+                </div>
               </div>
             );
           })() : null}

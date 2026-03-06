@@ -1,9 +1,9 @@
 'use client';
 
 import type { LeadScoreBand, LeadStatus } from '@lead-flood/contracts';
-import { Building2, Check, Eye, Phone, X } from 'lucide-react';
+import { Building2, Eye, Loader2, MessageSquare, Phone, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
 import { CustomSelect } from '../../../src/components/custom-select.js';
@@ -87,6 +87,25 @@ export default function LeadsPage() {
   const [statusFilter, setStatusFilter] = useState<LeadStatus | undefined>(undefined);
   const [scoreBandFilter, setScoreBandFilter] = useState<LeadScoreBand | undefined>(undefined);
   const [rejectedLeadIds, setRejectedLeadIds] = useState<Set<string>>(new Set());
+  const [qualificationThreshold, setQualificationThreshold] = useState<number | null>(null);
+  const [generatingForLead, setGeneratingForLead] = useState<string | null>(null);
+
+  // Load qualification threshold from pipeline settings
+  useEffect(() => {
+    apiClient
+      .listPipelineSettings()
+      .then(({ items }) => {
+        const setting = items.find((i) => i.key === 'scoreQualificationThreshold');
+        if (setting && typeof setting.value === 'number') {
+          setQualificationThreshold(setting.value);
+        } else {
+          setQualificationThreshold(0.5); // default
+        }
+      })
+      .catch(() => {
+        setQualificationThreshold(0.5); // fallback
+      });
+  }, [apiClient]);
 
   const leads = useApiQuery(
     useCallback(
@@ -128,6 +147,22 @@ export default function LeadsPage() {
           }),
       },
     });
+  };
+
+  const handleGenerateMessage = async (leadId: string, icpProfileId: string, firstName: string) => {
+    setGeneratingForLead(leadId);
+    try {
+      await apiClient.generateDraft({
+        leadId,
+        icpProfileId,
+        promptVersion: 'v2',
+      });
+      toast.success(`Message draft generated for ${firstName}`);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to generate message');
+    } finally {
+      setGeneratingForLead(null);
+    }
   };
 
   return (
@@ -286,26 +321,45 @@ export default function LeadsPage() {
                         >
                           <Eye className="h-3.5 w-3.5" />
                         </button>
-                        {lead.status === 'enriched' || lead.status === 'new' ? (
-                          <>
-                            <button
-                              type="button"
-                              title="Approve for messaging"
-                              className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-zbooni-green/15 hover:text-zbooni-green"
-                              onClick={() => router.push(`/dashboard/messages?lead=${lead.id}`)}
-                            >
-                              <Check className="h-3.5 w-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              title="Reject lead"
-                              className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-red-500/15 hover:text-red-400"
-                              onClick={() => handleReject(lead.id, lead.firstName ?? '', lead.lastName ?? '')}
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </>
-                        ) : null}
+                        {(() => {
+                          // Leads above qualification threshold already had messages auto-generated
+                          const isAboveThreshold = qualificationThreshold !== null
+                            && blendedScore !== null
+                            && blendedScore >= qualificationThreshold;
+                          const isBelowThreshold = qualificationThreshold !== null
+                            && (blendedScore === null || blendedScore < qualificationThreshold);
+                          const isActionable = lead.status === 'enriched' || lead.status === 'new';
+
+                          if (isAboveThreshold || !isActionable) return null;
+
+                          return (
+                            <>
+                              {isBelowThreshold && lead.latestIcpProfileId ? (
+                                <button
+                                  type="button"
+                                  title="Generate message draft"
+                                  disabled={generatingForLead === lead.id}
+                                  className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-zbooni-teal/15 hover:text-zbooni-teal disabled:opacity-50"
+                                  onClick={() => handleGenerateMessage(lead.id, lead.latestIcpProfileId!, lead.firstName ?? '')}
+                                >
+                                  {generatingForLead === lead.id ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <MessageSquare className="h-3.5 w-3.5" />
+                                  )}
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                title="Reject lead"
+                                className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-red-500/15 hover:text-red-400"
+                                onClick={() => handleReject(lead.id, lead.firstName ?? '', lead.lastName ?? '')}
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            </>
+                          );
+                        })()}
                       </div>
                     </td>
                   </tr>

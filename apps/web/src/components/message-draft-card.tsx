@@ -67,11 +67,6 @@ function VariantEditor({
           </span>
         </div>
         <div className="flex items-center gap-2">
-          {variant.qualityScore !== null ? (
-            <span className="text-xs text-muted-foreground">
-              Q: {(variant.qualityScore * 100).toFixed(0)}%
-            </span>
-          ) : null}
           {!isEditing ? (
             <button
               type="button"

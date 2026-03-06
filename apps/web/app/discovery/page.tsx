@@ -372,6 +372,7 @@ function SettingTierBands({
   onChange: (v: { low: number; med: number; high: number }) => void;
 }) {
   const Icon = setting.icon;
+  const validationError = value.high <= value.low ? 'HIGH threshold must be greater than LOW threshold' : null;
 
   return (
     <div className="group rounded-xl border border-border/30 bg-zbooni-dark/40 p-4 transition-colors hover:border-border/50">
@@ -396,9 +397,10 @@ function SettingTierBands({
                 max={1}
                 step={0.01}
                 value={value.low}
-                onChange={(e) =>
-                  onChange({ ...value, low: Number(e.target.value) })
-                }
+                onChange={(e) => {
+                  const low = Number(e.target.value);
+                  onChange({ ...value, low, med: low });
+                }}
                 className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
                 aria-label="Low tier upper bound"
               />
@@ -407,19 +409,7 @@ function SettingTierBands({
               <span className="rounded-md bg-yellow-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-yellow-400">
                 MED
               </span>
-              <span className="text-[10px] text-muted-foreground/40">&lt;</span>
-              <input
-                type="number"
-                min={0}
-                max={1}
-                step={0.01}
-                value={value.med}
-                onChange={(e) =>
-                  onChange({ ...value, med: Number(e.target.value) })
-                }
-                className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
-                aria-label="Medium tier upper bound"
-              />
+              <span className="text-[10px] text-muted-foreground/40">{value.low.toFixed(2)} – {value.high.toFixed(2)}</span>
             </div>
             <div className="flex items-center gap-1.5">
               <span className="rounded-md bg-zbooni-green/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zbooni-green">
@@ -432,15 +422,22 @@ function SettingTierBands({
                 max={1}
                 step={0.01}
                 value={value.high}
-                onChange={(e) =>
-                  onChange({ ...value, high: Number(e.target.value) })
-                }
+                onChange={(e) => {
+                  const high = Number(e.target.value);
+                  onChange({ ...value, high, med: high });
+                }}
                 className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
                 aria-label="High tier lower bound"
               />
             </div>
           </div>
-          <p className="mt-2 text-[10px] text-muted-foreground/30">{setting.spectrum}</p>
+          {validationError ? (
+            <p className="mt-1.5 text-[10px] font-medium text-red-400">{validationError}</p>
+          ) : (
+            <p className="mt-2 text-[10px] text-muted-foreground/30">
+              LOW &lt; {value.low.toFixed(2)} · MEDIUM {value.low.toFixed(2)}–{value.high.toFixed(2)} · HIGH &ge; {value.high.toFixed(2)}
+            </p>
+          )}
         </div>
       </div>
     </div>

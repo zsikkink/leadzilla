@@ -183,6 +183,19 @@ export class ApiClient {
     });
   }
 
+  generateDraft(data: {
+    leadId: string;
+    icpProfileId: string;
+    scorePredictionId?: string | undefined;
+    channel?: string | undefined;
+    promptVersion: string;
+  }): Promise<unknown> {
+    return this.request('/v1/messaging/drafts/generate', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   sendMessage(data: { messageDraftId: string; messageVariantId: string; idempotencyKey: string }): Promise<unknown> {
     return this.request('/v1/messaging/sends', {
       method: 'POST',
