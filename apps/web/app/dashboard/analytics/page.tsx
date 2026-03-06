@@ -612,7 +612,7 @@ export default function AnalyticsPage() {
         {funnel.data ? (
           <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
             <StatCard label="Discovered" value={String(funnel.data.discoveredCount)} accent="text-foreground" />
-            <StatCard label="Qualified" value={String(funnel.data.qualifiedCount)} accent="text-zbooni-teal" />
+            <StatCard label="Feature Extraction" value={String(funnel.data.qualifiedCount)} accent="text-zbooni-teal" />
             <StatCard label="Enriched" value={String(funnel.data.enrichedCount)} accent="text-zbooni-green" />
             <StatCard label="Scored" value={String(funnel.data.scoredCount)} accent="text-yellow-400" />
             <StatCard label="Deals Won" value={String(funnel.data.dealsWonCount)} accent="text-purple-400" />

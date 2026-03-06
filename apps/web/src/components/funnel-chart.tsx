@@ -1,106 +1,39 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import type { FunnelResponse } from '@lead-flood/contracts';
 import {
+  Bar,
+  BarChart,
   CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
+  Cell,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
 
-import type { FunnelResponse } from '@lead-flood/contracts';
-
-type DateRange = '7d' | '30d' | '90d';
-
 interface FunnelChartProps {
   data: FunnelResponse;
 }
 
 const STAGES = [
-  { key: 'discovered', label: 'Discovered', color: '#60A5FA' },
-  { key: 'enriched', label: 'Enriched', color: '#3CC8E0' },
-  { key: 'scored', label: 'Scored', color: '#FACC15' },
-  { key: 'messaged', label: 'Messaged', color: '#7BFF6B' },
-  { key: 'replied', label: 'Replied', color: '#C084FC' },
+  { key: 'discovered', label: 'Discovered', color: '#60A5FA', getValue: (d: FunnelResponse) => d.discoveredCount },
+  { key: 'enriched', label: 'Enriched', color: '#3CC8E0', getValue: (d: FunnelResponse) => d.enrichedCount },
+  { key: 'scored', label: 'Scored', color: '#FACC15', getValue: (d: FunnelResponse) => d.scoredCount },
+  { key: 'messaged', label: 'Messaged', color: '#7BFF6B', getValue: (d: FunnelResponse) => d.messagesSentCount },
+  { key: 'replied', label: 'Replied', color: '#C084FC', getValue: (d: FunnelResponse) => d.repliesCount },
 ] as const;
-
-const RANGE_DAYS: Record<DateRange, number> = { '7d': 7, '30d': 30, '90d': 90 };
-
-function formatDate(date: Date): string {
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
-/**
- * Distribute a total count across `days` data points with realistic variance.
- * Returns an array of daily values that sum close to `total`.
- * Uses a seeded-ish approach per stage to keep values stable across re-renders.
- */
-function distributeCount(total: number, days: number, seed: number): number[] {
-  if (total === 0) return Array(days).fill(0) as number[];
-
-  const dailyBase = total / days;
-  const values: number[] = [];
-
-  for (let i = 0; i < days; i++) {
-    // Deterministic-ish variance using sin for visual stability
-    const variance = Math.sin(seed * 13.37 + i * 7.19) * 0.15 + 1;
-    values.push(Math.max(0, Math.round(dailyBase * variance)));
-  }
-
-  return values;
-}
-
-function generateTimeSeriesData(data: FunnelResponse, range: DateRange) {
-  const days = RANGE_DAYS[range];
-  const now = new Date();
-  const discoveredDays = distributeCount(data.discoveredCount, days, 1);
-  const enrichedDays = distributeCount(data.enrichedCount, days, 2);
-  const scoredDays = distributeCount(data.scoredCount, days, 3);
-  const messagedDays = distributeCount(data.messagesSentCount, days, 4);
-  const repliedDays = distributeCount(data.repliesCount, days, 5);
-
-  // Enforce funnel ordering: discovered >= enriched >= scored >= messaged >= replied
-  const funnelLayers = [discoveredDays, enrichedDays, scoredDays, messagedDays, repliedDays];
-  for (let i = 0; i < days; i++) {
-    for (let layer = 1; layer < funnelLayers.length; layer++) {
-      funnelLayers[layer]![i] = Math.min(funnelLayers[layer]![i]!, funnelLayers[layer - 1]![i]!);
-    }
-  }
-
-  const series: Record<string, string | number>[] = [];
-
-  for (let i = days - 1; i >= 0; i--) {
-    const date = new Date(now);
-    date.setDate(date.getDate() - i);
-    const idx = days - 1 - i;
-
-    series.push({
-      date: formatDate(date),
-      discovered: discoveredDays[idx] ?? 0,
-      enriched: enrichedDays[idx] ?? 0,
-      scored: scoredDays[idx] ?? 0,
-      messaged: messagedDays[idx] ?? 0,
-      replied: repliedDays[idx] ?? 0,
-    });
-  }
-
-  return series;
-}
 
 function CustomTooltipContent({
   active,
   payload,
-  label,
 }: {
-  active?: boolean;
-  payload?: { color: string; name: string; value: number }[];
-  label?: string;
+  active?: boolean | undefined;
+  payload?: { payload: { label: string; count: number; rate: string; color: string } }[] | undefined;
 }) {
   if (!active || !payload || payload.length === 0) return null;
+  const entry = payload[0]?.payload;
+  if (!entry) return null;
 
   return (
     <div
@@ -112,147 +45,93 @@ function CustomTooltipContent({
         boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
       }}
     >
-      <p style={{ fontSize: '12px', fontWeight: 600, color: 'hsl(240 5% 65%)', marginBottom: '6px' }}>
-        {label}
+      <p style={{ fontSize: '13px', fontWeight: 600, color: entry.color, marginBottom: '4px' }}>
+        {entry.label}
       </p>
-      {payload.map((entry) => (
-        <div
-          key={entry.name}
-          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '2px 0' }}
-        >
-          <span
-            style={{
-              width: '8px',
-              height: '8px',
-              borderRadius: '50%',
-              backgroundColor: entry.color,
-              flexShrink: 0,
-            }}
-          />
-          <span style={{ fontSize: '13px', color: 'hsl(0 0% 96%)', fontWeight: 500 }}>
-            {entry.name}
-          </span>
-          <span
-            style={{
-              fontSize: '13px',
-              color: 'hsl(0 0% 96%)',
-              fontWeight: 700,
-              marginLeft: 'auto',
-              paddingLeft: '12px',
-              fontVariantNumeric: 'tabular-nums',
-            }}
-          >
-            {entry.value}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function CustomLegendContent({ payload }: { payload?: { color: string; value: string }[] }) {
-  if (!payload) return null;
-
-  return (
-    <div style={{ display: 'flex', justifyContent: 'center', gap: '16px', paddingTop: '8px' }}>
-      {payload.map((entry) => (
-        <div
-          key={entry.value}
-          style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-        >
-          <span
-            style={{
-              width: '8px',
-              height: '8px',
-              borderRadius: '50%',
-              backgroundColor: entry.color,
-              flexShrink: 0,
-            }}
-          />
-          <span style={{ fontSize: '12px', color: 'hsl(240 5% 65%)', fontWeight: 500 }}>
-            {entry.value}
-          </span>
-        </div>
-      ))}
+      <p style={{ fontSize: '14px', fontWeight: 700, color: 'hsl(0 0% 96%)' }}>
+        {entry.count.toLocaleString()}
+      </p>
+      {entry.rate !== '\u2014' ? (
+        <p style={{ fontSize: '11px', color: 'hsl(240 5% 65%)', marginTop: '2px' }}>
+          {entry.rate} from previous stage
+        </p>
+      ) : null}
     </div>
   );
 }
 
 export function FunnelChart({ data }: FunnelChartProps) {
-  const [dateRange, setDateRange] = useState<DateRange>('7d');
+  const chartData = STAGES.map((stage, i) => {
+    const count = stage.getValue(data);
+    const prevCount = i > 0 ? STAGES[i - 1]!.getValue(data) : 0;
+    const rate = i > 0 && prevCount > 0
+      ? `${Math.round((count / prevCount) * 100)}%`
+      : '\u2014';
 
-  const chartData = useMemo(() => generateTimeSeriesData(data, dateRange), [data, dateRange]);
-
-  const ranges: { value: DateRange; label: string }[] = [
-    { value: '7d', label: '7d' },
-    { value: '30d', label: '30d' },
-    { value: '90d', label: '90d' },
-  ];
+    return {
+      label: stage.label,
+      count,
+      rate,
+      color: stage.color,
+    };
+  });
 
   return (
     <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-      <div className="mb-5 flex items-center justify-between">
-        <h2 className="text-base font-bold tracking-tight">Pipeline Activity</h2>
-        <div className="flex gap-1">
-          {ranges.map((r) => (
-            <button
-              key={r.value}
-              type="button"
-              onClick={() => setDateRange(r.value)}
-              className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${
-                dateRange === r.value
-                  ? 'bg-zbooni-green/20 text-zbooni-green'
-                  : 'bg-zbooni-dark/60 text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
+      <div className="mb-5">
+        <h2 className="text-base font-bold tracking-tight">Pipeline Funnel</h2>
+        <p className="mt-0.5 text-[11px] text-muted-foreground/50">
+          Aggregate conversion across pipeline stages
+        </p>
       </div>
       <style>{`
         .recharts-wrapper { outline: none !important; }
         .recharts-surface { outline: none !important; }
         .recharts-surface:focus { outline: none !important; }
       `}</style>
-      <ResponsiveContainer width="100%" height={360}>
-        <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="hsl(240 8% 18%)" vertical={false} />
+      <ResponsiveContainer width="100%" height={280}>
+        <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="hsl(240 8% 18%)" horizontal={false} />
           <XAxis
-            dataKey="date"
-            tick={{ fontSize: 11, fontWeight: 500, fill: 'hsl(240 5% 65%)' }}
-            axisLine={{ stroke: 'hsl(240 8% 18%)' }}
-            tickLine={false}
-            dy={8}
-            interval={dateRange === '7d' ? 0 : dateRange === '30d' ? 4 : 13}
-          />
-          <YAxis
+            type="number"
             tick={{ fontSize: 11, fontWeight: 500, fill: 'hsl(240 5% 55%)' }}
             axisLine={false}
             tickLine={false}
             allowDecimals={false}
           />
+          <YAxis
+            type="category"
+            dataKey="label"
+            tick={{ fontSize: 12, fontWeight: 600, fill: 'hsl(240 5% 75%)' }}
+            axisLine={false}
+            tickLine={false}
+            width={90}
+          />
           <Tooltip
             content={<CustomTooltipContent />}
-            cursor={{ stroke: 'hsl(240 8% 25%)', strokeDasharray: '4 4' }}
+            cursor={{ fill: 'hsl(240 8% 16%)' }}
             animationDuration={150}
           />
-          <Legend content={<CustomLegendContent />} />
-          {STAGES.map((stage) => (
-            <Line
-              key={stage.key}
-              type="monotone"
-              dataKey={stage.key}
-              name={stage.label}
-              stroke={stage.color}
-              strokeWidth={2}
-              dot={false}
-              activeDot={{ r: 4, strokeWidth: 0, fill: stage.color }}
-              animationDuration={600}
-            />
-          ))}
-        </LineChart>
+          <Bar dataKey="count" radius={[0, 6, 6, 0]} maxBarSize={36}>
+            {chartData.map((entry) => (
+              <Cell key={entry.label} fill={entry.color} fillOpacity={0.7} />
+            ))}
+          </Bar>
+        </BarChart>
       </ResponsiveContainer>
+      {/* Stage-to-stage conversion rates */}
+      <div className="mt-4 flex items-center justify-center gap-6">
+        {chartData.slice(1).map((entry) => (
+          <div key={entry.label} className="text-center">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
+              &rarr; {entry.label}
+            </p>
+            <p className="text-sm font-bold tabular-nums" style={{ color: entry.color }}>
+              {entry.rate}
+            </p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

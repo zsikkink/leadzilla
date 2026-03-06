@@ -63,18 +63,6 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
     const to = query.to ? new Date(query.to) : null;
     const icpProfileId = query.icpProfileId ?? null;
 
-    const rollupWhere = {
-      ...(from || to
-        ? {
-            day: {
-              ...(from ? { gte: from } : {}),
-              ...(to ? { lte: to } : {}),
-            },
-          }
-        : {}),
-      ...(icpProfileId ? { icpProfileId } : {}),
-    };
-
     const discoveryDateWhere = from || to
       ? {
           discoveredAt: {
@@ -128,15 +116,6 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
           },
         }
       : {};
-
-    const rollupAgg = await prisma.analyticsDailyRollup.aggregate({
-      where: rollupWhere,
-      _sum: {
-        discoveredCount: true,
-        enrichedCount: true,
-        scoredCount: true,
-      },
-    });
 
     // V2 pipeline: Business records don't have a direct icpProfileId relation.
     // When ICP filtering is active, resolve matching discovery run IDs first.
@@ -303,7 +282,10 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
     // Combine v1 (legacy) + v2 (Business) counts
     const discoveredCount = v2DiscoveredCount + v1DiscoveredCount;
     const enrichedCount = v2EnrichedCount + v1EnrichedCount;
-    const qualifiedCount = rollupAgg._sum.discoveredCount ?? discoveredCount;
+    // Use enrichedCount as proxy for qualified — in V2 pipeline, feature extraction
+    // always follows enrichment. Previously used rollup table which caused inconsistent
+    // results across date ranges (rollup data partially present → 7d > 30d anomaly).
+    const qualifiedCount = enrichedCount;
 
     // Cost aggregation: sum costCents across leads matching the filter
     const costAgg = await prisma.lead.aggregate({
