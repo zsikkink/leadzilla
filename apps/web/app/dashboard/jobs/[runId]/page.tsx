@@ -608,6 +608,7 @@ export default function DiscoveryRunDetailPage() {
           INSUFFICIENT_REVIEWS: 'Too few reviews',
           DNS_RESOLUTION_FAILED: 'DNS failed',
           NO_CONTACTS_FOUND: 'No contacts found',
+          BUSINESS_NOT_FOUND: 'Business not found',
         };
         const reasons = outcome.disqualificationReasons ?? {};
         const hasReasons = Object.keys(reasons).length > 0;

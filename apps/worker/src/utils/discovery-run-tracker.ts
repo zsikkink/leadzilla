@@ -137,7 +137,7 @@ export async function tryFinalizeDiscoveryRun(
     const newBusinesses = typeof result.newBusinesses === 'number' ? result.newBusinesses : 0;
     if (newBusinesses === 0 || isTimedOut) {
       // Truly zero businesses found, or timed out waiting — finalize
-      await finalizeRun(possibleRunId, result, 'failed', 0, 0, logger, 'No businesses found by search tasks', 0, {});
+      await finalizeRun(possibleRunId, result, 'failed', 0, 0, 0, 0, logger, 'No businesses found by search tasks', 0, {});
       return;
     }
     // Prequalify events don't exist yet — return without finalizing
@@ -166,7 +166,8 @@ export async function tryFinalizeDiscoveryRun(
 
   // 4. For qualified/pending businesses, check lead pipeline status
   const qualificationThreshold = await getQualificationThreshold();
-  let completedLeads = 0;
+  let messageDraftedLeads = 0;
+  let lowScoredLeads = 0;
   let failedLeads = 0;
   let inFlightItems = 0;
 
@@ -207,12 +208,12 @@ export async function tryFinalizeDiscoveryRun(
           failedLeads++;
         } else if (lead.messageDrafts.length > 0) {
           // message.generate completed — terminal success
-          completedLeads++;
+          messageDraftedLeads++;
         } else if (lead.scorePredictions.length > 0) {
           const latest = lead.scorePredictions[0]!;
           if (latest.scoreBand === 'LOW' || latest.blendedScore < qualificationThreshold) {
             // Scored LOW or below qualification threshold → no downstream enqueued, terminal
-            completedLeads++;
+            lowScoredLeads++;
           } else {
             // Scored above threshold — waiting for apollo.enrich → message.generate
             inFlightItems++;
@@ -226,6 +227,7 @@ export async function tryFinalizeDiscoveryRun(
   }
 
   // 5. Compute terminal count for progress tracking
+  const completedLeads = messageDraftedLeads + lowScoredLeads;
   const terminalCount = completedLeads + failedLeads + disqualifiedIds.size;
 
   // 6. Finalize if all items are terminal OR safety timeout
@@ -240,14 +242,20 @@ export async function tryFinalizeDiscoveryRun(
       ? `0 leads produced — all ${disqualifiedIds.size} of ${businessIds.length} businesses were disqualified`
       : null;
 
+    const failedLeadsNote = completedLeads === 0 && failedLeads > 0 && disqualifiedIds.size === 0
+      ? `0 successful leads — all ${failedLeads} leads failed during pipeline processing`
+      : null;
+
     await finalizeRun(
       possibleRunId,
       result,
       status,
       completedLeads,
-      failedLeads + disqualifiedIds.size,
+      messageDraftedLeads,
+      failedLeads,
+      disqualifiedIds.size,
       logger,
-      disqualNote ?? timeoutNote,
+      disqualNote ?? failedLeadsNote ?? timeoutNote,
       businessIds.length,
       disqualReasons,
     );
@@ -271,7 +279,7 @@ export async function tryFinalizeDiscoveryRun(
             businessesFound: businessIds.length,
             businessesDisqualified: disqualifiedIds.size,
             leadsCreated: completedLeads + failedLeads,
-            messagesDrafted: completedLeads,
+            messagesDrafted: messageDraftedLeads,
             disqualificationReasons: disqualReasons,
           },
         }),
@@ -326,6 +334,8 @@ export async function checkStaleDiscoveryRuns(logger: TrackerLogger): Promise<vo
         'failed',
         0,
         0,
+        0,
+        0,
         logger,
         `Force-finalized: run stuck in running state for ${Math.round(elapsedMs / 60000)}min without searchTasksComplete flag`,
         0,
@@ -349,12 +359,16 @@ async function finalizeRun(
   currentResult: Record<string, unknown>,
   status: 'completed' | 'failed',
   completedLeads: number,
-  failedItems: number,
+  messageDraftedLeads: number,
+  failedLeads: number,
+  disqualifiedCount: number,
   logger: TrackerLogger,
   error?: string | null | undefined,
   totalBusinesses: number = 0,
   disqualificationReasons: Record<string, number> = {},
 ): Promise<void> {
+  const failedItems = failedLeads + disqualifiedCount;
+
   // Atomic update: only finalize if still running (prevents double-finalization)
   const updated = await prisma.jobExecution.updateMany({
     where: { id: discoveryRunId, status: 'running' },
@@ -370,9 +384,9 @@ async function finalizeRun(
         pipelineFailedItems: failedItems,
         outcome: {
           businessesFound: totalBusinesses,
-          businessesDisqualified: Object.values(disqualificationReasons).reduce((a, b) => a + b, 0),
-          leadsCreated: completedLeads,
-          messagesDrafted: completedLeads,
+          businessesDisqualified: disqualifiedCount,
+          leadsCreated: completedLeads + failedLeads,
+          messagesDrafted: messageDraftedLeads,
           disqualificationReasons,
         },
       }),

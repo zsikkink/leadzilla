@@ -456,6 +456,10 @@ export async function handleBusinessConvertJob(
 
   if (!business) {
     logger.warn(logCtx, 'Business not found — skipping conversion');
+    await prisma.business.update({
+      where: { id: businessId },
+      data: { preQualified: false, disqualificationReason: 'BUSINESS_NOT_FOUND' },
+    }).catch(() => { /* Business truly doesn't exist — nothing to update */ });
     await tryFinalizeDiscoveryRun(discoveryRunId, logger);
     return;
   }
@@ -466,6 +470,10 @@ export async function handleBusinessConvertJob(
       { ...logCtx, reason: 'NO_DOMAIN' },
       'Business has no website domain — cannot find contacts, skipping',
     );
+    await prisma.business.update({
+      where: { id: businessId },
+      data: { preQualified: false, disqualificationReason: 'NO_WEBSITE_DOMAIN' },
+    });
     await tryFinalizeDiscoveryRun(discoveryRunId, logger);
     return;
   }
@@ -1029,6 +1037,10 @@ export async function handleBusinessConvertJob(
       { ...logCtx, reason: 'NO_CONTACTS_FOUND', candidateCount: allCandidates.length },
       'No decision-maker contacts with valid email found — cannot create lead',
     );
+    await prisma.business.update({
+      where: { id: businessId },
+      data: { preQualified: false, disqualificationReason: 'NO_CONTACTS_FOUND' },
+    });
     await tryFinalizeDiscoveryRun(discoveryRunId, logger);
     return;
   }

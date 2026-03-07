@@ -285,7 +285,7 @@ export class ApiClient {
 
   getDiscoveryRunDetails(runId: string): Promise<{
     run: Record<string, unknown>;
-    searchTasks: Array<{ id: string; queryText: string; countryCode: string; city: string | null; status: string; resultsCount: number; provider: string }>;
+    searchTasks: Array<{ id: string; queryText: string; countryCode: string; city: string | null; status: string; resultsCount: number; provider: string; error: string | null }>;
     businesses: Array<{ id: string; name: string; websiteDomain: string | null; deterministicScore: number | null; scoreBand: string | null; preQualified: boolean; disqualificationReason: string | null }>;
     leads: Array<Record<string, unknown>>;
     costEvents: Array<{ id: string; provider: string; action: string; creditCost: number; createdAt: string }>;
