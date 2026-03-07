@@ -679,6 +679,7 @@ async function main(): Promise<void> {
               knowledgeEntryIds: [],
               promptVersion: 'v1',
               correlationId: job.data.correlationId ?? job.id,
+              ...(payload.channel !== undefined ? { channel: payload.channel as 'EMAIL' | 'WHATSAPP' } : {}),
             } satisfies MessageGenerateJobPayload,
             {
               singletonKey: `message.generate:${payload.leadId}:${payload.icpProfileId}`,
