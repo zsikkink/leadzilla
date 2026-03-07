@@ -2,6 +2,7 @@ import { prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
 import { formatErrorMessage } from '../errors.js';
+import { getPipelineSettings } from '../utils/pipeline-settings.js';
 
 export const DATA_RETENTION_JOB_NAME = 'data.retention';
 
@@ -14,9 +15,6 @@ export const DATA_RETENTION_RETRY_OPTIONS: Pick<
   retryBackoff: true,
   deadLetter: 'data.retention.dead_letter',
 };
-
-/** Default retention period in days. */
-const DEFAULT_RETENTION_DAYS = 90;
 
 /** Batch size per delete operation to avoid long transactions. */
 const DELETE_BATCH_SIZE = 500;
@@ -220,7 +218,8 @@ export async function handleDataRetentionJob(
   logger: DataRetentionLogger,
   job: Job<DataRetentionJobPayload>,
 ): Promise<void> {
-  const retentionDays = job.data.retentionDays ?? DEFAULT_RETENTION_DAYS;
+  const dbSettings = await getPipelineSettings();
+  const retentionDays = job.data.retentionDays ?? dbSettings.outboxRetentionDays;
   const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
 
   logger.info(

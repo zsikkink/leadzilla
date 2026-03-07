@@ -44,17 +44,18 @@ function normalizeCountriesToIso(countries: string[]): string[] {
 
 /**
  * Resolve countries for task generation.
- * Priority: config.countries (from API request, already filtered by ALLOWED_COUNTRIES)
- * takes precedence. ICP targetCountries is only used as fallback when config has none.
+ * Priority: ICP targetCountries wins (user-configured per ICP profile).
+ * Config countries (from env var DISCOVERY_COUNTRIES) are only a fallback
+ * when the ICP has no target countries set.
  */
 function resolveCountries(configCountries: string[], icpTargetCountries: string[]): string[] {
-  // API request countries are already validated/filtered — prefer them
-  if (configCountries.length > 0) {
-    return configCountries;
-  }
-  // Fallback to normalized ICP countries
+  // ICP target countries take priority — they're user-configured per profile
   const normalized = normalizeCountriesToIso(icpTargetCountries);
-  return normalized.length > 0 ? normalized : configCountries;
+  if (normalized.length > 0) {
+    return normalized;
+  }
+  // Fallback to config countries (env var defaults)
+  return configCountries;
 }
 
 /**

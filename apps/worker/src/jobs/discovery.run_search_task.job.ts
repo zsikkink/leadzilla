@@ -41,6 +41,8 @@ export interface DiscoveryRunSearchTaskJobPayload {
   includeSocialMediaAnalysis?: boolean | undefined;
   /** Early-stop: stop searching when this many unique businesses are found. */
   targetUniqueBusinesses?: number | undefined;
+  /** User-configured minimum review count for pre-qualification. */
+  minReviewCount?: number | undefined;
 }
 
 export interface DiscoveryRunSearchTaskLogger {
@@ -60,6 +62,7 @@ export interface DiscoveryRunSearchTaskDependencies {
     icpProfileId: string;
     includeWebsiteAnalysis?: boolean | undefined;
     includeSocialMediaAnalysis?: boolean | undefined;
+    minReviewCount?: number | undefined;
     correlationId?: string | undefined;
   }) => Promise<void>) | undefined;
 }
@@ -338,6 +341,7 @@ export async function handleDiscoveryRunSearchTaskJob(
         ...(job.data.includeSocialMediaAnalysis !== undefined
           ? { includeSocialMediaAnalysis: job.data.includeSocialMediaAnalysis }
           : {}),
+        ...(job.data.minReviewCount !== undefined ? { minReviewCount: job.data.minReviewCount } : {}),
         ...(correlationId ? { correlationId } : {}),
       });
       enqueuedCount += 1;
@@ -537,6 +541,7 @@ export async function handleDiscoveryRunSearchTaskJob(
       includeWebsiteAnalysis: job.data.includeWebsiteAnalysis,
       includeSocialMediaAnalysis: job.data.includeSocialMediaAnalysis,
       targetUniqueBusinesses: job.data.targetUniqueBusinesses,
+      minReviewCount: job.data.minReviewCount,
     },
     {
       startAfter: startAfterSeconds,

@@ -19,6 +19,7 @@ import {
   findActiveTrainedModel,
   getQualificationThreshold,
 } from '../scoring/shared.js';
+import { getDeterministicAiBlend, getScoreTierBands } from '../utils/pipeline-settings.js';
 
 export const SCORING_COMPUTE_JOB_NAME = 'scoring.compute';
 export const SCORING_COMPUTE_IDEMPOTENCY_KEY_PATTERN = 'scoring.compute:${runId}';
@@ -161,7 +162,13 @@ export async function handleScoringComputeJob(
 
     // Look up a trained logistic model (not the baseline stub)
     const trainedModel = await findActiveTrainedModel();
-    const blendRatio = await computeBlendRatio();
+
+    // Read UI-configured blend override and tier bands (same pattern as scoring.batch)
+    const deterministicAiBlend = await getDeterministicAiBlend();
+    const blendRatio = deterministicAiBlend !== null
+      ? { deterministicWeight: deterministicAiBlend, aiWeight: 1 - deterministicAiBlend }
+      : await computeBlendRatio();
+    const scoreTierBands = await getScoreTierBands();
 
     let persistedPredictions = 0;
     for (const targetLeadId of targetLeadIds) {
@@ -246,7 +253,7 @@ export async function handleScoringComputeJob(
         const blendedScore = usedTrainedModel || logisticScore > 0
           ? dWeight * deterministicScore + aWeight * logisticScore
           : deterministicScore;
-        const scoreBand = toScoreBand(blendedScore);
+        const scoreBand = toScoreBand(blendedScore, scoreTierBands);
 
         const prediction = await prisma.leadScorePrediction.upsert({
           where: {

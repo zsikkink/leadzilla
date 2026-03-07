@@ -20,6 +20,7 @@ export interface DiscoveryRunJobPayload {
   includeWebsiteAnalysis?: boolean | undefined;
   includeSocialMediaAnalysis?: boolean | undefined;
   limit?: number | undefined;
+  minReviewCount?: number | undefined;
   requestedByUserId?: string | undefined;
 }
 
@@ -70,6 +71,7 @@ export function buildDiscoveryService(
         includeWebsiteAnalysis: input.includeWebsiteAnalysis,
         includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
         limit: input.limit,
+        minReviewCount: input.advancedSettings?.minReviewCount,
         requestedByUserId: input.requestedByUserId,
       };
 
@@ -101,6 +103,7 @@ export function buildDiscoveryService(
             includeWebsiteAnalysis: input.includeWebsiteAnalysis,
             includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
             limit: icpLimit,
+            minReviewCount: input.advancedSettings?.minReviewCount,
             requestedByUserId: input.requestedByUserId,
           });
         }

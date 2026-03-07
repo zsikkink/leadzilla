@@ -47,6 +47,7 @@ export interface DiscoverySeedJobPayload {
   icpProfileId?: string | undefined;
   includeWebsiteAnalysis?: boolean | undefined;
   includeSocialMediaAnalysis?: boolean | undefined;
+  minReviewCount?: number | undefined;
 }
 
 export interface DiscoverySeedLogger {
@@ -342,6 +343,7 @@ export async function handleDiscoverySeedJob(
             includeSocialMediaAnalysis: job.data.includeSocialMediaAnalysis,
             ...(job.data.maxTasks !== undefined ? { maxTasks: seedConfig.maxTasks } : {}),
             ...(targetUniqueBusinesses !== undefined ? { targetUniqueBusinesses } : {}),
+            ...(job.data.minReviewCount !== undefined ? { minReviewCount: job.data.minReviewCount } : {}),
           },
           {
             ...DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,

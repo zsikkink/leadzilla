@@ -358,6 +358,7 @@ async function main(): Promise<void> {
           includeWebsiteAnalysis: payload.includeWebsiteAnalysis,
           includeSocialMediaAnalysis: payload.includeSocialMediaAnalysis,
           ...(payload.limit !== undefined ? { maxTasks: payload.limit } : {}),
+          ...(payload.minReviewCount !== undefined ? { minReviewCount: payload.minReviewCount } : {}),
           enqueueRunTasks: true,
         },
         {

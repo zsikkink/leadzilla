@@ -21,9 +21,10 @@ import {
   type DiscoveryRunJobPayload,
 } from './discovery.service.js';
 
-// ── Inline category mapping (mirrors @lead-flood/discovery icp-category-map) ──
-// API can't import @lead-flood/discovery (not a dependency), so we inline the
-// read-only mapping data needed for the preview endpoint.
+// ── Inline category mapping (synced copy of @lead-flood/discovery icp-category-map) ──
+// API can't import @lead-flood/discovery (not a dependency), so we keep a synced
+// copy. Source of truth: packages/discovery/src/queries/icp-category-map.ts
+// Last synced: 2026-03-06
 
 const INLINE_CATEGORY_TAXONOMY_EN = [
   'bakery', 'coffee shop', 'restaurant', 'beauty salon', 'barbershop', 'gym',
@@ -34,50 +35,68 @@ const INLINE_CATEGORY_TAXONOMY_EN = [
 ];
 
 const ICP_INDUSTRY_CATEGORY_MAP: Record<string, string[]> = {
-  luxury_retail: ['fashion boutique', 'jewelry store', 'home decor', 'watch store', 'luxury goods'],
-  luxury_services: ['fashion boutique', 'jewelry store', 'home decor', 'watch store', 'luxury goods', 'event planner', 'spa'],
-  food_beverage: ['restaurant', 'coffee shop', 'bakery', 'catering service'],
-  beauty_wellness: ['beauty salon', 'barbershop', 'spa', 'nail salon'],
-  health_medical: ['dental clinic', 'medical clinic', 'pharmacy', 'optical store'],
-  fitness: ['gym', 'fitness center', 'yoga studio', 'personal trainer'],
-  events: ['event planner', 'wedding venue', 'catering service', 'party supplies'],
-  automotive: ['car repair', 'auto accessories', 'car wash', 'car dealership'],
-  education: ['tutoring center', 'language school', 'training institute', 'nursery'],
-  home_services: ['cleaning service', 'moving service', 'plumber', 'electrician'],
-  pets: ['pet shop', 'veterinary clinic', 'pet grooming'],
-  retail: ['grocery store', 'electronics store', 'bookstore', 'furniture store', 'kids clothing'],
-  hospitality: ['hotel', 'resort', 'serviced apartment', 'guest house'],
+  // ── ICP A: Luxury & High-Ticket Services
+  luxury_services: ['jewelry store', 'watch store', 'luxury goods store', 'spa', 'concierge service', 'luxury car rental'],
+  yacht_charter: ['yacht charter', 'boat rental', 'marina', 'yacht broker'],
+  private_aviation: ['private jet charter', 'aviation services', 'helicopter tour'],
+  luxury_travel: ['luxury travel agency', 'travel agency', 'tour operator'],
+  personal_shopping: ['fashion boutique', 'personal stylist', 'designer clothing store', 'luxury boutique'],
+  // ── ICP B: Gifting, Corporate & Bespoke Experiences
+  corporate_gifting: ['corporate gifting', 'gift shop', 'gift hamper'],
+  florists: ['flower shop', 'flower delivery', 'wedding florist'],
+  gift_boxes: ['chocolate shop', 'gift basket store', 'gourmet food store', 'custom gift shop'],
+  experience_platforms: ['experience gift shop', 'activity center', 'adventure tour operator'],
+  bespoke_events: ['event planner', 'catering service', 'party planner', 'event decorator'],
+  // ── ICP C: Events, Weddings & Experiential Operators
+  wedding_planning: ['wedding planner', 'wedding venue', 'bridal shop', 'destination wedding planner'],
+  event_production: ['event management company', 'event rental', 'AV rental', 'stage design'],
+  exhibitions: ['exhibition organizer', 'convention center', 'trade show organizer', 'expo organizer'],
+  'pop-up_markets': ['pop-up shop', 'artisan market', 'weekend market', 'flea market'],
+  festivals: ['festival organizer', 'outdoor event venue', 'concert venue', 'event agency'],
+  // ── ICP D: Home, Design & High-Value Contracting
+  interior_design: ['interior designer', 'home decor store', 'furniture showroom', 'kitchen design', 'lighting showroom'],
+  renovation: ['renovation contractor', 'fit-out company', 'tiling store', 'flooring store', 'painting contractor'],
+  architecture: ['architecture firm', 'architectural consultant'],
+  contracting: ['general contractor', 'construction company', 'maintenance company', 'MEP contractor'],
+  landscape_design: ['landscaping company', 'garden center', 'garden design', 'outdoor furniture store'],
+  // ── ICP E: Boutique Hospitality & Short-Stay Operators
+  boutique_hotels: ['boutique hotel', 'bed and breakfast', 'heritage hotel'],
+  holiday_homes: ['holiday home rental', 'vacation rental', 'villa rental', 'chalet rental'],
+  serviced_residences: ['serviced apartment', 'furnished apartment', 'aparthotel'],
+  property_management: ['property management company', 'real estate agency', 'facilities management'],
+  hospitality: ['hotel', 'resort', 'guest house', 'hostel'],
+  // ── ICP F: Premium Wellness & Longevity Clinics
+  wellness_clinics: ['wellness clinic', 'wellness center', 'holistic health center', 'physiotherapy clinic'],
+  aesthetic_medicine: ['aesthetic clinic', 'cosmetic clinic', 'dermatology clinic', 'laser clinic', 'med spa', 'beauty salon'],
+  longevity: ['anti-aging clinic', 'regenerative medicine clinic', 'longevity clinic', 'functional medicine clinic'],
+  iv_therapy: ['IV drip clinic', 'IV therapy clinic', 'vitamin infusion clinic'],
+  medical_tourism: ['medical clinic', 'dental clinic', 'medical center', 'health tourism agency'],
+  // ── ICP G: High-Ticket Coaching & Advisory
+  executive_coaching: ['executive coach', 'life coach', 'leadership coach', 'career coach', 'business coach'],
+  business_advisory: ['business advisory firm', 'financial advisor', 'management consultant', 'strategy consultant'],
+  masterminds: ['coworking space', 'business center', 'startup accelerator', 'innovation hub'],
+  memberships: ['private members club', 'country club', 'social club', 'business club'],
+  consulting: ['consulting firm', 'consulting agency', 'IT consultant', 'HR consultant'],
+  // ── ICP H: Education & Training Providers
+  private_education: ['private school', 'international school', 'nursery', 'preschool', 'kindergarten'],
+  professional_training: ['training institute', 'training center', 'corporate training center', 'professional development center'],
+  bootcamps: ['coding bootcamp', 'tech academy', 'programming school'],
+  certifications: ['certification center', 'test prep center', 'exam center'],
+  cohort_programs: ['learning center', 'education center', 'workshop space', 'tutoring center', 'language school'],
+  // ── General categories (for custom/UI-created ICPs)
+  luxury_retail: ['luxury boutique', 'designer store', 'high-end fashion store', 'jewelry store', 'watch store'],
+  food_beverage: ['restaurant', 'coffee shop', 'bakery', 'catering service', 'juice bar', 'ice cream shop', 'food truck'],
+  beauty_wellness: ['beauty salon', 'barbershop', 'spa', 'nail salon', 'massage center', 'lash studio'],
+  health_medical: ['dental clinic', 'medical clinic', 'pharmacy', 'optical store', 'laboratory'],
+  fitness: ['gym', 'fitness center', 'yoga studio', 'personal trainer', 'Pilates studio', 'CrossFit gym', 'martial arts studio'],
+  events: ['event planner', 'wedding venue', 'catering service', 'party supplies', 'DJ service', 'photography studio'],
+  automotive: ['car repair', 'auto accessories', 'car wash', 'car dealership', 'tire shop', 'car detailing'],
+  education: ['tutoring center', 'language school', 'training institute', 'nursery', 'driving school', 'music school', 'art school'],
+  home_services: ['cleaning service', 'moving service', 'plumber', 'electrician', 'pest control', 'handyman', 'locksmith'],
+  pets: ['pet shop', 'veterinary clinic', 'pet grooming', 'pet boarding', 'dog trainer'],
+  retail: ['grocery store', 'electronics store', 'bookstore', 'furniture store', 'kids clothing', 'toy store', 'sports store', 'stationery store'],
   ecommerce: ['online store', 'dropshipping', 'marketplace seller'],
   professional_services: ['accounting firm', 'law firm', 'consulting agency', 'recruitment agency'],
-  yacht_charter: ['yacht charter', 'boat rental', 'luxury travel', 'marina'],
-  private_aviation: ['private jet charter', 'aviation services', 'luxury travel'],
-  luxury_travel: ['luxury travel agency', 'travel agency', 'hotel', 'resort', 'serviced apartment'],
-  personal_shopping: ['fashion boutique', 'personal stylist', 'luxury goods', 'jewelry store'],
-  corporate_gifting: ['gift shop', 'corporate gifting'],
-  florists: ['flower shop'],
-  gift_boxes: ['gift shop', 'gift boxes'],
-  experience_platforms: ['event planner', 'experience platform'],
-  bespoke_events: ['event planner', 'catering service'],
-  wedding_planning: ['event planner', 'wedding planner', 'catering service'],
-  event_production: ['event planner', 'event production'],
-  exhibitions: ['event planner', 'exhibition organizer'],
-  interior_design: ['interior design', 'home decor', 'furniture store'],
-  renovation: ['renovation contractor', 'home decor'],
-  architecture: ['architecture firm', 'interior design'],
-  landscape_design: ['landscaping', 'garden design'],
-  boutique_hotels: ['boutique hotel', 'hotel'],
-  holiday_homes: ['holiday home rental', 'serviced apartment'],
-  serviced_residences: ['serviced apartment'],
-  property_management: ['property management', 'real estate'],
-  wellness_clinics: ['wellness clinic', 'beauty salon', 'medical clinic'],
-  aesthetic_medicine: ['aesthetic clinic', 'beauty salon', 'medical clinic'],
-  medical_tourism: ['medical clinic', 'dental clinic'],
-  executive_coaching: ['business coaching', 'consulting'],
-  business_advisory: ['consulting', 'business advisory'],
-  private_education: ['private school', 'training institute'],
-  professional_training: ['training institute', 'professional training'],
-  bootcamps: ['coding bootcamp', 'training institute'],
-  certifications: ['training institute', 'certification center'],
 };
 
 function fuzzyMatchInlineCategories(industry: string): string[] {
@@ -156,7 +175,8 @@ export function registerDiscoveryRoutes(
   app.post('/v1/discovery/runs', async (request, reply) => {
     const parsed = CreateDiscoveryRunRequestSchema.safeParse(request.body);
     if (!parsed.success) {
-      return sendValidationError(reply, request.id, 'Invalid discovery run payload');
+      const details = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+      return sendValidationError(reply, request.id, `Invalid discovery run payload: ${details}`);
     }
 
     const userId = request.user?.sub;

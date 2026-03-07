@@ -341,6 +341,28 @@ async function finalizeRun(
           },
         });
       }
+
+      // Store conversion rate (qualified leads / unique businesses) — EMA-smoothed
+      if (completedLeads > 0 && newBusinesses > 0) {
+        const conversionRate = completedLeads / newBusinesses;
+        const convKey = `discovery_conversion_rate:${icpProfileId}`;
+        const existingConv = await prisma.pipelineSetting.findUnique({
+          where: { key: convKey },
+        });
+        const historicalConv = existingConv?.valueJson ? Number(existingConv.valueJson) : conversionRate;
+        const smoothedConv = 0.3 * conversionRate + 0.7 * historicalConv;
+
+        await prisma.pipelineSetting.upsert({
+          where: { key: convKey },
+          create: {
+            key: convKey,
+            valueJson: smoothedConv,
+          },
+          update: {
+            valueJson: smoothedConv,
+          },
+        });
+      }
     } catch {
       // Best-effort — don't fail the finalization
     }

@@ -390,9 +390,7 @@ async function main(): Promise<void> {
     dailySendLimit: env.WHATSAPP_DAILY_SEND_LIMIT,
   });
 
-  const warmupStartDate = await EmailRateLimiter.loadWarmupStartDate(prisma);
   const emailRateLimiter = new EmailRateLimiter(prisma, {
-    warmupStartDate,
     maxDaily: env.EMAIL_DAILY_SEND_LIMIT,
   });
 
@@ -788,8 +786,6 @@ async function main(): Promise<void> {
     (jobLogger, job) =>
       handlePipelineHealthJob(jobLogger, job, {
         slackWebhookUrl: env.SLACK_WEBHOOK_URL,
-        dlqDepthThreshold: env.PIPELINE_DLQ_DEPTH_THRESHOLD,
-        staleJobMinutes: env.PIPELINE_STALE_JOB_MINUTES,
         minSuccessRate: env.PIPELINE_MIN_SUCCESS_RATE,
         minEnrichmentRate: env.PIPELINE_MIN_ENRICHMENT_RATE,
       }),

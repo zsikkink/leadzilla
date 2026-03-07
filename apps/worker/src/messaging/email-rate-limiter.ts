@@ -5,8 +5,6 @@ import type { RateLimitResult } from './rate-limiter.js';
 type PrismaInstance = typeof prismaInstance;
 
 export interface EmailRateLimiterConfig {
-  /** Warmup start date (first day emails were sent). Read from PipelineSetting or env. */
-  warmupStartDate?: Date | undefined;
   /** Base emails/day in week 1 (default: 5) */
   baseDaily?: number | undefined;
   /** Increment per week (default: 5, so week 2 = 10, week 3 = 15, etc.) */
@@ -47,7 +45,6 @@ function computeWarmupWeek(warmupStart: Date, now: Date = new Date()): number {
 
 export class EmailRateLimiter {
   private readonly prisma: PrismaInstance;
-  private readonly warmupStartDate: Date;
   private readonly baseDaily: number;
   private readonly weeklyIncrement: number;
   private readonly maxDaily: number;
@@ -55,7 +52,6 @@ export class EmailRateLimiter {
 
   constructor(prisma: PrismaInstance, config?: EmailRateLimiterConfig) {
     this.prisma = prisma;
-    this.warmupStartDate = config?.warmupStartDate ?? new Date();
     this.baseDaily = config?.baseDaily ?? DEFAULT_BASE_DAILY;
     this.weeklyIncrement = config?.weeklyIncrement ?? DEFAULT_WEEKLY_INCREMENT;
     this.maxDaily = config?.maxDaily ?? DEFAULT_MAX_DAILY;
@@ -64,10 +60,12 @@ export class EmailRateLimiter {
 
   /**
    * Compute the current daily send limit based on warmup week and bounce rate.
+   * Reloads warmup start date from DB on every call so changes take effect immediately.
    */
   async computeDailyLimit(overrideMaxDaily?: number | undefined): Promise<{ limit: number; week: number; throttled: boolean }> {
     const effectiveMax = overrideMaxDaily ?? this.maxDaily;
-    const week = computeWarmupWeek(this.warmupStartDate);
+    const warmupStartDate = await EmailRateLimiter.loadWarmupStartDate(this.prisma);
+    const week = computeWarmupWeek(warmupStartDate);
     // Progressive ramp: week 1 = base, week 2 = base + increment, etc.
     let limit = Math.min(
       this.baseDaily + (week - 1) * this.weeklyIncrement,

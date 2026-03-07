@@ -14,7 +14,7 @@ const DEFAULT_QUALIFICATION_THRESHOLD = 0.34;
 export async function getQualificationThreshold(): Promise<number> {
   try {
     const setting = await prisma.pipelineSetting.findUnique({
-      where: { key: 'qualification_threshold' },
+      where: { key: 'scoreQualificationThreshold' },
       select: { valueJson: true },
     });
     if (setting?.valueJson !== null && setting?.valueJson !== undefined) {

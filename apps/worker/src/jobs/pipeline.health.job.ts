@@ -1,6 +1,8 @@
 import { prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { getPipelineSettings } from '../utils/pipeline-settings.js';
+
 export const PIPELINE_HEALTH_JOB_NAME = 'pipeline.health';
 
 export const PIPELINE_HEALTH_RETRY_OPTIONS: Pick<
@@ -50,8 +52,6 @@ interface HealthAlert {
   threshold: number;
 }
 
-const DEFAULT_DLQ_DEPTH_THRESHOLD = 10;
-const DEFAULT_STALE_JOB_MINUTES = 30;
 const DEFAULT_MIN_SUCCESS_RATE = 0.8;
 const DEFAULT_MIN_ENRICHMENT_RATE = 0.7;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -91,8 +91,11 @@ export async function handlePipelineHealthJob(
 ): Promise<void> {
   const { correlationId } = job.data;
   const resolvedDeps = deps ?? {};
-  const dlqDepthThreshold = resolvedDeps.dlqDepthThreshold ?? DEFAULT_DLQ_DEPTH_THRESHOLD;
-  const staleJobMinutes = resolvedDeps.staleJobMinutes ?? DEFAULT_STALE_JOB_MINUTES;
+
+  // Load DB-configured thresholds, then let deps override (for tests)
+  const dbSettings = await getPipelineSettings();
+  const dlqDepthThreshold = resolvedDeps.dlqDepthThreshold ?? dbSettings.healthDlqDepthThreshold;
+  const staleJobMinutes = resolvedDeps.staleJobMinutes ?? dbSettings.healthStaleJobMinutes;
   const minSuccessRate = resolvedDeps.minSuccessRate ?? DEFAULT_MIN_SUCCESS_RATE;
   const minEnrichmentRate = resolvedDeps.minEnrichmentRate ?? DEFAULT_MIN_ENRICHMENT_RATE;
 
