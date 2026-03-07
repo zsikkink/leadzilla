@@ -87,8 +87,12 @@ function isQuotaExhaustedError(error: unknown): boolean {
     message.includes('quota exhausted') ||
     message.includes('credits depleted') ||
     message.includes('quota exceeded') ||
+    message.includes('insufficient credits') ||
     message.includes('run out of searches') ||
     message.includes('billing') ||
+    message.includes('rate limit') ||
+    message.includes('plan limit') ||
+    message.includes('account limit') ||
     (statusCode === 429 && (message.includes('quota') || message.includes('limit') || message.includes('run out')))
   ) {
     return true;

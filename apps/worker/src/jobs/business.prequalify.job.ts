@@ -1,4 +1,5 @@
 import { prisma } from '@lead-flood/db';
+import { mapIcpIndustriesWithOverrides } from '@lead-flood/discovery';
 import { promises as dns } from 'node:dns';
 import type { Job, SendOptions } from 'pg-boss';
 
@@ -128,30 +129,60 @@ async function isParkedDomain(domain: string): Promise<boolean> {
   }
 }
 
+// ── Word-stem matching ────────────────────────────────────────────────
+
+/**
+ * Common English suffixes to strip for stem comparison.
+ * Ordered longest-first so "-ation" is tried before "-tion".
+ */
+const STEM_SUFFIXES = [
+  'ation', 'ment', 'ness', 'tion', 'sion', 'ance', 'ence',
+  'ible', 'able', 'ious', 'eous', 'less', 'ical', 'ful',
+  'ist', 'ity', 'ive', 'ous', 'ing', 'ary', 'ery', 'ory',
+  'ant', 'ent', 'ism', 'ial', 'ual', 'ure', 'age',
+  'er', 'or', 'al', 'ly', 'ed',
+];
+
+/** Strip common suffixes to produce a crude word stem. Min 3 chars left. */
+function wordStem(word: string): string {
+  const lower = word.toLowerCase();
+  if (lower.length <= 4) return lower;
+  for (const suffix of STEM_SUFFIXES) {
+    if (lower.endsWith(suffix) && lower.length - suffix.length >= 3) {
+      return lower.slice(0, -suffix.length);
+    }
+  }
+  return lower;
+}
+
 // ── ICP industry match ────────────────────────────────────────────────
 
 /**
- * Check if a business's SerpAPI category matches any of the ICP's target industries.
- * Uses fuzzy matching: splits both the business category and ICP industries into tokens
- * and checks for overlapping words.
+ * Check if a business's SerpAPI category matches any of the ICP's target industries
+ * or their derived search categories. Uses three matching strategies:
+ *
+ * 1. Exact token overlap (e.g., "spa" in both)
+ * 2. Word-stem matching (e.g., "Physiotherapist" → "physiotherap" matches "Physiotherapy")
+ * 3. Search category comparison (ICP industries → Google Maps categories via ICP_INDUSTRY_CATEGORY_MAP)
  */
 function matchesIcpIndustry(
   businessCategory: string | null,
   targetIndustries: string[],
+  searchCategories: string[],
 ): boolean {
   // If no target industries are set, all businesses match (no filter)
   if (targetIndustries.length === 0) return true;
   // If we don't know the business category, don't disqualify (let it through)
   if (!businessCategory) return true;
 
-  const bizTokens = new Set(
-    businessCategory
-      .toLowerCase()
-      .split(/[\s,_\-/&]+/)
-      .filter((t) => t.length > 2),
-  );
+  const bizTokens = businessCategory
+    .toLowerCase()
+    .split(/[\s,_\-/&]+/)
+    .filter((t) => t.length > 2);
+  const bizTokenSet = new Set(bizTokens);
+  const bizStems = new Set(bizTokens.map(wordStem));
 
-  // Check each ICP industry for token overlap with business category
+  // Strategy 1 + 2: Check target industries (token overlap + stem matching)
   for (const industry of targetIndustries) {
     const industryTokens = industry
       .toLowerCase()
@@ -159,7 +190,26 @@ function matchesIcpIndustry(
       .filter((t) => t.length > 2);
 
     for (const token of industryTokens) {
-      if (bizTokens.has(token)) return true;
+      // Exact token match
+      if (bizTokenSet.has(token)) return true;
+      // Stem match
+      if (bizStems.has(wordStem(token))) return true;
+    }
+  }
+
+  // Strategy 3: Check search categories (derived from ICP_INDUSTRY_CATEGORY_MAP + overrides)
+  const bizCategoryLower = businessCategory.toLowerCase();
+  for (const searchCat of searchCategories) {
+    const catLower = searchCat.toLowerCase();
+    // Direct substring match: "physiotherapy clinic" contains in "Physiotherapy Clinic Downtown"
+    if (bizCategoryLower.includes(catLower) || catLower.includes(bizCategoryLower)) {
+      return true;
+    }
+    // Token overlap with search category tokens
+    const catTokens = catLower.split(/[\s,_\-/&]+/).filter((t) => t.length > 2);
+    for (const catToken of catTokens) {
+      if (bizTokenSet.has(catToken)) return true;
+      if (bizStems.has(wordStem(catToken))) return true;
     }
   }
 
@@ -217,10 +267,11 @@ export async function handleBusinessPrequalifyJob(
   }
 
   // ── Check: minimum review count ────────────────────────────────────
-  const reviewCount = business.reviewCount ?? 0;
-  if (reviewCount < effectiveMinReviewCount) {
+  // If reviewCount is null/undefined (Google Places didn't return it), skip the check.
+  // Only reject when the count is explicitly below the threshold.
+  if (business.reviewCount != null && business.reviewCount < effectiveMinReviewCount) {
     await disqualify(businessId, discoveryRunId, 'INSUFFICIENT_REVIEWS', logCtx, logger, {
-      reviewCount,
+      reviewCount: business.reviewCount,
       minReviewCount: effectiveMinReviewCount,
     });
     return;
@@ -247,15 +298,29 @@ export async function handleBusinessPrequalifyJob(
   // ── Check: ICP industry match ──────────────────────────────────────
   const icpProfile = await prisma.icpProfile.findUnique({
     where: { id: icpProfileId },
-    select: { targetIndustries: true },
+    select: { targetIndustries: true, metadataJson: true },
   });
 
-  if (icpProfile && !matchesIcpIndustry(business.category, icpProfile.targetIndustries)) {
-    await disqualify(businessId, discoveryRunId, 'ICP_INDUSTRY_MISMATCH', logCtx, logger, {
-      businessCategory: business.category,
-      targetIndustries: icpProfile.targetIndustries,
-    });
-    return;
+  if (icpProfile) {
+    // Derive search categories from ICP industries + any user overrides
+    const overrides = icpProfile.metadataJson &&
+      typeof icpProfile.metadataJson === 'object' &&
+      !Array.isArray(icpProfile.metadataJson)
+      ? (icpProfile.metadataJson as Record<string, unknown>).categoryOverrides as
+          Record<string, { add?: string[]; remove?: string[] }> | undefined
+      : undefined;
+    const searchCategories = mapIcpIndustriesWithOverrides(
+      icpProfile.targetIndustries,
+      overrides,
+    );
+
+    if (!matchesIcpIndustry(business.category, icpProfile.targetIndustries, searchCategories)) {
+      await disqualify(businessId, discoveryRunId, 'ICP_INDUSTRY_MISMATCH', logCtx, logger, {
+        businessCategory: business.category,
+        targetIndustries: icpProfile.targetIndustries,
+      });
+      return;
+    }
   }
 
   // ── Pre-qualification passed ───────────────────────────────────────
@@ -284,7 +349,7 @@ export async function handleBusinessPrequalifyJob(
   }
 
   logger.info(
-    { ...logCtx, reviewCount },
+    { ...logCtx, reviewCount: business.reviewCount },
     'Completed business.prequalify job — business qualified',
   );
   } catch (error: unknown) {

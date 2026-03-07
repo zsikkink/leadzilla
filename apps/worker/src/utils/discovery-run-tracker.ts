@@ -268,6 +268,10 @@ export async function tryFinalizeDiscoveryRun(
     }
   } else if (terminalCount > 0) {
     // Not ready to finalize, but update progress so the frontend shows accurate lead count
+    const newBiz = typeof result.newBusinesses === 'number' ? result.newBusinesses : 0;
+    const alreadyKnownBiz = Math.max(0, businessIds.length - newBiz);
+    const convertedLeads = completedLeads + failedLeads;
+
     await prisma.jobExecution.update({
       where: { id: possibleRunId },
       data: {
@@ -275,10 +279,16 @@ export async function tryFinalizeDiscoveryRun(
           ...result,
           processedItems: terminalCount,
           failedItems: failedLeads + disqualifiedIds.size,
+          // Full funnel counts for frontend display
+          totalFound: businessIds.length,
+          alreadyKnown: alreadyKnownBiz,
+          newFound: newBiz,
+          disqualified: disqualifiedIds.size,
+          converted: convertedLeads,
           outcome: {
             businessesFound: businessIds.length,
             businessesDisqualified: disqualifiedIds.size,
-            leadsCreated: completedLeads + failedLeads,
+            leadsCreated: convertedLeads,
             messagesDrafted: messageDraftedLeads,
             disqualificationReasons: disqualReasons,
           },
@@ -369,6 +379,13 @@ async function finalizeRun(
 ): Promise<void> {
   const failedItems = failedLeads + disqualifiedCount;
 
+  // Derive full funnel counts from run data
+  const newBusinesses = typeof currentResult.newBusinesses === 'number'
+    ? currentResult.newBusinesses
+    : 0;
+  const alreadyKnown = Math.max(0, totalBusinesses - newBusinesses);
+  const converted = completedLeads + failedLeads; // leads created (both successful and failed)
+
   // Atomic update: only finalize if still running (prevents double-finalization)
   const updated = await prisma.jobExecution.updateMany({
     where: { id: discoveryRunId, status: 'running' },
@@ -382,10 +399,16 @@ async function finalizeRun(
         processedItems: completedLeads + failedItems,
         completedLeads,
         pipelineFailedItems: failedItems,
+        // Full funnel counts for frontend display
+        totalFound: totalBusinesses,
+        alreadyKnown,
+        newFound: newBusinesses,
+        disqualified: disqualifiedCount,
+        converted,
         outcome: {
           businessesFound: totalBusinesses,
           businessesDisqualified: disqualifiedCount,
-          leadsCreated: completedLeads + failedLeads,
+          leadsCreated: converted,
           messagesDrafted: messageDraftedLeads,
           disqualificationReasons,
         },
@@ -402,6 +425,50 @@ async function finalizeRun(
     'Discovery run finalized after full pipeline completion',
   );
 
+  // ── Failed run cleanup: delete stuck leads ──────────────────────────
+  // When a run fails, clean up leads that never progressed past processing/new.
+  // Leads that already reached scored/qualified/enriched/messaged etc. are kept.
+  if (status === 'failed') {
+    try {
+      // Find businesses linked to this run via DiscoveryCostEvent
+      const runCostEvents = await prisma.discoveryCostEvent.findMany({
+        where: { discoveryRunId, businessId: { not: null } },
+        select: { businessId: true },
+        distinct: ['businessId'],
+      });
+      const runBusinessIds = runCostEvents
+        .map((e) => e.businessId)
+        .filter((id): id is string => id !== null);
+
+      if (runBusinessIds.length > 0) {
+        // Find leads created from these businesses
+        const conversions = await prisma.businessConversion.findMany({
+          where: { businessId: { in: runBusinessIds } },
+          select: { leadId: true },
+        });
+        const leadIds = [...new Set(conversions.map((c) => c.leadId))];
+
+        if (leadIds.length > 0) {
+          const deleted = await prisma.lead.deleteMany({
+            where: {
+              id: { in: leadIds },
+              status: { in: ['new', 'processing'] },
+            },
+          });
+
+          if (deleted.count > 0) {
+            logger.info(
+              { discoveryRunId, deletedLeads: deleted.count },
+              'Cleaned up stuck leads from failed discovery run',
+            );
+          }
+        }
+      }
+    } catch {
+      // Best-effort cleanup — don't fail the finalization
+    }
+  }
+
   // Store yield rate for adaptive budget computation (EMA smoothing)
   const icpProfileId = typeof currentResult.icpProfileId === 'string'
     ? currentResult.icpProfileId
@@ -409,9 +476,7 @@ async function finalizeRun(
   const searchTasksProcessed = typeof currentResult.searchTasksProcessed === 'number'
     ? currentResult.searchTasksProcessed
     : 0;
-  const newBusinesses = typeof currentResult.newBusinesses === 'number'
-    ? currentResult.newBusinesses
-    : 0;
+  // Reuse newBusinesses already derived above for funnel counts
 
   if (icpProfileId && searchTasksProcessed > 0) {
     const yieldRate = newBusinesses / searchTasksProcessed;
