@@ -137,7 +137,7 @@ export async function tryFinalizeDiscoveryRun(
     const newBusinesses = typeof result.newBusinesses === 'number' ? result.newBusinesses : 0;
     if (newBusinesses === 0 || isTimedOut) {
       // Truly zero businesses found, or timed out waiting — finalize
-      await finalizeRun(possibleRunId, result, 'completed', 0, 0, logger);
+      await finalizeRun(possibleRunId, result, 'failed', 0, 0, logger, 'No businesses found by search tasks', 0, {});
       return;
     }
     // Prequalify events don't exist yet — return without finalizing
@@ -147,12 +147,20 @@ export async function tryFinalizeDiscoveryRun(
   // 3. Load businesses to check qualification status
   const businesses = await prisma.business.findMany({
     where: { id: { in: businessIds } },
-    select: { id: true, preQualified: true },
+    select: { id: true, preQualified: true, disqualificationReason: true },
   });
 
   const disqualifiedIds = new Set(
     businesses.filter((b) => b.preQualified === false).map((b) => b.id),
   );
+
+  // Aggregate disqualification reasons for outcome summary
+  const disqualReasons: Record<string, number> = {};
+  for (const biz of businesses) {
+    if (biz.preQualified === false && biz.disqualificationReason) {
+      disqualReasons[biz.disqualificationReason] = (disqualReasons[biz.disqualificationReason] ?? 0) + 1;
+    }
+  }
   // preQualified=null means still processing or not yet checked
   const qualifiedOrPendingIds = businessIds.filter((id) => !disqualifiedIds.has(id));
 
@@ -222,10 +230,14 @@ export async function tryFinalizeDiscoveryRun(
 
   // 6. Finalize if all items are terminal OR safety timeout
   if (inFlightItems === 0 || isTimedOut) {
-    const status = completedLeads > 0 || disqualifiedIds.size > 0 ? 'completed' : 'failed';
+    const status = completedLeads > 0 ? 'completed' : 'failed';
 
     const timeoutNote = isTimedOut && inFlightItems > 0
       ? `Safety timeout: ${inFlightItems} items still in flight after ${SAFETY_TIMEOUT_MS / 60000}min`
+      : null;
+
+    const disqualNote = completedLeads === 0 && disqualifiedIds.size > 0
+      ? `0 leads produced — all ${disqualifiedIds.size} of ${businessIds.length} businesses were disqualified`
       : null;
 
     await finalizeRun(
@@ -235,7 +247,9 @@ export async function tryFinalizeDiscoveryRun(
       completedLeads,
       failedLeads + disqualifiedIds.size,
       logger,
-      timeoutNote,
+      disqualNote ?? timeoutNote,
+      businessIds.length,
+      disqualReasons,
     );
 
     if (timeoutNote) {
@@ -253,6 +267,13 @@ export async function tryFinalizeDiscoveryRun(
           ...result,
           processedItems: terminalCount,
           failedItems: failedLeads + disqualifiedIds.size,
+          outcome: {
+            businessesFound: businessIds.length,
+            businessesDisqualified: disqualifiedIds.size,
+            leadsCreated: completedLeads + failedLeads,
+            messagesDrafted: completedLeads,
+            disqualificationReasons: disqualReasons,
+          },
         }),
       },
     });
@@ -302,11 +323,13 @@ export async function checkStaleDiscoveryRuns(logger: TrackerLogger): Promise<vo
       await finalizeRun(
         run.id,
         result,
-        'completed',
+        'failed',
         0,
         0,
         logger,
         `Force-finalized: run stuck in running state for ${Math.round(elapsedMs / 60000)}min without searchTasksComplete flag`,
+        0,
+        {},
       );
     }
   }
@@ -329,6 +352,8 @@ async function finalizeRun(
   failedItems: number,
   logger: TrackerLogger,
   error?: string | null | undefined,
+  totalBusinesses: number = 0,
+  disqualificationReasons: Record<string, number> = {},
 ): Promise<void> {
   // Atomic update: only finalize if still running (prevents double-finalization)
   const updated = await prisma.jobExecution.updateMany({
@@ -343,6 +368,13 @@ async function finalizeRun(
         processedItems: completedLeads + failedItems,
         completedLeads,
         pipelineFailedItems: failedItems,
+        outcome: {
+          businessesFound: totalBusinesses,
+          businessesDisqualified: Object.values(disqualificationReasons).reduce((a, b) => a + b, 0),
+          leadsCreated: completedLeads,
+          messagesDrafted: completedLeads,
+          disqualificationReasons,
+        },
       }),
     },
   });

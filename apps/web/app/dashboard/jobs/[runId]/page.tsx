@@ -90,6 +90,7 @@ interface SearchTaskData {
   status: string;
   resultsCount: number;
   provider: string;
+  error?: string | null;
 }
 
 interface BusinessData {
@@ -110,8 +111,19 @@ interface CostEventData {
   createdAt: string;
 }
 
+interface OutcomeData {
+  businessesFound: number;
+  businessesDisqualified: number;
+  leadsCreated: number;
+  messagesDrafted: number;
+  disqualificationReasons?: Record<string, number>;
+}
+
 interface RunDetailsResponse {
-  run: Record<string, unknown>;
+  run: Record<string, unknown> & {
+    errorMessage?: string | null;
+    outcome?: OutcomeData | null;
+  };
   searchTasks: SearchTaskData[];
   businesses: BusinessData[];
   leads: Array<Record<string, unknown>>;
@@ -585,6 +597,64 @@ export default function DiscoveryRunDetailPage() {
         />
       </div>
 
+      {/* Outcome funnel */}
+      {details.data?.run.outcome && (() => {
+        const outcome = details.data.run.outcome;
+        const REASON_LABELS: Record<string, string> = {
+          ICP_INDUSTRY_MISMATCH: 'Wrong industry',
+          NO_WEBSITE_DOMAIN: 'No website',
+          DOMAIN_NOT_RESOLVING: 'Website unreachable',
+          PARKED_DOMAIN: 'Parked domain',
+          INSUFFICIENT_REVIEWS: 'Too few reviews',
+          DNS_RESOLUTION_FAILED: 'DNS failed',
+          NO_CONTACTS_FOUND: 'No contacts found',
+        };
+        const reasons = outcome.disqualificationReasons ?? {};
+        const hasReasons = Object.keys(reasons).length > 0;
+        const qualified = outcome.businessesFound - outcome.businessesDisqualified;
+
+        return (
+          <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
+            <h2 className="mb-4 text-base font-bold tracking-tight">Pipeline Funnel</h2>
+            <div className="flex items-center gap-2">
+              {[
+                { label: 'Businesses', value: outcome.businessesFound, color: 'text-blue-400' },
+                { label: 'Qualified', value: qualified, color: 'text-zbooni-teal' },
+                { label: 'Leads', value: outcome.leadsCreated, color: 'text-zbooni-green' },
+                { label: 'Messages', value: outcome.messagesDrafted, color: 'text-yellow-400' },
+              ].map((step, i) => (
+                <div key={step.label} className="flex items-center gap-2">
+                  {i > 0 && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/20" />}
+                  <div className="rounded-lg border border-border/20 bg-zbooni-dark/20 px-3 py-2 text-center">
+                    <p className={`text-lg font-extrabold tabular-nums ${step.color}`}>{step.value}</p>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">{step.label}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {hasReasons && (
+              <div className="mt-4 rounded-lg border border-border/20 bg-zbooni-dark/10 px-4 py-3">
+                <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground/50">
+                  Disqualification Reasons
+                </p>
+                <div className="space-y-1">
+                  {Object.entries(reasons).map(([reason, count]) => (
+                    <div key={reason} className="flex items-center justify-between">
+                      <span className="text-xs text-foreground/70">
+                        {REASON_LABELS[reason] ?? reason}
+                      </span>
+                      <span className="font-mono text-xs font-bold tabular-nums text-red-400/70">
+                        {count}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Converted Leads */}
       {leads.length > 0 && (
         <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
@@ -703,7 +773,7 @@ export default function DiscoveryRunDetailPage() {
                     {task.queryText}
                   </p>
                   <p className="mt-0.5 text-[11px] text-red-400/70">
-                    Task failed
+                    {task.error || 'Task failed'}
                   </p>
                 </div>
               ))}

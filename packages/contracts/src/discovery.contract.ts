@@ -95,6 +95,7 @@ export const DiscoveryRunStatusResponseSchema = z
     errorMessage: z.string().nullable(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
+    currentStage: z.string().nullable().optional(),
   })
   .strict();
 
@@ -214,6 +215,7 @@ export const DiscoveryRunSummarySchema = z
     countries: z.array(z.string()),
     limit: z.number().int().min(0),
     errorMessage: z.string().nullable(),
+    currentStage: z.string().nullable().optional(),
   })
   .strict();
 

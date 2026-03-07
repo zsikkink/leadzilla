@@ -155,7 +155,11 @@ function RunCard({
             />
           </div>
           <p className="mt-1 text-[10px] text-muted-foreground/40">
-            {progressPct}% complete
+            {run.currentStage === 'searching'
+              ? 'Searching\u2026'
+              : run.currentStage === 'processing'
+                ? 'Processing pipeline\u2026'
+                : `${progressPct}% complete`}
           </p>
         </div>
       )}

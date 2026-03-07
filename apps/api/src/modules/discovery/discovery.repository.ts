@@ -50,6 +50,12 @@ function readRunProgress(result: unknown): DiscoveryRunProgress {
   };
 }
 
+function deriveCurrentStage(result: Record<string, unknown>, status: string): string | null {
+  if (status !== 'running') return null;
+  if (!result.searchTasksComplete) return 'searching';
+  return 'processing';
+}
+
 function mapJobStatusToPipelineStatus(
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled',
   failedItems: number,
@@ -165,6 +171,9 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
 
     const progress = readRunProgress(run.result);
     const status = mapJobStatusToPipelineStatus(run.status, progress.failedItems);
+    const resultJson = run.result && typeof run.result === 'object' && !Array.isArray(run.result)
+      ? run.result as Record<string, unknown>
+      : {};
 
     return {
       runId: run.id,
@@ -178,6 +187,7 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
       errorMessage: run.error,
       createdAt: run.createdAt.toISOString(),
       updatedAt: run.updatedAt.toISOString(),
+      currentStage: deriveCurrentStage(resultJson, run.status),
     };
   }
 
@@ -302,6 +312,9 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
         const payload = (row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload))
           ? row.payload as Record<string, unknown>
           : {};
+        const rowResultJson = (row.result && typeof row.result === 'object' && !Array.isArray(row.result))
+          ? row.result as Record<string, unknown>
+          : {};
 
         const countries: string[] = Array.isArray(payload.countries)
           ? (payload.countries as string[])
@@ -330,6 +343,7 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
           countries,
           limit,
           errorMessage: row.error,
+          currentStage: deriveCurrentStage(rowResultJson, row.status),
         };
       }),
       page: query.page,

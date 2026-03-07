@@ -389,6 +389,7 @@ export function registerDiscoveryRoutes(
               city: true,
               status: true,
               taskType: true,
+              error: true,
               _count: { select: { businessEvidence: true } },
             },
             orderBy: { createdAt: 'asc' },
@@ -411,6 +412,10 @@ export function registerDiscoveryRoutes(
         businessesFound: businesses.length,
         leadsConverted: leads.length,
         createdAt: jobExecution.createdAt.toISOString(),
+        errorMessage: jobExecution.error ?? null,
+        outcome: typeof resultJson.outcome === 'object' && resultJson.outcome !== null
+          ? resultJson.outcome
+          : null,
       };
 
       return {
@@ -423,6 +428,7 @@ export function registerDiscoveryRoutes(
           status: t.status,
           resultsCount: t._count.businessEvidence,
           provider: t.taskType.startsWith('SERP_') ? 'SERPAPI' : t.taskType,
+          error: t.error ?? null,
         })),
         businesses: businesses.map((b) => ({
           id: b.id,
