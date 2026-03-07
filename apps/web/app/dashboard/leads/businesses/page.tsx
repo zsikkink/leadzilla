@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
+  AlertTriangle,
   ArrowLeft,
   Building2,
   ChevronDown,
@@ -10,6 +11,7 @@ import {
   ExternalLink,
   Globe,
   Instagram,
+  Linkedin,
   Loader2,
   Mail,
   MapPin,
@@ -17,11 +19,12 @@ import {
   Phone,
   Search,
   Shield,
-  Star,
   Users,
   X,
 } from 'lucide-react';
 
+import { AboutBusinessCard } from '@/components/about-business-card.js';
+import { SocialLinkIcon } from '@/components/social-link-icon.js';
 import { cn } from '@/lib/utils.js';
 import { getSupabaseBrowserClient } from '@/lib/supabase-client.js';
 import { countryName } from '@/lib/countries.js';
@@ -166,6 +169,7 @@ interface BusinessContact {
   jobTitle: string | null;
   email: string | null;
   linkedinUrl: string | null;
+  source: string | null;
 }
 
 // ── Business name cleanup ────────────────────────────────────────────────────
@@ -299,17 +303,63 @@ function Section({ title, icon: Icon, iconColor, count, children, defaultOpen }:
 
 // ── Detail panel ─────────────────────────────────────────────────────────────
 
+function mergeSocialLinksForBiz(
+  websiteScrape: Record<string, unknown> | null,
+  instagramHandle: string | null,
+  instagramScrape: Record<string, unknown> | null,
+): Array<{ platform: string; url: string }> {
+  const links: Array<{ platform: string; url: string }> = [];
+  const seen = new Set<string>();
+  if (websiteScrape) {
+    for (const sl of extractSocialLinks(websiteScrape)) {
+      const key = sl.platform.toLowerCase();
+      if (!seen.has(key)) { seen.add(key); links.push(sl); }
+    }
+  }
+  if (instagramHandle && !seen.has('instagram')) {
+    seen.add('instagram');
+    links.push({ platform: 'Instagram', url: `https://instagram.com/${instagramHandle}` });
+  }
+  if (instagramScrape && !seen.has('instagram')) {
+    const handle = instagramScrape.username as string | undefined;
+    if (handle) { seen.add('instagram'); links.push({ platform: 'Instagram', url: `https://instagram.com/${handle}` }); }
+  }
+  return links;
+}
+
 function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; contacts: BusinessContact[]; onClose: () => void }) {
   const websiteScrape = biz.apify_website_scrape_json;
   const instagramScrape = biz.apify_instagram_scrape_json;
 
   const decisionMakers = websiteScrape ? extractDecisionMakers(websiteScrape) : [];
-  const socialLinks = websiteScrape ? extractSocialLinks(websiteScrape) : [];
+  const mergedSocialLinks = mergeSocialLinksForBiz(websiteScrape, biz.instagram_handle, instagramScrape);
   const techStack = websiteScrape ? extractTechStack(websiteScrape) : [];
   const certifications = websiteScrape ? extractCertifications(websiteScrape) : [];
   const contactInfo = websiteScrape ? extractContactInfo(websiteScrape) : { emails: [], phones: [], addresses: [] };
   const igData = instagramScrape ? extractInstagramData(instagramScrape) : null;
   const igPosts = instagramScrape ? extractInstagramPosts(instagramScrape) : [];
+
+  // Merge IG business contact info into contact methods
+  const allEmails = [...contactInfo.emails];
+  if (igData?.businessEmail && !allEmails.includes(igData.businessEmail)) {
+    allEmails.push(igData.businessEmail);
+  }
+  const allPhones = [...contactInfo.phones];
+  if (igData?.businessPhone && !allPhones.includes(igData.businessPhone)) {
+    allPhones.push(igData.businessPhone);
+  }
+
+  // Instagram incomplete warning
+  const igIncomplete = biz.instagram_handle && (
+    !instagramScrape ||
+    (instagramScrape.isVerified == null && instagramScrape.businessCategory == null)
+  );
+
+  // Extract metaDescription for about card
+  const metaDescription = websiteScrape
+    ? ((websiteScrape.metaDescription as string) ?? null)
+    : null;
+  const igBio = igData?.bio ?? null;
 
   return (
     <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
@@ -328,16 +378,21 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
         </div>
       </div>
 
+      {/* D2: About This Business */}
+      <div className="mt-4">
+        <AboutBusinessCard
+          category={biz.category}
+          metaDescription={metaDescription}
+          instagramBio={igBio}
+          countryCode={biz.country_code}
+          city={biz.city}
+          rating={biz.rating}
+          reviewCount={biz.review_count}
+        />
+      </div>
+
       {/* Quick stats */}
       <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Rating</p>
-          <p className="mt-0.5 flex items-center gap-1 text-sm font-bold"><Star className="h-3 w-3 text-yellow-400" />{biz.rating ? `${biz.rating}/5` : 'N/A'}</p>
-        </div>
-        <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Reviews</p>
-          <p className="mt-0.5 text-sm font-bold">{biz.review_count ?? 0}</p>
-        </div>
         <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Followers</p>
           <p className="mt-0.5 text-sm font-bold">{biz.follower_count ? biz.follower_count.toLocaleString() : 'N/A'}</p>
@@ -386,6 +441,16 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
         )}
       </div>
 
+      {/* D10: Instagram cookie expiry warning */}
+      {igIncomplete ? (
+        <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+          <div className="flex items-center gap-2 text-xs text-amber-400">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span>Instagram data may be incomplete. Authentication may need refreshing.</span>
+          </div>
+        </div>
+      ) : null}
+
       {/* Intelligence sections */}
       <div className="mt-5 space-y-3">
         {/* Decision Makers */}
@@ -423,12 +488,13 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
           </Section>
         )}
 
-        {/* Social Links */}
-        {socialLinks.length > 0 && (
-          <Section title="Social Media" icon={ExternalLink} iconColor="text-cyan-400" count={socialLinks.length}>
+        {/* Social Links (D5: icons, D7: merged) */}
+        {mergedSocialLinks.length > 0 && (
+          <Section title="Social Media" icon={ExternalLink} iconColor="text-cyan-400" count={mergedSocialLinks.length}>
             <div className="space-y-1.5">
-              {socialLinks.map((sl, i) => (
+              {mergedSocialLinks.map((sl, i) => (
                 <div key={i} className="flex items-center gap-2 text-sm">
+                  <SocialLinkIcon platform={sl.platform} className="h-3.5 w-3.5 text-muted-foreground/50" />
                   <span className="w-20 text-[11px] font-semibold uppercase text-muted-foreground/50">{sl.platform}</span>
                   <a
                     href={sl.url.startsWith('http') ? sl.url : `https://${sl.url}`}
@@ -455,28 +521,31 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
           </Section>
         )}
 
-        {/* Website Contact Info */}
-        {(contactInfo.emails.length > 0 || contactInfo.phones.length > 0 || contactInfo.addresses.length > 0) && (
-          <Section title="Website Contact Info" icon={Mail} iconColor="text-blue-400" count={contactInfo.emails.length + contactInfo.phones.length}>
+        {/* Contact Methods (D6: emails + phones) */}
+        {(allEmails.length > 0 || allPhones.length > 0) && (
+          <Section title="Contact Methods" icon={Mail} iconColor="text-blue-400" count={allEmails.length + allPhones.length}>
             <div className="space-y-2 text-xs">
-              {contactInfo.emails.length > 0 && (
+              {allEmails.length > 0 && (
                 <div>
                   <p className="text-[10px] font-semibold uppercase text-muted-foreground/40">Emails</p>
-                  {contactInfo.emails.map((e) => <a key={e} href={`mailto:${e}`} className="block font-mono text-zbooni-teal transition-colors hover:text-zbooni-green">{e}</a>)}
+                  {allEmails.map((e) => <a key={e} href={`mailto:${e}`} className="block font-mono text-zbooni-teal transition-colors hover:text-zbooni-green">{e}</a>)}
                 </div>
               )}
-              {contactInfo.phones.length > 0 && (
+              {allPhones.length > 0 && (
                 <div>
                   <p className="text-[10px] font-semibold uppercase text-muted-foreground/40">Phones</p>
-                  {contactInfo.phones.map((p) => <a key={p} href={`tel:${p}`} className="block font-mono text-foreground/70 transition-colors hover:text-foreground">{p}</a>)}
+                  {allPhones.map((p) => <a key={p} href={`tel:${p}`} className="block font-mono text-foreground/70 transition-colors hover:text-foreground">{p}</a>)}
                 </div>
               )}
-              {contactInfo.addresses.length > 0 && (
-                <div>
-                  <p className="text-[10px] font-semibold uppercase text-muted-foreground/40">Addresses</p>
-                  {contactInfo.addresses.map((a) => <p key={a} className="text-foreground/70">{a}</p>)}
-                </div>
-              )}
+            </div>
+          </Section>
+        )}
+
+        {/* Location (D6: addresses separate) */}
+        {contactInfo.addresses.length > 0 && (
+          <Section title="Location" icon={MapPin} iconColor="text-blue-400" count={contactInfo.addresses.length}>
+            <div className="space-y-1 text-xs">
+              {contactInfo.addresses.map((a) => <p key={a} className="text-foreground/70">{a}</p>)}
             </div>
           </Section>
         )}
@@ -503,18 +572,6 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
                 <div>
                   <p className="text-[10px] font-semibold uppercase text-muted-foreground/40">Media Count</p>
                   <p className="text-sm font-bold">{igData.mediaCount.toLocaleString()}</p>
-                </div>
-              )}
-              {igData.businessEmail && (
-                <div>
-                  <p className="text-[10px] font-semibold uppercase text-muted-foreground/40">Business Email</p>
-                  <a href={`mailto:${igData.businessEmail}`} className="font-mono text-xs text-zbooni-teal transition-colors hover:text-zbooni-green">{igData.businessEmail}</a>
-                </div>
-              )}
-              {igData.businessPhone && (
-                <div>
-                  <p className="text-[10px] font-semibold uppercase text-muted-foreground/40">Business Phone</p>
-                  <a href={`tel:${igData.businessPhone}`} className="font-mono text-xs text-foreground/70 transition-colors hover:text-foreground">{igData.businessPhone}</a>
                 </div>
               )}
               {igData.bio && (
@@ -550,16 +607,24 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
           </Section>
         )}
 
-        {/* Team Members (from business_contacts) */}
+        {/* Team Members (D8: primary/alternative badges + source) */}
         {contacts.length > 0 && (
           <Section title="Team Members" icon={Users} iconColor="text-amber-400" count={contacts.length} defaultOpen>
             <div className="space-y-2">
-              {contacts.map((tm) => (
+              {contacts.map((tm, idx) => (
                 <div key={tm.id} className="flex items-center gap-3 rounded-lg border border-border/20 bg-slate-800 px-3 py-2">
                   <div className="flex h-7 w-7 items-center justify-center rounded-md bg-amber-500/10 text-[10px] font-bold text-amber-400">{tm.fullName.charAt(0)}</div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-semibold truncate">{tm.fullName}</p>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-xs font-semibold truncate">{tm.fullName}</p>
+                      {idx === 0 ? (
+                        <span className="shrink-0 rounded-full bg-zbooni-green/15 px-1.5 py-0.5 text-[9px] font-bold text-zbooni-green">Primary</span>
+                      ) : (
+                        <span className="shrink-0 rounded-full bg-muted/20 px-1.5 py-0.5 text-[9px] font-bold text-muted-foreground/50">Alternative</span>
+                      )}
+                    </div>
                     {tm.jobTitle ? <p className="text-[10px] text-muted-foreground/50 truncate">{tm.jobTitle}</p> : null}
+                    {tm.source ? <p className="text-[9px] text-muted-foreground/30">{tm.source}</p> : null}
                   </div>
                   <div className="flex shrink-0 gap-1.5">
                     {tm.email ? (
@@ -569,7 +634,7 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
                     ) : null}
                     {tm.linkedinUrl ? (
                       <a href={tm.linkedinUrl} target="_blank" rel="noopener noreferrer" title="LinkedIn" className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
-                        <ExternalLink className="h-3 w-3" />
+                        <Linkedin className="h-3 w-3" />
                       </a>
                     ) : null}
                   </div>
@@ -612,7 +677,18 @@ export default function BusinessIntelligencePage() {
   const [page, setPage] = useState(1);
   const pageSize = 30;
 
-  const fetchBusinesses = useCallback(async (pageNum: number) => {
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const fetchBusinesses = useCallback(async (pageNum: number, search: string) => {
     setIsLoading(true);
     setError(null);
     try {
@@ -620,12 +696,19 @@ export default function BusinessIntelligencePage() {
       const from = (pageNum - 1) * pageSize;
       const to = from + pageSize - 1;
 
-      const { data, error: fetchError, count } = await supabase
+      let query = supabase
         .from('businesses')
         .select(
           'id,name,country_code,country,city,category,rating,review_count,follower_count,deterministic_score,score_band,has_whatsapp,has_instagram,accepts_online_payments,recent_activity,website_domain,phone_e164,instagram_handle,pre_qualified,disqualification_reason,apify_website_scrape_json,apify_instagram_scrape_json,website_scraped_at,instagram_scraped_at,created_at,updated_at',
           { count: 'exact' },
-        )
+        );
+
+      // D11: Server-side search
+      if (search) {
+        query = query.or(`name.ilike.%${search}%,category.ilike.%${search}%,website_domain.ilike.%${search}%,city.ilike.%${search}%,instagram_handle.ilike.%${search}%`);
+      }
+
+      const { data, error: fetchError, count } = await query
         .order('deterministic_score', { ascending: false })
         .order('updated_at', { ascending: false })
         .range(from, to);
@@ -692,8 +775,8 @@ export default function BusinessIntelligencePage() {
   }, []);
 
   useEffect(() => {
-    void fetchBusinesses(page);
-  }, [page, fetchBusinesses]);
+    void fetchBusinesses(page, debouncedSearch);
+  }, [page, debouncedSearch, fetchBusinesses]);
 
   // Fetch business_contacts when a business is selected
   useEffect(() => {
@@ -713,12 +796,13 @@ export default function BusinessIntelligencePage() {
           .limit(10);
 
         if (contacts && contacts.length > 0 && !cancelled) {
-          setSelectedContacts(contacts.map((c: { id: string; name: string; title: string | null; email: string | null; linkedinUrl: string | null }) => ({
+          setSelectedContacts(contacts.map((c: { id: string; name: string; title: string | null; email: string | null; linkedinUrl: string | null; source: string | null }) => ({
             id: c.id,
             fullName: c.name,
             jobTitle: c.title,
             email: c.email,
             linkedinUrl: c.linkedinUrl,
+            source: (c.source as string) ?? null,
           })));
         } else if (!cancelled) {
           // Fallback: extract decision makers from website scrape data
@@ -733,6 +817,7 @@ export default function BusinessIntelligencePage() {
                 jobTitle: typeof dm.title === 'string' ? dm.title : null,
                 email: typeof dm.email === 'string' ? dm.email : null,
                 linkedinUrl: typeof dm.linkedinUrl === 'string' ? dm.linkedinUrl : null,
+                source: 'Website',
               })));
             }
           }
@@ -745,17 +830,8 @@ export default function BusinessIntelligencePage() {
     return () => { cancelled = true; };
   }, [selectedId]);
 
-  const filtered = useMemo(() => {
-    if (!searchQuery.trim()) return businesses;
-    const q = searchQuery.toLowerCase();
-    return businesses.filter((b) =>
-      b.name.toLowerCase().includes(q) ||
-      (b.category ?? '').toLowerCase().includes(q) ||
-      (b.city ?? '').toLowerCase().includes(q) ||
-      (b.website_domain ?? '').toLowerCase().includes(q) ||
-      (b.instagram_handle ?? '').toLowerCase().includes(q),
-    );
-  }, [businesses, searchQuery]);
+  // Server-side search via debouncedSearch already filters businesses
+  const filtered = businesses;
 
   const selected = selectedId ? businesses.find((b) => b.id === selectedId) ?? null : null;
   const totalPages = Math.ceil(total / pageSize);

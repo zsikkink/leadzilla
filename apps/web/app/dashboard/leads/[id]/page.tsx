@@ -1,8 +1,11 @@
 'use client';
 
 import {
+  AlertCircle,
+  AlertTriangle,
   ArrowLeft,
   Brain,
+  Briefcase,
   Building2,
   ExternalLink,
   Globe,
@@ -16,17 +19,18 @@ import {
   Phone,
   RefreshCw,
   Shield,
+  TrendingUp,
   User,
   Users,
-  Briefcase,
-  AlertCircle,
-  TrendingUp,
 } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { AboutBusinessCard } from '../../../../src/components/about-business-card.js';
 import { LeadStatusBadge } from '../../../../src/components/lead-status-badge.js';
 import { ScoreBandBadge } from '../../../../src/components/score-band-badge.js';
+import { ScoringBreakdown } from '../../../../src/components/scoring-breakdown.js';
+import { SocialLinkIcon } from '../../../../src/components/social-link-icon.js';
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
 import { countryName } from '../../../../src/lib/countries.js';
@@ -121,6 +125,8 @@ interface BusinessScrapeData {
   reviewCount: number | null;
   followerCount: number | null;
   category: string | null;
+  countryCode: string | null;
+  city: string | null;
 }
 
 interface DecisionMaker { name: string; title: string; email?: string | undefined; linkedinUrl?: string | undefined }
@@ -218,29 +224,73 @@ function extractContactAddresses(scrape: Record<string, unknown>): ContactAddres
   return [];
 }
 
+function mergeSocialLinks(
+  websiteScrape: Record<string, unknown> | null,
+  instagramHandle: string | null,
+  instagramScrape: Record<string, unknown> | null,
+): SocialLink[] {
+  const links: SocialLink[] = [];
+  const seen = new Set<string>();
+
+  // From website scrape socialLinks
+  if (websiteScrape) {
+    const raw = extractBusinessSocialLinks(websiteScrape);
+    for (const sl of raw) {
+      const key = sl.platform.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        links.push(sl);
+      }
+    }
+  }
+
+  // From Business.instagramHandle
+  if (instagramHandle && !seen.has('instagram')) {
+    seen.add('instagram');
+    links.push({ platform: 'Instagram', url: `https://instagram.com/${instagramHandle}`, handle: instagramHandle });
+  }
+
+  // From Instagram scraper data — if we have IG data, ensure it shows
+  if (instagramScrape && !seen.has('instagram')) {
+    const handle = instagramScrape.username as string | undefined;
+    if (handle) {
+      seen.add('instagram');
+      links.push({ platform: 'Instagram', url: `https://instagram.com/${handle}`, handle });
+    }
+  }
+
+  return links;
+}
+
 function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
   const ws = data.websiteScrape;
   const ig = data.instagramScrape;
 
   const decisionMakers = ws ? extractBusinessDecisionMakers(ws) : [];
   const techStack = ws ? extractBusinessTechStack(ws) : [];
-  const socialLinks = ws ? extractBusinessSocialLinks(ws) : [];
+  const mergedSocialLinks = mergeSocialLinks(ws, data.instagramHandle, ig);
   const certs = ws ? extractBusinessCertifications(ws) : [];
   const emails = ws ? extractContactEmails(ws) : [];
   const phones = ws ? extractContactPhones(ws) : [];
   const addresses = ws ? extractContactAddresses(ws) : [];
 
-  const igVerified = ig ? Boolean(ig.isVerified) : false;
-  const igCategory = ig ? (ig.businessCategory as string) ?? null : null;
-  const igMediaCount = ig && typeof ig.mediaCount === 'number' ? ig.mediaCount : null;
-  const igBio = ig && typeof ig.biography === 'string' ? ig.biography : null;
+  // Add Instagram business email/phone to contact methods
   const igBusinessEmail = ig && typeof ig.businessEmail === 'string' ? ig.businessEmail : null;
   const igBusinessPhone = ig && typeof ig.businessPhone === 'string' ? ig.businessPhone : null;
+  const allEmails = [...emails];
+  if (igBusinessEmail && !allEmails.some((e) => e.email === igBusinessEmail)) {
+    allEmails.push({ email: igBusinessEmail, context: 'Instagram' });
+  }
+  const allPhones = [...phones];
+  if (igBusinessPhone && !allPhones.some((p) => p.number === igBusinessPhone)) {
+    allPhones.push({ number: igBusinessPhone, type: 'Instagram' });
+  }
+
+  const igMediaCount = ig && typeof ig.mediaCount === 'number' ? ig.mediaCount : null;
 
   const hasAnyData =
-    decisionMakers.length > 0 || techStack.length > 0 || socialLinks.length > 0 ||
-    certs.length > 0 || emails.length > 0 || phones.length > 0 || addresses.length > 0 ||
-    igVerified || igCategory || igBio;
+    decisionMakers.length > 0 || techStack.length > 0 || mergedSocialLinks.length > 0 ||
+    certs.length > 0 || allEmails.length > 0 || allPhones.length > 0 || addresses.length > 0;
 
   if (!hasAnyData) {
     return (
@@ -280,14 +330,14 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
         )}
       </div>
 
-      {/* Contact Information */}
-      {(emails.length > 0 || phones.length > 0 || addresses.length > 0) && (
+      {/* Contact Methods (D6: emails + phones at top) */}
+      {(allEmails.length > 0 || allPhones.length > 0) && (
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">
-            <Mail className="mr-1 inline h-3 w-3" />Contact Information
+            <Mail className="mr-1 inline h-3 w-3" />Contact Methods
           </p>
           <div className="grid gap-2 sm:grid-cols-2">
-            {emails.map((e, i) => (
+            {allEmails.map((e, i) => (
               <a
                 key={i}
                 href={`mailto:${e.email}`}
@@ -298,7 +348,7 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
                 {e.context && <span className="ml-auto text-[10px] text-muted-foreground/40">{e.context}</span>}
               </a>
             ))}
-            {phones.map((p, i) => (
+            {allPhones.map((p, i) => (
               <a
                 key={i}
                 href={`tel:${p.number}`}
@@ -309,6 +359,17 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
                 {p.type && <span className="ml-auto text-[10px] text-muted-foreground/40">{p.type}</span>}
               </a>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Location (D6: addresses below) */}
+      {addresses.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">
+            <MapPin className="mr-1 inline h-3 w-3" />Location
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
             {addresses.map((a, i) => (
               <div
                 key={i}
@@ -354,57 +415,26 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
         </div>
       )}
 
-      {/* Social Presence */}
-      {socialLinks.length > 0 && (
+      {/* Social Presence (D5: platform icons, D7: merged sources) */}
+      {mergedSocialLinks.length > 0 && (
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">
             <Globe className="mr-1 inline h-3 w-3" />Social Presence
           </p>
           <div className="flex flex-wrap gap-2">
-            {socialLinks.map((sl, i) => (
+            {mergedSocialLinks.map((sl, i) => (
               <a
                 key={i}
-                href={sl.url}
+                href={sl.url.startsWith('http') ? sl.url : `https://${sl.url}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 rounded-full border border-border/30 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground transition-colors hover:text-zbooni-teal hover:border-zbooni-teal/30"
               >
+                <SocialLinkIcon platform={sl.platform} className="h-3 w-3" />
                 {sl.platform}
                 <ExternalLink className="h-2.5 w-2.5" />
               </a>
             ))}
-          </div>
-        </div>
-      )}
-
-      {/* Instagram Analytics */}
-      {(igBio || igVerified || igCategory || igBusinessEmail || igBusinessPhone) && (
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">
-            <Instagram className="mr-1 inline h-3 w-3" />Instagram
-          </p>
-          <div className="space-y-2">
-            {(igVerified || igCategory) && (
-              <div className="flex flex-wrap gap-2">
-                {igVerified && <span className="rounded-full bg-blue-500/10 px-2.5 py-1 text-[11px] font-semibold text-blue-400">Verified</span>}
-                {igCategory && <span className="rounded-full bg-pink-500/10 px-2.5 py-1 text-[11px] font-semibold text-pink-400">{igCategory}</span>}
-              </div>
-            )}
-            {igBio && (
-              <p className="text-xs text-muted-foreground/70 italic leading-relaxed">&ldquo;{igBio}&rdquo;</p>
-            )}
-            <div className="flex flex-wrap gap-2">
-              {igBusinessEmail && (
-                <a href={`mailto:${igBusinessEmail}`} className="inline-flex items-center gap-1 text-[11px] text-zbooni-teal hover:text-zbooni-green transition-colors">
-                  <Mail className="h-3 w-3" />{igBusinessEmail}
-                </a>
-              )}
-              {igBusinessPhone && (
-                <a href={`tel:${igBusinessPhone}`} className="inline-flex items-center gap-1 text-[11px] text-zbooni-teal hover:text-zbooni-green transition-colors">
-                  <Phone className="h-3 w-3" />{igBusinessPhone}
-                </a>
-              )}
-            </div>
           </div>
         </div>
       )}
@@ -465,8 +495,10 @@ export default function LeadDetailPage() {
   // Fetch linked Business scraper data via business_conversions → businesses
   const [businessData, setBusinessData] = useState<BusinessScrapeData | null>(null);
   const [businessId, setBusinessId] = useState<string | null>(null);
-  const [teamMembers, setTeamMembers] = useState<Array<{ id: string; fullName: string; jobTitle: string | null; email: string | null; linkedinUrl: string | null }>>([]);
+  const [teamMembers, setTeamMembers] = useState<Array<{ id: string; fullName: string; jobTitle: string | null; email: string | null; linkedinUrl: string | null; source: string | null }>>([]);
   const [instagramPosts, setInstagramPosts] = useState<Array<{ caption: string; likes: number; comments: number; timestamp: string; url: string | null }>>([]);
+  const [leadPhoneSource, setLeadPhoneSource] = useState<string | null>(null);
+  const [leadBusinessEmail, setLeadBusinessEmail] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     async function fetchBusiness() {
@@ -488,7 +520,7 @@ export default function LeadDetailPage() {
 
         const { data: biz } = await supabase
           .from('businesses')
-          .select('name, website_domain, instagram_handle, rating, review_count, follower_count, category, apify_website_scrape_json, apify_instagram_scrape_json')
+          .select('name, website_domain, instagram_handle, rating, review_count, follower_count, category, country_code, city, apify_website_scrape_json, apify_instagram_scrape_json')
           .eq('id', bizId)
           .single();
 
@@ -504,7 +536,20 @@ export default function LeadDetailPage() {
           reviewCount: biz.review_count,
           followerCount: biz.follower_count,
           category: biz.category,
+          countryCode: biz.country_code ?? null,
+          city: biz.city ?? null,
         });
+
+        // Fetch phoneSource and businessEmail from Lead table
+        const { data: leadExtra } = await supabase
+          .from('Lead')
+          .select('phoneSource, businessEmail')
+          .eq('id', id)
+          .single();
+        if (leadExtra && !cancelled) {
+          setLeadPhoneSource((leadExtra.phoneSource as string) ?? null);
+          setLeadBusinessEmail((leadExtra.businessEmail as string) ?? null);
+        }
 
         // Fetch team members from business_contacts table
         const { data: contacts } = await supabase
@@ -515,12 +560,13 @@ export default function LeadDetailPage() {
           .limit(10);
 
         if (contacts && contacts.length > 0 && !cancelled) {
-          setTeamMembers(contacts.map((c: { id: string; name: string; title: string | null; email: string | null; linkedinUrl: string | null }) => ({
+          setTeamMembers(contacts.map((c: { id: string; name: string; title: string | null; email: string | null; linkedinUrl: string | null; source: string | null }) => ({
             id: c.id,
             fullName: c.name,
             jobTitle: c.title,
             email: c.email,
             linkedinUrl: c.linkedinUrl,
+            source: (c.source as string) ?? null,
           })));
         } else if (!cancelled) {
           // Fallback: extract decision makers from website scrape data
@@ -534,6 +580,7 @@ export default function LeadDetailPage() {
                 jobTitle: typeof dm.title === 'string' ? dm.title : null,
                 email: typeof dm.email === 'string' ? dm.email : null,
                 linkedinUrl: typeof dm.linkedinUrl === 'string' ? dm.linkedinUrl : null,
+                source: 'Website',
               })));
             }
           }
@@ -698,6 +745,38 @@ export default function LeadDetailPage() {
           ) : null}
         </div>
 
+        {/* D9: Phone with source label + D9 business email */}
+        {(enrichmentFields.some((f) => f.label === 'Phone') || leadBusinessEmail) && (
+          <div className="mt-3 flex flex-wrap gap-3">
+            {enrichmentFields.filter((f) => f.label === 'Phone').map((f) => (
+              <div key="phone" className="flex items-center gap-2 text-sm">
+                <Phone className="h-3.5 w-3.5 text-muted-foreground/50" />
+                <a href={f.href ?? '#'} className="font-medium text-zbooni-teal hover:text-zbooni-green transition-colors">
+                  {f.value}
+                </a>
+                {leadPhoneSource && (
+                  <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${
+                    leadPhoneSource === 'APOLLO' || leadPhoneSource === 'HUNTER'
+                      ? 'bg-zbooni-green/15 text-zbooni-green'
+                      : 'bg-muted/20 text-muted-foreground/50'
+                  }`}>
+                    {leadPhoneSource === 'WEBSITE_SCRAPE' ? 'Website' : leadPhoneSource}
+                  </span>
+                )}
+              </div>
+            ))}
+            {leadBusinessEmail && (
+              <div className="flex items-center gap-2 text-sm">
+                <Mail className="h-3.5 w-3.5 text-muted-foreground/50" />
+                <a href={`mailto:${leadBusinessEmail}`} className="font-medium text-zbooni-teal hover:text-zbooni-green transition-colors">
+                  {leadBusinessEmail}
+                </a>
+                <span className="rounded-full bg-muted/20 px-1.5 py-0.5 text-[9px] font-bold text-muted-foreground/50">Business</span>
+              </div>
+            )}
+          </div>
+        )}
+
         {l.error ? (
           <div className="mt-3">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Error</p>
@@ -705,6 +784,34 @@ export default function LeadDetailPage() {
           </div>
         ) : null}
       </div>
+
+      {/* About This Business (D1) */}
+      {businessData ? (
+        <AboutBusinessCard
+          category={businessData.category}
+          metaDescription={
+            businessData.websiteScrape
+              ? ((businessData.websiteScrape.metaDescription as string) ?? null)
+              : null
+          }
+          instagramBio={
+            businessData.instagramScrape
+              ? ((businessData.instagramScrape.biography as string) ?? null)
+              : null
+          }
+          countryCode={businessData.countryCode}
+          city={businessData.city}
+          rating={businessData.rating}
+          reviewCount={businessData.reviewCount}
+        />
+      ) : null}
+
+      {/* Scoring Breakdown (D3) */}
+      <ScoringBreakdown
+        leadId={id}
+        blendedScore={scoreInfo?.blendedScore}
+        scoreBand={scoreInfo?.scoreBand}
+      />
 
       {/* Score Reasoning */}
       {scoreInfo?.reasoning && scoreInfo.reasoning.length > 0 ? (
@@ -842,7 +949,7 @@ export default function LeadDetailPage() {
         </div>
       ) : null}
 
-      {/* Team Members (from business_contacts table) */}
+      {/* Team Members (D8: Primary/Alternative badges + source labels) */}
       {teamMembers.length > 0 ? (
         <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
           <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
@@ -851,29 +958,40 @@ export default function LeadDetailPage() {
             <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">{teamMembers.length}</span>
           </h2>
           <div className="grid gap-2 sm:grid-cols-2">
-            {teamMembers.map((tm) => (
-              <div key={tm.id} className="flex items-center gap-3 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2.5">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-[11px] font-bold text-amber-400">
-                  {tm.fullName.charAt(0)}
+            {teamMembers.map((tm, idx) => {
+              const isPrimary = idx === 0 && tm.email?.toLowerCase() === l.email?.toLowerCase();
+              return (
+                <div key={tm.id} className="flex items-center gap-3 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2.5">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-[11px] font-bold text-amber-400">
+                    {tm.fullName.charAt(0)}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-sm font-semibold truncate">{tm.fullName}</p>
+                      {isPrimary ? (
+                        <span className="shrink-0 rounded-full bg-zbooni-green/15 px-1.5 py-0.5 text-[9px] font-bold text-zbooni-green">Primary</span>
+                      ) : (
+                        <span className="shrink-0 rounded-full bg-muted/20 px-1.5 py-0.5 text-[9px] font-bold text-muted-foreground/50">Alternative</span>
+                      )}
+                    </div>
+                    {tm.jobTitle ? <p className="text-[11px] text-muted-foreground/50 truncate">{tm.jobTitle}</p> : null}
+                    {tm.source ? <p className="text-[9px] text-muted-foreground/30">{tm.source}</p> : null}
+                  </div>
+                  <div className="flex shrink-0 gap-1.5">
+                    {tm.email ? (
+                      <a href={`mailto:${tm.email}`} title={tm.email} className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
+                        <Mail className="h-3.5 w-3.5" />
+                      </a>
+                    ) : null}
+                    {tm.linkedinUrl ? (
+                      <a href={tm.linkedinUrl} target="_blank" rel="noopener noreferrer" title="LinkedIn" className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
+                        <Linkedin className="h-3.5 w-3.5" />
+                      </a>
+                    ) : null}
+                  </div>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold truncate">{tm.fullName}</p>
-                  {tm.jobTitle ? <p className="text-[11px] text-muted-foreground/50 truncate">{tm.jobTitle}</p> : null}
-                </div>
-                <div className="flex shrink-0 gap-1.5">
-                  {tm.email ? (
-                    <a href={`mailto:${tm.email}`} title={tm.email} className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
-                      <Mail className="h-3.5 w-3.5" />
-                    </a>
-                  ) : null}
-                  {tm.linkedinUrl ? (
-                    <a href={tm.linkedinUrl} target="_blank" rel="noopener noreferrer" title="LinkedIn" className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
-                      <Linkedin className="h-3.5 w-3.5" />
-                    </a>
-                  ) : null}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       ) : null}
@@ -902,6 +1020,19 @@ export default function LeadDetailPage() {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      ) : null}
+
+      {/* D10: Instagram cookie expiry warning */}
+      {businessData?.instagramHandle && (
+        !businessData.instagramScrape ||
+        (businessData.instagramScrape.isVerified == null && businessData.instagramScrape.businessCategory == null)
+      ) ? (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3">
+          <div className="flex items-center gap-2 text-xs text-amber-400">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span>Instagram data may be incomplete. Authentication may need refreshing.</span>
           </div>
         </div>
       ) : null}
