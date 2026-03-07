@@ -4,6 +4,11 @@ import type { Job, SendOptions } from 'pg-boss';
 import { RetryableError } from '../errors.js';
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
 import { isProviderWithinBudget } from '../utils/pipeline-settings.js';
+import {
+  extractDecisionMakers,
+  validateExtractedContacts,
+  type LlmExtractionConfig,
+} from '../utils/llm-extraction.js';
 
 // ── Constants ──────────────────────────────────────────────────────────
 export const BUSINESS_CONVERT_JOB_NAME = 'business.convert';
@@ -200,6 +205,15 @@ export interface BusinessConvertJobDependencies {
     isConfigured: boolean;
   } | undefined;
   openAiAdapter?: OpenAiInsightGenerator | undefined;
+  linkedInSearchAdapter?: {
+    searchCompanyPeople(companyName: string, maxResults?: number): Promise<
+      | { status: 'success'; data: Array<{ name: string; title: string | null; linkedinUrl: string }> }
+      | { status: 'retryable_error'; failure: { message: string } }
+      | { status: 'terminal_error'; failure: { message: string } }
+    >;
+    isConfigured: boolean;
+  } | undefined;
+  llmExtractionConfig?: LlmExtractionConfig | undefined;
   enqueueFeaturesCompute?: ((payload: {
     runId: string;
     leadId: string;
@@ -404,6 +418,54 @@ function parseName(fullName: string): { firstName: string; lastName: string } {
     firstName: parts[0] ?? '',
     lastName: parts.slice(1).join(' '),
   };
+}
+
+// ── Name Validation ──────────────────────────────────────────────────
+
+const CORPORATE_SUFFIXES = new Set([
+  'llc', 'inc', 'ltd', 'events', 'company', 'group', 'management',
+  'corp', 'enterprise', 'international', 'services', 'solutions',
+  'corporation', 'enterprises', 'holdings', 'consulting', 'associates',
+]);
+
+const ROLE_WORDS = new Set([
+  'expert', 'skilled', 'quality', 'customer', 'support', 'control',
+  'senior', 'junior', 'assistant', 'specialist', 'consultant',
+  'installer', 'manager', 'technician', 'professional', 'certified',
+]);
+
+/**
+ * Validate that a name represents a real person, not a company name or role.
+ * Returns true if the name passes validation (is likely a real person).
+ */
+function isValidPersonName(name: string, businessName: string): boolean {
+  const trimmed = name.trim();
+
+  // Length checks
+  if (trimmed.length < 2 || trimmed.length > 50) return false;
+
+  // Just numbers or special characters
+  if (/^[\d\W]+$/.test(trimmed)) return false;
+
+  // Matches business name (case-insensitive)
+  if (trimmed.toLowerCase() === businessName.toLowerCase()) return false;
+
+  // All uppercase (company names are often ALL CAPS, e.g., "JOVIAL EVENTS")
+  // Allow 2-3 letter names that might be initials
+  if (trimmed === trimmed.toUpperCase() && trimmed.length > 3) return false;
+
+  const lowerWords = trimmed.toLowerCase().split(/\s+/);
+
+  // Contains corporate suffixes
+  for (const word of lowerWords) {
+    if (CORPORATE_SUFFIXES.has(word)) return false;
+  }
+
+  // Entire name is role words (not when a role word is part of a real name)
+  // Strip trailing 's' to catch plurals (e.g. "managers" → "manager")
+  if (lowerWords.every((w) => ROLE_WORDS.has(w) || ROLE_WORDS.has(w.replace(/s$/, '')))) return false;
+
+  return true;
 }
 
 // ── Handler ─────────────────────────────────────────────────────────────
@@ -762,7 +824,7 @@ export async function handleBusinessConvertJob(
       }
     }
     allCandidates.push({
-      name: business.name,
+      name: 'Unknown Contact',
       title: null,
       email: igEmailValid ? instagramData.businessEmail : null,
       phone: null, // Instagram businessPhone is the company's phone, not a decision maker's personal phone
@@ -933,7 +995,7 @@ export async function handleBusinessConvertJob(
           }
 
           allCandidates.push({
-            name: [hc.firstName ?? '', hc.lastName ?? ''].filter(Boolean).join(' ') || business.name,
+            name: [hc.firstName ?? '', hc.lastName ?? ''].filter(Boolean).join(' ') || 'Unknown Contact',
             title: hc.position,
             email: hc.email,
             phone: null,
@@ -982,7 +1044,7 @@ export async function handleBusinessConvertJob(
 
           apolloContactJson = ac;
           allCandidates.push({
-            name: [ac.firstName, ac.lastName].filter(Boolean).join(' ') || business.name,
+            name: [ac.firstName, ac.lastName].filter(Boolean).join(' ') || 'Unknown Contact',
             title: ac.title,
             email: ac.email,
             phone: ac.phone,
@@ -1011,18 +1073,197 @@ export async function handleBusinessConvertJob(
     );
   }
 
-  // ── 6. Select highest-authority contact as Lead ─────────────────────────
-  // Sort: seniority (executive=0, director=1, manager=2, other=3), then positionRank (lower=better)
-  // Only candidates with a valid (non-generic) email can become the lead
-  const leadCandidates = [...allCandidates]
-    .filter((c) => c.email !== null)
-    .sort((a, b) => {
-      const senDiff = seniorityRank(a.seniority) - seniorityRank(b.seniority);
-      if (senDiff !== 0) return senDiff;
-      return a.positionRank - b.positionRank;
-    });
+  // ── 5f. LLM extraction fallback — when rule-based extraction found zero valid team members (B9)
+  if (deps.llmExtractionConfig?.openAiApiKey && websiteScrapeData) {
+    const validScrapeCandidates = allCandidates.filter(
+      (c) => c.source === 'website_scrape' && isValidPersonName(c.name, business.name),
+    );
 
-  const resolvedContact = leadCandidates[0] ?? null;
+    if (validScrapeCandidates.length === 0) {
+      // Build a minimal HTML-like text from the scrape data for LLM
+      const pageText = [
+        websiteScrapeData.decisionMakers?.map((dm) => `${dm.name} - ${dm.title ?? ''}`).join('\n') ?? '',
+        websiteScrapeData.contactInfo?.emails?.map((e) => e.email).join(', ') ?? '',
+      ].join('\n');
+
+      if (pageText.trim().length > 10) {
+        const llmContacts = await extractDecisionMakers(
+          pageText,
+          business.name,
+          deps.llmExtractionConfig,
+        );
+
+        for (const llmC of llmContacts) {
+          const llmEmail = llmC.email && !isGenericEmail(llmC.email) ? llmC.email : null;
+          allCandidates.push({
+            name: llmC.name,
+            title: llmC.title,
+            email: llmEmail,
+            phone: llmC.phone,
+            linkedinUrl: null,
+            seniority: llmC.title ? classifySeniorityLocal(llmC.title) : 'other',
+            positionRank: 30,
+            source: 'website_scrape',
+            rawJson: { matchType: 'llm_extraction' },
+          });
+        }
+
+        if (llmContacts.length > 0) {
+          logger.info(
+            { ...logCtx, llmContactsFound: llmContacts.length },
+            'LLM extracted decision makers as fallback',
+          );
+        }
+      }
+    }
+  }
+
+  // ── 5g. LLM validation — filter garbage from ALL contacts (B9)
+  if (deps.llmExtractionConfig?.openAiApiKey && allCandidates.length > 0) {
+    const candidatesForValidation = allCandidates
+      .filter((c) => c.name !== 'Unknown Contact')
+      .map((c) => ({ name: c.name, title: c.title }));
+
+    if (candidatesForValidation.length > 0) {
+      const validated = await validateExtractedContacts(
+        candidatesForValidation,
+        business.name,
+        deps.llmExtractionConfig,
+      );
+
+      const fakenames = new Set(
+        validated
+          .filter((v) => !v.isRealPerson)
+          .map((v) => v.name.toLowerCase()),
+      );
+
+      if (fakenames.size > 0) {
+        // Remove fake-name candidates from allCandidates
+        for (let i = allCandidates.length - 1; i >= 0; i--) {
+          if (fakenames.has(allCandidates[i]!.name.toLowerCase())) {
+            logger.info(
+              { ...logCtx, fakeName: allCandidates[i]!.name },
+              'LLM validation rejected contact as not a real person',
+            );
+            allCandidates.splice(i, 1);
+          }
+        }
+      }
+    }
+  }
+
+  // ── 5h. Rule-based name validation — apply to ALL remaining candidates (B2)
+  for (let i = allCandidates.length - 1; i >= 0; i--) {
+    const candidate = allCandidates[i]!;
+    if (candidate.name !== 'Unknown Contact' && !isValidPersonName(candidate.name, business.name)) {
+      logger.info(
+        { ...logCtx, invalidName: candidate.name, source: candidate.source },
+        'Contact rejected by name validation',
+      );
+      allCandidates.splice(i, 1);
+    }
+  }
+
+  // ── 5i. LinkedIn verification for top candidates (B8) — limit to 1-2 searches
+  if (deps.linkedInSearchAdapter?.isConfigured) {
+    const liResult = await deps.linkedInSearchAdapter.searchCompanyPeople(business.name, 3);
+
+    if (liResult.status === 'success' && liResult.data.length > 0) {
+      logger.info(
+        { ...logCtx, linkedInResults: liResult.data.length },
+        'LinkedIn search returned results',
+      );
+
+      for (const liProfile of liResult.data) {
+        // Try to match LinkedIn profiles to existing candidates
+        const liNameLower = liProfile.name.toLowerCase();
+        let matched = false;
+
+        for (const candidate of allCandidates) {
+          const candidateNameLower = candidate.name.toLowerCase();
+          // Fuzzy match: same name or significant overlap
+          if (
+            candidateNameLower === liNameLower ||
+            candidateNameLower.includes(liNameLower) ||
+            liNameLower.includes(candidateNameLower)
+          ) {
+            candidate.linkedinUrl = liProfile.linkedinUrl;
+            matched = true;
+            break;
+          }
+        }
+
+        // If no match found, add as a new candidate (but without email)
+        if (!matched && isValidPersonName(liProfile.name, business.name)) {
+          allCandidates.push({
+            name: liProfile.name,
+            title: liProfile.title,
+            email: null,
+            phone: null,
+            linkedinUrl: liProfile.linkedinUrl,
+            seniority: liProfile.title ? classifySeniorityLocal(liProfile.title) : 'other',
+            positionRank: 40,
+            source: 'website_scrape', // Best available source designation
+            rawJson: { matchType: 'linkedin_search', linkedinUrl: liProfile.linkedinUrl },
+          });
+        }
+      }
+    } else {
+      logger.info(logCtx, 'LinkedIn search returned no results or failed');
+    }
+  }
+
+  // ── 6. Select highest-authority contact as Lead (B3 — improved priority) ──
+  // Sort: seniority (executive=0, director=1, manager=2, other=3), then positionRank (lower=better)
+  // High-authority contacts (CEO, Director, Founder) are preferred even without email
+  const sortedCandidates = [...allCandidates].sort((a, b) => {
+    const senDiff = seniorityRank(a.seniority) - seniorityRank(b.seniority);
+    if (senDiff !== 0) return senDiff;
+    return a.positionRank - b.positionRank;
+  });
+
+  // 6a. Try to infer email for high-authority candidates who lack one (B3)
+  for (const candidate of sortedCandidates) {
+    if (candidate.email !== null) continue;
+    if (seniorityRank(candidate.seniority) > 1) break; // Only for executives and directors
+
+    // Gather known emails at this domain for pattern inference
+    const knownEmails = allCandidates
+      .filter((c) => c.email !== null && c.email.endsWith(`@${domain}`))
+      .map((c) => {
+        const { firstName, lastName } = parseName(c.name);
+        return { email: c.email!, firstName, lastName };
+      });
+
+    if (knownEmails.length > 0) {
+      const inferred = await inferEmailPattern(
+        knownEmails,
+        domain,
+        [{ name: candidate.name, title: candidate.title, seniority: candidate.seniority }],
+        deps.smtpVerifier?.isConfigured ? deps.smtpVerifier : undefined,
+      );
+
+      if (inferred.length > 0) {
+        candidate.email = inferred[0]!.email;
+        logger.info(
+          { ...logCtx, email: candidate.email, candidate: candidate.name, pattern: inferred[0]!.pattern },
+          'Inferred email for high-authority candidate via pattern detection',
+        );
+      }
+    }
+  }
+
+  // 6b. Select the lead — prefer candidates with email, then by seniority
+  const leadCandidates = sortedCandidates.filter((c) => c.email !== null);
+  let resolvedContact = leadCandidates[0] ?? null;
+
+  // If no candidate has an email but a high-authority person exists, prefer them
+  if (!resolvedContact && sortedCandidates.length > 0) {
+    const topCandidate = sortedCandidates[0]!;
+    if (seniorityRank(topCandidate.seniority) <= 1) {
+      resolvedContact = topCandidate;
+    }
+  }
 
   // 6c. Both paid providers retryable → throw to trigger pg-boss retry
   if (!resolvedContact && hunterRetryable && apolloRetryable) {
@@ -1031,19 +1272,83 @@ export async function handleBusinessConvertJob(
     );
   }
 
-  // 6d. No contact from any source → terminal, can't create lead
-  if (!resolvedContact) {
+  // ── 6d. Determine phoneSource (B4) ────────────────────────────────────
+  let phoneSource: string | null = null;
+  if (resolvedContact?.phone) {
+    switch (resolvedContact.source) {
+      case 'website_scrape': phoneSource = 'WEBSITE_SCRAPE'; break;
+      case 'hunter': phoneSource = 'HUNTER'; break;
+      case 'apollo': phoneSource = 'APOLLO'; break;
+      case 'instagram': phoneSource = 'INSTAGRAM'; break;
+    }
+  }
+
+  // ── 6e. Separate generic vs personal email (B5) ────────────────────────
+  let contactEmail: string | null = resolvedContact?.email ?? null;
+  let businessEmailField: string | null = null;
+
+  if (contactEmail && isGenericEmail(contactEmail)) {
+    // Generic email goes to businessEmail, not the primary email field
+    businessEmailField = contactEmail;
+    contactEmail = null;
+  }
+
+  // If no personal email, check all candidates for any generic email to store
+  if (!businessEmailField) {
+    const genericCandidate = allCandidates.find(
+      (c) => c.email !== null && isGenericEmail(c.email),
+    );
+    if (genericCandidate) {
+      businessEmailField = genericCandidate.email;
+    }
+  }
+
+  // Also check scraped emails for generic ones to store
+  if (!businessEmailField && websiteScrapeData?.contactInfo?.emails) {
+    const genericScraped = websiteScrapeData.contactInfo.emails.find((e) =>
+      isGenericEmail(e.email),
+    );
+    if (genericScraped) {
+      businessEmailField = genericScraped.email;
+    }
+  }
+
+  // ── 6f. No usable contact → auto-reject or skip (B10) ────────────────
+  // If we have no personal email AND no generic email, can't create a lead
+  if (!contactEmail && !businessEmailField) {
+    if (!resolvedContact) {
+      logger.warn(
+        { ...logCtx, reason: 'NO_CONTACTS_FOUND', candidateCount: allCandidates.length },
+        'No decision-maker contacts found — cannot create lead',
+      );
+      await prisma.business.update({
+        where: { id: businessId },
+        data: { preQualified: false, disqualificationReason: 'NO_CONTACTS_FOUND' },
+      });
+      await tryFinalizeDiscoveryRun(discoveryRunId, logger);
+      return;
+    }
+  }
+
+  // Need a unique email for lead creation (Prisma unique constraint)
+  const leadEmail = contactEmail ?? businessEmailField;
+  if (!leadEmail) {
     logger.warn(
-      { ...logCtx, reason: 'NO_CONTACTS_FOUND', candidateCount: allCandidates.length },
-      'No decision-maker contacts with valid email found — cannot create lead',
+      { ...logCtx, reason: 'NO_EMAIL', candidateCount: allCandidates.length },
+      'No email found from any source — cannot create lead',
     );
     await prisma.business.update({
       where: { id: businessId },
-      data: { preQualified: false, disqualificationReason: 'NO_CONTACTS_FOUND' },
+      data: { preQualified: false, disqualificationReason: 'NO_EMAIL' },
     });
     await tryFinalizeDiscoveryRun(discoveryRunId, logger);
     return;
   }
+
+  // Determine if this should be auto-rejected as NO_DECISION_MAKER (B10)
+  const hasRealDecisionMaker = contactEmail !== null && resolvedContact !== null &&
+    isValidPersonName(resolvedContact.name, business.name);
+  const shouldAutoReject = !hasRealDecisionMaker;
 
   // ── 7. Derive lead source from actual provider ───────────────────────────
   let leadSource = 'SERPAPI_DISCOVERY';
@@ -1061,19 +1366,18 @@ export async function handleBusinessConvertJob(
   }
 
   // ── 8. Create Lead + BusinessConversion + BusinessContacts + CostEvents in ONE tx ─
-  const contactEmail = resolvedContact.email!;
-  const { firstName: resolvedFirstName, lastName: resolvedLastName } = parseName(resolvedContact.name);
+  const resolvedName = resolvedContact ? parseName(resolvedContact.name) : { firstName: 'Unknown', lastName: 'Contact' };
 
   const txResult = await prisma.$transaction(async (tx) => {
     // Check for existing lead with same email (dedup)
     const existingLead = await tx.lead.findFirst({
-      where: { email: contactEmail },
+      where: { email: leadEmail },
       select: { id: true },
     });
 
     if (existingLead) {
       logger.info(
-        { ...logCtx, existingLeadId: existingLead.id, email: contactEmail },
+        { ...logCtx, existingLeadId: existingLead.id, email: leadEmail },
         'Lead with this email already exists — linking via BusinessConversion',
       );
 
@@ -1107,7 +1411,7 @@ export async function handleBusinessConvertJob(
         throw err;
       });
 
-      // Create BusinessContact rows even for existing leads
+      // Create BusinessContact rows even for existing leads (store ALL discovered contacts)
       if (allCandidates.length > 0) {
         await tx.businessContact.createMany({
           data: allCandidates.slice(0, 5).map((c) => ({
@@ -1141,23 +1445,52 @@ export async function handleBusinessConvertJob(
       return { lead: existingLead, isNew: false };
     }
 
-    // Determine first/last name — use contact data, fallback to business name
-    const firstName = resolvedFirstName || business.name;
-    const lastName = resolvedLastName || '';
+    // Determine first/last name — never use business name as fallback (B1)
+    const firstName = resolvedName.firstName || 'Unknown';
+    const lastName = resolvedName.lastName || 'Contact';
 
     const lead = await tx.lead.create({
       data: {
         firstName,
         lastName,
-        email: contactEmail,
-        phone: resolvedContact.phone ?? null,
+        email: leadEmail,
+        phone: resolvedContact?.phone ?? null,
+        ...(phoneSource !== null ? { phoneSource } : {}),
+        ...(businessEmailField !== null && contactEmail !== null
+          ? { businessEmail: businessEmailField }
+          : {}),
+        ...(contactEmail === null && businessEmailField !== null
+          ? { businessEmail: businessEmailField }
+          : {}),
         businessId: business.id,
-        decisionMakerTitle: resolvedContact.title ?? null,
-        decisionMakerPhone: resolvedContact.phone ?? null,
+        decisionMakerTitle: resolvedContact?.title ?? null,
+        decisionMakerPhone: resolvedContact?.phone ?? null,
         source: leadSource,
-        status: 'new',
+        status: shouldAutoReject ? 'rejected' : 'new',
       },
     });
+
+    // Auto-reject: create LeadRejection record (B10)
+    if (shouldAutoReject) {
+      await tx.leadRejection.create({
+        data: {
+          leadId: lead.id,
+          businessId: business.id,
+          domain,
+          icpProfileId,
+          reason: 'NO_DECISION_MAKER',
+          rejectedBy: 'system:business.convert',
+          metadata: toInputJson({
+            candidateCount: allCandidates.length,
+            hasGenericEmailOnly: contactEmail === null && businessEmailField !== null,
+          }),
+        },
+      });
+      logger.info(
+        { ...logCtx, leadId: lead.id, reason: 'NO_DECISION_MAKER' },
+        'Lead auto-rejected — no valid decision maker found',
+      );
+    }
 
     await tx.businessConversion.create({
       data: {
@@ -1172,12 +1505,12 @@ export async function handleBusinessConvertJob(
           : Prisma.JsonNull,
         apolloHasEmail,
         apolloHasDirectPhone,
-        metadata: toInputJson({ contactSource: resolvedContact.source, discoveryRunId }),
+        metadata: toInputJson({ contactSource: resolvedContact?.source ?? 'unknown', discoveryRunId }),
         ...(businessInsights !== null ? { businessInsights } : {}),
       },
     });
 
-    // Create BusinessContact rows for all scraped contacts (max 5)
+    // Create BusinessContact rows for ALL scraped contacts (store all discovered contacts)
     if (allCandidates.length > 0) {
       await tx.businessContact.createMany({
         data: allCandidates.slice(0, 5).map((c) => ({
@@ -1211,8 +1544,8 @@ export async function handleBusinessConvertJob(
     return { lead, isNew: true };
   });
 
-  // ── 9. Enqueue features.compute if lead is newly created ────────────────
-  if (txResult.isNew && deps.enqueueFeaturesCompute) {
+  // ── 9. Enqueue features.compute if lead is newly created and NOT auto-rejected ─
+  if (txResult.isNew && !shouldAutoReject && deps.enqueueFeaturesCompute) {
     await deps.enqueueFeaturesCompute({
       runId: discoveryRunId,
       leadId: txResult.lead.id,
@@ -1233,7 +1566,8 @@ export async function handleBusinessConvertJob(
       ...logCtx,
       leadId: txResult.lead.id,
       isNewLead: txResult.isNew,
-      contactSource: resolvedContact.source,
+      autoRejected: shouldAutoReject,
+      contactSource: resolvedContact?.source ?? 'none',
       businessContactCount: Math.min(allCandidates.length, 5),
       paidProvidersCalled: costEvents.length,
       leadSource,

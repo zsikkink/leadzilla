@@ -22,6 +22,7 @@ import {
 import { getDeterministicAiBlend, getScoreTierBands } from '../utils/pipeline-settings.js';
 
 export const SCORING_COMPUTE_JOB_NAME = 'scoring.compute';
+/** Batch/API-triggered scoring singleton key. Per-lead scoring (from features.compute) uses a 3-part key: scoring.compute:${runId}:${leadId}:${icpProfileId} */
 export const SCORING_COMPUTE_IDEMPOTENCY_KEY_PATTERN = 'scoring.compute:${runId}';
 
 export const SCORING_COMPUTE_RETRY_OPTIONS: Pick<
@@ -307,6 +308,49 @@ export async function handleScoringComputeJob(
         });
 
         persistedPredictions += 1;
+
+        // ── Lead status transition + rejection tracking ──────────────
+        const isRejected = !deterministic.hardFilterPassed || blendedScore < qualificationThreshold;
+        await prisma.lead.update({
+          where: { id: targetLeadId },
+          data: { status: isRejected ? 'rejected' : 'qualified' },
+        });
+
+        if (isRejected) {
+          const rejectionReason = !deterministic.hardFilterPassed ? 'HARD_FILTER_FAILED' : 'BELOW_THRESHOLD';
+          const failedFilters = deterministic.reasonCodes
+            .filter((c) => c.startsWith('HARD_FILTER_FAILED_'))
+            .map((c) => c.replace('HARD_FILTER_FAILED_', ''));
+
+          await prisma.leadRejection.upsert({
+            where: { leadId: targetLeadId },
+            create: {
+              leadId: targetLeadId,
+              icpProfileId: targetIcpId,
+              score: blendedScore,
+              reason: rejectionReason,
+              rejectedBy: 'SYSTEM',
+              ...(rejectionReason === 'HARD_FILTER_FAILED' && failedFilters.length > 0
+                ? { metadata: toInputJson({ filters: failedFilters }) }
+                : {}),
+            },
+            update: {
+              icpProfileId: targetIcpId,
+              score: blendedScore,
+              reason: rejectionReason,
+              rejectedBy: 'SYSTEM',
+              rejectedAt: new Date(),
+              ...(rejectionReason === 'HARD_FILTER_FAILED' && failedFilters.length > 0
+                ? { metadata: toInputJson({ filters: failedFilters }) }
+                : {}),
+            },
+          });
+
+          logger.info(
+            { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, blendedScore, reason: rejectionReason },
+            `Lead rejected — ${rejectionReason}`,
+          );
+        }
 
         if (blendedScore >= qualificationThreshold) {
           // Prefer apollo.enrich (post-scoring reveal) over direct message.generate

@@ -520,10 +520,10 @@ function isValidDecisionMakerName(name: string, businessName?: string | undefine
     return false;
   }
 
-  // C3: Reject names containing blocklisted words
+  // C3: Reject names containing blocklisted words (strip trailing 's' to catch plurals)
   const words = trimmed.toLowerCase().split(/\s+/);
   for (const word of words) {
-    if (NAME_BLOCKLIST_WORDS.has(word)) {
+    if (NAME_BLOCKLIST_WORDS.has(word) || NAME_BLOCKLIST_WORDS.has(word.replace(/s$/, ''))) {
       return false;
     }
   }

@@ -133,20 +133,28 @@ function normalizeCountry(value: unknown): string | null {
     return null;
   }
 
-  if (['uae', 'ae', 'united arab emirates'].includes(normalized)) {
-    return 'UAE';
-  }
-  if (['ksa', 'saudi arabia', 'sa'].includes(normalized)) {
-    return 'KSA';
-  }
-  if (['jordan', 'jo'].includes(normalized)) {
-    return 'Jordan';
-  }
-  if (['egypt', 'eg'].includes(normalized)) {
-    return 'Egypt';
-  }
+  const COUNTRY_MAP: Record<string, string> = {
+    uae: 'UAE', ae: 'UAE', 'united arab emirates': 'UAE',
+    ksa: 'KSA', 'saudi arabia': 'KSA', sa: 'KSA',
+    jordan: 'Jordan', jo: 'Jordan',
+    egypt: 'Egypt', eg: 'Egypt',
+    bahrain: 'Bahrain', bh: 'Bahrain',
+    kuwait: 'Kuwait', kw: 'Kuwait',
+    oman: 'Oman', om: 'Oman',
+    qatar: 'Qatar', qa: 'Qatar',
+    lebanon: 'Lebanon', lb: 'Lebanon',
+    iraq: 'Iraq', iq: 'Iraq',
+    morocco: 'Morocco', ma: 'Morocco',
+    tunisia: 'Tunisia', tn: 'Tunisia',
+    algeria: 'Algeria', dz: 'Algeria',
+    libya: 'Libya', ly: 'Libya',
+    yemen: 'Yemen', ye: 'Yemen',
+    syria: 'Syria', sy: 'Syria',
+    palestine: 'Palestine', ps: 'Palestine',
+    sudan: 'Sudan', sd: 'Sudan',
+  };
 
-  return normalized.toUpperCase();
+  return COUNTRY_MAP[normalized] ?? normalized.toUpperCase();
 }
 
 function asNumber(value: unknown): number | null {

@@ -269,8 +269,48 @@ export async function handleScoringBatchJob(
 
         scored += 1;
 
-        // Transition lead to enriched now that it has a score
-        await prisma.lead.update({ where: { id: lead.id }, data: { status: 'enriched' } });
+        // ── Lead status transition + rejection tracking ──────────────
+        const isRejected = !deterministic.hardFilterPassed || blendedScore < qualificationThreshold;
+        await prisma.lead.update({
+          where: { id: lead.id },
+          data: { status: isRejected ? 'rejected' : 'qualified' },
+        });
+
+        if (isRejected) {
+          const rejectionReason = !deterministic.hardFilterPassed ? 'HARD_FILTER_FAILED' : 'BELOW_THRESHOLD';
+          const failedFilters = deterministic.reasonCodes
+            .filter((c) => c.startsWith('HARD_FILTER_FAILED_'))
+            .map((c) => c.replace('HARD_FILTER_FAILED_', ''));
+
+          await prisma.leadRejection.upsert({
+            where: { leadId: lead.id },
+            create: {
+              leadId: lead.id,
+              icpProfileId: targetIcpId,
+              score: blendedScore,
+              reason: rejectionReason,
+              rejectedBy: 'SYSTEM',
+              ...(rejectionReason === 'HARD_FILTER_FAILED' && failedFilters.length > 0
+                ? { metadata: toInputJson({ filters: failedFilters }) }
+                : {}),
+            },
+            update: {
+              icpProfileId: targetIcpId,
+              score: blendedScore,
+              reason: rejectionReason,
+              rejectedBy: 'SYSTEM',
+              rejectedAt: new Date(),
+              ...(rejectionReason === 'HARD_FILTER_FAILED' && failedFilters.length > 0
+                ? { metadata: toInputJson({ filters: failedFilters }) }
+                : {}),
+            },
+          });
+
+          logger.info(
+            { jobId: job.id, leadId: lead.id, blendedScore, reason: rejectionReason },
+            `Lead rejected — ${rejectionReason}`,
+          );
+        }
 
         // Enqueue message generation for qualified leads
         if (blendedScore >= qualificationThreshold && deps?.enqueueMessageGenerate) {
