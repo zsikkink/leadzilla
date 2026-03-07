@@ -5,7 +5,20 @@ import type {
   SearchRefreshBucket,
 } from './providers/types.js';
 
-const COUNTRY_SET = new Set<DiscoveryCountryCode>(['JO', 'SA', 'AE', 'EG']);
+/**
+ * All valid MENA country codes — must match DiscoveryCountryCode exactly.
+ * `satisfies` ensures compile error if the type changes but this array doesn't.
+ */
+const ALL_COUNTRY_CODES = [
+  'JO', 'SA', 'AE', 'EG',
+  'QA', 'BH', 'KW', 'OM', 'LB',
+  'IQ', 'MA', 'TN', 'DZ', 'LY',
+  'YE', 'SY', 'PS', 'SD',
+] as const satisfies readonly DiscoveryCountryCode[];
+
+const COUNTRY_SET = new Set<DiscoveryCountryCode>(ALL_COUNTRY_CODES);
+
+export { ALL_COUNTRY_CODES };
 const LANGUAGE_SET = new Set<DiscoveryLanguageCode>(['en', 'ar']);
 const DEFAULT_DISCOVERY_MAPS_ZOOM = 13;
 const TASK_TYPE_SET = new Set<SearchTaskType>([

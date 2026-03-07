@@ -84,6 +84,7 @@ export const LeadInspectionResponseSchema = z
     latestIcpProfileId: z.string().nullable(),
     latestScoreBand: LeadScoreBandSchema.nullable(),
     latestBlendedScore: z.number().nullable(),
+    latestScorePredictionId: z.string().nullable(),
     latestDiscoveryRawPayload: z.unknown().nullable(),
     latestEnrichmentNormalizedPayload: z.unknown().nullable(),
     latestEnrichmentRawPayload: z.unknown().nullable(),

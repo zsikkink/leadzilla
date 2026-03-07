@@ -583,6 +583,7 @@ async function main(): Promise<void> {
                 ? scoreInfoFallback.scoreBand : null),
             latestBlendedScore: lead.scorePredictions[0]?.blendedScore
               ?? (typeof scoreInfoFallback?.blendedScore === 'number' ? scoreInfoFallback.blendedScore : null),
+            latestScorePredictionId: lead.scorePredictions[0]?.id ?? null,
             latestDiscoveryRawPayload: lead.discoveryRecords[0]?.rawPayload ?? null,
             latestEnrichmentNormalizedPayload: lead.enrichmentRecords[0]?.normalizedPayload ?? enrichmentFallback ?? null,
             latestEnrichmentRawPayload: lead.enrichmentRecords[0]?.rawPayload ?? null,

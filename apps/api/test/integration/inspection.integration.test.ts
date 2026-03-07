@@ -280,6 +280,7 @@ describe('inspection endpoints integration', () => {
             latestIcpProfileId: row.discoveryRecords[0]?.icpProfileId ?? null,
             latestScoreBand: row.scorePredictions[0]?.scoreBand ?? null,
             latestBlendedScore: row.scorePredictions[0]?.blendedScore ?? null,
+            latestScorePredictionId: row.scorePredictions[0]?.id ?? null,
             latestDiscoveryRawPayload: row.discoveryRecords[0]?.rawPayload ?? null,
             latestEnrichmentNormalizedPayload: row.enrichmentRecords[0]?.normalizedPayload ?? null,
             latestEnrichmentRawPayload: row.enrichmentRecords[0]?.rawPayload ?? null,

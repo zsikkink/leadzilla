@@ -150,12 +150,13 @@ export default function LeadsPage() {
     });
   };
 
-  const handleGenerateMessage = async (leadId: string, icpProfileId: string, firstName: string) => {
+  const handleGenerateMessage = async (leadId: string, icpProfileId: string, firstName: string, scorePredictionId: string | null) => {
     setGeneratingForLead(leadId);
     try {
       await apiClient.generateDraft({
         leadId,
         icpProfileId,
+        ...(scorePredictionId ? { scorePredictionId } : {}),
         promptVersion: 'v2',
       });
       toast.success(`Message draft generated for ${firstName}`);
@@ -341,7 +342,7 @@ export default function LeadsPage() {
                                   title="Generate message draft"
                                   disabled={generatingForLead === lead.id}
                                   className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-zbooni-teal/15 hover:text-zbooni-teal disabled:opacity-50"
-                                  onClick={() => handleGenerateMessage(lead.id, lead.latestIcpProfileId!, lead.firstName ?? '')}
+                                  onClick={() => handleGenerateMessage(lead.id, lead.latestIcpProfileId!, lead.firstName ?? '', lead.latestScorePredictionId ?? null)}
                                 >
                                   {generatingForLead === lead.id ? (
                                     <Loader2 className="h-3.5 w-3.5 animate-spin" />

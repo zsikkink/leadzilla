@@ -59,6 +59,9 @@ IMPORTANT: Fix all errors before committing. Do not skip steps.
 - **Say "I don't know"**: If you don't have enough information to answer, say so. Fabricating a plausible-sounding answer is worse than admitting ignorance. "I'd need to read X before I can answer that" is always acceptable.
 - **Hold your position or explain the change**: If you held position A, and the user challenges it, do not immediately switch to position B. Either (1) defend A with reasoning, or (2) explicitly acknowledge "I was wrong about A because [specific reason], and B is correct because [specific evidence]." The phrase "you're right" must always be followed by WHY.
 
+## Communication
+- The user is a non-technical founder. Explain technical concepts in plain English — what it does, why it matters, what breaks. Use technical terms but pair them with context so they make sense at a "plumbing level." Don't strip jargon entirely, just make it accessible.
+
 ## Self-Improvement
 After any correction or mistake: update CLAUDE.md or module CLAUDE.md so the error doesn't recur. Ask "should I update CLAUDE.md?" after receiving corrections.
 
