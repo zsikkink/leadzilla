@@ -682,13 +682,15 @@ model SearchTask {
   error              String?
   createdAt          DateTime         @default(now()) @map("created_at")
   updatedAt          DateTime         @updatedAt @map("updated_at")
+  discoveryRunId     String?          @map("discovery_run_id")
 
   discoveredSources  Source[]
   businessEvidence   BusinessEvidence[]
 
-  @@unique([taskType, queryHash])
+  @@unique([taskType, queryHash, discoveryRunId])
   @@index([status, runAfter])
   @@index([countryCode, language, timeBucket])
+  @@index([discoveryRunId])
   @@map("search_tasks")
 }
 

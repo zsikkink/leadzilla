@@ -44,7 +44,7 @@ async function purgeCompletedSearchTasks(
   while (hasMore) {
     const batch = await prisma.searchTask.findMany({
       where: {
-        status: { in: ['DONE', 'FAILED'] },
+        status: { in: ['DONE', 'FAILED', 'SKIPPED'] },
         updatedAt: { lt: cutoff },
       },
       select: { id: true },

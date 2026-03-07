@@ -282,7 +282,7 @@ export async function handleDiscoverySeedJob(
       );
     }
 
-    const seedResult = await seedSearchTasks(seedConfig, new Date(), icpSeedConfig);
+    const seedResult = await seedSearchTasks(seedConfig, new Date(), icpSeedConfig, job.data.discoveryRunId);
 
     logger.info(
       {

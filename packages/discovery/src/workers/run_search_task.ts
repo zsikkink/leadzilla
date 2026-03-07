@@ -41,6 +41,7 @@ interface SearchTaskRow {
   attempts: number;
   run_after: Date;
   last_result_hash: string | null;
+  discovery_run_id: string | null;
 }
 
 interface TaskProcessStats {
@@ -373,6 +374,9 @@ async function lockNextRunnableTask(
     const timeBucketFilter = options.timeBucket
       ? Prisma.sql`AND "time_bucket" = ${options.timeBucket}`
       : Prisma.empty;
+    const discoveryRunFilter = options.discoveryRunId
+      ? Prisma.sql`AND "discovery_run_id" = ${options.discoveryRunId}`
+      : Prisma.sql`AND "discovery_run_id" IS NULL`;
     const rows = await tx.$queryRaw<SearchTaskRow[]>`
       SELECT
         id,
@@ -389,11 +393,13 @@ async function lockNextRunnableTask(
         status,
         attempts,
         run_after,
-        last_result_hash
+        last_result_hash,
+        discovery_run_id
       FROM "search_tasks"
       WHERE "status" IN ('PENDING', 'FAILED')
         AND "run_after" <= NOW()
         ${timeBucketFilter}
+        ${discoveryRunFilter}
       ORDER BY "run_after" ASC
       LIMIT 1
       FOR UPDATE SKIP LOCKED

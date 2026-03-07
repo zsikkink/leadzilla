@@ -144,6 +144,7 @@ export async function seedSearchTasks(
   >,
   now: Date = new Date(),
   icpConfig?: IcpSeedConfig | undefined,
+  discoveryRunId?: string | undefined,
 ): Promise<SeedTasksResult> {
   if (!icpConfig) {
     throw new Error(
@@ -177,6 +178,7 @@ export async function seedSearchTasks(
   let inserted = 0;
 
   for (const task of tasksToInsert) {
+    const runIdValue = discoveryRunId ?? null;
     const result = await prisma.$executeRaw`
       INSERT INTO "search_tasks" (
         "id",
@@ -194,7 +196,8 @@ export async function seedSearchTasks(
         "attempts",
         "run_after",
         "created_at",
-        "updated_at"
+        "updated_at",
+        "discovery_run_id"
       )
       VALUES (
         ${task.id},
@@ -212,9 +215,10 @@ export async function seedSearchTasks(
         0,
         NOW(),
         NOW(),
-        NOW()
+        NOW(),
+        ${runIdValue}
       )
-      ON CONFLICT ("task_type", "query_hash") DO NOTHING
+      ON CONFLICT ("task_type", "query_hash", "discovery_run_id") DO NOTHING
     `;
 
     inserted += Number(result);
