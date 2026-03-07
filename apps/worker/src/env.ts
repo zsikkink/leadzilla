@@ -45,8 +45,6 @@ const LEGACY_GOOGLE_CSE_ENV_KEYS = [
   'GOOGLE_CSE_API_KEY',
   'GOOGLE_CSE_ENGINE_ID',
   'GOOGLE_CSE_BASE_URL',
-  'GOOGLE_CUSTOM_SEARCH_API_KEY',
-  'GOOGLE_CUSTOM_SEARCH_ENGINE_ID',
   'CUSTOMSEARCH_API_KEY',
   'CUSTOMSEARCH_ENGINE_ID',
 ] as const;
@@ -146,6 +144,8 @@ const WorkerEnvSchema = z.object({
   WORKER_PREQUALIFY_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(5),
   WORKER_CONVERT_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(3),
   WORKER_FEATURES_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(5),
+  GOOGLE_CUSTOM_SEARCH_API_KEY: optionalNonEmptyString(),
+  GOOGLE_CUSTOM_SEARCH_ENGINE_ID: optionalNonEmptyString(),
 });
 
 export type WorkerEnv = z.infer<typeof WorkerEnvSchema>;
