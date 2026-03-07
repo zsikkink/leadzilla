@@ -320,6 +320,8 @@ describe('WebsiteScraperAdapter', () => {
         'example.com/about': aboutHtml,
         'example.com/contact': contactHtml,
         'example.com': homepageHtml,
+        'instagram.com/testbiz': '<html></html>',
+        'wa.me/': '<html></html>',
       });
 
       const adapter = new WebsiteScraperAdapter({

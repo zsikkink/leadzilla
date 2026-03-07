@@ -80,6 +80,7 @@ export interface WebsiteScraperData {
 
   // Page-level intelligence
   pageTitle: string | null;
+  metaDescription: string | null;
   detectedCountry: string | null;
 
   // Crawl metadata
@@ -343,6 +344,40 @@ const PLATFORM_EMAIL_DOMAINS = new Set([
   'github.com',
 ]);
 
+// ── Anchor-text keywords for link following (C1) ─────────────────────────
+
+const TEAM_ANCHOR_KEYWORDS: ReadonlyArray<{ keyword: string; priority: number }> = [
+  { keyword: 'team', priority: 0 },
+  { keyword: 'about us', priority: 1 },
+  { keyword: 'who we are', priority: 2 },
+  { keyword: 'meet the', priority: 3 },
+  { keyword: 'our people', priority: 4 },
+  { keyword: 'founders', priority: 5 },
+  { keyword: 'leadership', priority: 6 },
+  { keyword: 'management', priority: 7 },
+  { keyword: 'staff', priority: 8 },
+  { keyword: 'our experts', priority: 9 },
+  { keyword: 'about the team', priority: 10 },
+];
+
+// ── Name validation blocklist (C3) ────────────────────────────────────────
+
+const NAME_BLOCKLIST_WORDS = new Set([
+  'expert', 'skilled', 'quality', 'customer', 'support', 'control',
+  'consultant', 'installer', 'professional', 'specialist', 'assistant',
+  'associate', 'technician', 'representative', 'coordinator', 'supervisor',
+  'advisor', 'analyst', 'developer', 'designer', 'engineer', 'architect',
+]);
+
+// ── Corporate suffixes (C6) ───────────────────────────────────────────────
+
+const CORPORATE_SUFFIXES = [
+  'llc', 'inc', 'ltd', 'corp', 'company', 'co.', 'group', 'management',
+  'enterprise', 'international', 'services', 'solutions', 'holdings',
+  'associates', 'partners', 'ventures', 'agency', 'studio', 'creative',
+  'digital', 'events', 'trading', 'consulting', 'contracting',
+] as const;
+
 // ── Country detection ──────────────────────────────────────────────────────
 
 const COUNTRY_NAMES: Record<string, string> = {
@@ -390,7 +425,7 @@ function detectCountryFromPage($: cheerio.CheerioAPI): string | null {
 
 const DEFAULT_PER_PAGE_TIMEOUT_MS = 8_000;
 const DEFAULT_TOTAL_TIMEOUT_MS = 25_000;
-const DEFAULT_MAX_PAGES = 5;
+const DEFAULT_MAX_PAGES = 10;
 const DEFAULT_USER_AGENT = 'Mozilla/5.0 (compatible; LeadFlood/1.0)';
 
 function classifyStatus(statusCode: number): 'retryable' | 'terminal' {
@@ -468,6 +503,54 @@ function isGenericEmail(email: string): boolean {
 function isPlatformEmail(email: string): boolean {
   const domain = email.split('@')[1]?.toLowerCase() ?? '';
   return PLATFORM_EMAIL_DOMAINS.has(domain);
+}
+
+// ── Decision maker name validation (C3, C4, C5, C6) ──────────────────────
+
+/**
+ * Validate a potential decision maker name.
+ * Returns false (reject) if the name fails any validation rule.
+ */
+function isValidDecisionMakerName(name: string, businessName?: string | undefined): boolean {
+  const trimmed = name.trim();
+
+  // C5: Reject all-uppercase names (except 2-3 letter initials like "JK")
+  const lettersOnly = trimmed.replace(/\s/g, '');
+  if (lettersOnly.length > 3 && lettersOnly === lettersOnly.toUpperCase() && /^[A-Z]+$/.test(lettersOnly)) {
+    return false;
+  }
+
+  // C3: Reject names containing blocklisted words
+  const words = trimmed.toLowerCase().split(/\s+/);
+  for (const word of words) {
+    if (NAME_BLOCKLIST_WORDS.has(word)) {
+      return false;
+    }
+  }
+  // C3: "Executive" rejected only when used alone
+  if (trimmed.toLowerCase() === 'executive') {
+    return false;
+  }
+
+  // C6: Reject names containing corporate suffixes
+  const nameLower = trimmed.toLowerCase();
+  for (const suffix of CORPORATE_SUFFIXES) {
+    if (nameLower.includes(suffix)) {
+      return false;
+    }
+  }
+
+  // C4: Reject if name matches business name (case-insensitive substring in either direction)
+  if (businessName) {
+    const bizLower = businessName.trim().toLowerCase();
+    if (bizLower.length > 0 && nameLower.length > 0) {
+      if (nameLower === bizLower || nameLower.includes(bizLower) || bizLower.includes(nameLower)) {
+        return false;
+      }
+    }
+  }
+
+  return true;
 }
 
 // ── Email regex ────────────────────────────────────────────────────────────
@@ -644,13 +727,15 @@ function detectWhatsApp($: cheerio.CheerioAPI): boolean {
 const MAX_DECISION_MAKERS = 5;
 
 /** Extract decision makers from team/about pages. Preserves visual page order via positionRank. */
-function extractDecisionMakers($: cheerio.CheerioAPI, pageUrl: string): DecisionMaker[] {
+function extractDecisionMakers($: cheerio.CheerioAPI, pageUrl: string, businessName?: string | undefined): DecisionMaker[] {
   const makers: DecisionMaker[] = [];
   const seenNames = new Set<string>();
 
   function addMaker(dm: Omit<DecisionMaker, 'positionRank'>): void {
     if (makers.length >= MAX_DECISION_MAKERS) return;
     if (seenNames.has(dm.name.toLowerCase())) return;
+    // C3, C4, C5, C6: Validate name before adding
+    if (!isValidDecisionMakerName(dm.name, businessName)) return;
     seenNames.add(dm.name.toLowerCase());
     makers.push({ ...dm, positionRank: makers.length + 1 });
   }
@@ -1258,6 +1343,15 @@ async function fetchPageWithPlaywright(
   }
 }
 
+// ── Meta description extraction (C7) ──────────────────────────────────────
+
+function extractMetaDescription($: cheerio.CheerioAPI): string | null {
+  const desc = $('meta[name="description"]').attr('content')?.trim();
+  if (desc) return desc;
+  const ogDesc = $('meta[property="og:description"]').attr('content')?.trim();
+  return ogDesc ?? null;
+}
+
 // ── Crawl result per page ──────────────────────────────────────────────────
 
 interface PageResult {
@@ -1292,7 +1386,7 @@ export class WebsiteScraperAdapter {
     return true;
   }
 
-  async scrapeWebsite(domain: string): Promise<WebsiteScraperResult> {
+  async scrapeWebsite(domain: string, businessName?: string | undefined): Promise<WebsiteScraperResult> {
     const crawlStart = Date.now();
     const baseUrl = normaliseUrl(domain);
 
@@ -1348,7 +1442,7 @@ export class WebsiteScraperAdapter {
       }
 
       // Phase 4: Aggregate results from all pages
-      const fetchData = this.aggregateResults(pages, crawlStart);
+      const fetchData = this.aggregateResults(pages, crawlStart, businessName);
 
       // Phase 5: Playwright fallback (if enabled and quality check fails)
       if (this.enablePlaywright && needsPlaywrightFallback(fetchData, rawHomepageHtml)) {
@@ -1357,11 +1451,17 @@ export class WebsiteScraperAdapter {
           baseOrigin,
           crawledUrls,
           crawlStart,
+          businessName,
         );
         if (playwrightData) {
+          // C8: Validate social links
+          playwrightData.socialLinks = await this.validateSocialLinks(playwrightData.socialLinks);
           return { status: 'success', data: playwrightData };
         }
       }
+
+      // C8: Validate social links
+      fetchData.socialLinks = await this.validateSocialLinks(fetchData.socialLinks);
 
       return {
         status: 'success',
@@ -1381,6 +1481,7 @@ export class WebsiteScraperAdapter {
     baseOrigin: string,
     urlsToCrawl: Set<string>,
     crawlStart: number,
+    businessName?: string | undefined,
   ): Promise<WebsiteScraperData | null> {
     let chromium: BrowserType;
     try {
@@ -1427,7 +1528,7 @@ export class WebsiteScraperAdapter {
 
       if (pages.length === 0) return null;
 
-      return this.aggregateResults(pages, crawlStart);
+      return this.aggregateResults(pages, crawlStart, businessName);
     } catch {
       // Browser launch failure — skip fallback
       return null;
@@ -1539,6 +1640,7 @@ export class WebsiteScraperAdapter {
     baseOrigin: string,
     alreadyCrawled: Set<string>,
   ): string[] {
+    // Two buckets: priority-path matches (score 0-99) and anchor-text matches (score 100+)
     const candidates = new Map<string, number>();
 
     // 1. Parse all <a href> from homepage
@@ -1552,13 +1654,30 @@ export class WebsiteScraperAdapter {
         if (u.origin !== baseOrigin) return;
 
         const pathname = u.pathname;
+        const normalized = normalizeForDedup(resolved);
+        if (alreadyCrawled.has(normalized)) return;
+
+        // Priority path match (existing behavior)
         if (matchesPriorityPath(pathname)) {
-          const normalized = normalizeForDedup(resolved);
-          if (!alreadyCrawled.has(normalized)) {
-            const score = getPathPriority(pathname);
-            const existing = candidates.get(resolved);
-            if (existing === undefined || score < existing) {
-              candidates.set(resolved, score);
+          const score = getPathPriority(pathname);
+          const existing = candidates.get(resolved);
+          if (existing === undefined || score < existing) {
+            candidates.set(resolved, score);
+          }
+          return;
+        }
+
+        // C1: Anchor-text link following — check link TEXT for team keywords
+        const anchorText = $(el).text().trim().toLowerCase();
+        if (anchorText.length > 0) {
+          for (const { keyword, priority } of TEAM_ANCHOR_KEYWORDS) {
+            if (anchorText.includes(keyword)) {
+              const score = 100 + priority; // Anchor-text pages scored after priority paths
+              const existing = candidates.get(resolved);
+              if (existing === undefined || score < existing) {
+                candidates.set(resolved, score);
+              }
+              break;
             }
           }
         }
@@ -1580,6 +1699,61 @@ export class WebsiteScraperAdapter {
     return [...candidates.entries()]
       .sort((a, b) => a[1] - b[1])
       .map(([url]) => url);
+  }
+
+  /** C8: Validate social links by sending HEAD requests; remove dead links. */
+  private async validateSocialLinks(links: SocialLink[]): Promise<SocialLink[]> {
+    if (links.length === 0) return links;
+
+    const VALIDATION_TIMEOUT_MS = 5_000;
+    // Generic error pages that social platforms redirect dead links to
+    const ERROR_PATH_PATTERNS = ['/error', '/404', '/not-found', '/unavailable'];
+
+    const results = await Promise.allSettled(
+      links.map(async (link): Promise<SocialLink | null> => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), VALIDATION_TIMEOUT_MS);
+
+        try {
+          const response = await this.fetchImpl(link.url, {
+            method: 'HEAD',
+            headers: { 'User-Agent': this.userAgent },
+            redirect: 'follow',
+            signal: controller.signal,
+          });
+
+          // Dead link: 404 or 410
+          if (response.status === 404 || response.status === 410) {
+            return null;
+          }
+
+          // Check if redirected to a generic error page
+          const finalUrl = response.url;
+          if (finalUrl) {
+            try {
+              const finalPath = new URL(finalUrl).pathname.toLowerCase();
+              if (ERROR_PATH_PATTERNS.some((p) => finalPath.includes(p))) {
+                return null;
+              }
+            } catch {
+              // URL parse failure — keep the link
+            }
+          }
+
+          return link;
+        } catch {
+          // Timeout or network error — keep the link (assume valid on ambiguous failures)
+          return link;
+        } finally {
+          clearTimeout(timeout);
+        }
+      }),
+    );
+
+    return results
+      .filter((r): r is PromiseFulfilledResult<SocialLink | null> => r.status === 'fulfilled')
+      .map((r) => r.value)
+      .filter((v): v is SocialLink => v !== null);
   }
 
   /** Resolve a potentially relative URL against a base origin. */
@@ -1605,7 +1779,7 @@ export class WebsiteScraperAdapter {
   }
 
   /** Aggregate extraction results from all crawled pages. */
-  private aggregateResults(pages: PageResult[], crawlStart: number): WebsiteScraperData {
+  private aggregateResults(pages: PageResult[], crawlStart: number, businessName?: string | undefined): WebsiteScraperData {
     // Original signals (merged across all pages)
     const allPaymentWidgets = new Set<string>();
     const allDetectedPlatforms = new Set<string>();
@@ -1616,6 +1790,7 @@ export class WebsiteScraperAdapter {
     let hasProductCatalog = false;
     let hasWhatsApp = false;
     let pageTitle: string | null = null;
+    let metaDescription: string | null = null;
     let detectedCountry: string | null = null;
 
     // New signals
@@ -1674,13 +1849,18 @@ export class WebsiteScraperAdapter {
         if (titleText.length > 0) pageTitle = titleText;
       }
 
+      // C7: Meta description (from homepage only)
+      if (!metaDescription) {
+        metaDescription = extractMetaDescription($);
+      }
+
       // Country detection (first match wins)
       if (!detectedCountry) {
         detectedCountry = detectCountryFromPage($);
       }
 
       // Decision makers
-      for (const dm of extractDecisionMakers($, pageUrl)) {
+      for (const dm of extractDecisionMakers($, pageUrl, businessName)) {
         const nameKey = dm.name.toLowerCase();
         if (!seenDecisionMakerNames.has(nameKey)) {
           seenDecisionMakerNames.add(nameKey);
@@ -1789,6 +1969,7 @@ export class WebsiteScraperAdapter {
 
       // Page-level intelligence
       pageTitle,
+      metaDescription,
       detectedCountry,
 
       // Crawl metadata
