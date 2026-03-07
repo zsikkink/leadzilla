@@ -427,7 +427,15 @@ export function registerDiscoveryRoutes(
           city: t.city,
           status: t.status,
           resultsCount: t._count.businessEvidence,
-          provider: t.taskType.startsWith('SERP_') ? 'SERPAPI' : t.taskType,
+          provider: (() => {
+            const tt = t.taskType as string;
+            if (tt === 'SERP_MAPS_LOCAL') return 'Google Maps';
+            if (tt === 'SERP_GOOGLE_LOCAL') return 'Google Local';
+            if (tt === 'SERP_GOOGLE') return 'Google Web';
+            if (tt.startsWith('SERP_')) return 'Google Search';
+            if (tt === 'GOOGLE_CUSTOM_SEARCH') return 'Google Custom Search';
+            return tt;
+          })(),
           error: t.error ?? null,
         })),
         businesses: businesses.map((b) => ({

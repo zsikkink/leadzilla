@@ -11,8 +11,10 @@ import {
   GetJobStatusResponseSchema,
   GetLeadResponseSchema,
   HealthResponseSchema,
+  LeadRejectionResponseSchema,
   ListLeadsQuerySchema,
   ListLeadsResponseSchema,
+  RejectLeadRequestSchema,
   type RunDiscoverySeedRequest,
   type RunDiscoveryTasksRequest,
   type TriggerJobRunResponse,
@@ -26,6 +28,7 @@ import {
   type ReplyClassifyJobPayload,
   ReadyResponseSchema,
 } from '@lead-flood/contracts';
+import { Prisma, prisma } from '@lead-flood/db';
 
 import { buildAuthGuard, type AuthGuardOptions, type VerifyAccessToken } from './auth/guard.js';
 import type { ApiEnv } from './env.js';
@@ -391,6 +394,112 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
           requestId: request.id,
         });
       }
+
+      reply.status(204);
+      return;
+    });
+
+    api.patch('/v1/leads/:id/reject', async (request, reply) => {
+      const parsedParams = z.object({ id: z.string().min(1) }).safeParse(request.params);
+      if (!parsedParams.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({ error: 'Invalid lead id', requestId: request.id });
+      }
+      const parsedBody = RejectLeadRequestSchema.safeParse(request.body);
+      if (!parsedBody.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({ error: 'Invalid rejection payload', requestId: request.id });
+      }
+
+      const leadId = parsedParams.data.id;
+      const userId = request.user?.sub;
+      if (!userId) {
+        reply.status(401);
+        return ErrorResponseSchema.parse({ error: 'Authentication required', requestId: request.id });
+      }
+
+      const lead = await prisma.lead.findFirst({
+        where: { id: leadId, deletedAt: null },
+        select: { id: true, businessId: true },
+      });
+      if (!lead) {
+        reply.status(404);
+        return ErrorResponseSchema.parse({ error: 'Lead not found', requestId: request.id });
+      }
+
+      // Get latest blended score for the rejection record
+      const latestScore = await prisma.leadScorePrediction.findFirst({
+        where: { leadId },
+        orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }],
+        select: { blendedScore: true },
+      });
+
+      const metadataValue = parsedBody.data.metadata
+        ? JSON.parse(JSON.stringify(parsedBody.data.metadata)) as Prisma.InputJsonValue
+        : Prisma.JsonNull;
+
+      const [rejection] = await prisma.$transaction([
+        prisma.leadRejection.upsert({
+          where: { leadId },
+          create: {
+            leadId,
+            reason: parsedBody.data.reason,
+            rejectedBy: userId,
+            score: latestScore?.blendedScore ?? null,
+            metadata: metadataValue,
+            businessId: lead.businessId ?? null,
+          },
+          update: {
+            reason: parsedBody.data.reason,
+            rejectedBy: userId,
+            score: latestScore?.blendedScore ?? null,
+            metadata: metadataValue,
+            rejectedAt: new Date(),
+          },
+        }),
+        prisma.lead.update({
+          where: { id: leadId },
+          data: { status: 'rejected' },
+        }),
+      ]);
+
+      reply.status(200);
+      return LeadRejectionResponseSchema.parse({
+        id: rejection.id,
+        leadId: rejection.leadId,
+        reason: rejection.reason,
+        rejectedBy: rejection.rejectedBy,
+        rejectedAt: rejection.rejectedAt.toISOString(),
+        score: rejection.score,
+        metadata: rejection.metadata as Record<string, unknown> | null,
+      });
+    });
+
+    api.patch('/v1/leads/:id/unreject', async (request, reply) => {
+      const parsedParams = z.object({ id: z.string().min(1) }).safeParse(request.params);
+      if (!parsedParams.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({ error: 'Invalid lead id', requestId: request.id });
+      }
+
+      const leadId = parsedParams.data.id;
+      const lead = await prisma.lead.findFirst({ where: { id: leadId, deletedAt: null } });
+      if (!lead) {
+        reply.status(404);
+        return ErrorResponseSchema.parse({ error: 'Lead not found', requestId: request.id });
+      }
+
+      // Determine what status to restore — if scored, use 'scored'; otherwise 'new'
+      const hasScore = await prisma.leadScorePrediction.findFirst({
+        where: { leadId },
+        select: { id: true },
+      });
+      const restoredStatus = hasScore ? 'scored' : 'new';
+
+      await prisma.$transaction([
+        prisma.leadRejection.deleteMany({ where: { leadId } }),
+        prisma.lead.update({ where: { id: leadId }, data: { status: restoredStatus } }),
+      ]);
 
       reply.status(204);
       return;

@@ -447,6 +447,8 @@ async function main(): Promise<void> {
     listLeads: async (query) => {
       const where: Prisma.LeadWhereInput = {
         deletedAt: null,
+        // Exclude rejected leads by default unless includeRejected is true
+        ...(!query.includeRejected ? { status: { not: 'rejected' } } : {}),
         ...(query.icpProfileId
           ? {
               OR: [
@@ -456,13 +458,15 @@ async function main(): Promise<void> {
               ],
             }
           : {}),
+        // Status filter (overrides the rejected exclusion if explicitly set)
         ...(query.status ? { status: query.status } : {}),
-        ...(query.scoreBand
+        ...(query.scoreBand || query.minBlendedScore !== undefined
           ? {
               scorePredictions: {
                 some: {
                   ...(query.icpProfileId ? { icpProfileId: query.icpProfileId } : {}),
-                  scoreBand: query.scoreBand,
+                  ...(query.scoreBand ? { scoreBand: query.scoreBand } : {}),
+                  ...(query.minBlendedScore !== undefined ? { blendedScore: { gte: query.minBlendedScore } } : {}),
                 },
               },
             }

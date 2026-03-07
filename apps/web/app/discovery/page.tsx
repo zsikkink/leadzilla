@@ -103,7 +103,7 @@ const PIPELINE_SETTINGS: PipelineSetting[] = [
     key: 'scoreQualificationThreshold',
     label: 'Score Qualification Threshold',
     description:
-      'Minimum score to trigger outreach. Higher = fewer but higher-quality leads. Lower = more volume.',
+      'Leads scoring below this threshold are automatically rejected. Higher = fewer but higher-quality leads. Lower = more volume.',
     spectrum: '0 = message everyone, 1.0 = ultra-selective',
     icon: Target,
     iconColor: 'text-zbooni-green',

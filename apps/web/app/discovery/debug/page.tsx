@@ -99,6 +99,9 @@ const STATUS_PROGRESSION: Record<string, number> = {
   new: 0,
   processing: 1,
   enriched: 2,
+  scored: 3,
+  qualified: 3,
+  rejected: -2,
   failed: -1,
   messaged: 4,
   replied: 5,
@@ -134,11 +137,15 @@ function buildPipelineStages(lead: LeadItem): PipelineStage[] {
   const hasScore = lead.latestBlendedScore !== null && lead.latestBlendedScore !== undefined;
   const statusLevel = STATUS_PROGRESSION[lead.status] ?? 0;
   const isFailed = lead.status === 'failed';
+  const isRejected = lead.status === 'rejected';
   const isMessaged = statusLevel >= 4;
   const isReplied = lead.status === 'replied';
   const isCold = lead.status === 'cold';
   const isLowScore = lead.latestScoreBand === 'LOW';
+  const isBelowThreshold = isLowScore || isRejected;
   const enrichmentFailed = isFailed && !hasEnrichment;
+  // EN-1: If scored LOW and no enrichment data, enrichment was intentionally skipped
+  const enrichmentSkipped = !hasEnrichment && hasScore && isLowScore;
 
   // C10: Derive qualification status from actual pipeline progress, not just enrichment JSON
   const qualificationCompleted = hasScore || hasEnrichment || statusLevel >= 2;
@@ -259,16 +266,30 @@ function buildPipelineStages(lead: LeadItem): PipelineStage[] {
     feedbackDetails.push({ label: 'Status', value: 'Awaiting outcome' });
   }
 
+  // EN-1: Enrichment status — skipped if below threshold and no data
+  const enrichmentStatus: StageStatus = enrichmentFailed ? 'failed'
+    : hasEnrichment ? 'completed'
+    : enrichmentSkipped ? 'skipped'
+    : qualificationCompleted ? 'completed'
+    : 'pending';
+  const enrichmentSkippedDetails: StageDetail[] = enrichmentSkipped
+    ? [{ label: 'Reason', value: 'Skipped — score below threshold' }]
+    : enrichmentDetails;
+
+  // EN-4/EN-5 + rejected: downstream stages after scoring show "Skipped" for below-threshold / rejected leads
+  const skipReason = isRejected ? 'Skipped — lead rejected' : 'Skipped — score below threshold';
+  const downstreamSkipped = isBelowThreshold && !isMessaged && !isReplied && !isCold;
+
   return [
     { id: 'discovery', title: 'Discovery', icon: Radar, status: 'completed', timestamp: lead.createdAt, details: discoveryDetails },
     { id: 'prequalification', title: 'Pre-qualification', icon: Layers, status: qualificationStatus, timestamp: qualificationCompleted ? lead.updatedAt : null, details: prequalDetails },
-    { id: 'enrichment', title: 'Enrichment', icon: Globe, status: enrichmentFailed ? 'failed' : hasEnrichment ? 'completed' : qualificationCompleted ? 'completed' : 'pending', timestamp: hasEnrichment ? lead.updatedAt : null, details: enrichmentDetails },
+    { id: 'enrichment', title: 'Enrichment', icon: Globe, status: enrichmentStatus, timestamp: hasEnrichment ? lead.updatedAt : null, details: enrichmentSkippedDetails },
     { id: 'features', title: 'Feature Computation', icon: Sparkles, status: hasScore ? 'completed' : enrichmentFailed ? 'skipped' : 'pending', timestamp: hasScore ? lead.updatedAt : null, details: enrichment ? extractFeatureDetails(enrichment) : [] },
-    { id: 'scoring', title: 'Scoring', icon: Target, status: hasScore ? 'completed' : enrichmentFailed ? 'skipped' : 'pending', timestamp: hasScore ? lead.updatedAt : null, details: scoringDetails },
-    { id: 'message-gen', title: 'Message Generation', icon: Mail, status: isMessaged || isReplied || isCold ? 'completed' : isLowScore ? 'skipped' : 'pending', timestamp: null, details: isLowScore ? [{ label: 'Reason', value: 'Score below threshold' }] : [] },
-    { id: 'message-send', title: 'Message Send', icon: MessageSquare, status: isMessaged || isReplied || isCold ? 'completed' : isLowScore ? 'skipped' : 'pending', timestamp: null, details: isLowScore ? [{ label: 'Reason', value: 'Score below threshold' }] : [] },
-    { id: 'followups', title: 'Follow-ups', icon: Clock, status: isReplied || isCold ? 'completed' : isMessaged ? 'pending' : 'pending', timestamp: null, details: isCold ? [{ label: 'Outcome', value: 'No reply received' }] : isReplied ? [{ label: 'Outcome', value: 'Reply received' }] : [] },
-    { id: 'feedback', title: 'Feedback / Learning', icon: TrendingUp, status: isReplied ? 'completed' : isCold ? 'pending' : isMessaged ? 'pending' : 'pending', timestamp: null, details: feedbackDetails },
+    { id: 'scoring', title: 'Scoring', icon: Target, status: hasScore ? 'completed' : enrichmentFailed ? 'skipped' : 'pending', timestamp: hasScore ? lead.updatedAt : null, details: isRejected ? [...scoringDetails, { label: 'Outcome', value: 'Lead rejected' }] : scoringDetails },
+    { id: 'message-gen', title: 'Message Generation', icon: Mail, status: isMessaged || isReplied || isCold ? 'completed' : downstreamSkipped ? 'skipped' : 'pending', timestamp: null, details: downstreamSkipped ? [{ label: 'Reason', value: skipReason }] : [] },
+    { id: 'message-send', title: 'Message Send', icon: MessageSquare, status: isMessaged || isReplied || isCold ? 'completed' : downstreamSkipped ? 'skipped' : 'pending', timestamp: null, details: downstreamSkipped ? [{ label: 'Reason', value: skipReason }] : [] },
+    { id: 'followups', title: 'Follow-ups', icon: Clock, status: isReplied || isCold ? 'completed' : downstreamSkipped ? 'skipped' : isMessaged ? 'pending' : 'pending', timestamp: null, details: downstreamSkipped ? [{ label: 'Reason', value: skipReason }] : isCold ? [{ label: 'Outcome', value: 'No reply received' }] : isReplied ? [{ label: 'Outcome', value: 'Reply received' }] : [] },
+    { id: 'feedback', title: 'Feedback / Learning', icon: TrendingUp, status: isReplied ? 'completed' : downstreamSkipped ? 'skipped' : isCold ? 'pending' : isMessaged ? 'pending' : 'pending', timestamp: null, details: downstreamSkipped ? [{ label: 'Reason', value: skipReason }] : feedbackDetails },
   ];
 }
 

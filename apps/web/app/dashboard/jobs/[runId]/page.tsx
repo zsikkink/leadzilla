@@ -24,6 +24,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
+import { countryName } from '../../../../src/lib/countries.js';
 import { getWebEnv } from '../../../../src/lib/env.js';
 
 // ── Status badge (reused from list page) ─────────────────────────────────
@@ -197,7 +198,7 @@ function SearchTaskItem({
           <p className="truncate text-xs font-semibold">{task.queryText}</p>
           <div className="mt-0.5 flex items-center gap-2">
             <span className="text-[10px] text-muted-foreground/40">
-              {task.countryCode}
+              {countryName(task.countryCode)}
               {task.city ? ` / ${task.city}` : ''}
             </span>
             <span className="text-[10px] text-muted-foreground/25">|</span>
@@ -597,9 +598,21 @@ export default function DiscoveryRunDetailPage() {
         />
       </div>
 
-      {/* Outcome funnel */}
-      {details.data?.run.outcome && (() => {
-        const outcome = details.data.run.outcome;
+      {/* Outcome funnel — reads from resultJson (v2 fields or legacy outcome) */}
+      {details.data && (() => {
+        const runData = details.data.run as Record<string, unknown>;
+        const outcome = runData.outcome as OutcomeData | null;
+        // v2 resultJson fields (from Session A)
+        const totalFound = typeof runData.totalFound === 'number' ? runData.totalFound : null;
+        const alreadyKnown = typeof runData.alreadyKnown === 'number' ? runData.alreadyKnown : null;
+        const newFound = typeof runData.newFound === 'number' ? runData.newFound : null;
+        const disqualified = typeof runData.disqualified === 'number' ? runData.disqualified : null;
+        const converted = typeof runData.converted === 'number' ? runData.converted : null;
+        const hasV2 = totalFound !== null;
+
+        // If neither v2 nor legacy outcome exists, skip
+        if (!hasV2 && !outcome) return null;
+
         const REASON_LABELS: Record<string, string> = {
           ICP_INDUSTRY_MISMATCH: 'Wrong industry',
           NO_WEBSITE_DOMAIN: 'No website',
@@ -610,20 +623,30 @@ export default function DiscoveryRunDetailPage() {
           NO_CONTACTS_FOUND: 'No contacts found',
           BUSINESS_NOT_FOUND: 'Business not found',
         };
-        const reasons = outcome.disqualificationReasons ?? {};
+        const reasons = outcome?.disqualificationReasons ?? {};
         const hasReasons = Object.keys(reasons).length > 0;
-        const qualified = outcome.businessesFound - outcome.businessesDisqualified;
+
+        // Build funnel steps: v2 format first, fallback to legacy
+        const funnelSteps = hasV2
+          ? [
+              { label: 'Found', value: totalFound!, color: 'text-blue-400' },
+              { label: 'Already Known', value: alreadyKnown ?? 0, color: 'text-muted-foreground' },
+              { label: 'New', value: newFound ?? 0, color: 'text-zbooni-teal' },
+              { label: 'Disqualified', value: disqualified ?? 0, color: 'text-red-400' },
+              { label: 'Leads', value: converted ?? leads.length, color: 'text-zbooni-green' },
+            ]
+          : [
+              { label: 'Businesses', value: outcome!.businessesFound, color: 'text-blue-400' },
+              { label: 'Qualified', value: outcome!.businessesFound - outcome!.businessesDisqualified, color: 'text-zbooni-teal' },
+              { label: 'Leads', value: outcome!.leadsCreated, color: 'text-zbooni-green' },
+              { label: 'Messages', value: outcome!.messagesDrafted, color: 'text-yellow-400' },
+            ];
 
         return (
           <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
             <h2 className="mb-4 text-base font-bold tracking-tight">Pipeline Funnel</h2>
-            <div className="flex items-center gap-2">
-              {[
-                { label: 'Businesses', value: outcome.businessesFound, color: 'text-blue-400' },
-                { label: 'Qualified', value: qualified, color: 'text-zbooni-teal' },
-                { label: 'Leads', value: outcome.leadsCreated, color: 'text-zbooni-green' },
-                { label: 'Messages', value: outcome.messagesDrafted, color: 'text-yellow-400' },
-              ].map((step, i) => (
+            <div className="flex items-center gap-2 flex-wrap">
+              {funnelSteps.map((step, i) => (
                 <div key={step.label} className="flex items-center gap-2">
                   {i > 0 && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/20" />}
                   <div className="rounded-lg border border-border/20 bg-zbooni-dark/20 px-3 py-2 text-center">
