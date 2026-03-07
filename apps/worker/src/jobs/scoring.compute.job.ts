@@ -355,6 +355,21 @@ export async function handleScoringComputeJob(
       }
     }
 
+    // Update JobExecution tracking records for scored leads
+    const scoredLeadIds = job.data.mode === 'BY_LEAD_IDS' && job.data.leadIds
+      ? job.data.leadIds
+      : targetLeadIds;
+    if (scoredLeadIds.length > 0) {
+      await prisma.jobExecution.updateMany({
+        where: {
+          type: SCORING_COMPUTE_JOB_NAME,
+          status: 'queued',
+          leadId: { in: scoredLeadIds },
+        },
+        data: { status: 'completed', finishedAt: new Date() },
+      });
+    }
+
     logger.info(
       {
         jobId: job.id,
@@ -367,6 +382,19 @@ export async function handleScoringComputeJob(
       'Completed scoring.compute job',
     );
   } catch (error: unknown) {
+    // Mark JobExecution as failed for tracked leads
+    const failedLeadIds = job.data.leadIds ?? [];
+    if (failedLeadIds.length > 0) {
+      await prisma.jobExecution.updateMany({
+        where: {
+          type: SCORING_COMPUTE_JOB_NAME,
+          status: 'queued',
+          leadId: { in: failedLeadIds },
+        },
+        data: { status: 'failed', finishedAt: new Date() },
+      }).catch(() => { /* best-effort */ });
+    }
+
     logger.error(
       {
         jobId: job.id,
