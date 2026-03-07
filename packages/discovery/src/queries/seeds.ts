@@ -171,6 +171,9 @@ export const COUNTRY_NAME_TO_ISO: Record<string, string> = {
   algeria: 'DZ',
   libya: 'LY',
   yemen: 'YE',
+  syria: 'SY',
+  palestine: 'PS',
+  sudan: 'SD',
   'united arab emirates': 'AE',
   'saudi arabia': 'SA',
   // Already ISO codes (passthrough)
@@ -184,6 +187,14 @@ export const COUNTRY_NAME_TO_ISO: Record<string, string> = {
   qa: 'QA',
   lb: 'LB',
   iq: 'IQ',
+  ma: 'MA',
+  tn: 'TN',
+  dz: 'DZ',
+  ly: 'LY',
+  ye: 'YE',
+  sy: 'SY',
+  ps: 'PS',
+  sd: 'SD',
 };
 
 /** Default cities per country code for V2 discovery. */

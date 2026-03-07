@@ -12,6 +12,9 @@ enum LeadStatus {
   new
   processing
   enriched
+  scored
+  qualified
+  rejected
   stuck
   failed
   messaged
@@ -217,6 +220,8 @@ model Lead {
   lastName            String
   email               String        @unique
   phone               String?
+  phoneSource         String?
+  businessEmail       String?
   source              String
   status              LeadStatus    @default(new)
   enrichmentData      Json?
@@ -240,6 +245,7 @@ model Lead {
   trainingLabels      TrainingLabel[]
   businessConversions BusinessConversion[]
   pipelineEvents      LeadPipelineEvent[]
+  rejection           LeadRejection?
 
   @@index([status])
   @@index([source])
@@ -905,4 +911,23 @@ model BusinessContact {
 
   @@index([businessId])
   @@map("business_contacts")
+}
+
+model LeadRejection {
+  id           String   @id @default(cuid())
+  leadId       String   @unique
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  businessId   String?
+  domain       String?
+  icpProfileId String?
+  score        Float?
+  reason       String
+  rejectedBy   String
+  rejectedAt   DateTime @default(now())
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@index([icpProfileId])
+  @@index([reason])
+  @@map("lead_rejections")
 }

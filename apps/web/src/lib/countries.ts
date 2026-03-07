@@ -1,7 +1,8 @@
 /** ISO 3166-1 alpha-2 → full country name for MENA region + common codes */
 const COUNTRY_NAMES: Record<string, string> = {
-  AE: 'United Arab Emirates',
-  SA: 'Saudi Arabia',
+  // MENA core (18 countries)
+  AE: 'UAE',
+  SA: 'KSA',
   BH: 'Bahrain',
   KW: 'Kuwait',
   QA: 'Qatar',
@@ -18,6 +19,7 @@ const COUNTRY_NAMES: Record<string, string> = {
   TN: 'Tunisia',
   DZ: 'Algeria',
   MA: 'Morocco',
+  // Non-MENA
   US: 'United States',
   GB: 'United Kingdom',
   DE: 'Germany',

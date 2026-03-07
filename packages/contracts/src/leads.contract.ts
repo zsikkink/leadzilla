@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const LeadStatusSchema = z.enum(['new', 'processing', 'enriched', 'stuck', 'failed', 'messaged', 'replied', 'cold']);
+export const LeadStatusSchema = z.enum(['new', 'processing', 'enriched', 'scored', 'qualified', 'rejected', 'stuck', 'failed', 'messaged', 'replied', 'cold']);
 export const JobStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']);
 export const LeadScoreBandSchema = z.enum(['LOW', 'MEDIUM', 'HIGH']);
 
@@ -53,6 +53,8 @@ export const ListLeadsQuerySchema = z
     icpProfileId: z.string().min(1).optional(),
     status: LeadStatusSchema.optional(),
     scoreBand: LeadScoreBandSchema.optional(),
+    minBlendedScore: z.coerce.number().min(0).max(1).optional(),
+    includeRejected: z.coerce.boolean().default(false).optional(),
     from: z.string().datetime().optional(),
     to: z.string().datetime().optional(),
     includeQualityMetrics: z.coerce.boolean().default(false),
