@@ -250,9 +250,11 @@ export async function handleScoringComputeJob(
 
         const dWeight = deps?.deterministicWeight ?? blendRatio.deterministicWeight;
         const aWeight = deps?.aiWeight ?? blendRatio.aiWeight;
-        const blendedScore = usedTrainedModel || logisticScore > 0
-          ? dWeight * deterministicScore + aWeight * logisticScore
-          : deterministicScore;
+        const blendedScore = Math.min(1, Math.max(0,
+          usedTrainedModel || logisticScore > 0
+            ? dWeight * deterministicScore + aWeight * logisticScore
+            : deterministicScore,
+        ));
         const scoreBand = toScoreBand(blendedScore, scoreTierBands);
 
         const prediction = await prisma.leadScorePrediction.upsert({
@@ -348,10 +350,12 @@ export async function handleScoringComputeJob(
               'Enqueued message.generate for qualifying lead (no apollo.enrich)',
             );
           }
-        } else {
-          // Below qualification threshold — this lead is terminal, check if run can finalize
-          await tryFinalizeDiscoveryRun(runId, logger);
         }
+
+        // Always check if discovery run can finalize or update progress
+        // (LOW scores are terminal; HIGH/MEDIUM may still be in-flight but
+        // tryFinalizeDiscoveryRun handles that correctly)
+        await tryFinalizeDiscoveryRun(runId, logger);
       }
     }
 

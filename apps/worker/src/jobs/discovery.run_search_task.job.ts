@@ -168,13 +168,26 @@ async function updateJobRunProgress(jobRunId: string, state: RunState): Promise<
   });
 }
 
-async function updateDiscoveryRunProgress(discoveryRunId: string, state: RunState): Promise<void> {
+async function updateDiscoveryRunProgress(discoveryRunId: string, state: RunState, targetLeads?: number | undefined): Promise<void> {
+  // Read existing result to preserve processedItems set by downstream pipeline jobs
+  const existing = await prisma.jobExecution.findUnique({
+    where: { id: discoveryRunId },
+    select: { result: true },
+  });
+  const existingResult = existing?.result && typeof existing.result === 'object'
+    ? existing.result as Record<string, unknown>
+    : {};
+
   await prisma.jobExecution.update({
     where: { id: discoveryRunId },
     data: {
       status: 'running',
       result: toInputJson({
-        processedItems: state.processedTaskCount,
+        ...existingResult,
+        // Preserve processedItems from downstream jobs (leads at terminal state)
+        // — don't overwrite with search task count
+        ...(targetLeads !== undefined ? { totalItems: targetLeads } : {}),
+        searchTasksProcessed: state.processedTaskCount,
         failedItems: state.failedCount,
         newBusinesses: state.newBusinesses,
         newSources: state.newSources,
@@ -207,7 +220,7 @@ async function completeSearchPhase(
   await markSearchTasksComplete(
     discoveryRunId,
     {
-      processedItems: state.processedTaskCount,
+      searchTasksProcessed: state.processedTaskCount,
       failedItems: state.failedCount,
       newBusinesses: state.newBusinesses,
       newSources: state.newSources,
@@ -392,7 +405,7 @@ export async function handleDiscoveryRunSearchTaskJob(
       await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
       releaseSlot(runKey, runState);
     } else {
-      await updateDiscoveryRunProgress(job.data.discoveryRunId, runState);
+      await updateDiscoveryRunProgress(job.data.discoveryRunId, runState, job.data.targetUniqueBusinesses);
     }
   }
 

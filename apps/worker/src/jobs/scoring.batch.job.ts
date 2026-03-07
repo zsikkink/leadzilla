@@ -211,11 +211,12 @@ export async function handleScoringBatchJob(
         }
 
         // Blend scores
-        const blendedScore =
+        const blendedScore = Math.min(1, Math.max(0,
           usedTrainedModel || logisticScore > 0
             ? blendRatio.deterministicWeight * deterministicScore +
               blendRatio.aiWeight * logisticScore
-            : deterministicScore;
+            : deterministicScore,
+        ));
         const scoreBand = toScoreBand(blendedScore, scoreTierBands);
 
         // Persist prediction

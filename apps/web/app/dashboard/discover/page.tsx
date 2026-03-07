@@ -82,7 +82,7 @@ function ProgressBar({ processed, total }: { processed: number; total: number })
     <div className="w-full">
       <div className="mb-1.5 flex items-center justify-between text-xs">
         <span className="font-medium text-muted-foreground">
-          {processed} / {total} processed
+          {processed} / {total} leads
         </span>
         <span className="font-bold text-foreground">{pct}%</span>
       </div>

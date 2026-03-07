@@ -28,7 +28,7 @@ interface TrackerLogger {
 }
 
 interface SearchTaskCounters {
-  processedItems: number;
+  searchTasksProcessed: number;
   failedItems: number;
   newBusinesses: number;
   newSources: number;
@@ -47,11 +47,21 @@ export async function markSearchTasksComplete(
   icpProfileId: string | undefined,
   logger: TrackerLogger,
 ): Promise<void> {
+  // Read existing result to preserve processedItems set by downstream pipeline jobs
+  const existing = await prisma.jobExecution.findUnique({
+    where: { id: discoveryRunId },
+    select: { result: true },
+  });
+  const existingResult = existing?.result && typeof existing.result === 'object'
+    ? existing.result as Record<string, unknown>
+    : {};
+
   await prisma.jobExecution.update({
     where: { id: discoveryRunId },
     data: {
       // Keep status as 'running' — don't finalize yet
       result: toInputJson({
+        ...existingResult,
         ...counters,
         searchTasksComplete: true,
         searchTasksCompletedAt: new Date().toISOString(),
@@ -207,7 +217,10 @@ export async function tryFinalizeDiscoveryRun(
     }
   }
 
-  // 5. Finalize if all items are terminal OR safety timeout
+  // 5. Compute terminal count for progress tracking
+  const terminalCount = completedLeads + failedLeads + disqualifiedIds.size;
+
+  // 6. Finalize if all items are terminal OR safety timeout
   if (inFlightItems === 0 || isTimedOut) {
     const status = completedLeads > 0 || disqualifiedIds.size > 0 ? 'completed' : 'failed';
 
@@ -231,6 +244,18 @@ export async function tryFinalizeDiscoveryRun(
         timeoutNote,
       );
     }
+  } else if (terminalCount > 0) {
+    // Not ready to finalize, but update progress so the frontend shows accurate lead count
+    await prisma.jobExecution.update({
+      where: { id: possibleRunId },
+      data: {
+        result: toInputJson({
+          ...result,
+          processedItems: terminalCount,
+          failedItems: failedLeads + disqualifiedIds.size,
+        }),
+      },
+    });
   }
 }
 
@@ -315,6 +340,7 @@ async function finalizeRun(
       result: toInputJson({
         ...currentResult,
         pipelineCompleted: true,
+        processedItems: completedLeads + failedItems,
         completedLeads,
         pipelineFailedItems: failedItems,
       }),
@@ -334,15 +360,15 @@ async function finalizeRun(
   const icpProfileId = typeof currentResult.icpProfileId === 'string'
     ? currentResult.icpProfileId
     : null;
-  const processedItems = typeof currentResult.processedItems === 'number'
-    ? currentResult.processedItems
+  const searchTasksProcessed = typeof currentResult.searchTasksProcessed === 'number'
+    ? currentResult.searchTasksProcessed
     : 0;
   const newBusinesses = typeof currentResult.newBusinesses === 'number'
     ? currentResult.newBusinesses
     : 0;
 
-  if (icpProfileId && processedItems > 0) {
-    const yieldRate = newBusinesses / processedItems;
+  if (icpProfileId && searchTasksProcessed > 0) {
+    const yieldRate = newBusinesses / searchTasksProcessed;
     try {
       // Store smoothed yield rate (legacy)
       const setting = await prisma.pipelineSetting.findUnique({
@@ -364,7 +390,7 @@ async function finalizeRun(
 
       // Store search efficiency (businesses per task) for new two-rate formula
       if (newBusinesses > 0) {
-        const searchEfficiency = newBusinesses / processedItems;
+        const searchEfficiency = newBusinesses / searchTasksProcessed;
         await prisma.pipelineSetting.upsert({
           where: { key: `discovery_search_efficiency:${icpProfileId}` },
           create: {
