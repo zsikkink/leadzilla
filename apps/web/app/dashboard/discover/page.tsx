@@ -390,12 +390,12 @@ export default function DiscoverPage() {
 
   // Available cities based on derived countries
   const availableCities = useMemo(() => {
-    const cities: string[] = [];
+    const cities = new Set<string>();
     for (const country of derivedCountries) {
       const mapped = COUNTRY_CITIES[country];
-      if (mapped) cities.push(...mapped);
+      if (mapped) for (const c of mapped) cities.add(c);
     }
-    return cities.sort();
+    return Array.from(cities).sort();
   }, [derivedCountries]);
 
   // Reset city selection when countries change
