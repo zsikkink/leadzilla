@@ -369,8 +369,8 @@ export default function DiscoveryRunDetailPage() {
         headers,
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => null) as { message?: string } | null;
-        throw new Error(body?.message ?? `Cancel failed (${res.status})`);
+        const body = await res.json().catch(() => null) as { error?: string; message?: string } | null;
+        throw new Error(body?.error ?? body?.message ?? `Cancel failed (${res.status})`);
       }
       run.refetch();
       details.refetch();

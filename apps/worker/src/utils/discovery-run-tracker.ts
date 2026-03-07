@@ -244,11 +244,46 @@ export async function checkStaleDiscoveryRuns(logger: TrackerLogger): Promise<vo
       type: 'discovery.run',
       status: 'running',
     },
-    select: { id: true },
+    select: { id: true, startedAt: true, result: true },
   });
 
   for (const run of staleRuns) {
+    // First try the normal finalization path (checks searchTasksComplete flag)
     await tryFinalizeDiscoveryRun(run.id, logger);
+
+    // Fallback: if the run is STILL running (tryFinalize didn't help because
+    // searchTasksComplete was never set — e.g. worker crash), force-finalize
+    // after the safety timeout based on startedAt
+    const stillRunning = await prisma.jobExecution.findUnique({
+      where: { id: run.id },
+      select: { status: true },
+    });
+    if (stillRunning?.status !== 'running') continue;
+
+    const startedAt = run.startedAt;
+    if (!startedAt) continue;
+
+    const elapsedMs = Date.now() - startedAt.getTime();
+    if (elapsedMs > SAFETY_TIMEOUT_MS) {
+      const result = run.result && typeof run.result === 'object'
+        ? run.result as Record<string, unknown>
+        : {};
+
+      logger.warn(
+        { discoveryRunId: run.id, elapsedMs },
+        'Force-finalizing stuck discovery run — searchTasksComplete flag was never set',
+      );
+
+      await finalizeRun(
+        run.id,
+        result,
+        'completed',
+        0,
+        0,
+        logger,
+        `Force-finalized: run stuck in running state for ${Math.round(elapsedMs / 60000)}min without searchTasksComplete flag`,
+      );
+    }
   }
 
   if (staleRuns.length > 0) {
