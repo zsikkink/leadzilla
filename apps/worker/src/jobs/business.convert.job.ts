@@ -824,7 +824,7 @@ export async function handleBusinessConvertJob(
   const allCandidates: ContactCandidate[] = [];
   let apolloContactJson: unknown = null;
   let hunterContactJson: unknown = null;
-  const costEvents: Array<{ provider: 'APOLLO' | 'HUNTER' | 'SERPAPI'; costCents: number; apiCallType: string }> = [];
+  const costEvents: Array<{ provider: 'APOLLO' | 'HUNTER' | 'SERPAPI' | 'GOOGLE_CUSTOM_SEARCH'; costCents: number; apiCallType: string }> = [];
   const estimatedEmployees = websiteScrapeData?.businessSignals?.estimatedEmployeeCount ?? null;
 
   // 5a. Website scrape decision makers (max 5, already ranked by positionRank)
@@ -1212,7 +1212,7 @@ export async function handleBusinessConvertJob(
     }
   }
 
-  // ── 5i. Brave-based 4-stage contact intelligence ─────────────────────
+  // ── 5i. Google Custom Search 4-stage contact intelligence ─────────────
   // Path A (found contacts): V1 people verify + V2 LinkedIn verify
   // Path B (no contacts): D1 people discover + D2 LinkedIn discover
   const locality = [business.city, business.countryCode].filter(Boolean).join(', ') || null;
@@ -1230,6 +1230,7 @@ export async function handleBusinessConvertJob(
           titleOrFunction: candidate.title,
           maxResults: 3,
         });
+        costEvents.push({ provider: 'GOOGLE_CUSTOM_SEARCH', costCents: 0, apiCallType: 'linkedin_verify' });
         if (verifyResult.status === 'success' && verifyResult.data.length > 0) {
           const exact = verifyResult.data.find((p) =>
             p.name.toLowerCase() === candidate.name.toLowerCase(),
@@ -1247,6 +1248,7 @@ export async function handleBusinessConvertJob(
         locality,
         5,
       );
+      costEvents.push({ provider: 'GOOGLE_CUSTOM_SEARCH', costCents: 0, apiCallType: 'linkedin_discover' });
       if (discoverResult.status === 'success') {
         for (const profile of discoverResult.data) {
           if (!isValidPersonName(profile.name, business.name)) continue;
@@ -1265,7 +1267,7 @@ export async function handleBusinessConvertJob(
             source: 'website_scrape',
             sourceStage: 'D2',
             matchedSignals: ['company_match', 'linkedin_profile'],
-            rawJson: { matchType: 'brave_discovery', linkedinUrl: profile.linkedinUrl },
+            rawJson: { matchType: 'google_cse_discovery', linkedinUrl: profile.linkedinUrl },
           });
         }
       }

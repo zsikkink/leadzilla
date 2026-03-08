@@ -24,6 +24,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body
         className="min-h-screen antialiased"
         style={{ fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif" }}
+        suppressHydrationWarning
       >
         <AuthProvider>{children}</AuthProvider>
         <Toaster theme="dark" position="bottom-right" richColors closeButton />

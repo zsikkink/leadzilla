@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "CostEventProvider" ADD VALUE 'GOOGLE_CUSTOM_SEARCH';
