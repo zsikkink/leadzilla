@@ -308,7 +308,7 @@ function CategoryCard({ category, metrics }: { category: CategoryDef; metrics: C
 
 const DEFAULT_JOBS_QUERY: JobRunListQuery = {
   page: 1,
-  pageSize: 200,
+  pageSize: 100,
 };
 
 const DEFAULT_REQUESTS_QUERY = {
