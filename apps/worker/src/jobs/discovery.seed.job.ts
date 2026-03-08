@@ -141,7 +141,7 @@ function withSeedOverrides(
     refreshBucket: config.refreshBucket,
     seedProfile: payload.profile ?? config.seedProfile,
     maxTasks:
-      payload.maxTasks && Number.isFinite(payload.maxTasks) && payload.maxTasks > 0
+      payload.maxTasks !== undefined && Number.isFinite(payload.maxTasks) && payload.maxTasks >= 0
         ? payload.maxTasks
         : config.maxTasks,
     seedBucket: payload.bucket ?? config.seedBucket,

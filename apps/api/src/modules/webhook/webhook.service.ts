@@ -181,7 +181,13 @@ export async function processResendWebhook(
   payload: ResendWebhookPayload,
 ): Promise<WebhookProcessResult> {
   const emailId = payload.data.email_id ?? '';
-  const dedupeKey = `resend:${emailId}`;
+  const recipients = payload.data.to ?? [];
+  const firstRecipient = recipients[0]?.toLowerCase() ?? 'unknown-recipient';
+  const fallbackStamp = payload.data.created_at ?? payload.created_at ?? '';
+  const fallbackSubject = payload.data.subject ?? '';
+  const dedupeKey = emailId
+    ? `resend:${emailId}`
+    : `resend:fallback:${payload.type}:${firstRecipient}:${fallbackStamp}:${fallbackSubject}`;
   const eventType = mapResendEventType(payload.type);
 
   if (!eventType) {
@@ -194,7 +200,6 @@ export async function processResendWebhook(
   }
 
   // Get recipient email(s) from the payload
-  const recipients = payload.data.to ?? [];
   if (recipients.length === 0) {
     return {
       feedbackEventId: null,

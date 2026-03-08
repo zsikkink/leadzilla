@@ -468,6 +468,18 @@ function isValidPersonName(name: string, businessName: string): boolean {
   return true;
 }
 
+function resolveDiscoveryProvider(
+  paramsJson: Prisma.JsonValue | null | undefined,
+): 'SERPAPI' | 'GOOGLE_PLACES' {
+  if (paramsJson && typeof paramsJson === 'object' && !Array.isArray(paramsJson)) {
+    const providerUsed = (paramsJson as Record<string, unknown>).providerUsed;
+    if (providerUsed === 'GOOGLE_PLACES') {
+      return 'GOOGLE_PLACES';
+    }
+  }
+  return 'SERPAPI';
+}
+
 // ── Handler ─────────────────────────────────────────────────────────────
 export async function handleBusinessConvertJob(
   logger: BusinessConvertLogger,
@@ -1354,7 +1366,21 @@ export async function handleBusinessConvertJob(
   let leadSource = 'SERPAPI_DISCOVERY';
   const evidence = await prisma.businessEvidence.findFirst({
     where: { businessId },
-    select: { sourceType: true },
+    select: {
+      id: true,
+      sourceType: true,
+      serpapiResultId: true,
+      rawJson: true,
+      createdAt: true,
+      searchTask: {
+        select: {
+          id: true,
+          taskType: true,
+          queryHash: true,
+          paramsJson: true,
+        },
+      },
+    },
     orderBy: { createdAt: 'desc' },
   });
   if (evidence?.sourceType) {
@@ -1543,6 +1569,76 @@ export async function handleBusinessConvertJob(
 
     return { lead, isNew: true };
   });
+
+  // Persist canonical pipeline lineage records used by feature/scoring analytics.
+  if (evidence?.searchTask) {
+    const provider = resolveDiscoveryProvider(evidence.searchTask.paramsJson as Prisma.JsonValue | null);
+    const providerRecordId = evidence.serpapiResultId ?? evidence.id;
+    await prisma.leadDiscoveryRecord.upsert({
+      where: {
+        leadId_icpProfileId_provider_providerRecordId: {
+          leadId: txResult.lead.id,
+          icpProfileId,
+          provider,
+          providerRecordId,
+        },
+      },
+      create: {
+        leadId: txResult.lead.id,
+        icpProfileId,
+        provider,
+        providerSource: evidence.sourceType,
+        providerRecordId,
+        queryHash: evidence.searchTask.queryHash,
+        rawPayload: toInputJson(evidence.rawJson),
+        provenanceJson: toInputJson({
+          businessId,
+          discoveryRunId,
+          searchTaskId: evidence.searchTask.id,
+          taskType: evidence.searchTask.taskType,
+        }),
+        discoveredAt: evidence.createdAt,
+      },
+      update: {
+        providerSource: evidence.sourceType,
+        rawPayload: toInputJson(evidence.rawJson),
+        provenanceJson: toInputJson({
+          businessId,
+          discoveryRunId,
+          searchTaskId: evidence.searchTask.id,
+          taskType: evidence.searchTask.taskType,
+        }),
+      },
+    });
+  }
+
+  if (hunterContactJson) {
+    const requestKey = `hunter:convert:${txResult.lead.id}:${icpProfileId}:${discoveryRunId}`;
+    await prisma.leadEnrichmentRecord.upsert({
+      where: { requestKey },
+      create: {
+        leadId: txResult.lead.id,
+        provider: 'HUNTER',
+        status: 'COMPLETED',
+        requestKey,
+        normalizedPayload: toInputJson({
+          contacts: hunterContactJson,
+          source: 'business.convert',
+        }),
+        rawPayload: toInputJson(hunterContactJson),
+        enrichedAt: new Date(),
+      },
+      update: {
+        status: 'COMPLETED',
+        normalizedPayload: toInputJson({
+          contacts: hunterContactJson,
+          source: 'business.convert',
+        }),
+        rawPayload: toInputJson(hunterContactJson),
+        enrichedAt: new Date(),
+      },
+    });
+  }
 
   // ── 9. Enqueue features.compute if lead is newly created and NOT auto-rejected ─
   if (txResult.isNew && !shouldAutoReject && deps.enqueueFeaturesCompute) {

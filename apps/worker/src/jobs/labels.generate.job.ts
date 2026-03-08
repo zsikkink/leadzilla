@@ -133,7 +133,7 @@ export async function handleLabelsGenerateJob(
 
     const coldLeads = await prisma.messageSend.findMany({
       where: {
-        status: 'SENT',
+        status: { in: ['SENT', 'DELIVERED'] },
         sentAt: { lte: cutoffDate },
         lead: {
           deletedAt: null,
@@ -258,4 +258,3 @@ export async function handleLabelsGenerateJob(
     throw error;
   }
 }
-

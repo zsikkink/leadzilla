@@ -78,22 +78,26 @@ export function buildDiscoveryService(
       await repository.createDiscoveryRun(runId, input, payload);
 
       try {
-        // Split limit across ICPs: each gets an even share, remainder goes to the first
+        // Split limit across ICPs: distribute remainder one-by-one from the front.
         const totalLimit = input.limit;
         const icpCount = icpProfileIds.length;
         const perIcpLimit = totalLimit !== undefined
           ? Math.floor(totalLimit / icpCount)
           : undefined;
-        const remainderLimit = totalLimit !== undefined
-          ? totalLimit - perIcpLimit! * icpCount
+        const remainderLimit = totalLimit !== undefined && perIcpLimit !== undefined
+          ? totalLimit - perIcpLimit * icpCount
           : 0;
 
         for (let i = 0; i < icpProfileIds.length; i++) {
           const icpId = icpProfileIds[i]!;
           let icpLimit = perIcpLimit;
-          // Give remainder to first ICP
-          if (icpLimit !== undefined && i === 0) {
-            icpLimit += remainderLimit;
+          if (icpLimit !== undefined && i < remainderLimit) {
+            icpLimit += 1;
+          }
+
+          // Explicitly skip zero-budget shards instead of falling back to worker defaults.
+          if (icpLimit !== undefined && icpLimit <= 0) {
+            continue;
           }
 
           await dependencies.enqueueDiscoveryRun({

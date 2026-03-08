@@ -93,6 +93,12 @@ function getRunKey(job: Job<DiscoveryRunSearchTaskJobPayload>): string {
 
 const runStates = new Map<string, RunState>();
 
+function toNonNegativeCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : 0;
+}
+
 function getRunState(runKey: string): RunState {
   const existing = runStates.get(runKey);
   if (existing) {
@@ -112,6 +118,37 @@ function getRunState(runKey: string): RunState {
   };
   runStates.set(runKey, created);
   return created;
+}
+
+async function hydrateRunStateFromExecution(
+  discoveryRunId: string,
+  state: RunState,
+): Promise<void> {
+  if (
+    state.processedTaskCount > 0 ||
+    state.doneCount > 0 ||
+    state.failedCount > 0 ||
+    state.newBusinesses > 0 ||
+    state.newSources > 0 ||
+    state.serpapiRequests > 0
+  ) {
+    return;
+  }
+
+  const execution = await prisma.jobExecution.findUnique({
+    where: { id: discoveryRunId },
+    select: { result: true },
+  });
+
+  const result = execution?.result && typeof execution.result === 'object' && !Array.isArray(execution.result)
+    ? execution.result as Record<string, unknown>
+    : {};
+
+  state.processedTaskCount = Math.max(state.processedTaskCount, toNonNegativeCount(result.searchTasksProcessed));
+  state.failedCount = Math.max(state.failedCount, toNonNegativeCount(result.failedItems));
+  state.newBusinesses = Math.max(state.newBusinesses, toNonNegativeCount(result.newBusinesses));
+  state.newSources = Math.max(state.newSources, toNonNegativeCount(result.newSources));
+  state.serpapiRequests = Math.max(state.serpapiRequests, toNonNegativeCount(result.serpapiRequests));
 }
 
 /**
@@ -288,6 +325,9 @@ export async function handleDiscoveryRunSearchTaskJob(
   runState.activeSlots += 1;
   const effectiveMaxTasks = job.data.maxTasks ?? dependencies.maxTasks;
   try {
+  if (job.data.discoveryRunId) {
+    await hydrateRunStateFromExecution(job.data.discoveryRunId, runState);
+  }
 
   if (effectiveMaxTasks !== undefined && runState.processedTaskCount >= effectiveMaxTasks) {
     if (job.data.jobRunId) {

@@ -282,6 +282,7 @@ export async function handleMessageGenerateJob(
           { jobId: job.id, leadId, existingDraftId: existingDraft.id, existingIcpProfileId: existingDraft.icpProfileId },
           `Lead already has active message from ICP ${icpName}, skipping`,
         );
+        await tryFinalizeDiscoveryRun(runId, logger);
         return;
       }
 
@@ -305,6 +306,7 @@ export async function handleMessageGenerateJob(
           { jobId: job.id, leadId, existingSendId: existingSend.id, existingIcpProfileId: existingSend.messageDraft.icpProfileId },
           `Lead already has active message from ICP ${icpName}, skipping`,
         );
+        await tryFinalizeDiscoveryRun(runId, logger);
         return;
       }
     }

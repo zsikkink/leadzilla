@@ -405,7 +405,10 @@ async function lockNextRunnableTask(
         last_result_hash,
         discovery_run_id
       FROM "search_tasks"
-      WHERE "status" IN ('PENDING', 'FAILED')
+      WHERE (
+        "status" = 'PENDING'
+        OR ("status" = 'FAILED' AND "attempts" < ${config.maxTaskAttempts})
+      )
         AND "run_after" <= NOW()
         ${timeBucketFilter}
         ${discoveryRunFilter}

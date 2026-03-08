@@ -310,11 +310,23 @@ export async function handleScoringComputeJob(
         persistedPredictions += 1;
 
         // ── Lead status transition + rejection tracking ──────────────
+        // Preserve downstream lifecycle states (messaged/replied/cold) during scheduled rescoring.
         const isRejected = !deterministic.hardFilterPassed || blendedScore < qualificationThreshold;
-        await prisma.lead.update({
-          where: { id: targetLeadId },
+        const statusUpdated = await prisma.lead.updateMany({
+          where: {
+            id: targetLeadId,
+            status: { in: ['new', 'processing', 'enriched', 'scored', 'qualified', 'rejected', 'stuck'] },
+          },
           data: { status: isRejected ? 'rejected' : 'qualified' },
         });
+        if (statusUpdated.count === 0) {
+          logger.info(
+            { jobId: job.id, leadId: targetLeadId },
+            'Skipped lead status update to preserve downstream lifecycle state',
+          );
+          await tryFinalizeDiscoveryRun(runId, logger);
+          continue;
+        }
 
         if (isRejected) {
           const rejectionReason = !deterministic.hardFilterPassed ? 'HARD_FILTER_FAILED' : 'BELOW_THRESHOLD';
