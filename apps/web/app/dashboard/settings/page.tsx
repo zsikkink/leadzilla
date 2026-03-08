@@ -96,7 +96,8 @@ export default function SettingsPage() {
             setBlendAutoMode(true);
           } else {
             setBlendAutoMode(false);
-            setBlendOverride(Math.round(Number(item.value) * 100));
+            // Controls page stores as integer 0-100, use as-is
+            setBlendOverride(Math.round(Number(item.value)));
           }
         } else if (item.key === 'scoreTierBands') {
           if (item.value != null && typeof item.value === 'object') {
@@ -173,7 +174,7 @@ export default function SettingsPage() {
         apiClient.updatePipelineSetting('auto_approve_score_max', max),
         apiClient.updatePipelineSetting('scoreQualificationThreshold', Number(qualThreshold)),
         apiClient.updatePipelineSetting('min_review_count', Number(minReviews)),
-        apiClient.updatePipelineSetting('deterministicAiBlend', blendAutoMode ? null : blendOverride / 100),
+        apiClient.updatePipelineSetting('deterministicAiBlend', blendAutoMode ? null : blendOverride),
         apiClient.updatePipelineSetting('scoreTierBands', { low: lowNum, high: highNum }),
         apiClient.updatePipelineSetting('enrichmentThreshold', Number(enrichThreshold)),
         apiClient.updatePipelineSetting('followUpMaxCount', Number(followUpMax)),
