@@ -963,6 +963,29 @@ export default function IcpDetailPage() {
           <span className="ml-auto text-xs font-normal text-muted-foreground">Universal rules — same for all ICPs</span>
         </h2>
 
+        {/* Scoring Formula */}
+        <div className="mb-4 rounded-xl border border-border/30 bg-zbooni-dark/80 px-4 py-3">
+          <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/50">Scoring Equation</p>
+          <p className="font-mono text-[12px] leading-relaxed">
+            <span className="text-muted-foreground/70">score = </span>
+            <span className="text-emerald-400">0.10</span>
+            <span className="text-muted-foreground/70"> + </span>
+            <span className="text-blue-400">[(matched+ + 1) / (total+ + 1)]</span>
+            <span className="text-muted-foreground/70"> &times; </span>
+            <span className="text-orange-400">clamp(1 &minus; negPenalty, 0.2, 1.0)</span>
+            <span className="text-muted-foreground/70"> &times; </span>
+            <span className="text-muted-foreground/70">0.90</span>
+            <span className="text-muted-foreground/70"> + </span>
+            <span className="text-purple-400">categoryBonus</span>
+          </p>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted-foreground/40">
+            <span><span className="text-emerald-400">&bull;</span> 0.10 = BASE_SCORE (floor)</span>
+            <span><span className="text-blue-400">&bull;</span> matchRatio = positive signal match rate</span>
+            <span><span className="text-orange-400">&bull;</span> penaltyFactor = negative signal dampener</span>
+            <span><span className="text-purple-400">&bull;</span> categoryBonus = +10% / +5% / &minus;5%</span>
+          </div>
+        </div>
+
         {/* Hard Filters */}
         <div className="mb-4">
           <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-red-400/80">Hard Filters (must all pass)</h3>
@@ -984,24 +1007,20 @@ export default function IcpDetailPage() {
 
         {/* Positive Weighted Rules */}
         <div className="mb-4">
-          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-zbooni-green/80">Positive Signals (total weight: 26)</h3>
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-zbooni-green/80">Positive Signals (total weight: 19)</h3>
           <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
             {[
               { field: 'has_whatsapp', label: 'WhatsApp presence', weight: 3 },
-              { field: 'industry_supported', label: 'Industry match', weight: 3 },
               { field: 'has_instagram', label: 'Instagram presence', weight: 2 },
               { field: 'review_count', label: 'Reviews > 10', weight: 2 },
               { field: 'custom_order_signals', label: 'Custom order signals', weight: 2 },
               { field: 'has_booking_or_contact_form', label: 'Booking/contact form', weight: 2 },
               { field: 'high_ticket_signals', label: 'High-ticket signals', weight: 2 },
-              { field: 'deposit_milestone_signals', label: 'Deposit/milestone payments', weight: 2 },
-              { field: 'bank_transfer_reliance', label: 'Bank transfer reliance', weight: 2 },
               { field: 'icp_segment_priority', label: 'P1 priority segment', weight: 2 },
               { field: 'recent_activity', label: 'Recent activity', weight: 1 },
               { field: 'apify_payment_widget_count', label: 'Payment widgets', weight: 1 },
               { field: 'apify_has_pricing_tiers', label: 'Has pricing tiers', weight: 1 },
               { field: 'social_link_count', label: 'Multiple social profiles', weight: 1 },
-              { field: 'instagram_has_business_email', label: 'IG business email', weight: 1 },
             ].map((r) => (
               <div key={r.field} className="flex items-center justify-between rounded-lg border border-zbooni-green/20 bg-zbooni-green/5 px-3 py-2">
                 <div className="min-w-0">
@@ -1020,7 +1039,7 @@ export default function IcpDetailPage() {
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {[
               { cat: 'Sales Motion Fit', fields: 'whatsapp, instagram, custom orders, decision makers' },
-              { cat: 'Payment Complexity', fields: 'payment widgets, pricing tiers, high-ticket, deposits, bank transfer' },
+              { cat: 'Payment Complexity', fields: 'payment widgets, pricing tiers, high-ticket signals' },
               { cat: 'Risk & Urgency', fields: 'recent activity, booking form, contact info' },
               { cat: 'Switching Willingness', fields: 'social links, linkedin, tech stack, IG engagement' },
               { cat: 'General', fields: 'industry match, geo match, ICP priority' },
@@ -1034,7 +1053,7 @@ export default function IcpDetailPage() {
           <div className="mt-2 flex flex-wrap gap-3 text-[10px] text-muted-foreground/50">
             <span><strong className="text-zbooni-green">PROCEED</strong> (Sales + Payment + 3+ cats): +10% bonus</span>
             <span><strong className="text-zbooni-teal">SELECTIVE</strong> (2+ cats): +5% bonus</span>
-            <span><strong className="text-red-400">DISQUALIFY</strong> (&lt;2 cats): -15% penalty</span>
+            <span><strong className="text-red-400">DISQUALIFY</strong> (&lt;2 cats): -5% penalty</span>
           </div>
         </div>
 

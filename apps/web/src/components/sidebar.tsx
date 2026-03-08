@@ -36,7 +36,6 @@ const DASHBOARD_NAV_ITEMS = [
 
 const DEV_CONSOLE_NAV_ITEMS = [
   { href: '/discovery', label: 'Controls & Settings', icon: Settings },
-  { href: '/discovery#pipeline-settings', label: 'Pipeline Settings', icon: Settings },
   { href: '/discovery/debug', label: 'Pipeline Debug', icon: Bug },
   { href: '/discovery/rules', label: 'ICP & Rules', icon: TerminalSquare },
 ] as const;

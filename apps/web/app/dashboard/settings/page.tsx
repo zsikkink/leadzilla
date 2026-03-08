@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-import { Settings, Shield, SlidersHorizontal, Target } from 'lucide-react';
+import { MessageSquare, Settings, Shield, SlidersHorizontal, Target } from 'lucide-react';
 
 import { useAuth } from '../../../src/hooks/use-auth.js';
 import { cn } from '../../../src/lib/utils.js';
@@ -46,6 +46,31 @@ export default function SettingsPage() {
   const [minReviews, setMinReviews] = useState('15');
   const [reviewsError, setReviewsError] = useState<string | null>(null);
 
+  // Deterministic/AI blend state
+  const [blendAutoMode, setBlendAutoMode] = useState(true);
+  const [blendOverride, setBlendOverride] = useState(50);
+
+  // Score tier bands state
+  const [tierLow, setTierLow] = useState('0.34');
+  const [tierHigh, setTierHigh] = useState('0.67');
+  const [tierLowError, setTierLowError] = useState<string | null>(null);
+  const [tierHighError, setTierHighError] = useState<string | null>(null);
+  const [tierRangeError, setTierRangeError] = useState<string | null>(null);
+
+  // Enrichment threshold state
+  const [enrichThreshold, setEnrichThreshold] = useState('0.3');
+  const [enrichError, setEnrichError] = useState<string | null>(null);
+
+  // Follow-up max count state
+  const [followUpMax, setFollowUpMax] = useState('3');
+  const [followUpError, setFollowUpError] = useState<string | null>(null);
+
+  // Daily send limits state
+  const [whatsappLimit, setWhatsappLimit] = useState('50');
+  const [emailLimit, setEmailLimit] = useState('100');
+  const [whatsappLimitError, setWhatsappLimitError] = useState<string | null>(null);
+  const [emailLimitError, setEmailLimitError] = useState<string | null>(null);
+
   // Shared state
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -66,6 +91,27 @@ export default function SettingsPage() {
           setQualThreshold(String(item.value ?? '0.4'));
         } else if (item.key === 'min_review_count') {
           setMinReviews(String(item.value ?? '15'));
+        } else if (item.key === 'deterministicAiBlend') {
+          if (item.value == null) {
+            setBlendAutoMode(true);
+          } else {
+            setBlendAutoMode(false);
+            setBlendOverride(Math.round(Number(item.value) * 100));
+          }
+        } else if (item.key === 'scoreTierBands') {
+          if (item.value != null && typeof item.value === 'object') {
+            const bands = item.value as { low?: number; high?: number };
+            if (bands.low != null) setTierLow(String(bands.low));
+            if (bands.high != null) setTierHigh(String(bands.high));
+          }
+        } else if (item.key === 'enrichmentThreshold') {
+          setEnrichThreshold(String(item.value ?? '0.3'));
+        } else if (item.key === 'followUpMaxCount') {
+          setFollowUpMax(String(item.value ?? '3'));
+        } else if (item.key === 'whatsappDailyLimit') {
+          setWhatsappLimit(String(item.value ?? '50'));
+        } else if (item.key === 'emailDailyLimit') {
+          setEmailLimit(String(item.value ?? '100'));
         }
       }
       setLoaded(true);
@@ -76,7 +122,7 @@ export default function SettingsPage() {
   }, [apiClient]);
 
   const handleSaveAll = useCallback(async () => {
-    // Validate
+    // Validate existing fields
     const minErr = validateDecimalScore(scoreMin);
     const maxErr = validateDecimalScore(scoreMax);
     const qualErr = validateDecimalScore(qualThreshold);
@@ -86,7 +132,21 @@ export default function SettingsPage() {
     setQualError(qualErr);
     setReviewsError(revErr);
 
-    if (minErr || maxErr || qualErr || revErr) return;
+    // Validate new fields
+    const tLowErr = validateDecimalScore(tierLow);
+    const tHighErr = validateDecimalScore(tierHigh);
+    const eThreshErr = validateDecimalScore(enrichThreshold);
+    const fUpErr = validatePositiveInt(followUpMax);
+    const waErr = validatePositiveInt(whatsappLimit);
+    const emErr = validatePositiveInt(emailLimit);
+    setTierLowError(tLowErr);
+    setTierHighError(tHighErr);
+    setEnrichError(eThreshErr);
+    setFollowUpError(fUpErr);
+    setWhatsappLimitError(waErr);
+    setEmailLimitError(emErr);
+
+    if (minErr || maxErr || qualErr || revErr || tLowErr || tHighErr || eThreshErr || fUpErr || waErr || emErr) return;
 
     const min = Number(scoreMin);
     const max = Number(scoreMax);
@@ -96,6 +156,15 @@ export default function SettingsPage() {
     }
     setRangeError(null);
 
+    // Validate tier band range
+    const lowNum = Number(tierLow);
+    const highNum = Number(tierHigh);
+    if (lowNum >= highNum) {
+      setTierRangeError('LOW threshold must be less than HIGH threshold');
+      return;
+    }
+    setTierRangeError(null);
+
     setSaving(true);
     try {
       await Promise.all([
@@ -104,13 +173,19 @@ export default function SettingsPage() {
         apiClient.updatePipelineSetting('auto_approve_score_max', max),
         apiClient.updatePipelineSetting('scoreQualificationThreshold', Number(qualThreshold)),
         apiClient.updatePipelineSetting('min_review_count', Number(minReviews)),
+        apiClient.updatePipelineSetting('deterministicAiBlend', blendAutoMode ? null : blendOverride / 100),
+        apiClient.updatePipelineSetting('scoreTierBands', { low: lowNum, high: highNum }),
+        apiClient.updatePipelineSetting('enrichmentThreshold', Number(enrichThreshold)),
+        apiClient.updatePipelineSetting('followUpMaxCount', Number(followUpMax)),
+        apiClient.updatePipelineSetting('whatsappDailyLimit', Number(whatsappLimit)),
+        apiClient.updatePipelineSetting('emailDailyLimit', Number(emailLimit)),
       ]);
     } catch {
       // Silently handle — settings may not all be wired yet
     } finally {
       setSaving(false);
     }
-  }, [apiClient, autoApproveEnabled, scoreMin, scoreMax, qualThreshold, minReviews]);
+  }, [apiClient, autoApproveEnabled, scoreMin, scoreMax, qualThreshold, minReviews, blendAutoMode, blendOverride, tierLow, tierHigh, enrichThreshold, followUpMax, whatsappLimit, emailLimit]);
 
   if (!loaded) {
     return (
@@ -249,6 +324,206 @@ export default function SettingsPage() {
             )}
           />
           {reviewsError ? <p className="mt-1 text-[10px] text-red-400">{reviewsError}</p> : null}
+        </div>
+      </div>
+
+      {/* ── Deterministic/AI Blend Override ───────────────────────── */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <SlidersHorizontal className="h-4 w-4 text-zbooni-teal" />
+          <h2 className="text-base font-bold tracking-tight">Deterministic / AI Blend</h2>
+        </div>
+        <p className="mb-4 text-xs text-muted-foreground/60">
+          Override the automatic blend between rule-based scoring and AI scoring.
+          Auto mode adjusts as the ML model improves.
+        </p>
+
+        <div className="space-y-4">
+          <label className="flex items-center gap-3">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={blendAutoMode}
+              onClick={() => setBlendAutoMode(!blendAutoMode)}
+              className={cn(
+                'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors',
+                blendAutoMode ? 'bg-zbooni-green' : 'bg-muted/40',
+              )}
+            >
+              <span
+                className={cn(
+                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg transition-transform',
+                  blendAutoMode ? 'translate-x-5' : 'translate-x-0',
+                )}
+              />
+            </button>
+            <span className="text-sm font-medium">Auto mode</span>
+          </label>
+
+          {blendAutoMode ? (
+            <p className="text-xs text-muted-foreground/60">
+              System decides automatically: 90/10 (no model) &rarr; 70/30 (decent model) &rarr; 50/50 (strong model).
+            </p>
+          ) : (
+            <div className="max-w-xs space-y-2">
+              <div className="flex items-center justify-between text-xs text-muted-foreground/60">
+                <span>Rules</span>
+                <span>AI</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={blendOverride}
+                onChange={(e) => setBlendOverride(Number(e.target.value))}
+                className="h-2 w-full cursor-pointer accent-zbooni-teal"
+              />
+              <p className="text-center text-sm tabular-nums text-muted-foreground">
+                {blendOverride}% deterministic / {100 - blendOverride}% AI
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Score Tier Bands ────────────────────────────────────────── */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <Target className="h-4 w-4 text-zbooni-teal" />
+          <h2 className="text-base font-bold tracking-tight">Score Tier Bands</h2>
+        </div>
+        <p className="mb-4 text-xs text-muted-foreground/60">
+          Adjust where LOW / MEDIUM / HIGH score bands are drawn.
+          Leads below LOW get minimal attention, above HIGH get full enrichment.
+        </p>
+        <div className="flex items-start gap-4">
+          <div className="flex-1">
+            <label className="mb-1 block text-xs font-medium text-muted-foreground/70">LOW threshold</label>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={tierLow}
+              onChange={(e) => { setTierLow(e.target.value); setTierLowError(validateDecimalScore(e.target.value)); setTierRangeError(null); }}
+              placeholder="0.34"
+              className={cn(
+                'h-9 w-full rounded-lg border bg-zbooni-dark/40 px-3 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/20',
+                tierLowError ? 'border-red-500/50' : 'border-border/50',
+              )}
+            />
+            {tierLowError ? <p className="mt-1 text-[10px] text-red-400">{tierLowError}</p> : null}
+          </div>
+          <div className="flex-1">
+            <label className="mb-1 block text-xs font-medium text-muted-foreground/70">HIGH threshold</label>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={tierHigh}
+              onChange={(e) => { setTierHigh(e.target.value); setTierHighError(validateDecimalScore(e.target.value)); setTierRangeError(null); }}
+              placeholder="0.67"
+              className={cn(
+                'h-9 w-full rounded-lg border bg-zbooni-dark/40 px-3 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/20',
+                tierHighError ? 'border-red-500/50' : 'border-border/50',
+              )}
+            />
+            {tierHighError ? <p className="mt-1 text-[10px] text-red-400">{tierHighError}</p> : null}
+          </div>
+        </div>
+        {tierRangeError ? <p className="mt-2 text-[10px] text-red-400">{tierRangeError}</p> : null}
+      </div>
+
+      {/* ── Enrichment Threshold ────────────────────────────────────── */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <Shield className="h-4 w-4 text-zbooni-teal" />
+          <h2 className="text-base font-bold tracking-tight">Enrichment Threshold</h2>
+        </div>
+        <p className="mb-4 text-xs text-muted-foreground/60">
+          Minimum score before spending money on Apollo contact enrichment.
+          Leads below this skip paid enrichment to save costs.
+        </p>
+        <div className="max-w-xs">
+          <input
+            type="text"
+            inputMode="decimal"
+            value={enrichThreshold}
+            onChange={(e) => { setEnrichThreshold(e.target.value); setEnrichError(validateDecimalScore(e.target.value)); }}
+            placeholder="0.3"
+            className={cn(
+              'h-9 w-full rounded-lg border bg-zbooni-dark/40 px-3 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/20',
+              enrichError ? 'border-red-500/50' : 'border-border/50',
+            )}
+          />
+          {enrichError ? <p className="mt-1 text-[10px] text-red-400">{enrichError}</p> : null}
+        </div>
+      </div>
+
+      {/* ── Follow-up Max Count ─────────────────────────────────────── */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <Settings className="h-4 w-4 text-zbooni-teal" />
+          <h2 className="text-base font-bold tracking-tight">Follow-up Max Count</h2>
+        </div>
+        <p className="mb-4 text-xs text-muted-foreground/60">
+          Maximum follow-up messages per lead before marking them cold.
+          Higher values are more persistent but risk annoying leads.
+        </p>
+        <div className="max-w-xs">
+          <input
+            type="text"
+            inputMode="numeric"
+            value={followUpMax}
+            onChange={(e) => { setFollowUpMax(e.target.value); setFollowUpError(validatePositiveInt(e.target.value)); }}
+            placeholder="3"
+            className={cn(
+              'h-9 w-full rounded-lg border bg-zbooni-dark/40 px-3 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/20',
+              followUpError ? 'border-red-500/50' : 'border-border/50',
+            )}
+          />
+          {followUpError ? <p className="mt-1 text-[10px] text-red-400">{followUpError}</p> : null}
+        </div>
+      </div>
+
+      {/* ── Daily Send Limits ───────────────────────────────────────── */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <MessageSquare className="h-4 w-4 text-zbooni-teal" />
+          <h2 className="text-base font-bold tracking-tight">Daily Send Limits</h2>
+        </div>
+        <p className="mb-4 text-xs text-muted-foreground/60">
+          Maximum messages sent per day per channel.
+          Prevents throttling and keeps sender reputation healthy.
+        </p>
+        <div className="flex items-start gap-4">
+          <div className="flex-1">
+            <label className="mb-1 block text-xs font-medium text-muted-foreground/70">WhatsApp</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={whatsappLimit}
+              onChange={(e) => { setWhatsappLimit(e.target.value); setWhatsappLimitError(validatePositiveInt(e.target.value)); }}
+              placeholder="50"
+              className={cn(
+                'h-9 w-full rounded-lg border bg-zbooni-dark/40 px-3 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/20',
+                whatsappLimitError ? 'border-red-500/50' : 'border-border/50',
+              )}
+            />
+            {whatsappLimitError ? <p className="mt-1 text-[10px] text-red-400">{whatsappLimitError}</p> : null}
+          </div>
+          <div className="flex-1">
+            <label className="mb-1 block text-xs font-medium text-muted-foreground/70">Email</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={emailLimit}
+              onChange={(e) => { setEmailLimit(e.target.value); setEmailLimitError(validatePositiveInt(e.target.value)); }}
+              placeholder="100"
+              className={cn(
+                'h-9 w-full rounded-lg border bg-zbooni-dark/40 px-3 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/20',
+                emailLimitError ? 'border-red-500/50' : 'border-border/50',
+              )}
+            />
+            {emailLimitError ? <p className="mt-1 text-[10px] text-red-400">{emailLimitError}</p> : null}
+          </div>
         </div>
       </div>
 

@@ -120,8 +120,9 @@ export default function LeadsPage() {
   const [pageSize, setPageSize] = useState(20);
   const [statusFilter, setStatusFilter] = useState<LeadStatus | undefined>(undefined);
   const [scoreBandFilter, setScoreBandFilter] = useState<LeadScoreBand | undefined>(undefined);
-  const [showAllLeads, setShowAllLeads] = useState(false);
   const [qualificationThreshold, setQualificationThreshold] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [generatingForLead, setGeneratingForLead] = useState<string | null>(null);
   const [rejectingLead, setRejectingLead] = useState<string | null>(null);
 
@@ -147,6 +148,12 @@ export default function LeadsPage() {
       });
   }, [apiClient]);
 
+  // Debounce search query
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   // Build the API query with score filter
   const leads = useApiQuery(
     useCallback(
@@ -157,12 +164,10 @@ export default function LeadsPage() {
           includeQualityMetrics: false,
           ...(statusFilter ? { status: statusFilter } : {}),
           ...(scoreBandFilter ? { scoreBand: scoreBandFilter } : {}),
-          // When "show all" is OFF and we have a threshold, filter by score
-          ...(!showAllLeads && qualificationThreshold !== null ? { minBlendedScore: qualificationThreshold } : {}),
         }),
-      [apiClient, page, pageSize, statusFilter, scoreBandFilter, showAllLeads, qualificationThreshold],
+      [apiClient, page, pageSize, statusFilter, scoreBandFilter],
     ),
-    [page, pageSize, statusFilter, scoreBandFilter, showAllLeads, qualificationThreshold],
+    [page, pageSize, statusFilter, scoreBandFilter],
   );
 
   const totalPages = leads.data ? Math.ceil(leads.data.total / leads.data.pageSize) : 0;
@@ -357,6 +362,14 @@ export default function LeadsPage() {
         </button>
         <button
           type="button"
+          onClick={() => router.push('/dashboard/leads/businesses')}
+          className="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-muted-foreground/60 transition-colors hover:text-foreground"
+        >
+          <Building2 className="h-3.5 w-3.5" />
+          Business Intel
+        </button>
+        <button
+          type="button"
           onClick={() => setActiveTab('rejected')}
           className={cn(
             'relative flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors',
@@ -367,14 +380,6 @@ export default function LeadsPage() {
         >
           <ShieldX className="h-3.5 w-3.5" />
           Rejected
-        </button>
-        <button
-          type="button"
-          onClick={() => router.push('/dashboard/leads/businesses')}
-          className="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-muted-foreground/60 transition-colors hover:text-foreground"
-        >
-          <Building2 className="h-3.5 w-3.5" />
-          Business Intel
         </button>
       </div>
 
@@ -402,24 +407,13 @@ export default function LeadsPage() {
               placeholder="All scores"
             />
 
-            {/* Show all leads toggle (E9) */}
-            <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-border/60 hover:text-foreground">
-              <input
-                type="checkbox"
-                checked={showAllLeads}
-                onChange={(e) => {
-                  setShowAllLeads(e.target.checked);
-                  setPage(1);
-                }}
-                className="h-3.5 w-3.5 rounded border-border/50 accent-zbooni-teal"
-              />
-              Show all leads
-              {!showAllLeads && qualificationThreshold !== null && (
-                <span className="text-[10px] text-muted-foreground/40">
-                  (score &ge; {(qualificationThreshold * 100).toFixed(0)})
-                </span>
-              )}
-            </label>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search leads..."
+              className="h-9 w-48 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-zbooni-teal/50 focus:outline-none focus:ring-2 focus:ring-zbooni-teal/20"
+            />
 
             <div className="ml-auto">
               <CustomSelect
@@ -460,7 +454,15 @@ export default function LeadsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(leads.data?.items ?? []).map((lead) => {
+                  {(leads.data?.items ?? []).filter((lead) => {
+                    if (!debouncedSearch) return true;
+                    const q = debouncedSearch.toLowerCase();
+                    return (
+                      (lead.firstName?.toLowerCase().includes(q)) ||
+                      (lead.lastName?.toLowerCase().includes(q)) ||
+                      (lead.email?.toLowerCase().includes(q))
+                    );
+                  }).map((lead) => {
                     const enrichmentRaw = lead.latestEnrichmentNormalizedPayload ?? lead.latestEnrichmentRawPayload;
                     const blendedScore = lead.latestBlendedScore ?? extractBlendedScore(enrichmentRaw);
                     const phone = extractPhone(enrichmentRaw);

@@ -40,90 +40,88 @@ type RuleCategory = 'HARD_FILTER' | 'WEIGHTED' | 'ANTI_FIT';
 /* ------------------------------------------------------------------ */
 
 interface SimFormState {
-  // Core business info
+  // Hard filters
   country: string;
   hasEmail: boolean;
-  industry: string;
-  companySize: number;
-  reviewCount: number;
-  followerCount: number;
+  dataAlignmentScore: number;
+  // Weighted signals (positive)
   hasWhatsapp: boolean;
   hasInstagram: boolean;
-  acceptsOnlinePayments: boolean;
-  hasWebsite: boolean;
-  recentActivity: boolean;
-  avgRating: number;
-  // V2.1 scraper fields
-  decisionMakerCount: number;
-  hasExecutiveContact: boolean;
-  websiteEmailCount: number;
-  websitePhoneCount: number;
-  socialLinkCount: number;
-  hasLinkedin: boolean;
-  techStackSize: number;
-  hasCrm: boolean;
-  hasLiveChat: boolean;
-  hasAnalytics: boolean;
-  estimatedEmployees: number;
-  certificationCount: number;
-  instagramBusinessCategory: string;
-  instagramHasBusinessEmail: boolean;
-  // Data alignment & business signals
-  dataAlignmentScore: number;
-  industrySupported: boolean;
+  reviewCount: number;
   customOrderSignals: boolean;
   hasBookingOrContactForm: boolean;
   paymentWidgetCount: number;
   hasPricingTiers: boolean;
+  highTicketSignals: boolean;
+  decisionMakerCount: number;
+  hasExecutiveContact: boolean;
+  socialLinkCount: number;
+  hasLinkedin: boolean;
+  recentActivity: boolean;
+  icpSegmentPriority: number;
+  // Anti-fit signals (negative)
   pureSelfServeEcom: boolean;
   subscriptionBillingDetected: boolean;
-  highTicketSignals: boolean;
-  depositMilestoneSignals: boolean;
-  bankTransferReliance: boolean;
-  icpSegmentPriority: number;
+  // Business context
+  industry: string;
+  companySize: number;
+  followerCount: number;
+  avgRating: number;
+  websiteEmailCount: number;
+  websitePhoneCount: number;
+  techStackSize: number;
+  estimatedEmployees: number;
+  certificationCount: number;
+  hasWebsite: boolean;
+  hasCrm: boolean;
+  hasLiveChat: boolean;
+  hasAnalytics: boolean;
+  instagramBusinessCategory: string;
+  acceptsOnlinePayments: boolean;
+  // AI / Similarity
   aiSimilarityScore: number;
 }
 
 const DEFAULT_SIM: SimFormState = {
+  // Hard filters
   country: 'AE',
   hasEmail: true,
-  industry: 'retail',
-  companySize: 80,
-  reviewCount: 120,
-  followerCount: 15000,
+  dataAlignmentScore: 0.7,
+  // Weighted signals (positive)
   hasWhatsapp: true,
   hasInstagram: true,
-  acceptsOnlinePayments: true,
-  hasWebsite: true,
-  recentActivity: true,
-  avgRating: 4.3,
-  decisionMakerCount: 2,
-  hasExecutiveContact: true,
-  websiteEmailCount: 1,
-  websitePhoneCount: 1,
-  socialLinkCount: 4,
-  hasLinkedin: true,
-  techStackSize: 3,
-  hasCrm: false,
-  hasLiveChat: false,
-  hasAnalytics: true,
-  estimatedEmployees: 80,
-  certificationCount: 1,
-  instagramBusinessCategory: '',
-  instagramHasBusinessEmail: false,
-  // Data alignment & business signals
-  dataAlignmentScore: 0.7,
-  industrySupported: true,
+  reviewCount: 120,
   customOrderSignals: false,
   hasBookingOrContactForm: true,
   paymentWidgetCount: 1,
   hasPricingTiers: false,
+  highTicketSignals: false,
+  decisionMakerCount: 2,
+  hasExecutiveContact: true,
+  socialLinkCount: 4,
+  hasLinkedin: true,
+  recentActivity: true,
+  icpSegmentPriority: 2,
+  // Anti-fit signals (negative)
   pureSelfServeEcom: false,
   subscriptionBillingDetected: false,
-  highTicketSignals: false,
-  depositMilestoneSignals: false,
-  bankTransferReliance: false,
-  icpSegmentPriority: 2,
+  // Business context
+  industry: 'retail',
+  companySize: 80,
+  followerCount: 15000,
+  avgRating: 4.3,
+  websiteEmailCount: 1,
+  websitePhoneCount: 1,
+  techStackSize: 3,
+  estimatedEmployees: 80,
+  certificationCount: 1,
+  hasWebsite: true,
+  hasCrm: false,
+  hasLiveChat: false,
+  hasAnalytics: true,
+  instagramBusinessCategory: '',
+  acceptsOnlinePayments: true,
+  // AI / Similarity
   aiSimilarityScore: 0.5,
 };
 
@@ -162,9 +160,7 @@ const FIELD_KEY_MAP: Record<string, (form: SimFormState) => unknown> = {
   estimated_employees: (f) => f.estimatedEmployees,
   certification_count: (f) => f.certificationCount,
   instagram_business_category: (f) => f.instagramBusinessCategory,
-  instagram_has_business_email: (f) => f.instagramHasBusinessEmail,
   // Business signal fields from UNIVERSAL_RULES
-  industry_supported: (f) => f.industrySupported,
   custom_order_signals: (f) => f.customOrderSignals,
   has_booking_or_contact_form: (f) => f.hasBookingOrContactForm,
   apify_payment_widget_count: (f) => f.paymentWidgetCount,
@@ -172,9 +168,45 @@ const FIELD_KEY_MAP: Record<string, (form: SimFormState) => unknown> = {
   pure_self_serve_ecom: (f) => f.pureSelfServeEcom,
   subscription_billing_detected: (f) => f.subscriptionBillingDetected,
   high_ticket_signals: (f) => f.highTicketSignals,
-  deposit_milestone_signals: (f) => f.depositMilestoneSignals,
-  bank_transfer_reliance: (f) => f.bankTransferReliance,
   icp_segment_priority: (f) => f.icpSegmentPriority,
+};
+
+/* ------------------------------------------------------------------ */
+/*  Category map — mirrors FIELD_KEY_CATEGORY_MAP from deterministic.ts */
+/* ------------------------------------------------------------------ */
+
+const FIELD_KEY_CATEGORY_MAP: Record<string, string> = {
+  has_whatsapp: 'SALES_MOTION_FIT',
+  has_instagram: 'SALES_MOTION_FIT',
+  custom_order_signals: 'SALES_MOTION_FIT',
+  apollo_has_direct_phone: 'SALES_MOTION_FIT',
+  decision_maker_count: 'SALES_MOTION_FIT',
+  apify_has_booking_form: 'SALES_MOTION_FIT',
+  has_decision_maker_phone: 'SALES_MOTION_FIT',
+  apify_payment_widget_count: 'PAYMENT_COMPLEXITY',
+  apify_has_pricing_tiers: 'PAYMENT_COMPLEXITY',
+  high_ticket_signals: 'PAYMENT_COMPLEXITY',
+  recent_activity: 'RISK_URGENCY',
+  has_booking_or_contact_form: 'RISK_URGENCY',
+  website_email_count: 'RISK_URGENCY',
+  website_phone_count: 'RISK_URGENCY',
+  follower_growth_signal: 'SWITCHING_WILLINGNESS',
+  high_engagement_signal: 'SWITCHING_WILLINGNESS',
+  social_link_count: 'SWITCHING_WILLINGNESS',
+  has_linkedin: 'SWITCHING_WILLINGNESS',
+  tech_stack_size: 'SWITCHING_WILLINGNESS',
+  instagram_follower_count: 'SWITCHING_WILLINGNESS',
+  instagram_engagement_rate: 'SWITCHING_WILLINGNESS',
+  instagram_has_bio_link: 'SWITCHING_WILLINGNESS',
+  pure_self_serve_ecom: 'GENERAL',
+  shopify_detected: 'GENERAL',
+  subscription_billing_detected: 'GENERAL',
+  industry_match: 'GENERAL',
+  geo_match: 'GENERAL',
+  icp_segment_priority: 'GENERAL',
+  apify_has_shopify: 'GENERAL',
+  apify_has_product_catalog: 'GENERAL',
+  instagram_is_business_account: 'GENERAL',
 };
 
 /* ------------------------------------------------------------------ */
@@ -257,22 +289,33 @@ function evaluateRule(rule: QualificationRuleResponse, form: SimFormState): bool
   }
 }
 
-function simulateScore(
-  rules: QualificationRuleResponse[],
-  form: SimFormState,
-  blendWeights: { deterministic: number; ai: number },
-): {
+interface SimulationResult {
   score: number;
   deterministicScore: number;
   aiScore: number;
   passedHard: boolean;
   breakdown: Array<{ rule: string; passed: boolean; contribution: number; group: 'hard_filters' | 'positive' | 'negative' }>;
   equation: string;
-} {
+  qualificationPath: 'PROCEED' | 'SELECTIVE' | 'DISQUALIFY' | 'HARD_FILTERED';
+  categoryBonus: number;
+}
+
+function simulateScore(
+  rules: QualificationRuleResponse[],
+  form: SimFormState,
+  blendWeights: { deterministic: number; ai: number },
+): SimulationResult {
   const breakdown: Array<{ rule: string; passed: boolean; contribution: number; group: 'hard_filters' | 'positive' | 'negative' }> = [];
   let passedHard = true;
-  let weightSum = 0;
-  let maxPossibleWeight = 0;
+
+  // Accumulators matching the real backend formula
+  let weightedPositiveMatched = 0;
+  let weightedPositiveTotal = 0;
+  let weightedNegativeMatched = 0;
+  let weightedNegativeTotal = 0;
+
+  // Track per-rule evaluation for category scoring
+  const ruleEvals: Array<{ fieldKey: string; ruleType: string; matched: boolean }> = [];
 
   for (const rule of rules) {
     if (!rule.isActive) continue;
@@ -283,18 +326,21 @@ function simulateScore(
     if (category === 'HARD_FILTER') {
       if (!passed) passedHard = false;
       breakdown.push({ rule: rule.name, passed, contribution: 0, group: 'hard_filters' });
+      ruleEvals.push({ fieldKey: rule.fieldKey, ruleType: 'HARD_FILTER', matched: passed });
     } else if (category === 'WEIGHTED') {
-      const w = rule.weight ?? 0;
-      maxPossibleWeight += w;
-      const contribution = passed ? w : 0;
-      weightSum += contribution;
-      breakdown.push({ rule: rule.name, passed, contribution, group: 'positive' });
+      const w = rule.weight ?? 1;
+      weightedPositiveTotal += w;
+      if (passed) weightedPositiveMatched += w;
+      breakdown.push({ rule: rule.name, passed, contribution: passed ? w : 0, group: 'positive' });
+      ruleEvals.push({ fieldKey: rule.fieldKey, ruleType: 'WEIGHTED', matched: passed });
     } else {
-      // ANTI_FIT: negative weight when matched
+      // ANTI_FIT: negative weight
       const w = rule.weight ?? 0;
-      const contribution = passed ? w : 0;
-      weightSum += contribution;
-      breakdown.push({ rule: rule.name, passed, contribution, group: 'negative' });
+      const penalty = Math.abs(w);
+      weightedNegativeTotal += penalty;
+      if (passed) weightedNegativeMatched += penalty;
+      breakdown.push({ rule: rule.name, passed, contribution: passed ? w : 0, group: 'negative' });
+      ruleEvals.push({ fieldKey: rule.fieldKey, ruleType: 'WEIGHTED', matched: passed });
     }
   }
 
@@ -305,13 +351,80 @@ function simulateScore(
       aiScore: form.aiSimilarityScore,
       passedHard: false,
       breakdown,
-      equation: `final = (hard filters failed) => 0`,
+      equation: 'hard filters failed => score = 0',
+      qualificationPath: 'HARD_FILTERED',
+      categoryBonus: 0,
     };
   }
 
-  const deterministicScore = Math.max(0, Math.min(1, maxPossibleWeight > 0 ? weightSum / maxPossibleWeight : 0));
+  // --- Category-based scoring (mirrors deterministic.ts) ---
+  const categoryBuckets = new Map<string, { matched: number; total: number }>();
+  for (const evaluation of ruleEvals) {
+    if (evaluation.ruleType === 'HARD_FILTER') continue;
+    const cat = FIELD_KEY_CATEGORY_MAP[evaluation.fieldKey] ?? 'GENERAL';
+    const existing = categoryBuckets.get(cat) ?? { matched: 0, total: 0 };
+    existing.total += 1;
+    if (evaluation.matched) existing.matched += 1;
+    categoryBuckets.set(cat, existing);
+  }
+
+  // Count categories that pass (>=50% match rate, at least 1 matched, excluding GENERAL)
+  const passedCategories = new Set<string>();
+  for (const [cat, bucket] of categoryBuckets) {
+    if (cat === 'GENERAL') continue;
+    const rate = bucket.total > 0 ? bucket.matched / bucket.total : 0;
+    if (rate >= 0.5 && bucket.matched >= 1) {
+      passedCategories.add(cat);
+    }
+  }
+
+  const hasSalesMotion = passedCategories.has('SALES_MOTION_FIT');
+  const hasPaymentComplexity = passedCategories.has('PAYMENT_COMPLEXITY');
+
+  let qualificationPath: 'PROCEED' | 'SELECTIVE' | 'DISQUALIFY' | 'HARD_FILTERED';
+  let categoryBonus = 0;
+
+  if (hasSalesMotion && hasPaymentComplexity && passedCategories.size >= 3) {
+    qualificationPath = 'PROCEED';
+    categoryBonus = 0.10;
+  } else if (passedCategories.size >= 2) {
+    qualificationPath = 'SELECTIVE';
+    categoryBonus = 0.05;
+  } else {
+    qualificationPath = 'DISQUALIFY';
+    categoryBonus = -0.05;
+  }
+
+  // --- Weighted-average scoring (Option D: BASE_SCORE + matchRatio * penalty * 0.90 + categoryBonus) ---
+  const BASE_SCORE = 0.10;
+  let deterministicScore: number;
+
+  if (weightedPositiveTotal > 0 || weightedNegativeTotal > 0) {
+    const matchRatio = weightedPositiveTotal > 0
+      ? (weightedPositiveMatched + 1) / (weightedPositiveTotal + 1)
+      : 1;
+
+    const penaltyFactor = weightedNegativeTotal > 0
+      ? 1 - (weightedNegativeMatched / weightedNegativeTotal) * 0.8
+      : 1;
+
+    const boundedPenaltyFactor = Math.max(0.2, Math.min(1, penaltyFactor));
+
+    deterministicScore = BASE_SCORE + matchRatio * boundedPenaltyFactor * 0.90;
+    deterministicScore = Math.max(0, Math.min(1, deterministicScore + categoryBonus));
+  } else {
+    deterministicScore = 1;
+  }
+
   const aiScore = Math.max(0, Math.min(1, form.aiSimilarityScore));
   const finalScore = Math.max(0, Math.min(1, blendWeights.deterministic * deterministicScore + blendWeights.ai * aiScore));
+
+  const matchRatioDisplay = weightedPositiveTotal > 0
+    ? ((weightedPositiveMatched + 1) / (weightedPositiveTotal + 1)).toFixed(3)
+    : '1.000';
+  const penaltyDisplay = weightedNegativeTotal > 0
+    ? Math.max(0.2, Math.min(1, 1 - (weightedNegativeMatched / weightedNegativeTotal) * 0.8)).toFixed(3)
+    : '1.000';
 
   return {
     score: finalScore,
@@ -319,7 +432,9 @@ function simulateScore(
     aiScore,
     passedHard: true,
     breakdown,
-    equation: `final = (${blendWeights.deterministic.toFixed(2)} × deterministic ${deterministicScore.toFixed(2)}) + (${blendWeights.ai.toFixed(2)} × ai/sim ${aiScore.toFixed(2)}) = ${finalScore.toFixed(2)}`,
+    equation: `det = 0.10 + ${matchRatioDisplay} * ${penaltyDisplay} * 0.90 + (${categoryBonus >= 0 ? '+' : ''}${categoryBonus.toFixed(2)}) = ${deterministicScore.toFixed(3)} | final = ${blendWeights.deterministic.toFixed(2)} * ${deterministicScore.toFixed(3)} + ${blendWeights.ai.toFixed(2)} * ${aiScore.toFixed(3)} = ${finalScore.toFixed(3)}`,
+    qualificationPath,
+    categoryBonus,
   };
 }
 
@@ -597,15 +712,31 @@ export default function ICPRulesPage() {
               </button>
             </div>
 
-            {/* Formula explanation */}
+            {/* Real equation display */}
             <div className="mt-4 rounded-lg border border-border/50 bg-slate-800 px-4 py-3">
-              <p className="font-mono text-xs text-muted-foreground leading-relaxed">
-                Pass all <span className="text-red-400 font-semibold">HARD_FILTERs</span>
-                {' '}<span className="text-slate-500">&rarr;</span>{' '}
-                Sum <span className="text-blue-400 font-semibold">weights</span>
-                {' '}<span className="text-slate-500">&rarr;</span>{' '}
-                Normalize
+              <p className="font-mono text-xs leading-relaxed">
+                <span className="text-muted-foreground/60">score = </span>
+                <span className="font-semibold text-emerald-400">0.10</span>
+                <span className="text-muted-foreground/60"> + </span>
+                <span className="font-semibold text-blue-400">[</span>
+                <span className="text-blue-400">(matched+ + 1)</span>
+                <span className="text-muted-foreground/60"> / </span>
+                <span className="text-blue-400">(total+ + 1)</span>
+                <span className="font-semibold text-blue-400">]</span>
+                <span className="text-muted-foreground/60"> &times; </span>
+                <span className="font-semibold text-orange-400">clamp</span>
+                <span className="text-orange-400">(1 - negPenalty, 0.2, 1.0)</span>
+                <span className="text-muted-foreground/60"> &times; </span>
+                <span className="text-muted-foreground/60">0.90</span>
+                <span className="text-muted-foreground/60"> + </span>
+                <span className="font-semibold text-purple-400">categoryBonus</span>
               </p>
+              <div className="mt-2 flex flex-wrap gap-3 text-[10px]">
+                <span className="text-emerald-400/70">BASE = 0.10</span>
+                <span className="text-blue-400/70">matchRatio = positive signal coverage</span>
+                <span className="text-orange-400/70">penalty = anti-fit dampening (0.2&ndash;1.0)</span>
+                <span className="text-purple-400/70">category = +0.10 / +0.05 / -0.05</span>
+              </div>
             </div>
 
             {/* Hard Filter rules */}
@@ -734,12 +865,8 @@ export default function ICPRulesPage() {
               <div className="mt-4 rounded-lg border border-border/30 bg-slate-800/60 px-4 py-3">
                 <div className="flex items-center gap-6 text-xs">
                   <div>
-                    <span className="text-muted-foreground/60">Total Features:</span>{' '}
-                    <span className="font-bold text-foreground">67</span>
-                  </div>
-                  <div>
                     <span className="text-muted-foreground/60">ML Features:</span>{' '}
-                    <span className="font-bold text-foreground">48</span>
+                    <span className="font-bold text-foreground">43</span>
                   </div>
                   <div>
                     <span className="text-muted-foreground/60">Blend Ratio:</span>{' '}
@@ -755,8 +882,8 @@ export default function ICPRulesPage() {
                 </p>
               </div>
 
-              {/* Core business fields */}
-              <p className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">Core Business Info</p>
+              {/* ── 1. Hard Filters ── */}
+              <p className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-red-400/60">Hard Filters</p>
               <div className="form-grid mt-2">
                 <label>
                   Country
@@ -769,6 +896,116 @@ export default function ICPRulesPage() {
                     ))}
                   </select>
                 </label>
+                <label>
+                  Data Alignment Score
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={simForm.dataAlignmentScore}
+                      onChange={(e) => setSimForm((prev) => ({ ...prev, dataAlignmentScore: Number(e.target.value) }))}
+                      className="flex-1"
+                    />
+                    <span className="font-mono text-xs tabular-nums w-8 text-right">{simForm.dataAlignmentScore.toFixed(2)}</span>
+                  </div>
+                </label>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.hasEmail} onChange={(e) => setSimForm((prev) => ({ ...prev, hasEmail: e.target.checked }))} />
+                  Has Email
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.pureSelfServeEcom} onChange={(e) => setSimForm((prev) => ({ ...prev, pureSelfServeEcom: e.target.checked }))} />
+                  Pure Self-Serve Ecom
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.subscriptionBillingDetected} onChange={(e) => setSimForm((prev) => ({ ...prev, subscriptionBillingDetected: e.target.checked }))} />
+                  Subscription Billing
+                </label>
+              </div>
+
+              {/* ── 2. Weighted Signals (Positive) ── */}
+              <p className="mt-5 text-[10px] font-semibold uppercase tracking-wider text-blue-400/60">Weighted Signals (Positive)</p>
+              <div className="form-grid mt-2">
+                <label>
+                  Review Count
+                  <input type="number" min={0} value={simForm.reviewCount} onChange={(e) => setSimForm((prev) => ({ ...prev, reviewCount: Number(e.target.value) || 0 }))} />
+                </label>
+                <label>
+                  Decision Makers
+                  <input type="number" min={0} value={simForm.decisionMakerCount} onChange={(e) => setSimForm((prev) => ({ ...prev, decisionMakerCount: Number(e.target.value) || 0 }))} />
+                </label>
+                <label>
+                  Payment Widgets
+                  <input type="number" min={0} value={simForm.paymentWidgetCount} onChange={(e) => setSimForm((prev) => ({ ...prev, paymentWidgetCount: Number(e.target.value) || 0 }))} />
+                </label>
+                <label>
+                  Social Links
+                  <input type="number" min={0} value={simForm.socialLinkCount} onChange={(e) => setSimForm((prev) => ({ ...prev, socialLinkCount: Number(e.target.value) || 0 }))} />
+                </label>
+                <label>
+                  ICP Segment Priority
+                  <input type="number" min={0} max={5} value={simForm.icpSegmentPriority} onChange={(e) => setSimForm((prev) => ({ ...prev, icpSegmentPriority: Number(e.target.value) || 0 }))} />
+                </label>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.hasWhatsapp} onChange={(e) => setSimForm((prev) => ({ ...prev, hasWhatsapp: e.target.checked }))} />
+                  Has WhatsApp
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.hasInstagram} onChange={(e) => setSimForm((prev) => ({ ...prev, hasInstagram: e.target.checked }))} />
+                  Has Instagram
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.customOrderSignals} onChange={(e) => setSimForm((prev) => ({ ...prev, customOrderSignals: e.target.checked }))} />
+                  Custom Order Signals
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.hasBookingOrContactForm} onChange={(e) => setSimForm((prev) => ({ ...prev, hasBookingOrContactForm: e.target.checked }))} />
+                  Booking/Contact Form
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.hasPricingTiers} onChange={(e) => setSimForm((prev) => ({ ...prev, hasPricingTiers: e.target.checked }))} />
+                  Has Pricing Tiers
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.highTicketSignals} onChange={(e) => setSimForm((prev) => ({ ...prev, highTicketSignals: e.target.checked }))} />
+                  High-Ticket Signals
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.hasExecutiveContact} onChange={(e) => setSimForm((prev) => ({ ...prev, hasExecutiveContact: e.target.checked }))} />
+                  Has Executive Contact
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.hasLinkedin} onChange={(e) => setSimForm((prev) => ({ ...prev, hasLinkedin: e.target.checked }))} />
+                  Has LinkedIn
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.recentActivity} onChange={(e) => setSimForm((prev) => ({ ...prev, recentActivity: e.target.checked }))} />
+                  Recent Activity
+                </label>
+              </div>
+
+              {/* ── 3. Anti-fit Signals (Negative) ── */}
+              <p className="mt-5 text-[10px] font-semibold uppercase tracking-wider text-orange-400/60">Anti-fit Signals (Negative)</p>
+              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.pureSelfServeEcom} onChange={(e) => setSimForm((prev) => ({ ...prev, pureSelfServeEcom: e.target.checked }))} />
+                  Pure Self-Serve Ecom
+                </label>
+                <label className="inline-flex items-center gap-1.5 text-[13px]">
+                  <input type="checkbox" checked={simForm.subscriptionBillingDetected} onChange={(e) => setSimForm((prev) => ({ ...prev, subscriptionBillingDetected: e.target.checked }))} />
+                  Subscription Billing
+                </label>
+              </div>
+
+              {/* ── 4. Business Context ── */}
+              <p className="mt-5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">Business Context</p>
+              <div className="form-grid mt-2">
                 <label>
                   Industry
                   <input
@@ -784,15 +1021,6 @@ export default function ICPRulesPage() {
                     min={0}
                     value={simForm.companySize}
                     onChange={(e) => setSimForm((prev) => ({ ...prev, companySize: Number(e.target.value) || 0 }))}
-                  />
-                </label>
-                <label>
-                  Review Count
-                  <input
-                    type="number"
-                    min={0}
-                    value={simForm.reviewCount}
-                    onChange={(e) => setSimForm((prev) => ({ ...prev, reviewCount: Number(e.target.value) || 0 }))}
                   />
                 </label>
                 <label>
@@ -815,42 +1043,6 @@ export default function ICPRulesPage() {
                     onChange={(e) => setSimForm((prev) => ({ ...prev, avgRating: Number(e.target.value) || 0 }))}
                   />
                 </label>
-              </div>
-
-              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.hasEmail} onChange={(e) => setSimForm((prev) => ({ ...prev, hasEmail: e.target.checked }))} />
-                  Has Email
-                </label>
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.hasWhatsapp} onChange={(e) => setSimForm((prev) => ({ ...prev, hasWhatsapp: e.target.checked }))} />
-                  Has WhatsApp
-                </label>
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.hasInstagram} onChange={(e) => setSimForm((prev) => ({ ...prev, hasInstagram: e.target.checked }))} />
-                  Has Instagram
-                </label>
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.acceptsOnlinePayments} onChange={(e) => setSimForm((prev) => ({ ...prev, acceptsOnlinePayments: e.target.checked }))} />
-                  Online Payments
-                </label>
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.hasWebsite} onChange={(e) => setSimForm((prev) => ({ ...prev, hasWebsite: e.target.checked }))} />
-                  Has Website
-                </label>
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.recentActivity} onChange={(e) => setSimForm((prev) => ({ ...prev, recentActivity: e.target.checked }))} />
-                  Recent Activity
-                </label>
-              </div>
-
-              {/* V2.1 scraper intelligence fields */}
-              <p className="mt-5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">Website &amp; Social Intelligence (v2.1)</p>
-              <div className="form-grid mt-2">
-                <label>
-                  Decision Makers
-                  <input type="number" min={0} value={simForm.decisionMakerCount} onChange={(e) => setSimForm((prev) => ({ ...prev, decisionMakerCount: Number(e.target.value) || 0 }))} />
-                </label>
                 <label>
                   Website Emails
                   <input type="number" min={0} value={simForm.websiteEmailCount} onChange={(e) => setSimForm((prev) => ({ ...prev, websiteEmailCount: Number(e.target.value) || 0 }))} />
@@ -858,10 +1050,6 @@ export default function ICPRulesPage() {
                 <label>
                   Website Phones
                   <input type="number" min={0} value={simForm.websitePhoneCount} onChange={(e) => setSimForm((prev) => ({ ...prev, websitePhoneCount: Number(e.target.value) || 0 }))} />
-                </label>
-                <label>
-                  Social Links
-                  <input type="number" min={0} value={simForm.socialLinkCount} onChange={(e) => setSimForm((prev) => ({ ...prev, socialLinkCount: Number(e.target.value) || 0 }))} />
                 </label>
                 <label>
                   Tech Stack Size
@@ -880,15 +1068,10 @@ export default function ICPRulesPage() {
                   <input value={simForm.instagramBusinessCategory} onChange={(e) => setSimForm((prev) => ({ ...prev, instagramBusinessCategory: e.target.value }))} placeholder="e.g. Shopping & Retail" />
                 </label>
               </div>
-
               <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.hasExecutiveContact} onChange={(e) => setSimForm((prev) => ({ ...prev, hasExecutiveContact: e.target.checked }))} />
-                  Has Executive Contact
-                </label>
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.hasLinkedin} onChange={(e) => setSimForm((prev) => ({ ...prev, hasLinkedin: e.target.checked }))} />
-                  Has LinkedIn
+                  <input type="checkbox" checked={simForm.hasWebsite} onChange={(e) => setSimForm((prev) => ({ ...prev, hasWebsite: e.target.checked }))} />
+                  Has Website
                 </label>
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
                   <input type="checkbox" checked={simForm.hasCrm} onChange={(e) => setSimForm((prev) => ({ ...prev, hasCrm: e.target.checked }))} />
@@ -903,72 +1086,14 @@ export default function ICPRulesPage() {
                   Has Analytics
                 </label>
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.instagramHasBusinessEmail} onChange={(e) => setSimForm((prev) => ({ ...prev, instagramHasBusinessEmail: e.target.checked }))} />
-                  IG Business Email
+                  <input type="checkbox" checked={simForm.acceptsOnlinePayments} onChange={(e) => setSimForm((prev) => ({ ...prev, acceptsOnlinePayments: e.target.checked }))} />
+                  Online Payments
                 </label>
               </div>
 
-              {/* Data alignment & business signals */}
-              <p className="mt-5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">Data Alignment &amp; Business Signals</p>
-              <div className="form-grid mt-2">
-                <label>
-                  Data Alignment Score
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={simForm.dataAlignmentScore}
-                      onChange={(e) => setSimForm((prev) => ({ ...prev, dataAlignmentScore: Number(e.target.value) }))}
-                      className="flex-1"
-                    />
-                    <span className="font-mono text-xs tabular-nums w-8 text-right">{simForm.dataAlignmentScore.toFixed(2)}</span>
-                  </div>
-                </label>
-                <label>
-                  Payment Widgets
-                  <input type="number" min={0} value={simForm.paymentWidgetCount} onChange={(e) => setSimForm((prev) => ({ ...prev, paymentWidgetCount: Number(e.target.value) || 0 }))} />
-                </label>
-              </div>
-
-              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.industrySupported} onChange={(e) => setSimForm((prev) => ({ ...prev, industrySupported: e.target.checked }))} />
-                  Industry Supported
-                </label>
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.customOrderSignals} onChange={(e) => setSimForm((prev) => ({ ...prev, customOrderSignals: e.target.checked }))} />
-                  Custom Order Signals
-                </label>
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.hasBookingOrContactForm} onChange={(e) => setSimForm((prev) => ({ ...prev, hasBookingOrContactForm: e.target.checked }))} />
-                  Booking/Contact Form
-                </label>
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.hasPricingTiers} onChange={(e) => setSimForm((prev) => ({ ...prev, hasPricingTiers: e.target.checked }))} />
-                  Has Pricing Tiers
-                </label>
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.pureSelfServeEcom} onChange={(e) => setSimForm((prev) => ({ ...prev, pureSelfServeEcom: e.target.checked }))} />
-                  Pure Self-Serve Ecom
-                </label>
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.subscriptionBillingDetected} onChange={(e) => setSimForm((prev) => ({ ...prev, subscriptionBillingDetected: e.target.checked }))} />
-                  Subscription Billing
-                </label>
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.highTicketSignals} onChange={(e) => setSimForm((prev) => ({ ...prev, highTicketSignals: e.target.checked }))} />
-                  High-Ticket Signals
-                </label>
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.depositMilestoneSignals} onChange={(e) => setSimForm((prev) => ({ ...prev, depositMilestoneSignals: e.target.checked }))} />
-                  Deposit/Milestone Signals
-                </label>
-                <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.bankTransferReliance} onChange={(e) => setSimForm((prev) => ({ ...prev, bankTransferReliance: e.target.checked }))} />
-                  Bank Transfer Reliance
-                </label>
+              {/* ── 5. AI / Similarity ── */}
+              <p className="mt-5 text-[10px] font-semibold uppercase tracking-wider text-purple-400/60">AI / Similarity</p>
+              <div className="mt-2">
                 <label className="col-span-full text-[13px]">
                   <span className="mb-1 block text-xs text-muted-foreground/70">AI / Similarity Score: {Math.round(simForm.aiSimilarityScore * 100)}%</span>
                   <input
@@ -1036,6 +1161,24 @@ export default function ICPRulesPage() {
                         Failed one or more hard filter requirements. Lead would be rejected.
                       </p>
                     ) : null}
+
+                    {/* Qualification path badge */}
+                    {simResult.passedHard ? (
+                      <div className="mt-2 flex items-center gap-2">
+                        <span className={cn(
+                          'rounded px-2 py-0.5 text-[10px] font-bold uppercase',
+                          simResult.qualificationPath === 'PROCEED' && 'bg-emerald-500/15 text-emerald-400',
+                          simResult.qualificationPath === 'SELECTIVE' && 'bg-blue-500/15 text-blue-400',
+                          simResult.qualificationPath === 'DISQUALIFY' && 'bg-red-500/15 text-red-400',
+                        )}>
+                          {simResult.qualificationPath}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground/50">
+                          Category bonus: {simResult.categoryBonus >= 0 ? '+' : ''}{simResult.categoryBonus.toFixed(2)}
+                        </span>
+                      </div>
+                    ) : null}
+
                     <p className="mt-2 text-xs text-muted-foreground/70">
                       {simResult.equation}
                     </p>
