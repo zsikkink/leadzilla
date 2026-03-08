@@ -14,6 +14,7 @@ enum LeadStatus {
   enriched
   scored
   qualified
+  drafted
   rejected
   stuck
   failed
@@ -75,6 +76,7 @@ enum CostEventProvider {
   APIFY_WEBSITE
   APIFY_INSTAGRAM
   HUNTER
+  GOOGLE_PLACES
 }
 
 enum DiscoveryRecordStatus {

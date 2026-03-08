@@ -5,7 +5,7 @@ import type { LogisticModel } from './logistic.js';
 
 export const BASELINE_MODEL_VERSION_TAG = 'deterministic-baseline-v1';
 
-const DEFAULT_QUALIFICATION_THRESHOLD = 0.5;
+const DEFAULT_QUALIFICATION_THRESHOLD = 0.4;
 
 /**
  * Read the qualification threshold from PipelineSetting table.
@@ -35,12 +35,11 @@ export async function getQualificationThreshold(): Promise<number> {
  * Feature keys consumed by the trained logistic regression model.
  * Must stay in sync with model.train NUMERIC_FEATURE_KEYS.
  *
- * 47 features: 18 original + 7 Wave-1 + 2 category-coverage + 11 v2 + 9 v2.1 enhanced scraper.
- * (instagram_is_verified removed — unreliable signal for UAE SMBs)
+ * 43 features: 14 original + 5 Wave-1 + 1 category-coverage + 11 v2 + 8 v2.1 + 4 removed dead features.
+ * Removed (0% detection): industry_supported, deposit_milestone_signals, bank_transfer_reliance, instagram_has_business_email
  */
 export const TRAINED_MODEL_FEATURE_KEYS = [
   // ── Original (noise features physical_store_present + abandonment_signal_detected removed) ──
-  'industry_supported',
   'has_whatsapp',
   'has_instagram',
   'accepts_online_payments',
@@ -58,16 +57,14 @@ export const TRAINED_MODEL_FEATURE_KEYS = [
   'variable_pricing_detected',
   'industry_match',
   'geo_match',
-  // ── Wave-1 additions (7) ──
+  // ── Wave-1 additions (5 — removed deposit_milestone_signals) ──
   'high_ticket_signals',
-  'deposit_milestone_signals',
   'subscription_billing_detected',
   'international_customer_signals',
   'icp_segment_priority',
   'review_count_tier',
   'follower_count_tier',
-  // ── Category-coverage additions (2) ──
-  'bank_transfer_reliance',
+  // ── Category-coverage additions (1 — removed bank_transfer_reliance) ──
   'upsell_signals',
   // ── v2 additions (Apify + Instagram + Apollo) ──
   'apify_payment_widget_count',
@@ -81,7 +78,7 @@ export const TRAINED_MODEL_FEATURE_KEYS = [
   'instagram_days_since_last_post',
   'instagram_has_bio_link',
   'has_decision_maker_phone',
-  // ── v2.1 additions (enhanced scraper features) ──
+  // ── v2.1 additions (enhanced scraper features — removed instagram_has_business_email) ──
   'decision_maker_count',
   'apollo_has_direct_phone',
   'website_email_count',
@@ -90,7 +87,6 @@ export const TRAINED_MODEL_FEATURE_KEYS = [
   'has_linkedin',
   'tech_stack_size',
   'estimated_employees',
-  'instagram_has_business_email',
 ] as const;
 
 /**

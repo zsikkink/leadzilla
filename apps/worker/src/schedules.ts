@@ -69,6 +69,11 @@ import {
   type PipelineHealthJobPayload,
   PIPELINE_HEALTH_RETRY_OPTIONS,
 } from './jobs/pipeline.health.job.js';
+import {
+  SEARCH_TASK_RECOVERY_JOB_NAME,
+  type SearchTaskRecoveryJobPayload,
+  SEARCH_TASK_RECOVERY_RETRY_OPTIONS,
+} from './jobs/search-task.recovery.job.js';
 import { HEARTBEAT_QUEUE_NAME, HEARTBEAT_RETRY_OPTIONS } from './queues.js';
 
 export async function registerWorkerSchedules(boss: Pick<PgBoss, 'schedule'>): Promise<void> {
@@ -275,6 +280,19 @@ export async function registerWorkerSchedules(boss: Pick<PgBoss, 'schedule'>): P
     {
       singletonKey: 'schedule:model.drift',
       ...MODEL_DRIFT_RETRY_OPTIONS,
+    },
+  );
+
+  // Every 15 minutes — search task recovery (stuck RUNNING >10min, abandoned PENDING >2h)
+  await boss.schedule(
+    SEARCH_TASK_RECOVERY_JOB_NAME,
+    '*/15 * * * *',
+    {
+      correlationId: 'scheduler:search-task.recovery',
+    } satisfies SearchTaskRecoveryJobPayload,
+    {
+      singletonKey: 'schedule:search-task.recovery',
+      ...SEARCH_TASK_RECOVERY_RETRY_OPTIONS,
     },
   );
 }

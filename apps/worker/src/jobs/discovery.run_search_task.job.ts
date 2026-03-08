@@ -475,9 +475,12 @@ export async function handleDiscoveryRunSearchTaskJob(
     return;
   }
 
-  // Early-stop: enough unique businesses found for the lead target
+  // Early-stop: enough unique businesses found for the lead target.
+  // Use 2x buffer because not all discovered businesses become qualified leads
+  // (disqualification, low scores, missing contacts reduce yield).
   const targetBiz = job.data.targetUniqueBusinesses;
-  if (targetBiz !== undefined && runState.newBusinesses >= targetBiz) {
+  const earlyStopThreshold = targetBiz !== undefined ? targetBiz * 2 : undefined;
+  if (earlyStopThreshold !== undefined && runState.newBusinesses >= earlyStopThreshold) {
     if (job.data.discoveryRunId) {
       await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
       releaseSlot(runKey, runState);

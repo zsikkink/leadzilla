@@ -1,5 +1,4 @@
 import { prisma } from '@lead-flood/db';
-import { mapIcpIndustriesWithOverrides } from '@lead-flood/discovery';
 import { promises as dns } from 'node:dns';
 import type { Job, SendOptions } from 'pg-boss';
 
@@ -51,6 +50,8 @@ export interface BusinessPrequalifyJobPayload {
   includeWebsiteAnalysis?: boolean | undefined;
   includeSocialMediaAnalysis?: boolean | undefined;
   correlationId?: string | undefined;
+  /** Which search provider discovered this business (for cost tracking). */
+  providerUsed?: 'SERPAPI' | 'GOOGLE_PLACES' | undefined;
 }
 
 export interface BusinessPrequalifyJobDependencies {
@@ -129,93 +130,6 @@ async function isParkedDomain(domain: string): Promise<boolean> {
   }
 }
 
-// ── Word-stem matching ────────────────────────────────────────────────
-
-/**
- * Common English suffixes to strip for stem comparison.
- * Ordered longest-first so "-ation" is tried before "-tion".
- */
-const STEM_SUFFIXES = [
-  'ation', 'ment', 'ness', 'tion', 'sion', 'ance', 'ence',
-  'ible', 'able', 'ious', 'eous', 'less', 'ical', 'ful',
-  'ist', 'ity', 'ive', 'ous', 'ing', 'ary', 'ery', 'ory',
-  'ant', 'ent', 'ism', 'ial', 'ual', 'ure', 'age',
-  'er', 'or', 'al', 'ly', 'ed',
-];
-
-/** Strip common suffixes to produce a crude word stem. Min 3 chars left. */
-function wordStem(word: string): string {
-  const lower = word.toLowerCase();
-  if (lower.length <= 4) return lower;
-  for (const suffix of STEM_SUFFIXES) {
-    if (lower.endsWith(suffix) && lower.length - suffix.length >= 3) {
-      return lower.slice(0, -suffix.length);
-    }
-  }
-  return lower;
-}
-
-// ── ICP industry match ────────────────────────────────────────────────
-
-/**
- * Check if a business's SerpAPI category matches any of the ICP's target industries
- * or their derived search categories. Uses three matching strategies:
- *
- * 1. Exact token overlap (e.g., "spa" in both)
- * 2. Word-stem matching (e.g., "Physiotherapist" → "physiotherap" matches "Physiotherapy")
- * 3. Search category comparison (ICP industries → Google Maps categories via ICP_INDUSTRY_CATEGORY_MAP)
- */
-function matchesIcpIndustry(
-  businessCategory: string | null,
-  targetIndustries: string[],
-  searchCategories: string[],
-): boolean {
-  // If no target industries are set, all businesses match (no filter)
-  if (targetIndustries.length === 0) return true;
-  // If we don't know the business category, don't disqualify (let it through)
-  if (!businessCategory) return true;
-
-  const bizTokens = businessCategory
-    .toLowerCase()
-    .split(/[\s,_\-/&]+/)
-    .filter((t) => t.length > 2);
-  const bizTokenSet = new Set(bizTokens);
-  const bizStems = new Set(bizTokens.map(wordStem));
-
-  // Strategy 1 + 2: Check target industries (token overlap + stem matching)
-  for (const industry of targetIndustries) {
-    const industryTokens = industry
-      .toLowerCase()
-      .split(/[\s,_\-/&]+/)
-      .filter((t) => t.length > 2);
-
-    for (const token of industryTokens) {
-      // Exact token match
-      if (bizTokenSet.has(token)) return true;
-      // Stem match
-      if (bizStems.has(wordStem(token))) return true;
-    }
-  }
-
-  // Strategy 3: Check search categories (derived from ICP_INDUSTRY_CATEGORY_MAP + overrides)
-  const bizCategoryLower = businessCategory.toLowerCase();
-  for (const searchCat of searchCategories) {
-    const catLower = searchCat.toLowerCase();
-    // Direct substring match: "physiotherapy clinic" contains in "Physiotherapy Clinic Downtown"
-    if (bizCategoryLower.includes(catLower) || catLower.includes(bizCategoryLower)) {
-      return true;
-    }
-    // Token overlap with search category tokens
-    const catTokens = catLower.split(/[\s,_\-/&]+/).filter((t) => t.length > 2);
-    for (const catToken of catTokens) {
-      if (bizTokenSet.has(catToken)) return true;
-      if (bizStems.has(wordStem(catToken))) return true;
-    }
-  }
-
-  return false;
-}
-
 // ── Handler ───────────────────────────────────────────────────────────
 
 export async function handleBusinessPrequalifyJob(
@@ -231,9 +145,21 @@ export async function handleBusinessPrequalifyJob(
     includeWebsiteAnalysis,
     includeSocialMediaAnalysis,
     correlationId,
+    providerUsed,
   } = job.data;
   const effectiveCorrelationId = correlationId ?? job.id;
-  const effectiveMinReviewCount = minReviewCount ?? DEFAULT_MIN_REVIEW_COUNT;
+
+  // Use explicit payload value, else pipeline setting, else default
+  let effectiveMinReviewCount = minReviewCount ?? DEFAULT_MIN_REVIEW_COUNT;
+  if (minReviewCount === undefined) {
+    const setting = await prisma.pipelineSetting.findUnique({
+      where: { key: 'min_review_count' },
+    });
+    if (setting?.valueJson !== undefined && setting.valueJson !== null) {
+      const parsed = typeof setting.valueJson === 'number' ? setting.valueJson : Number(setting.valueJson);
+      if (!isNaN(parsed)) effectiveMinReviewCount = parsed;
+    }
+  }
 
   const logCtx = {
     jobId: job.id,
@@ -262,7 +188,7 @@ export async function handleBusinessPrequalifyJob(
 
   // ── Check: website domain ──────────────────────────────────────────
   if (!business.websiteDomain) {
-    await disqualify(businessId, discoveryRunId, 'NO_WEBSITE_DOMAIN', logCtx, logger);
+    await disqualify(businessId, discoveryRunId, 'NO_WEBSITE_DOMAIN', logCtx, logger, undefined, providerUsed);
     return;
   }
 
@@ -273,7 +199,7 @@ export async function handleBusinessPrequalifyJob(
     await disqualify(businessId, discoveryRunId, 'INSUFFICIENT_REVIEWS', logCtx, logger, {
       reviewCount: business.reviewCount,
       minReviewCount: effectiveMinReviewCount,
-    });
+    }, providerUsed);
     return;
   }
 
@@ -282,7 +208,7 @@ export async function handleBusinessPrequalifyJob(
   if (!resolves) {
     await disqualify(businessId, discoveryRunId, 'DOMAIN_NOT_RESOLVING', logCtx, logger, {
       domain: business.websiteDomain,
-    });
+    }, providerUsed);
     return;
   }
 
@@ -291,36 +217,8 @@ export async function handleBusinessPrequalifyJob(
   if (parked) {
     await disqualify(businessId, discoveryRunId, 'PARKED_DOMAIN', logCtx, logger, {
       domain: business.websiteDomain,
-    });
+    }, providerUsed);
     return;
-  }
-
-  // ── Check: ICP industry match ──────────────────────────────────────
-  const icpProfile = await prisma.icpProfile.findUnique({
-    where: { id: icpProfileId },
-    select: { targetIndustries: true, metadataJson: true },
-  });
-
-  if (icpProfile) {
-    // Derive search categories from ICP industries + any user overrides
-    const overrides = icpProfile.metadataJson &&
-      typeof icpProfile.metadataJson === 'object' &&
-      !Array.isArray(icpProfile.metadataJson)
-      ? (icpProfile.metadataJson as Record<string, unknown>).categoryOverrides as
-          Record<string, { add?: string[]; remove?: string[] }> | undefined
-      : undefined;
-    const searchCategories = mapIcpIndustriesWithOverrides(
-      icpProfile.targetIndustries,
-      overrides,
-    );
-
-    if (!matchesIcpIndustry(business.category, icpProfile.targetIndustries, searchCategories)) {
-      await disqualify(businessId, discoveryRunId, 'ICP_INDUSTRY_MISMATCH', logCtx, logger, {
-        businessCategory: business.category,
-        targetIndustries: icpProfile.targetIndustries,
-      });
-      return;
-    }
   }
 
   // ── Pre-qualification passed ───────────────────────────────────────
@@ -332,7 +230,7 @@ export async function handleBusinessPrequalifyJob(
     },
   });
 
-  await recordCostEvent(discoveryRunId, businessId);
+  await recordCostEvent(discoveryRunId, businessId, providerUsed ?? 'SERPAPI');
 
   // ── Enqueue business.convert if dependency provided ────────────────
   if (deps?.enqueueBusinessConvert) {
@@ -367,6 +265,7 @@ async function disqualify(
   logCtx: Record<string, unknown>,
   logger: BusinessPrequalifyLogger,
   extra?: Record<string, unknown>,
+  provider?: 'SERPAPI' | 'GOOGLE_PLACES' | undefined,
 ): Promise<void> {
   await prisma.business.update({
     where: { id: businessId },
@@ -376,7 +275,7 @@ async function disqualify(
     },
   });
 
-  await recordCostEvent(discoveryRunId, businessId);
+  await recordCostEvent(discoveryRunId, businessId, provider ?? 'SERPAPI');
 
   logger.info(
     { ...logCtx, reason, ...extra },
@@ -390,11 +289,12 @@ async function disqualify(
 async function recordCostEvent(
   discoveryRunId: string,
   businessId: string,
+  provider: 'SERPAPI' | 'GOOGLE_PLACES' = 'SERPAPI',
 ): Promise<void> {
   await prisma.discoveryCostEvent.create({
     data: {
       discoveryRunId,
-      provider: 'SERPAPI',
+      provider,
       costCents: 0,
       apiCallType: 'prequalify_check',
       businessId,

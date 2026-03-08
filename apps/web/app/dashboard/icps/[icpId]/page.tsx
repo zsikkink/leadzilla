@@ -735,27 +735,29 @@ export default function IcpDetailPage() {
           </button>
         </div>
 
-        {/* Hook & Angle from metadata */}
-        {meta.hook ? (
-          <div className="mt-4 rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 p-4">
-            <div className="flex items-start gap-2">
-              <MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-zbooni-teal" />
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-zbooni-teal/70">Sales Hook</p>
-                <p className="mt-0.5 text-sm italic text-muted-foreground">&ldquo;{meta.hook}&rdquo;</p>
-              </div>
+        {/* Hook & Angle from metadata — editable */}
+        <div className="mt-4 rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 p-4">
+          <div className="flex items-start gap-2">
+            <MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-zbooni-teal" />
+            <div className="flex-1">
+              <EditableField
+                label="Sales Hook"
+                value={meta.hook ?? ''}
+                multiline
+                onSave={(val) => handleUpdate('metadataJson', { ...meta, hook: val || undefined })}
+                textClassName="italic text-muted-foreground"
+              />
             </div>
-            {meta.angle ? (
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {meta.angle.map((a) => (
-                  <span key={a} className="rounded-full bg-zbooni-teal/10 px-2.5 py-0.5 text-xs text-zbooni-teal">
-                    {a}
-                  </span>
-                ))}
-              </div>
-            ) : null}
           </div>
-        ) : null}
+          <div className="mt-3">
+            <EditableTags
+              label="Sales Angles"
+              tags={meta.angle ?? []}
+              onSave={(val) => handleUpdate('metadataJson', { ...meta, angle: val.length > 0 ? val : undefined })}
+              tagClassName="bg-zbooni-teal/10 text-zbooni-teal"
+            />
+          </div>
+        </div>
 
         {/* Industry Mapping Editor — full width */}
         <div className="mt-5 text-sm">

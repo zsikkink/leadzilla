@@ -33,14 +33,11 @@ const FIELD_KEY_CATEGORY_MAP: Record<string, QualificationCategory> = {
   custom_order_signals: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
   apollo_has_direct_phone: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
   decision_maker_count: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
-  instagram_has_business_email: QUALIFICATION_CATEGORIES.SALES_MOTION_FIT,
 
   // Payment Complexity — "High ticket, deposits, irregular amounts, international"
   apify_payment_widget_count: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
   apify_has_pricing_tiers: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
   high_ticket_signals: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
-  deposit_milestone_signals: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
-  bank_transfer_reliance: QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY,
 
   // Risk & Urgency — "Failed payment kills deal, timing matters, reachability"
   recent_activity: QUALIFICATION_CATEGORIES.RISK_URGENCY,
@@ -396,14 +393,15 @@ export function evaluateDeterministicScore(
     categoryBonus = 0.05;
   } else {
     qualificationPath = 'DISQUALIFY';
-    categoryBonus = -0.15;
+    categoryBonus = -0.05;
   }
 
-  // --- Weighted-average scoring (existing formula + category adjustment) ---
+  // --- Weighted-average scoring (Option D: base 0.10 + weighted ratio * 0.90 + category) ---
+  const BASE_SCORE = 0.10;
   let qualificationScore = 0;
   if (hardFilterPassed) {
     if (weightedPositiveTotal > 0 || weightedNegativeTotal > 0) {
-      const baseScore =
+      const matchRatio =
         weightedPositiveTotal > 0
           ? (weightedPositiveMatched + 1) / (weightedPositiveTotal + 1)
           : 1;
@@ -412,7 +410,7 @@ export function evaluateDeterministicScore(
           ? 1 - (weightedNegativeMatched / weightedNegativeTotal) * 0.8
           : 1;
       const boundedPenaltyFactor = Math.max(0.2, Math.min(1, penaltyFactor));
-      qualificationScore = baseScore * boundedPenaltyFactor;
+      qualificationScore = BASE_SCORE + matchRatio * boundedPenaltyFactor * 0.90;
 
       // Apply category bonus/penalty
       qualificationScore = Math.max(0, Math.min(1, qualificationScore + categoryBonus));

@@ -324,6 +324,10 @@ export function registerDiscoveryRoutes(
             scoreBand: true,
             preQualified: true,
             disqualificationReason: true,
+            evidence: {
+              select: { searchTaskId: true },
+              take: 1,
+            },
           },
           orderBy: { createdAt: 'desc' },
         }),
@@ -469,6 +473,7 @@ export function registerDiscoveryRoutes(
           scoreBand: b.scoreBand,
           preQualified: b.preQualified,
           disqualificationReason: b.disqualificationReason,
+          searchTaskId: b.evidence[0]?.searchTaskId ?? null,
         })),
         leads: leads.map((c) => ({
           id: c.id,

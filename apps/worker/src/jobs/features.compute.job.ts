@@ -477,7 +477,25 @@ const P2_INDUSTRIES = new Set([
   'education', 'training', 'bootcamp', 'certification',
 ]);
 
-function classifyIcpSegmentPriority(industry: string | null, targetIndustries: Set<string>): number {
+/**
+ * Derive ICP segment priority from the ICP profile's metadataJson.priority field.
+ * 'P1' → 2, 'P2' → 1, anything else → 0.
+ * Falls back to industry keyword matching if priority not set.
+ */
+function classifyIcpSegmentPriority(
+  icpMetadataJson: unknown,
+  industry: string | null,
+  targetIndustries: Set<string>,
+): number {
+  // Primary: use ICP profile's explicit priority (e.g., 'P1', 'P2')
+  if (icpMetadataJson && typeof icpMetadataJson === 'object' && !Array.isArray(icpMetadataJson)) {
+    const priority = (icpMetadataJson as Record<string, unknown>).priority;
+    if (priority === 'P1') return 2;
+    if (priority === 'P2') return 1;
+    if (typeof priority === 'number') return priority;
+  }
+
+  // Fallback: keyword matching
   if (!industry) return 0;
   const lower = industry.toLowerCase();
 
@@ -979,11 +997,26 @@ export async function handleFeaturesComputeJob(
     const highTicketSignals =
       extractBooleanFromSources(featureSources, ['highTicketSignals']) ??
       includesAnyKeyword(featureSources, [
+        // General luxury/premium terms
         'luxury', 'premium', 'bespoke', 'VIP', 'concierge',
-        'high-end', 'exclusive', 'by appointment only',
+        'high-end', 'high end', 'exclusive', 'by appointment only',
+        'private', 'boutique', 'curated', 'tailor-made', 'tailored',
+        'custom-made', 'handcrafted', 'artisan', 'elite',
+        // Price indicators (AED)
         'AED 5,000', 'AED 10,000', 'AED 50,000', 'AED 100,000',
-        'starting at AED', 'from AED',
-        'charter', 'wedding package', 'treatment package',
+        'starting at AED', 'from AED', 'price on request',
+        'prices start', 'starting from', 'contact for pricing',
+        // MENA-specific high-ticket services
+        'charter', 'yacht', 'superyacht', 'private jet',
+        'wedding package', 'wedding planner', 'event planner',
+        'treatment package', 'aesthetic', 'cosmetic',
+        'interior design', 'renovation', 'fit-out', 'fitout',
+        'landscape', 'architecture', 'contracting',
+        'corporate gift', 'gifting', 'hamper',
+        'holiday home', 'serviced apartment', 'serviced residence',
+        'personal shopper', 'stylist', 'consultant',
+        // Arabic luxury terms
+        'فاخر', 'حصري', 'VIP', 'بريميوم',
       ]);
 
     const depositMilestoneSignals =
@@ -1057,7 +1090,7 @@ export async function handleFeaturesComputeJob(
       (normalizedCountry !== null && targetCountries.has(normalizedCountry));
     const industrySupported = industryMatch;
 
-    const icpSegmentPriority = classifyIcpSegmentPriority(industry, targetIndustries);
+    const icpSegmentPriority = classifyIcpSegmentPriority(icp.metadataJson, industry, targetIndustries);
     const reviewCountTier = toReviewCountTier(reviewCount);
     const followerCountTier = toFollowerCountTier(followerCount);
 

@@ -554,7 +554,14 @@ async function upsertBusinessFromLocalResult(
     };
 
     if (phoneE164 !== null) {
-      updateData.phoneE164 = phoneE164;
+      // Check if another business already has this phone to avoid unique constraint crash (P2002)
+      const phoneOwner = await discoveryPrisma.business.findFirst({
+        where: { phoneE164, NOT: { id: existing.id } },
+        select: { id: true },
+      });
+      if (!phoneOwner) {
+        updateData.phoneE164 = phoneE164;
+      }
     }
     if (
       websiteDomain !== null &&

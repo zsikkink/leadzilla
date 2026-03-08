@@ -8,6 +8,7 @@ const STATUS_STYLES: Record<LeadStatus, string> = {
   enriched: 'bg-purple-500/15 text-purple-400',
   scored: 'bg-indigo-500/15 text-indigo-400',
   qualified: 'bg-teal-500/15 text-teal-400',
+  drafted: 'bg-cyan-500/15 text-cyan-400',
   rejected: 'bg-orange-500/15 text-orange-400',
   stuck: 'bg-yellow-500/15 text-yellow-400',
   failed: 'bg-red-500/15 text-red-400',

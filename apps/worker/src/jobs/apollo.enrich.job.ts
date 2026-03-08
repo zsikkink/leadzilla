@@ -296,6 +296,17 @@ export async function handleApolloEnrichJob(
   // Call Apollo to reveal contact data (1 export credit)
   const apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
 
+  // Track Apollo cost event (1 credit per API call regardless of result)
+  await prisma.discoveryCostEvent.create({
+    data: {
+      discoveryRunId: runId,
+      provider: 'APOLLO',
+      costCents: 1,
+      apiCallType: 'post_score_enrich',
+      leadId,
+    },
+  });
+
   if (apolloResult.status !== 'success' || apolloResult.contacts.length === 0) {
     logger.warn(
       { ...logCtx, apolloStatus: apolloResult.status },

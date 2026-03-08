@@ -22,6 +22,7 @@ const STATUS_OPTIONS = [
   { value: 'enriched', label: 'Enriched' },
   { value: 'scored', label: 'Scored' },
   { value: 'qualified', label: 'Qualified' },
+  { value: 'drafted', label: 'Drafted' },
   { value: 'messaged', label: 'Messaged' },
   { value: 'replied', label: 'Replied' },
   { value: 'cold', label: 'Cold' },
@@ -102,6 +103,8 @@ interface RejectedLeadRow {
   firstName: string | null;
   lastName: string | null;
   email: string;
+  companyName: string | null;
+  icpProfileName: string | null;
   reason: string;
   score: number | null;
   rejectedAt: string;
@@ -192,15 +195,35 @@ export default function LeadsPage() {
 
         const { data: leadRows } = await supabase
           .from('Lead')
-          .select('id, firstName, lastName, email')
+          .select('id, firstName, lastName, email, enrichmentData, icpProfileId')
           .in('id', leadIds);
 
-        const leadMap = new Map<string, { firstName: string | null; lastName: string | null; email: string }>();
+        // Load ICP profile names for display
+        const icpIds = [...new Set((leadRows ?? []).map((l) => l.icpProfileId as string | null).filter(Boolean))] as string[];
+        const icpMap = new Map<string, string>();
+        if (icpIds.length > 0) {
+          const { data: icpRows } = await supabase
+            .from('IcpProfile')
+            .select('id, name')
+            .in('id', icpIds);
+          for (const icp of icpRows ?? []) {
+            icpMap.set(icp.id as string, icp.name as string);
+          }
+        }
+
+        const leadMap = new Map<string, { firstName: string | null; lastName: string | null; email: string; companyName: string | null; icpProfileName: string | null }>();
         for (const l of leadRows ?? []) {
+          const enrichment = l.enrichmentData && typeof l.enrichmentData === 'object' && !Array.isArray(l.enrichmentData)
+            ? l.enrichmentData as Record<string, unknown>
+            : null;
+          const companyName = (typeof enrichment?.companyName === 'string' ? enrichment.companyName : null)
+            ?? (typeof enrichment?.company_name === 'string' ? enrichment.company_name : null);
           leadMap.set(l.id as string, {
             firstName: l.firstName as string | null,
             lastName: l.lastName as string | null,
             email: l.email as string,
+            companyName,
+            icpProfileName: l.icpProfileId ? (icpMap.get(l.icpProfileId as string) ?? null) : null,
           });
         }
 
@@ -214,6 +237,8 @@ export default function LeadsPage() {
                 firstName: lead?.firstName ?? null,
                 lastName: lead?.lastName ?? null,
                 email: lead?.email ?? '',
+                companyName: lead?.companyName ?? null,
+                icpProfileName: lead?.icpProfileName ?? null,
                 reason: r.reason,
                 score: r.score,
                 rejectedAt: r.rejectedAt,
@@ -616,7 +641,9 @@ export default function LeadsPage() {
               <thead className="sticky top-0 z-10">
                 <tr className="border-b border-border/50 bg-card text-left">
                   <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Name</th>
+                  <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Company</th>
                   <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Email</th>
+                  <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">ICP</th>
                   <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Reason</th>
                   <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Score</th>
                   <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Rejected</th>
@@ -632,7 +659,13 @@ export default function LeadsPage() {
                     >
                       {[rl.firstName, rl.lastName].filter(Boolean).join(' ') || 'Unknown'}
                     </td>
+                    <td className="px-4 py-3 text-muted-foreground">{rl.companyName || '\u2014'}</td>
                     <td className="px-4 py-3 text-muted-foreground">{rl.email || '\u2014'}</td>
+                    <td className="px-4 py-3">
+                      {rl.icpProfileName ? (
+                        <span className="truncate text-xs text-muted-foreground">{rl.icpProfileName}</span>
+                      ) : '\u2014'}
+                    </td>
                     <td className="px-4 py-3">
                       <span className={cn(
                         'inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider',
@@ -682,7 +715,7 @@ export default function LeadsPage() {
                 ))}
                 {rejectedLoading ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
+                    <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
                       <div className="flex items-center justify-center gap-2">
                         <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
                         Loading rejected leads...
@@ -692,7 +725,7 @@ export default function LeadsPage() {
                 ) : null}
                 {!rejectedLoading && rejectedLeads.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
+                    <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
                       No rejected leads.
                     </td>
                   </tr>

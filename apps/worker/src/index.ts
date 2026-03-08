@@ -150,6 +150,11 @@ import {
   type ModelDriftJobPayload,
 } from './jobs/model.drift.job.js';
 import {
+  SEARCH_TASK_RECOVERY_JOB_NAME,
+  handleSearchTaskRecoveryJob,
+  type SearchTaskRecoveryJobPayload,
+} from './jobs/search-task.recovery.job.js';
+import {
   OUTBOX_CLEANUP_JOB_NAME,
   handleOutboxCleanupJob,
   type OutboxCleanupJobPayload,
@@ -846,6 +851,13 @@ async function main(): Promise<void> {
       handleModelDriftJob(driftLogger, driftJob, {
         slackWebhookUrl: env.SLACK_WEBHOOK_URL,
       }),
+  );
+
+  await registerWorker<SearchTaskRecoveryJobPayload>(
+    boss,
+    logger,
+    SEARCH_TASK_RECOVERY_JOB_NAME,
+    handleSearchTaskRecoveryJob,
   );
 
   const shutdown = async (signal: string): Promise<void> => {

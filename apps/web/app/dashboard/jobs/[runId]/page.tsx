@@ -102,6 +102,7 @@ interface BusinessData {
   scoreBand: string | null;
   preQualified: boolean;
   disqualificationReason: string | null;
+  searchTaskId: string | null;
 }
 
 interface CostEventData {
@@ -760,7 +761,7 @@ export default function DiscoveryRunDetailPage() {
               <SearchTaskItem
                 key={task.id}
                 task={task}
-                businesses={businesses}
+                businesses={businesses.filter((b) => b.searchTaskId === task.id)}
               />
             ))}
           </div>

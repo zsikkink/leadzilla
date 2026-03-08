@@ -311,7 +311,7 @@ export async function handleMessageGenerateJob(
 
     const icpProfile = await prisma.icpProfile.findUnique({
       where: { id: icpProfileId },
-      select: { description: true, featureList: true },
+      select: { description: true, featureList: true, metadataJson: true },
     });
 
     const latestSnapshot = await prisma.leadFeatureSnapshot.findFirst({
@@ -394,6 +394,17 @@ export async function handleMessageGenerateJob(
     const customSystemPrompt = typeof systemPromptSetting?.valueJson === 'string' ? systemPromptSetting.valueJson : null;
     const messagingInstructions = typeof instrSetting?.valueJson === 'string' ? instrSetting.valueJson : null;
 
+    // Extract ICP sales hook + angle from metadataJson
+    const icpMetadata = icpProfile?.metadataJson && typeof icpProfile.metadataJson === 'object'
+      ? icpProfile.metadataJson as Record<string, unknown>
+      : null;
+    const icpHook = typeof icpMetadata?.hook === 'string' ? icpMetadata.hook : null;
+    const icpAngle = typeof icpMetadata?.angle === 'string'
+      ? icpMetadata.angle
+      : Array.isArray(icpMetadata?.angle)
+        ? (icpMetadata.angle as unknown[]).filter((a): a is string => typeof a === 'string').join(', ')
+        : null;
+
     const groundingContext = {
       leadName: `${lead.firstName} ${lead.lastName}`,
       leadEmail: lead.email,
@@ -405,6 +416,8 @@ export async function handleMessageGenerateJob(
       blendedScore: latestScore?.blendedScore ?? 0,
       icpDescription: icpProfile?.description ?? 'No ICP description available',
       businessIntelligence,
+      icpHook,
+      icpAngle,
       customRole,
       customSystemPrompt,
       messagingInstructions,
@@ -659,6 +672,14 @@ export async function handleMessageGenerateJob(
       },
       include: { variants: true },
     });
+
+    // Set lead status to 'drafted' if this is the initial message (not a follow-up)
+    if (followUpNumber === 0 && !existingDraftForRetry) {
+      await prisma.lead.update({
+        where: { id: leadId },
+        data: { status: 'drafted' },
+      });
+    }
 
     // Auto-send for follow-ups
     if (autoApprove && deps?.boss) {

@@ -15,6 +15,7 @@ import {
   MessageSquare,
   Rocket,
   Settings,
+  SlidersHorizontal,
   Target,
   TerminalSquare,
   Users,
@@ -32,6 +33,7 @@ const DASHBOARD_NAV_ITEMS = [
   { href: '/dashboard/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/dashboard/recommendations', label: 'Recommendations', icon: Lightbulb },
   { href: '/dashboard/jobs', label: 'Jobs', icon: Activity },
+  { href: '/dashboard/settings', label: 'Settings', icon: SlidersHorizontal },
 ] as const;
 
 const DEV_CONSOLE_NAV_ITEMS = [

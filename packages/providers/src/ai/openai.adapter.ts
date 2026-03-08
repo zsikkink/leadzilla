@@ -29,6 +29,10 @@ export interface MessageGenerationContext {
   customSystemPrompt?: string | null | undefined;
   /** Custom instructions from sales team via PipelineSetting. */
   messagingInstructions?: string | null | undefined;
+  /** Pre-written sales hook from ICP profile — the sharp opening line. */
+  icpHook?: string | null | undefined;
+  /** Sales angle from ICP profile — the value proposition framing. */
+  icpAngle?: string | null | undefined;
 }
 
 export interface MessageVariantContent {
@@ -252,6 +256,8 @@ export class OpenAiAdapter {
       context.country ? `Country: ${context.country}` : null,
       `Score band: ${context.scoreBand} (${context.blendedScore.toFixed(2)})`,
       `ICP description: ${context.icpDescription}`,
+      context.icpHook ? `ICP hook (use as opening line): ${context.icpHook}` : null,
+      context.icpAngle ? `ICP angle (value proposition framing): ${context.icpAngle}` : null,
       context.businessIntelligence
         ? `\nBusiness Intelligence:\n${context.businessIntelligence}`
         : 'No structured business intelligence available.',

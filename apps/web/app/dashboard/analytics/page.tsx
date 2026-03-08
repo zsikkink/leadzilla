@@ -12,7 +12,6 @@ import {
   MessageSquare,
   Search,
   Send,
-  Settings,
   Tag,
   Target,
   ThumbsDown,
@@ -22,7 +21,7 @@ import {
   Users,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 import { cn } from '../../../src/lib/utils.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
@@ -198,178 +197,6 @@ function PipelineStageCard({ stage, data }: { stage: PipelineStage; data: Funnel
         />
       </div>
       <p className="mt-2 text-[11px] text-muted-foreground/40 font-medium">{progressPct}% complete</p>
-    </div>
-  );
-}
-
-// ── Auto-Approve Settings ─────────────────────────────────────────────────
-
-interface AutoApproveSettingsProps {
-  apiClient: { listPipelineSettings(): Promise<{ items: { key: string; value: unknown; updatedAt: string }[] }>; updatePipelineSetting(key: string, value: unknown): Promise<unknown> };
-}
-
-function validateDecimalScore(value: string): string | null {
-  if (value === '') return null;
-  const num = Number(value);
-  if (isNaN(num)) return 'Must be a number';
-  if (num < 0 || num > 1) return 'Score must be a decimal between 0 and 1 (e.g., 0.5)';
-  if (num >= 2) return 'Score must be a decimal between 0 and 1 (e.g., 0.5)';
-  return null;
-}
-
-function AutoApproveSettings({ apiClient }: AutoApproveSettingsProps) {
-  const [enabled, setEnabled] = useState(false);
-  const [scoreMin, setScoreMin] = useState('0.5');
-  const [scoreMax, setScoreMax] = useState('1.0');
-  const [saving, setSaving] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [minError, setMinError] = useState<string | null>(null);
-  const [maxError, setMaxError] = useState<string | null>(null);
-  const [rangeError, setRangeError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void apiClient.listPipelineSettings().then((res) => {
-      if (cancelled) return;
-      for (const item of res.items) {
-        if (item.key === 'auto_approve_enabled') {
-          setEnabled(item.value === true || item.value === 'true');
-        } else if (item.key === 'auto_approve_score_min') {
-          setScoreMin(String(item.value ?? '0.5'));
-        } else if (item.key === 'auto_approve_score_max') {
-          setScoreMax(String(item.value ?? '1.0'));
-        }
-      }
-      setLoaded(true);
-    }).catch(() => {
-      setLoaded(true);
-    });
-    return () => { cancelled = true; };
-  }, [apiClient]);
-
-  const handleSave = async () => {
-    const minErr = validateDecimalScore(scoreMin);
-    const maxErr = validateDecimalScore(scoreMax);
-    setMinError(minErr);
-    setMaxError(maxErr);
-
-    if (minErr || maxErr) return;
-
-    const min = Number(scoreMin);
-    const max = Number(scoreMax);
-    if (min > max) {
-      setRangeError('Min must be less than or equal to Max');
-      return;
-    }
-    setRangeError(null);
-
-    setSaving(true);
-    try {
-      await Promise.all([
-        apiClient.updatePipelineSetting('auto_approve_enabled', enabled),
-        apiClient.updatePipelineSetting('auto_approve_score_min', min),
-        apiClient.updatePipelineSetting('auto_approve_score_max', max),
-      ]);
-    } catch {
-      // Error handled silently — endpoint may not exist yet (DC-6 fallback)
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (!loaded) return null;
-
-  return (
-    <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-      <div className="mb-4 flex items-center gap-2">
-        <Settings className="h-4 w-4 text-zbooni-teal" />
-        <h2 className="text-base font-bold tracking-tight">Auto-Approve Settings</h2>
-      </div>
-
-      <div className="space-y-4">
-        {/* Toggle */}
-        <label className="flex items-center gap-3">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={enabled}
-            onClick={() => setEnabled(!enabled)}
-            className={cn(
-              'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors',
-              enabled ? 'bg-zbooni-green' : 'bg-muted/40',
-            )}
-          >
-            <span
-              className={cn(
-                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg transition-transform',
-                enabled ? 'translate-x-5' : 'translate-x-0',
-              )}
-            />
-          </button>
-          <span className="text-sm font-medium">Auto-approve messages</span>
-        </label>
-
-        {/* Score range */}
-        {enabled ? (
-          <div className="space-y-3">
-            <p className="text-xs text-muted-foreground/60">
-              Auto-approve messages for leads with score in range:
-            </p>
-            <div className="flex items-center gap-2">
-              <div className="flex-1">
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={scoreMin}
-                  onChange={(e) => {
-                    setScoreMin(e.target.value);
-                    setMinError(validateDecimalScore(e.target.value));
-                    setRangeError(null);
-                  }}
-                  placeholder="0.5"
-                  className={cn(
-                    'h-9 w-full rounded-lg border bg-zbooni-dark/40 px-3 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/20',
-                    minError ? 'border-red-500/50' : 'border-border/50',
-                  )}
-                />
-                {minError ? <p className="mt-1 text-[10px] text-red-400">{minError}</p> : null}
-              </div>
-              <span className="text-xs text-muted-foreground/50">&le; score &le;</span>
-              <div className="flex-1">
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={scoreMax}
-                  onChange={(e) => {
-                    setScoreMax(e.target.value);
-                    setMaxError(validateDecimalScore(e.target.value));
-                    setRangeError(null);
-                  }}
-                  placeholder="1.0"
-                  className={cn(
-                    'h-9 w-full rounded-lg border bg-zbooni-dark/40 px-3 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/20',
-                    maxError ? 'border-red-500/50' : 'border-border/50',
-                  )}
-                />
-                {maxError ? <p className="mt-1 text-[10px] text-red-400">{maxError}</p> : null}
-              </div>
-            </div>
-            {rangeError ? <p className="text-[10px] text-red-400">{rangeError}</p> : null}
-          </div>
-        ) : null}
-
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={saving}
-          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-        >
-          {saving ? (
-            <span className="h-3 w-3 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
-          ) : null}
-          Save Settings
-        </button>
-      </div>
     </div>
   );
 }
@@ -735,8 +562,7 @@ export default function AnalyticsPage() {
         )}
       </div>
 
-      {/* ── Auto-Approve Settings ──────────────────────────────────── */}
-      <AutoApproveSettings apiClient={apiClient} />
+      {/* Auto-Approve Settings moved to /dashboard/settings */}
 
       {/* ── Loading state ─────────────────────────────────────────── */}
       {funnel.isLoading && !funnel.data ? (

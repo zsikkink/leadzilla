@@ -1,4 +1,4 @@
-import { Prisma, prisma, toInputJson } from '@lead-flood/db';
+import { type Prisma, prisma, toInputJson } from '@lead-flood/db';
 
 import { getQualificationThreshold } from '../scoring/shared.js';
 
