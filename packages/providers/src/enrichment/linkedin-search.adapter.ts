@@ -1,11 +1,13 @@
-// ── LinkedIn Search Adapter (Brave-only) ─────────────────────────────
-// Uses Brave Web Search for both broad people discovery and LinkedIn verification.
+// ── LinkedIn Search Adapter (Google Custom Search) ───────────────────
+// Uses Google Custom Search JSON API for both broad people discovery
+// and LinkedIn profile verification.
+// Recovery mode: finds contacts for qualified companies with no usable personal contact.
+// Verification mode: corroborates name/title/company/socials for already-found contacts.
+
+import type { GoogleCustomSearchAdapter, GoogleCustomSearchResponse } from './google-custom-search.adapter.js';
 
 export interface LinkedInSearchConfig {
-  braveApiKey?: string | undefined;
-  braveBaseUrl?: string | undefined;
-  timeoutMs?: number | undefined;
-  fetchImpl?: typeof fetch | undefined;
+  searchAdapter: GoogleCustomSearchAdapter;
 }
 
 export interface LinkedInProfileResult {
@@ -31,20 +33,6 @@ export type LinkedInSearchResponse =
   | { status: 'success'; data: LinkedInProfileResult[]; query: string; stage: DecisionMakerSearchStage }
   | { status: 'retryable_error'; failure: LinkedInSearchFailure }
   | { status: 'terminal_error'; failure: LinkedInSearchFailure };
-
-interface BraveResultItem {
-  title?: string;
-  description?: string;
-  url?: string;
-}
-
-const DEFAULT_BRAVE_BASE = 'https://api.search.brave.com/res/v1/web/search';
-const DEFAULT_TIMEOUT_MS = 15_000;
-
-function classifyStatus(statusCode: number): 'retryable' | 'terminal' {
-  if (statusCode === 429 || statusCode >= 500) return 'retryable';
-  return 'terminal';
-}
 
 /**
  * Parse a LinkedIn search result title to extract person name and title.
@@ -84,20 +72,14 @@ function isLinkedInProfileUrl(url: string): boolean {
 }
 
 export class LinkedInSearchAdapter {
-  private readonly braveApiKey: string | undefined;
-  private readonly braveBase: string;
-  private readonly timeout: number;
-  private readonly fetchFn: typeof fetch;
+  private readonly search: GoogleCustomSearchAdapter;
 
   constructor(config: LinkedInSearchConfig) {
-    this.braveApiKey = config.braveApiKey;
-    this.braveBase = config.braveBaseUrl ?? DEFAULT_BRAVE_BASE;
-    this.timeout = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.fetchFn = config.fetchImpl ?? fetch;
+    this.search = config.searchAdapter;
   }
 
   get isConfigured(): boolean {
-    return Boolean(this.braveApiKey);
+    return this.search.isConfigured;
   }
 
   async searchPersonVerification(input: {
@@ -109,12 +91,12 @@ export class LinkedInSearchAdapter {
   }): Promise<LinkedInSearchResponse> {
     const locality = input.cityOrCountry?.trim() ? `"${input.cityOrCountry.trim()}"` : '';
     const queryV1 = `"${input.name}" "${input.companyName}" ${locality} (founder OR ceo OR cmo OR head OR director OR leadership OR team)`.trim();
-    const v1 = await this.searchViaBrave(queryV1, 'VERIFY_V1_PEOPLE_WEB', input.maxResults ?? 5);
+    const v1 = await this.searchViaGoogle(queryV1, 'VERIFY_V1_PEOPLE_WEB', input.maxResults ?? 5);
     if (v1.status !== 'success') return v1;
 
     const title = input.titleOrFunction?.trim() ? `"${input.titleOrFunction.trim()}"` : '';
     const queryV2 = `site:linkedin.com/in "${input.name}" "${input.companyName}" ${title}`.trim();
-    const v2 = await this.searchViaBrave(queryV2, 'VERIFY_V2_LINKEDIN', input.maxResults ?? 5);
+    const v2 = await this.searchViaGoogle(queryV2, 'VERIFY_V2_LINKEDIN', input.maxResults ?? 5);
     if (v2.status === 'success') {
       return {
         ...v2,
@@ -136,11 +118,11 @@ export class LinkedInSearchAdapter {
   ): Promise<LinkedInSearchResponse> {
     const locality = cityOrCountry?.trim() ? `"${cityOrCountry.trim()}"` : '';
     const queryD1 = `"${companyName}" ${locality} (team OR leadership OR c-suite OR management OR executives OR about us)`.trim();
-    const d1 = await this.searchViaBrave(queryD1, 'DISCOVER_D1_PEOPLE_WEB', maxResults);
+    const d1 = await this.searchViaGoogle(queryD1, 'DISCOVER_D1_PEOPLE_WEB', maxResults);
     if (d1.status !== 'success') return d1;
 
     const queryD2 = `site:linkedin.com/in "${companyName}" ("ceo" OR "founder" OR "head of" OR "director")`;
-    const d2 = await this.searchViaBrave(queryD2, 'DISCOVER_D2_LINKEDIN', maxResults);
+    const d2 = await this.searchViaGoogle(queryD2, 'DISCOVER_D2_LINKEDIN', maxResults);
     if (d2.status === 'success') {
       return {
         ...d2,
@@ -155,108 +137,39 @@ export class LinkedInSearchAdapter {
     };
   }
 
-  private async searchViaBrave(
+  private async searchViaGoogle(
     query: string,
     stage: DecisionMakerSearchStage,
     maxResults: number,
   ): Promise<LinkedInSearchResponse> {
-    if (!this.braveApiKey) {
+    const result: GoogleCustomSearchResponse = await this.search.search(query, Math.min(maxResults, 10));
+
+    if (result.status !== 'success') {
       return {
-        status: 'terminal_error',
-        failure: {
-          classification: 'terminal',
-          statusCode: null,
-          message: 'Brave Search API key not configured',
-          raw: null,
-        },
+        status: result.status,
+        failure: result.failure,
       };
     }
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeout);
-
-    try {
-      const url = new URL(this.braveBase);
-      url.searchParams.set('q', query);
-      url.searchParams.set('count', String(Math.min(maxResults, 10)));
-
-      const response = await this.fetchFn(url.toString(), {
-        signal: controller.signal,
-        headers: {
-          Accept: 'application/json',
-          'x-subscription-token': this.braveApiKey,
-        },
-      });
-
-      if (!response.ok) {
-        const classification = classifyStatus(response.status);
-        const text = await response.text().catch(() => '');
-        return {
-          status: classification === 'retryable' ? 'retryable_error' : 'terminal_error',
-            failure: {
-              classification,
-              statusCode: response.status,
-              message: `Brave Search returned ${response.status}`,
-              raw: text,
-            },
-          };
-      }
-
-      const json = (await response.json()) as {
-        web?: {
-          results?: BraveResultItem[];
-        };
-      };
-      const items = Array.isArray(json.web?.results) ? json.web!.results! : [];
-
-      return {
-        status: 'success',
-        data: this.parseResults(items, maxResults),
-        query,
-        stage,
-      };
-    } catch (err: unknown) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        return {
-          status: 'retryable_error',
-            failure: {
-              classification: 'retryable',
-              statusCode: null,
-              message: 'Brave LinkedIn search timed out',
-              raw: null,
-            },
-          };
-      }
-      return {
-        status: 'retryable_error',
-        failure: {
-          classification: 'retryable',
-          statusCode: null,
-          message: err instanceof Error ? err.message : 'Unknown network error',
-          raw: err,
-        },
-      };
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-  private parseResults(
-    items: BraveResultItem[],
-    maxResults: number,
-  ): LinkedInProfileResult[] {
-    return items
-      .filter((item) => item.url && isLinkedInProfileUrl(item.url))
+    const profiles = result.data
+      .filter((item) => isLinkedInProfileUrl(item.link))
       .slice(0, maxResults)
       .map((item) => {
-        const parsed = parseLinkedInTitle(item.title ?? '');
+        const parsed = parseLinkedInTitle(item.title);
         return {
           name: parsed.name,
-          title: parsed.title ?? (item.description ? item.description.split(/[.–-]/).at(0)?.trim() ?? null : null),
-          linkedinUrl: item.url!,
+          title: parsed.title ?? (item.snippet ? item.snippet.split(/[.–-]/).at(0)?.trim() ?? null : null),
+          linkedinUrl: item.link,
         };
       })
       .filter((r) => r.name.length > 0);
+
+    return {
+      status: 'success',
+      data: profiles,
+      query,
+      stage,
+    };
   }
 
   private mergeProfiles(

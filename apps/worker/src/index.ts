@@ -12,6 +12,7 @@ import {
 import { createLogger } from '@lead-flood/observability';
 import {
   ApolloDiscoveryAdapter,
+  GoogleCustomSearchAdapter,
   HunterEnrichmentAdapter,
   InstagramScraperAdapter,
   LinkedInSearchAdapter,
@@ -380,9 +381,13 @@ async function main(): Promise<void> {
     baseUrl: env.OPENAI_BASE_URL,
   });
 
+  const googleCustomSearchAdapter = new GoogleCustomSearchAdapter({
+    apiKey: env.GOOGLE_CUSTOM_SEARCH_API_KEY,
+    engineId: env.GOOGLE_CUSTOM_SEARCH_ENGINE_ID,
+  });
+
   const linkedInSearchAdapter = new LinkedInSearchAdapter({
-    braveApiKey: env.BRAVE_SEARCH_API_KEY,
-    braveBaseUrl: env.BRAVE_SEARCH_BASE_URL,
+    searchAdapter: googleCustomSearchAdapter,
   });
 
   const resendAdapter = new ResendAdapter({
