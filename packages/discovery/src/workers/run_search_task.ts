@@ -9,6 +9,7 @@ import { normalizePhoneE164 } from '../normalization/phone.js';
 import { deriveRootDomainFromUrl } from '../utils/url.js';
 import type {
   DiscoveryCountryCode,
+  DiscoveryProviderName,
   DiscoveryProvider,
   NormalizedLocalBusiness,
   NormalizedProviderResponse,
@@ -57,6 +58,7 @@ export interface RunSearchTaskResult {
   status: 'EMPTY' | 'DONE' | 'FAILED' | 'SKIPPED';
   queryHash?: string;
   taskType?: SearchTaskType;
+  providerUsed?: DiscoveryProviderName;
   countryCode?: DiscoveryCountryCode;
   language?: 'en' | 'ar';
   durationMs: number;
@@ -129,6 +131,13 @@ function normalizeAddress(value: string | null): string | null {
   }
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : null;
+}
+
+function toRecord(value: Prisma.JsonValue): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
 }
 
 function normalizeNullableString(value: string | null): string | null {
@@ -714,6 +723,7 @@ async function executeTaskWithProvider(
     language: task.language,
     city: task.city,
     page: task.page,
+    fallbackScopeKey: task.discovery_run_id,
   } as const;
 
   if (task.task_type === 'SERP_GOOGLE') {
@@ -744,7 +754,9 @@ async function markTaskDone(
   status: 'DONE' | 'SKIPPED',
   resultHash: string | null,
   nextRunAfter: Date,
+  providerUsed: DiscoveryProviderName,
 ): Promise<void> {
+  const paramsJson = toRecord(task.params_json);
   await discoveryPrisma.searchTask.update({
     where: { id: task.id },
     data: {
@@ -752,6 +764,10 @@ async function markTaskDone(
       lastResultHash: resultHash,
       runAfter: nextRunAfter,
       error: null,
+      paramsJson: {
+        ...paramsJson,
+        providerUsed,
+      },
     },
   });
 }
@@ -810,7 +826,7 @@ export async function runSearchTask(
       ? addRefreshInterval(new Date(), config.refreshBucket)
       : new Date();
 
-    await markTaskDone(task, status, resultHash, nextRunAfter);
+    await markTaskDone(task, status, resultHash, nextRunAfter, providerResponse.provider);
     incrementMetric('tasks_run');
     if (status === 'SKIPPED') {
       incrementMetric('tasks_skipped');
@@ -821,6 +837,7 @@ export async function runSearchTask(
       status,
       queryHash: task.query_hash,
       taskType: task.task_type,
+      providerUsed: providerResponse.provider,
       countryCode: task.country_code,
       language: task.language,
       attempts: task.attempts,

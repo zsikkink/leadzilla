@@ -342,19 +342,27 @@ export function registerDiscoveryRoutes(
 
       const businessIds = businesses.map((b) => b.id);
 
-      // Get search tasks linked via business evidence
-      const [searchTaskRows, leads] = await Promise.all([
-        businessIds.length > 0
-          ? prisma.businessEvidence.findMany({
-              where: { businessId: { in: businessIds }, searchTaskId: { not: null } },
-              select: { searchTaskId: true },
-              distinct: ['searchTaskId'],
-            })
-          : Promise.resolve([]),
+      const [searchTasks, conversionRows] = await Promise.all([
+        prisma.searchTask.findMany({
+          where: { discoveryRunId: runId },
+          select: {
+            id: true,
+            queryText: true,
+            countryCode: true,
+            city: true,
+            status: true,
+            taskType: true,
+            paramsJson: true,
+            error: true,
+            _count: { select: { businessEvidence: true } },
+          },
+          orderBy: { createdAt: 'asc' },
+        }),
         businessIds.length > 0
           ? prisma.businessConversion.findMany({
               where: { businessId: { in: businessIds } },
               select: {
+                metadata: true,
                 lead: {
                   select: {
                     id: true,
@@ -375,31 +383,35 @@ export function registerDiscoveryRoutes(
           : Promise.resolve([]),
       ]);
 
-      const searchTaskIds = searchTaskRows
-        .map((r) => r.searchTaskId)
-        .filter((id): id is string => id !== null);
-
-      const searchTasks = searchTaskIds.length > 0
-        ? await prisma.searchTask.findMany({
-            where: { id: { in: searchTaskIds } },
-            select: {
-              id: true,
-              queryText: true,
-              countryCode: true,
-              city: true,
-              status: true,
-              taskType: true,
-              error: true,
-              _count: { select: { businessEvidence: true } },
-            },
-            orderBy: { createdAt: 'asc' },
-          })
-        : [];
+      const leads = conversionRows
+        .filter((row) => {
+          if (!row.metadata || typeof row.metadata !== 'object' || Array.isArray(row.metadata)) {
+            return false;
+          }
+          const metadata = row.metadata as Record<string, unknown>;
+          return metadata.discoveryRunId === runId;
+        })
+        .map((row) => row.lead);
 
       // Get run counters from result JSON
       const resultJson = (jobExecution.result && typeof jobExecution.result === 'object' && !Array.isArray(jobExecution.result))
         ? jobExecution.result as Record<string, unknown>
         : {};
+      const totalFound = typeof resultJson.totalFound === 'number'
+        ? resultJson.totalFound
+        : businesses.length;
+      const newFound = typeof resultJson.newFound === 'number'
+        ? resultJson.newFound
+        : (typeof resultJson.newBusinesses === 'number' ? resultJson.newBusinesses : null);
+      const alreadyKnown = typeof resultJson.alreadyKnown === 'number'
+        ? resultJson.alreadyKnown
+        : (newFound !== null ? Math.max(0, totalFound - newFound) : null);
+      const disqualified = typeof resultJson.disqualified === 'number'
+        ? resultJson.disqualified
+        : null;
+      const converted = typeof resultJson.converted === 'number'
+        ? resultJson.converted
+        : leads.length;
 
       const run = {
         id: runId,
@@ -411,6 +423,11 @@ export function registerDiscoveryRoutes(
         tasksFailed: typeof resultJson.failedItems === 'number' ? resultJson.failedItems : 0,
         businessesFound: businesses.length,
         leadsConverted: leads.length,
+        totalFound,
+        alreadyKnown,
+        newFound,
+        disqualified,
+        converted,
         createdAt: jobExecution.createdAt.toISOString(),
         errorMessage: jobExecution.error ?? null,
         outcome: typeof resultJson.outcome === 'object' && resultJson.outcome !== null
@@ -428,6 +445,12 @@ export function registerDiscoveryRoutes(
           status: t.status,
           resultsCount: t._count.businessEvidence,
           provider: (() => {
+            const params = t.paramsJson && typeof t.paramsJson === 'object' && !Array.isArray(t.paramsJson)
+              ? t.paramsJson as Record<string, unknown>
+              : {};
+            const providerUsed = typeof params.providerUsed === 'string' ? params.providerUsed : null;
+            if (providerUsed === 'SERPAPI') return 'SerpAPI';
+            if (providerUsed === 'GOOGLE_PLACES') return 'Google Places';
             const tt = t.taskType as string;
             if (tt === 'SERP_MAPS_LOCAL') return 'Google Maps';
             if (tt === 'SERP_GOOGLE_LOCAL') return 'Google Local';
@@ -448,14 +471,14 @@ export function registerDiscoveryRoutes(
           disqualificationReason: b.disqualificationReason,
         })),
         leads: leads.map((c) => ({
-          id: c.lead.id,
-          firstName: c.lead.firstName,
-          lastName: c.lead.lastName,
-          email: c.lead.email,
-          source: c.lead.source,
-          blendedScore: c.lead.scorePredictions[0]?.blendedScore ?? null,
-          scoreBand: c.lead.scorePredictions[0]?.scoreBand ?? null,
-          status: c.lead.status,
+          id: c.id,
+          firstName: c.firstName,
+          lastName: c.lastName,
+          email: c.email,
+          source: c.source,
+          blendedScore: c.scorePredictions[0]?.blendedScore ?? null,
+          scoreBand: c.scorePredictions[0]?.scoreBand ?? null,
+          status: c.status,
         })),
         costEvents: costEvents.map((e) => ({
           id: e.id,

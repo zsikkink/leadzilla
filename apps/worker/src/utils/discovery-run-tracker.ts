@@ -1,4 +1,4 @@
-import { prisma, toInputJson } from '@lead-flood/db';
+import { Prisma, prisma, toInputJson } from '@lead-flood/db';
 
 import { getQualificationThreshold } from '../scoring/shared.js';
 
@@ -21,6 +21,14 @@ import { getQualificationThreshold } from '../scoring/shared.js';
  */
 
 const SAFETY_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+function extractDiscoveryRunIdFromMetadata(
+  metadata: Prisma.JsonValue | null | undefined,
+): string | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const value = (metadata as Record<string, unknown>).discoveryRunId;
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
 
 interface TrackerLogger {
   info: (obj: Record<string, unknown>, msg: string) => void;
@@ -117,7 +125,17 @@ export async function tryFinalizeDiscoveryRun(
   const isTimedOut = searchCompletedAt !== null &&
     Date.now() - searchCompletedAt.getTime() > SAFETY_TIMEOUT_MS;
 
-  // 2. Get all businesses from this discovery run via DiscoveryCostEvent
+  // 2a. Get all businesses discovered by this run (for funnel metrics)
+  const discoveredEvidence = await prisma.businessEvidence.findMany({
+    where: {
+      searchTask: { discoveryRunId: possibleRunId },
+    },
+    select: { businessId: true },
+    distinct: ['businessId'],
+  });
+  const discoveredBusinessIds = discoveredEvidence.map((e) => e.businessId);
+
+  // 2b. Get businesses actively processed in this run pipeline (new businesses)
   const costEvents = await prisma.discoveryCostEvent.findMany({
     where: {
       discoveryRunId: possibleRunId,
@@ -127,17 +145,36 @@ export async function tryFinalizeDiscoveryRun(
     distinct: ['businessId'],
   });
 
-  const businessIds = costEvents
+  const pipelineBusinessIds = costEvents
     .map((e) => e.businessId)
     .filter((id): id is string => id !== null);
+  const allBusinessIds = [...new Set([...discoveredBusinessIds, ...pipelineBusinessIds])];
+  const totalBusinesses = allBusinessIds.length;
 
   // Zero DiscoveryCostEvents — but check whether prequalify has even run yet.
   // If newBusinesses > 0 but no cost events exist, prequalify jobs haven't fired.
-  if (businessIds.length === 0) {
+  if (pipelineBusinessIds.length === 0) {
     const newBusinesses = typeof result.newBusinesses === 'number' ? result.newBusinesses : 0;
-    if (newBusinesses === 0 || isTimedOut) {
-      // Truly zero businesses found, or timed out waiting — finalize
-      await finalizeRun(possibleRunId, result, 'failed', 0, 0, 0, 0, logger, 'No businesses found by search tasks', 0, {});
+    if (newBusinesses === 0 && totalBusinesses > 0) {
+      // No new businesses to process (all already known) — finalize successfully.
+      await finalizeRun(possibleRunId, result, 'completed', 0, 0, 0, 0, logger, null, totalBusinesses, {});
+      return;
+    }
+    if (totalBusinesses === 0 || isTimedOut) {
+      // Truly zero businesses found, or timed out waiting for prequalify
+      await finalizeRun(
+        possibleRunId,
+        result,
+        'failed',
+        0,
+        0,
+        0,
+        0,
+        logger,
+        'No businesses found by search tasks',
+        totalBusinesses,
+        {},
+      );
       return;
     }
     // Prequalify events don't exist yet — return without finalizing
@@ -146,7 +183,7 @@ export async function tryFinalizeDiscoveryRun(
 
   // 3. Load businesses to check qualification status
   const businesses = await prisma.business.findMany({
-    where: { id: { in: businessIds } },
+    where: { id: { in: pipelineBusinessIds } },
     select: { id: true, preQualified: true, disqualificationReason: true },
   });
 
@@ -162,7 +199,7 @@ export async function tryFinalizeDiscoveryRun(
     }
   }
   // preQualified=null means still processing or not yet checked
-  const qualifiedOrPendingIds = businessIds.filter((id) => !disqualifiedIds.has(id));
+  const qualifiedOrPendingIds = pipelineBusinessIds.filter((id) => !disqualifiedIds.has(id));
 
   // 4. For qualified/pending businesses, check lead pipeline status
   const qualificationThreshold = await getQualificationThreshold();
@@ -175,11 +212,14 @@ export async function tryFinalizeDiscoveryRun(
     // Get BusinessConversions to find associated leads
     const conversions = await prisma.businessConversion.findMany({
       where: { businessId: { in: qualifiedOrPendingIds } },
-      select: { businessId: true, leadId: true },
+      select: { businessId: true, leadId: true, metadata: true },
     });
+    const runConversions = conversions.filter(
+      (c) => extractDiscoveryRunIdFromMetadata(c.metadata as Prisma.JsonValue | null) === possibleRunId,
+    );
 
-    const businessesWithConversion = new Set(conversions.map((c) => c.businessId));
-    const leadIds = [...new Set(conversions.map((c) => c.leadId))];
+    const businessesWithConversion = new Set(runConversions.map((c) => c.businessId));
+    const leadIds = [...new Set(runConversions.map((c) => c.leadId))];
 
     // Businesses still waiting for conversion
     const noConversionCount = qualifiedOrPendingIds.filter(
@@ -239,7 +279,7 @@ export async function tryFinalizeDiscoveryRun(
       : null;
 
     const disqualNote = completedLeads === 0 && disqualifiedIds.size > 0
-      ? `0 leads produced — all ${disqualifiedIds.size} of ${businessIds.length} businesses were disqualified`
+      ? `0 leads produced — all ${disqualifiedIds.size} of ${pipelineBusinessIds.length} businesses were disqualified`
       : null;
 
     const failedLeadsNote = completedLeads === 0 && failedLeads > 0 && disqualifiedIds.size === 0
@@ -256,7 +296,7 @@ export async function tryFinalizeDiscoveryRun(
       disqualifiedIds.size,
       logger,
       disqualNote ?? failedLeadsNote ?? timeoutNote,
-      businessIds.length,
+      totalBusinesses,
       disqualReasons,
     );
 
@@ -269,7 +309,7 @@ export async function tryFinalizeDiscoveryRun(
   } else if (terminalCount > 0) {
     // Not ready to finalize, but update progress so the frontend shows accurate lead count
     const newBiz = typeof result.newBusinesses === 'number' ? result.newBusinesses : 0;
-    const alreadyKnownBiz = Math.max(0, businessIds.length - newBiz);
+    const alreadyKnownBiz = Math.max(0, totalBusinesses - newBiz);
     const convertedLeads = completedLeads + failedLeads;
 
     await prisma.jobExecution.update({
@@ -280,13 +320,13 @@ export async function tryFinalizeDiscoveryRun(
           processedItems: terminalCount,
           failedItems: failedLeads + disqualifiedIds.size,
           // Full funnel counts for frontend display
-          totalFound: businessIds.length,
+          totalFound: totalBusinesses,
           alreadyKnown: alreadyKnownBiz,
           newFound: newBiz,
           disqualified: disqualifiedIds.size,
           converted: convertedLeads,
           outcome: {
-            businessesFound: businessIds.length,
+            businessesFound: totalBusinesses,
             businessesDisqualified: disqualifiedIds.size,
             leadsCreated: convertedLeads,
             messagesDrafted: messageDraftedLeads,
@@ -444,9 +484,18 @@ async function finalizeRun(
         // Find leads created from these businesses
         const conversions = await prisma.businessConversion.findMany({
           where: { businessId: { in: runBusinessIds } },
-          select: { leadId: true },
+          select: { leadId: true, metadata: true },
         });
-        const leadIds = [...new Set(conversions.map((c) => c.leadId))];
+        const leadIds = [
+          ...new Set(
+            conversions
+              .filter(
+                (c) =>
+                  extractDiscoveryRunIdFromMetadata(c.metadata as Prisma.JsonValue | null) === discoveryRunId,
+              )
+              .map((c) => c.leadId),
+          ),
+        ];
 
         if (leadIds.length > 0) {
           const deleted = await prisma.lead.deleteMany({

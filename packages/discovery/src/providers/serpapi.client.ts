@@ -617,6 +617,7 @@ export class SerpApiDiscoveryProvider implements DiscoveryProvider {
     const payload = await this.requestWithRetry(requestUrl, requestContext);
     return {
       engine,
+      provider: 'SERPAPI',
       organicResults: normalizeOrganicResults(payload),
       localBusinesses: normalizeLocalBusinesses(payload, input.countryCode),
       raw: payload,
@@ -788,4 +789,3 @@ export async function searchMapsLocal(
   const provider = new SerpApiDiscoveryProvider(config);
   return provider.searchMapsLocal(params);
 }
-

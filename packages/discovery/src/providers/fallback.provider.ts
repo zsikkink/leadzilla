@@ -15,9 +15,11 @@ export class FallbackDiscoveryProvider implements DiscoveryProvider {
   private readonly fallback: DiscoveryProvider;
   private readonly primaryName: string;
   private readonly fallbackName: string;
-
-  /** Once primary is exhausted, skip it for remaining requests in this process lifetime. */
-  private primaryExhausted = false;
+  /**
+   * Tracks exhausted scopes (typically discoveryRunId) so fallback switching is
+   * isolated per run instead of process-global.
+   */
+  private readonly exhaustedScopeKeys = new Set<string>();
 
   constructor(options: {
     primary: DiscoveryProvider;
@@ -47,8 +49,10 @@ export class FallbackDiscoveryProvider implements DiscoveryProvider {
     method: 'searchGoogle' | 'searchGoogleLocal' | 'searchMapsLocal',
     params: SerpApiCommonRequest,
   ): Promise<NormalizedProviderResponse> {
-    // If primary is already known to be exhausted, go straight to fallback
-    if (this.primaryExhausted) {
+    const scopeKey = normalizeScopeKey(params.fallbackScopeKey);
+
+    // If this scope is already known to be exhausted, go straight to fallback
+    if (scopeKey !== null && this.exhaustedScopeKeys.has(scopeKey)) {
       return this.fallback[method](params);
     }
 
@@ -56,9 +60,16 @@ export class FallbackDiscoveryProvider implements DiscoveryProvider {
       return await this.primary[method](params);
     } catch (error: unknown) {
       if (isQuotaExhaustedError(error)) {
-        this.primaryExhausted = true;
+        // Persist switch only when a scope key is provided (e.g. discoveryRunId).
+        if (scopeKey !== null) {
+          this.exhaustedScopeKeys.add(scopeKey);
+        }
+        const scopeText = scopeKey ? ` scope=${scopeKey}` : '';
+        const persistenceText = scopeKey
+          ? 'for remaining requests in this scope'
+          : 'for this request';
         console.warn(
-          `[FallbackDiscoveryProvider] ${this.primaryName} quota exhausted — switching to ${this.fallbackName} for all remaining requests`,
+          `[FallbackDiscoveryProvider] ${this.primaryName} quota exhausted${scopeText} — switching to ${this.fallbackName} ${persistenceText}`,
         );
         return this.fallback[method](params);
       }
@@ -67,6 +78,12 @@ export class FallbackDiscoveryProvider implements DiscoveryProvider {
       throw error;
     }
   }
+}
+
+function normalizeScopeKey(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 /**

@@ -282,6 +282,7 @@ export class GooglePlacesDiscoveryProvider implements DiscoveryProvider {
     if (params.page > 1) {
       return {
         engine,
+        provider: 'GOOGLE_PLACES',
         organicResults: [],
         localBusinesses: [],
         raw: { skipped: true, reason: 'page > 1 not supported by Google Places API' },
@@ -316,6 +317,7 @@ export class GooglePlacesDiscoveryProvider implements DiscoveryProvider {
 
     return {
       engine,
+      provider: 'GOOGLE_PLACES',
       organicResults: [],
       localBusinesses,
       raw: response,

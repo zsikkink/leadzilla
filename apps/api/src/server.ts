@@ -489,12 +489,32 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         return ErrorResponseSchema.parse({ error: 'Lead not found', requestId: request.id });
       }
 
-      // Determine what status to restore — if scored, use 'scored'; otherwise 'new'
-      const hasScore = await prisma.leadScorePrediction.findFirst({
+      // Determine what status to restore.
+      // Restore to `qualified` when the latest score still passes threshold,
+      // otherwise restore to `scored`; if no score exists, restore to `new`.
+      const latestScore = await prisma.leadScorePrediction.findFirst({
         where: { leadId },
-        select: { id: true },
+        orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }],
+        select: { blendedScore: true },
       });
-      const restoredStatus = hasScore ? 'scored' : 'new';
+
+      let qualificationThreshold = 0.5;
+      const thresholdSetting = await prisma.pipelineSetting.findUnique({
+        where: { key: 'scoreQualificationThreshold' },
+        select: { valueJson: true },
+      });
+      if (thresholdSetting?.valueJson !== null && thresholdSetting?.valueJson !== undefined) {
+        const parsed = typeof thresholdSetting.valueJson === 'number'
+          ? thresholdSetting.valueJson
+          : Number(thresholdSetting.valueJson);
+        if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) {
+          qualificationThreshold = parsed;
+        }
+      }
+
+      const restoredStatus: LeadStatus = latestScore
+        ? (latestScore.blendedScore >= qualificationThreshold ? 'qualified' : 'scored')
+        : 'new';
 
       await prisma.$transaction([
         prisma.leadRejection.deleteMany({ where: { leadId } }),

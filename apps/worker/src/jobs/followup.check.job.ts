@@ -73,7 +73,9 @@ export async function handleFollowupCheckJob(
           select: {
             id: true,
             feedbackEvents: {
-              where: { eventType: { in: ['REPLIED', 'UNSUBSCRIBED', 'MEETING_BOOKED', 'DEAL_WON', 'BOUNCED'] } },
+              // REPLIED is intentionally excluded so OUT_OF_OFFICE responses can
+              // reschedule follow-ups via reply.classify without being canceled.
+              where: { eventType: { in: ['UNSUBSCRIBED', 'MEETING_BOOKED', 'DEAL_WON', 'BOUNCED'] } },
               select: { id: true },
               take: 1,
             },
@@ -116,7 +118,7 @@ export async function handleFollowupCheckJob(
     let enqueuedCount = 0;
 
     for (const send of eligibleSends) {
-      // Double-check: no reply events
+      // Double-check: no terminal feedback events
       if (send.lead.feedbackEvents.length > 0) {
         // Stale data — cancel this follow-up
         await prisma.messageSend.update({
