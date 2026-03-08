@@ -35,6 +35,7 @@ const GENERIC_EMAIL_PREFIXES = new Set([
   'appointments', 'events', 'press', 'media', 'partnerships',
   'careers', 'jobs', 'recruitment',
   'booking', 'bookings', 'inquiries', 'reservations',
+  'care', 'customercare', 'customer-care',
 ]);
 
 // ── Payload & Dependencies ─────────────────────────────────────────────
@@ -213,7 +214,7 @@ export interface BusinessConvertJobDependencies {
       cityOrCountry?: string | null,
       maxResults?: number,
     ): Promise<
-      | { status: 'success'; data: Array<{ name: string; title: string | null; linkedinUrl: string }> }
+      | { status: 'success'; data: Array<{ name: string; title: string | null; linkedinUrl: string | null }> }
       | { status: 'retryable_error'; failure: { message: string } }
       | { status: 'terminal_error'; failure: { message: string } }
     >;
@@ -224,7 +225,7 @@ export interface BusinessConvertJobDependencies {
       titleOrFunction?: string | null;
       maxResults?: number;
     }): Promise<
-      | { status: 'success'; data: Array<{ name: string; title: string | null; linkedinUrl: string }> }
+      | { status: 'success'; data: Array<{ name: string; title: string | null; linkedinUrl: string | null }> }
       | { status: 'retryable_error'; failure: { message: string } }
       | { status: 'terminal_error'; failure: { message: string } }
     >;
@@ -477,6 +478,9 @@ function isValidPersonName(name: string, businessName: string): boolean {
   // Length checks
   if (trimmed.length < 2 || trimmed.length > 50) return false;
 
+  // Reject placeholder names
+  if (trimmed.toLowerCase() === 'unknown contact') return false;
+
   // Just numbers or special characters
   if (/^[\d\W]+$/.test(trimmed)) return false;
 
@@ -499,6 +503,26 @@ function isValidPersonName(name: string, businessName: string): boolean {
   if (lowerWords.every((w) => ROLE_WORDS.has(w) || ROLE_WORDS.has(w.replace(/s$/, '')))) return false;
 
   return true;
+}
+
+async function persistCostEvents(
+  db: typeof prisma,
+  discoveryRunId: string,
+  businessId: string,
+  costEvents: Array<{ provider: string; costCents: number; apiCallType: string }>,
+): Promise<void> {
+  if (costEvents.length === 0) return;
+  for (const ce of costEvents) {
+    await db.discoveryCostEvent.create({
+      data: {
+        discoveryRunId,
+        provider: ce.provider as Parameters<typeof db.discoveryCostEvent.create>[0]['data']['provider'],
+        costCents: ce.costCents,
+        apiCallType: ce.apiCallType,
+        businessId,
+      },
+    });
+  }
 }
 
 function resolveDiscoveryProvider(
@@ -1203,7 +1227,7 @@ export async function handleBusinessConvertJob(
   // ── 5h. Rule-based name validation — apply to ALL remaining candidates (B2)
   for (let i = allCandidates.length - 1; i >= 0; i--) {
     const candidate = allCandidates[i]!;
-    if (candidate.name !== 'Unknown Contact' && !isValidPersonName(candidate.name, business.name)) {
+    if (!isValidPersonName(candidate.name, business.name)) {
       logger.info(
         { ...logCtx, invalidName: candidate.name, source: candidate.source },
         'Contact rejected by name validation',
@@ -1238,7 +1262,7 @@ export async function handleBusinessConvertJob(
           if (exact) {
             candidate.linkedinUrl = exact.linkedinUrl;
             candidate.sourceStage = 'V2';
-            candidate.matchedSignals = ['name_match', 'company_match', 'linkedin_profile'];
+            candidate.matchedSignals = ['name_match', 'company_match', ...(exact.linkedinUrl ? ['linkedin_profile'] : [])];
           }
         }
       }
@@ -1266,7 +1290,7 @@ export async function handleBusinessConvertJob(
             positionRank: 45,
             source: 'website_scrape',
             sourceStage: 'D2',
-            matchedSignals: ['company_match', 'linkedin_profile'],
+            matchedSignals: ['company_match', ...(profile.linkedinUrl ? ['linkedin_profile'] : [])],
             rawJson: { matchType: 'google_cse_discovery', linkedinUrl: profile.linkedinUrl },
           });
         }
@@ -1400,6 +1424,7 @@ export async function handleBusinessConvertJob(
         where: { id: businessId },
         data: { preQualified: false, disqualificationReason: 'NO_CONTACTS_FOUND' },
       });
+      await persistCostEvents(prisma, discoveryRunId, businessId, costEvents);
       await tryFinalizeDiscoveryRun(discoveryRunId, logger);
       return;
     }
@@ -1416,6 +1441,7 @@ export async function handleBusinessConvertJob(
       where: { id: businessId },
       data: { preQualified: false, disqualificationReason: 'NO_EMAIL' },
     });
+    await persistCostEvents(prisma, discoveryRunId, businessId, costEvents);
     await tryFinalizeDiscoveryRun(discoveryRunId, logger);
     return;
   }
@@ -1533,17 +1559,7 @@ export async function handleBusinessConvertJob(
       }
 
       // Record cost events
-      for (const ce of costEvents) {
-        await tx.discoveryCostEvent.create({
-          data: {
-            discoveryRunId,
-            provider: ce.provider,
-            costCents: ce.costCents,
-            apiCallType: ce.apiCallType,
-            businessId,
-          },
-        });
-      }
+      await persistCostEvents(tx as unknown as typeof prisma, discoveryRunId, businessId, costEvents);
 
       return { lead: existingLead, isNew: false };
     }
@@ -1647,17 +1663,7 @@ export async function handleBusinessConvertJob(
     }
 
     // Record cost events inside transaction
-    for (const ce of costEvents) {
-      await tx.discoveryCostEvent.create({
-        data: {
-          discoveryRunId,
-          provider: ce.provider,
-          costCents: ce.costCents,
-          apiCallType: ce.apiCallType,
-          businessId,
-        },
-      });
-    }
+    await persistCostEvents(tx as unknown as typeof prisma, discoveryRunId, businessId, costEvents);
 
     return { lead, isNew: true };
   });

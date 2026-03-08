@@ -9,7 +9,6 @@ import {
   Building2,
   ExternalLink,
   Globe,
-  Hash,
   Instagram,
   Linkedin,
   Loader2,
@@ -94,24 +93,6 @@ function extractScoreInfo(data: unknown): ScoreInfo | null {
   };
 }
 
-function extractRawDetails(data: unknown): Array<{ key: string; value: string }> {
-  if (!data || typeof data !== 'object') return [];
-  const d = data as Record<string, unknown>;
-  const skipKeys = new Set([
-    'email', 'phone', 'mobile_phone', 'phone_number', 'linkedinUrl', 'linkedin_url', 'linkedin',
-    'companyName', 'company_name', 'organization_name', 'industry', 'title', 'job_title', 'position',
-    'country', 'city', 'employeeCount', 'employee_count', 'company_size', 'domain', 'website',
-    'avgDealSize', 'whatsappUsage', '_scoreInfo', 'seasonalPeaks', 'internationalGuests',
-    'medicalTourism', 'cohortModel', 'paymentMethod',
-  ]);
-
-  return Object.entries(d)
-    .filter(([key, val]) => !skipKeys.has(key) && val !== null && val !== undefined && val !== '')
-    .map(([key, val]) => ({
-      key: key.replace(/_/g, ' ').replace(/([A-Z])/g, ' $1').trim(),
-      value: typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val),
-    }));
-}
 
 // ── Company Intelligence (from Business scraper data) ─────────
 
@@ -495,7 +476,8 @@ export default function LeadDetailPage() {
   // Fetch linked Business scraper data via business_conversions → businesses
   const [businessData, setBusinessData] = useState<BusinessScrapeData | null>(null);
   const [businessId, setBusinessId] = useState<string | null>(null);
-  const [teamMembers, setTeamMembers] = useState<Array<{ id: string; fullName: string; jobTitle: string | null; email: string | null; linkedinUrl: string | null; source: string | null }>>([]);
+  const [teamMembers, setTeamMembers] = useState<Array<{ id: string; fullName: string; jobTitle: string | null; email: string | null; phone: string | null; linkedinUrl: string | null; seniority: string | null; source: string | null }>>([]);
+  const [primaryLinkedinUrl, setPrimaryLinkedinUrl] = useState<string | null>(null);
   const [instagramPosts, setInstagramPosts] = useState<Array<{
     caption: string;
     likes: number;
@@ -567,14 +549,19 @@ export default function LeadDetailPage() {
           .limit(10);
 
         if (contacts && contacts.length > 0 && !cancelled) {
-          setTeamMembers(contacts.map((c: { id: string; name: string; title: string | null; email: string | null; linkedinUrl: string | null; source: string | null }) => ({
+          const mapped = contacts.map((c: { id: string; name: string; title: string | null; email: string | null; phone: string | null; linkedinUrl: string | null; seniority: string | null; source: string | null }) => ({
             id: c.id,
             fullName: c.name,
             jobTitle: c.title,
             email: c.email,
+            phone: c.phone,
             linkedinUrl: c.linkedinUrl,
+            seniority: c.seniority,
             source: (c.source as string) ?? null,
-          })));
+          }));
+          setTeamMembers(mapped);
+          const firstLinkedin = mapped.find((m) => m.linkedinUrl)?.linkedinUrl ?? null;
+          setPrimaryLinkedinUrl(firstLinkedin);
         } else if (!cancelled) {
           // Fallback: extract decision makers from website scrape data
           const websiteScrape = biz.apify_website_scrape_json as Record<string, unknown> | null;
@@ -586,7 +573,9 @@ export default function LeadDetailPage() {
                 fullName: typeof dm.name === 'string' ? dm.name : 'Unknown',
                 jobTitle: typeof dm.title === 'string' ? dm.title : null,
                 email: typeof dm.email === 'string' ? dm.email : null,
+                phone: null,
                 linkedinUrl: typeof dm.linkedinUrl === 'string' ? dm.linkedinUrl : null,
+                seniority: null,
                 source: 'Website',
               })));
             }
@@ -693,7 +682,6 @@ export default function LeadDetailPage() {
   const l = lead.data;
   const enrichmentFields = extractEnrichmentFields(l.enrichmentData);
   const scoreInfo = extractScoreInfo(l.enrichmentData);
-  const additionalDetails = extractRawDetails(l.enrichmentData);
 
   const scorePercent = scoreInfo?.blendedScore ? Math.round(scoreInfo.blendedScore * 100) : null;
 
@@ -759,8 +747,8 @@ export default function LeadDetailPage() {
           ) : null}
         </div>
 
-        {/* D9: Phone with source label + D9 business email */}
-        {(enrichmentFields.some((f) => f.label === 'Phone') || leadBusinessEmail) && (
+        {/* D9: Phone with source label + D9 business email + LinkedIn */}
+        {(enrichmentFields.some((f) => f.label === 'Phone') || leadBusinessEmail || primaryLinkedinUrl) && (
           <div className="mt-3 flex flex-wrap gap-3">
             {enrichmentFields.filter((f) => f.label === 'Phone').map((f) => (
               <div key="phone" className="flex items-center gap-2 text-sm">
@@ -787,6 +775,17 @@ export default function LeadDetailPage() {
                 </a>
                 <span className="rounded-full bg-muted/20 px-1.5 py-0.5 text-[9px] font-bold text-muted-foreground/50">Business</span>
               </div>
+            )}
+            {primaryLinkedinUrl && (
+              <a
+                href={primaryLinkedinUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 text-sm font-medium text-zbooni-teal hover:text-zbooni-green transition-colors"
+              >
+                <Linkedin className="h-3.5 w-3.5 text-muted-foreground/50" />
+                View LinkedIn
+              </a>
             )}
           </div>
         )}
@@ -904,30 +903,6 @@ export default function LeadDetailPage() {
         </div>
       ) : null}
 
-      {/* Additional Enrichment Details */}
-      {additionalDetails.length > 0 ? (
-        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-            <Hash className="h-4 w-4 text-zbooni-green" />
-            Additional Details
-          </h2>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {additionalDetails.map((detail) => (
-              <div
-                key={detail.key}
-                className="flex items-start gap-3 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3.5 py-2.5"
-              >
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/50 min-w-[100px]">
-                  {detail.key}
-                </p>
-                <p className="text-sm text-muted-foreground break-all">
-                  {detail.value.length > 200 ? detail.value.slice(0, 200) + '...' : detail.value}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
 
       {/* No enrichment data at all */}
       {!l.enrichmentData ? (
@@ -991,6 +966,11 @@ export default function LeadDetailPage() {
                       ) : (
                         <span className="shrink-0 rounded-full bg-muted/20 px-1.5 py-0.5 text-[9px] font-bold text-muted-foreground/50">Alternative</span>
                       )}
+                      {tm.seniority && tm.seniority !== 'other' ? (
+                        <span className="shrink-0 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[9px] font-bold text-blue-400">
+                          {tm.seniority.charAt(0).toUpperCase() + tm.seniority.slice(1)}
+                        </span>
+                      ) : null}
                     </div>
                     {tm.jobTitle ? <p className="text-[11px] text-muted-foreground/50 truncate">{tm.jobTitle}</p> : null}
                     {tm.source ? <p className="text-[9px] text-muted-foreground/30">{tm.source}</p> : null}
@@ -999,6 +979,11 @@ export default function LeadDetailPage() {
                     {tm.email ? (
                       <a href={`mailto:${tm.email}`} title={tm.email} className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
                         <Mail className="h-3.5 w-3.5" />
+                      </a>
+                    ) : null}
+                    {tm.phone ? (
+                      <a href={`tel:${tm.phone}`} title={tm.phone} className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
+                        <Phone className="h-3.5 w-3.5" />
                       </a>
                     ) : null}
                     {tm.linkedinUrl ? (
