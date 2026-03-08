@@ -19,7 +19,9 @@ import {
   Save,
   Settings,
   Shield,
+  ShieldCheck,
   Sliders,
+  Star,
   Target,
   Timer,
   UserCog,
@@ -127,6 +129,19 @@ const PIPELINE_SETTINGS: PipelineSetting[] = [
     step: 0.05,
     defaultValue: 0.3,
     format: (v: number) => v.toFixed(2),
+  },
+  {
+    type: 'number',
+    key: 'min_review_count',
+    label: 'Minimum Google Reviews',
+    description: 'Businesses with fewer reviews are disqualified during pre-qualification.',
+    spectrum: '0 = no filter, 50+ = established businesses only',
+    icon: Star,
+    iconColor: 'text-yellow-400',
+    min: 0,
+    max: 100,
+    step: 1,
+    defaultValue: 15,
   },
   {
     type: 'tier-bands',
@@ -449,6 +464,7 @@ interface SettingsState {
   deterministicAiBlend: number;
   scoreQualificationThreshold: number;
   enrichmentThreshold: number;
+  min_review_count: number;
   scoreTierBands: { low: number; med: number; high: number };
   followUpMaxCount: number;
   whatsappDailyLimit: number;
@@ -462,6 +478,7 @@ function getDefaultSettings(): SettingsState {
     deterministicAiBlend: 60,
     scoreQualificationThreshold: 0.5,
     enrichmentThreshold: 0.3,
+    min_review_count: 15,
     scoreTierBands: { low: 0.34, med: 0.67, high: 0.67 },
     followUpMaxCount: 3,
     whatsappDailyLimit: 50,
@@ -476,6 +493,7 @@ const NUMERIC_SETTING_KEYS = new Set([
   'deterministicAiBlend',
   'scoreQualificationThreshold',
   'enrichmentThreshold',
+  'min_review_count',
   'followUpMaxCount',
   'whatsappDailyLimit',
   'emailDailyLimit',
@@ -488,6 +506,9 @@ const NUMERIC_SETTING_KEYS = new Set([
 export default function ControlsSettingsPage() {
   const { apiClient } = useAuth();
   const [settings, setSettings] = useState<SettingsState>(getDefaultSettings);
+  const [autoApproveEnabled, setAutoApproveEnabled] = useState(false);
+  const [autoApproveScoreMin, setAutoApproveScoreMin] = useState(0.5);
+  const [autoApproveScoreMax, setAutoApproveScoreMax] = useState(1.0);
   const [messagingRole, setMessagingRole] = useState('');
   const [messagingRoleExpanded, setMessagingRoleExpanded] = useState(false);
   const [messagingSystemPrompt, setMessagingSystemPrompt] = useState('');
@@ -508,7 +529,15 @@ export default function ControlsSettingsPage() {
       .then(({ items }) => {
         const newSettings = { ...getDefaultSettings() };
         for (const item of items) {
-          if (item.key === 'messagingRole') {
+          if (item.key === 'auto_approve_enabled') {
+            setAutoApproveEnabled(item.value === true || item.value === 'true');
+          } else if (item.key === 'auto_approve_score_min') {
+            const n = Number(item.value);
+            if (!Number.isNaN(n)) setAutoApproveScoreMin(n);
+          } else if (item.key === 'auto_approve_score_max') {
+            const n = Number(item.value);
+            if (!Number.isNaN(n)) setAutoApproveScoreMax(n);
+          } else if (item.key === 'messagingRole') {
             setMessagingRole(String(item.value ?? ''));
           } else if (item.key === 'messagingSystemPrompt') {
             setMessagingSystemPrompt(String(item.value ?? ''));
@@ -571,8 +600,11 @@ export default function ControlsSettingsPage() {
       const promises = settingEntries.map(([key, value]) =>
         apiClient.updatePipelineSetting(key, value),
       );
-      // Also save messaging role, system prompt, and instructions
+      // Also save auto-approve, messaging role, system prompt, and instructions
       promises.push(
+        apiClient.updatePipelineSetting('auto_approve_enabled', autoApproveEnabled),
+        apiClient.updatePipelineSetting('auto_approve_score_min', autoApproveScoreMin),
+        apiClient.updatePipelineSetting('auto_approve_score_max', autoApproveScoreMax),
         apiClient.updatePipelineSetting('messagingRole', messagingRole),
         apiClient.updatePipelineSetting('messagingSystemPrompt', messagingSystemPrompt),
         apiClient.updatePipelineSetting('messagingInstructions', messagingInstructions),
@@ -586,10 +618,13 @@ export default function ControlsSettingsPage() {
     } finally {
       setIsSaving(false);
     }
-  }, [apiClient, settings, messagingRole, messagingSystemPrompt, messagingInstructions]);
+  }, [apiClient, settings, autoApproveEnabled, autoApproveScoreMin, autoApproveScoreMax, messagingRole, messagingSystemPrompt, messagingInstructions]);
 
   const handleReset = useCallback(() => {
     setSettings(getDefaultSettings());
+    setAutoApproveEnabled(false);
+    setAutoApproveScoreMin(0.5);
+    setAutoApproveScoreMax(1.0);
     setMessagingRole('');
     setMessagingRoleExpanded(false);
     setMessagingSystemPrompt('');
@@ -983,6 +1018,80 @@ export default function ControlsSettingsPage() {
                 }
                 return null;
               })}
+
+              {/* Auto-Approve Messages */}
+              <div className="rounded-xl border border-border/30 bg-zbooni-dark/40 p-4 transition-colors hover:border-border/50">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.04]">
+                      <ShieldCheck className="h-4 w-4 text-zbooni-green" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold tracking-tight">Auto-Approve Messages</p>
+                      <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground/50">
+                        Automatically send messages for leads within the score range
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={autoApproveEnabled}
+                    onClick={() => {
+                      setAutoApproveEnabled(!autoApproveEnabled);
+                      setHasChanges(true);
+                    }}
+                    className={cn(
+                      'relative mt-1 inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors',
+                      autoApproveEnabled ? 'bg-zbooni-green' : 'bg-muted/40',
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg transition-transform',
+                        autoApproveEnabled ? 'translate-x-5' : 'translate-x-0',
+                      )}
+                    />
+                  </button>
+                </div>
+                {autoApproveEnabled ? (
+                  <div className="mt-3 space-y-2 pl-11">
+                    <p className="text-[10px] font-medium text-muted-foreground/40">Score range for auto-approve:</p>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={autoApproveScoreMin}
+                        onChange={(e) => {
+                          setAutoApproveScoreMin(Number(e.target.value));
+                          setHasChanges(true);
+                        }}
+                        className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
+                        aria-label="Min auto-approve score"
+                      />
+                      <span className="text-[10px] text-muted-foreground/40">&le; score &le;</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={autoApproveScoreMax}
+                        onChange={(e) => {
+                          setAutoApproveScoreMax(Number(e.target.value));
+                          setHasChanges(true);
+                        }}
+                        className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
+                        aria-label="Max auto-approve score"
+                      />
+                    </div>
+                    {autoApproveScoreMin > autoApproveScoreMax ? (
+                      <p className="text-[10px] font-medium text-red-400">Min must be ≤ Max</p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
 
               {/* Read-only follow-up cadence display */}
               <div className="rounded-xl border border-border/30 bg-zbooni-dark/40 p-4">

@@ -4,7 +4,6 @@ import type { IcpProfileResponse, PipelineRunStatus } from '@lead-flood/contract
 import {
   AlertCircle,
   CheckCircle2,
-  ChevronDown,
   ChevronRight,
   Globe,
   Loader2,
@@ -12,7 +11,6 @@ import {
   Play,
   Rocket,
   Search,
-  Settings2,
   Target,
   TrendingUp,
   Zap,
@@ -294,8 +292,6 @@ export default function DiscoverPage() {
   const [selectedCities, setSelectedCities] = useState<Set<string>>(new Set());
   const [includeWebsiteAnalysis, setIncludeWebsiteAnalysis] = useState(true);
   const [includeSocialMediaAnalysis, setIncludeSocialMediaAnalysis] = useState(true);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [minReviewCount, setMinReviewCount] = useState(15);
   const [limit, setLimit] = useState('25');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -438,9 +434,6 @@ export default function DiscoverPage() {
     setSubmitError(null);
 
     const cities = selectedCities.size > 0 ? Array.from(selectedCities) : undefined;
-    const advancedSettings = minReviewCount !== 15
-      ? { minReviewCount }
-      : undefined;
 
     try {
       // Single API call with all selected ICPs — limit is split server-side
@@ -450,7 +443,6 @@ export default function DiscoverPage() {
         ...(cities ? { cities } : {}),
         includeWebsiteAnalysis,
         includeSocialMediaAnalysis,
-        ...(advancedSettings ? { advancedSettings } : {}),
         limit: parseInt(limit, 10),
         ...(user?.id ? { requestedByUserId: user.id } : {}),
       });
@@ -631,40 +623,6 @@ export default function DiscoverPage() {
                 </label>
               </div>
 
-              {/* Advanced settings collapsible */}
-              <div>
-                <button
-                  type="button"
-                  onClick={() => setShowAdvanced((prev) => !prev)}
-                  className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground/70 hover:text-foreground"
-                >
-                  <Settings2 className="h-3.5 w-3.5" />
-                  Advanced Settings
-                  <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showAdvanced && 'rotate-180')} />
-                </button>
-                {showAdvanced ? (
-                  <div className="mt-3 space-y-3 border-t border-border/20 pt-3">
-                    <div>
-                      <div className="mb-1.5 flex items-center justify-between">
-                        <label className="text-xs font-semibold text-muted-foreground">Min Review Count</label>
-                        <span className="rounded bg-zbooni-dark/40 px-1.5 py-0.5 text-[11px] font-bold tabular-nums">{minReviewCount}</span>
-                      </div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={50}
-                        value={minReviewCount}
-                        onChange={(e) => setMinReviewCount(parseInt(e.target.value, 10))}
-                        className="h-2 w-full cursor-pointer appearance-none rounded-full bg-zbooni-dark/40 accent-zbooni-teal [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-zbooni-teal"
-                      />
-                      <div className="mt-0.5 flex justify-between text-[10px] text-muted-foreground/40">
-                        <span>0 (no filter)</span>
-                        <span>50</span>
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
             </div>
           </div>
 
