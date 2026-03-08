@@ -30,8 +30,14 @@ pnpm-debug.log*
 .idea/
 
 # Claude Code personal config (team CLAUDE.md files are committed)
-.claude/local.md
-.claude/settings.local.json
+.claude/
+.agents/
+
+# Screenshots and temp images
+Screenshot *.png
+e2e-*.png
+docs/e2e-screenshots/
+docs/Untitled
 
 # Supabase local/linked artifacts (keep supabase/migrations committed)
 .supabase/
