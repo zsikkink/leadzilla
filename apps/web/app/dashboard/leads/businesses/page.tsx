@@ -878,7 +878,7 @@ export default function BusinessIntelligencePage() {
       {/* Main layout */}
       <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
         {/* Left: business list */}
-        <div className="space-y-3">
+        <div className="space-y-3 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto lg:pr-1">
           {isLoading ? (
             <div className="flex items-center gap-2 rounded-xl border border-border/30 bg-zbooni-dark/20 p-6">
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground/40" />
@@ -908,7 +908,9 @@ export default function BusinessIntelligencePage() {
 
         {/* Right: detail panel */}
         {selected ? (
-          <BusinessDetailPanel biz={selected} contacts={selectedContacts} onClose={() => setSelectedId(null)} />
+          <div className="lg:sticky lg:top-20 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto">
+            <BusinessDetailPanel biz={selected} contacts={selectedContacts} onClose={() => setSelectedId(null)} />
+          </div>
         ) : (
           <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
             <div className="flex flex-col items-center justify-center py-20">

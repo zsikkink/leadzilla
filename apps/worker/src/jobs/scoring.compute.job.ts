@@ -342,9 +342,10 @@ export async function handleScoringComputeJob(
               score: blendedScore,
               reason: rejectionReason,
               rejectedBy: 'SYSTEM',
-              ...(rejectionReason === 'HARD_FILTER_FAILED' && failedFilters.length > 0
-                ? { metadata: toInputJson({ filters: failedFilters }) }
-                : {}),
+              metadata: toInputJson({
+                failedHardFilters: failedFilters,
+                threshold: qualificationThreshold,
+              }),
             },
             update: {
               icpProfileId: targetIcpId,
@@ -352,9 +353,10 @@ export async function handleScoringComputeJob(
               reason: rejectionReason,
               rejectedBy: 'SYSTEM',
               rejectedAt: new Date(),
-              ...(rejectionReason === 'HARD_FILTER_FAILED' && failedFilters.length > 0
-                ? { metadata: toInputJson({ filters: failedFilters }) }
-                : {}),
+              metadata: toInputJson({
+                failedHardFilters: failedFilters,
+                threshold: qualificationThreshold,
+              }),
             },
           });
 

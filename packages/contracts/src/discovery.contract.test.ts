@@ -46,4 +46,12 @@ describe('CreateDiscoveryRunRequestSchema', () => {
       }),
     ).not.toThrow();
   });
+
+  it('normalizes alias and full-name countries before enum validation', () => {
+    const parsed = CreateDiscoveryRunRequestSchema.parse({
+      icpProfileIds: ['icp_1'],
+      countries: ['Algeria', 'UAE', 'KSA', 'Bahrain'],
+    });
+    expect(parsed.countries).toEqual(['DZ', 'AE', 'SA', 'BH']);
+  });
 });

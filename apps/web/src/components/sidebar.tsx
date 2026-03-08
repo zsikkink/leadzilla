@@ -15,7 +15,6 @@ import {
   MessageSquare,
   Rocket,
   Settings,
-  SlidersHorizontal,
   Target,
   TerminalSquare,
   Users,
@@ -33,11 +32,11 @@ const DASHBOARD_NAV_ITEMS = [
   { href: '/dashboard/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/dashboard/recommendations', label: 'Recommendations', icon: Lightbulb },
   { href: '/dashboard/jobs', label: 'Jobs', icon: Activity },
-  { href: '/dashboard/settings', label: 'Settings', icon: SlidersHorizontal },
 ] as const;
 
 const DEV_CONSOLE_NAV_ITEMS = [
   { href: '/discovery', label: 'Controls & Settings', icon: Settings },
+  { href: '/discovery#pipeline-settings', label: 'Pipeline Settings', icon: Settings },
   { href: '/discovery/debug', label: 'Pipeline Debug', icon: Bug },
   { href: '/discovery/rules', label: 'ICP & Rules', icon: TerminalSquare },
 ] as const;
@@ -193,6 +192,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           const isActive =
             href === '/discovery'
               ? pathname === '/discovery'
+              : href.startsWith('/discovery#')
+                ? pathname === '/discovery'
               : pathname === href || pathname.startsWith(`${href}/`);
 
           return (

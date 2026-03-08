@@ -106,6 +106,7 @@ interface RejectedLeadRow {
   companyName: string | null;
   icpProfileName: string | null;
   reason: string;
+  reasonDetails: string[];
   score: number | null;
   rejectedAt: string;
 }
@@ -177,7 +178,7 @@ export default function LeadsPage() {
         const supabase = getSupabaseBrowserClient();
         const { data, error } = await supabase
           .from('lead_rejections')
-          .select('id, leadId:leadId, reason, score, rejectedAt:rejectedAt')
+          .select('id, leadId:leadId, reason, score, rejectedAt:rejectedAt, metadata')
           .order('rejectedAt', { ascending: false })
           .limit(100);
 
@@ -229,8 +230,14 @@ export default function LeadsPage() {
 
         if (!cancelled) {
           setRejectedLeads(
-            (data ?? []).map((r: { id: string; leadId: string; reason: string; score: number | null; rejectedAt: string }) => {
+            (data ?? []).map((r: { id: string; leadId: string; reason: string; score: number | null; rejectedAt: string; metadata?: unknown }) => {
               const lead = leadMap.get(r.leadId);
+              const metadata = r.metadata && typeof r.metadata === 'object' && !Array.isArray(r.metadata)
+                ? r.metadata as Record<string, unknown>
+                : null;
+              const failedHardFilters = Array.isArray(metadata?.failedHardFilters)
+                ? metadata!.failedHardFilters.filter((x): x is string => typeof x === 'string')
+                : [];
               return {
                 id: r.id,
                 leadId: r.leadId,
@@ -240,6 +247,7 @@ export default function LeadsPage() {
                 companyName: lead?.companyName ?? null,
                 icpProfileName: lead?.icpProfileName ?? null,
                 reason: r.reason,
+                reasonDetails: failedHardFilters,
                 score: r.score,
                 rejectedAt: r.rejectedAt,
               };
@@ -659,8 +667,8 @@ export default function LeadsPage() {
                     >
                       {[rl.firstName, rl.lastName].filter(Boolean).join(' ') || 'Unknown'}
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground">{rl.companyName || '\u2014'}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{rl.email || '\u2014'}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{rl.companyName || 'Unknown company'}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{rl.email || 'No email'}</td>
                     <td className="px-4 py-3">
                       {rl.icpProfileName ? (
                         <span className="truncate text-xs text-muted-foreground">{rl.icpProfileName}</span>
@@ -673,6 +681,11 @@ export default function LeadsPage() {
                       )}>
                         {rl.reason.replace(/_/g, ' ')}
                       </span>
+                      {rl.reasonDetails.length > 0 ? (
+                        <p className="mt-1 text-[10px] text-muted-foreground/70">
+                          {rl.reasonDetails.join(', ')}
+                        </p>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3 text-right">
                       {rl.score !== null ? (

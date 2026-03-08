@@ -129,7 +129,10 @@ export const CreateDiscoveryRunRequestSchema = z
     icpProfileId: z.string().min(1).optional(),
     /** Array of ICP profile IDs to discover for (limit is split across ICPs) */
     icpProfileIds: z.array(z.string().min(1)).min(1).optional(),
-    countries: z.array(DiscoveryCountryCodeSchema).min(1),
+    countries: z.preprocess((value) => {
+      if (!Array.isArray(value)) return value;
+      return value.map((entry) => (typeof entry === 'string' ? normalizeDiscoveryCountryCode(entry) ?? entry : entry));
+    }, z.array(DiscoveryCountryCodeSchema).min(1)),
     cities: z.array(z.string().min(1)).optional(),
     includeWebsiteAnalysis: z.boolean().default(true),
     includeSocialMediaAnalysis: z.boolean().default(true),

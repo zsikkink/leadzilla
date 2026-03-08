@@ -221,7 +221,10 @@ function buildMessageContext(
 
   // If pre-computed AI insights are available, prepend them to companyInsight
   if (preComputedInsights) {
-    companyInsight = preComputedInsights + (companyInsight ? `\n${companyInsight}` : '');
+    const cleanedInsights = sanitizeInsights(preComputedInsights);
+    if (cleanedInsights.length > 0) {
+      companyInsight = cleanedInsights + (companyInsight ? `\n${companyInsight}` : '');
+    }
   }
 
   return { companyInsight, socialPresence, techGap, teamSignal };
@@ -400,12 +403,23 @@ export async function handleMessageGenerateJob(
     const icpMetadata = icpProfile?.metadataJson && typeof icpProfile.metadataJson === 'object'
       ? icpProfile.metadataJson as Record<string, unknown>
       : null;
-    const icpHook = typeof icpMetadata?.hook === 'string' ? icpMetadata.hook : null;
+    const icpHook = typeof icpMetadata?.salesHook === 'string'
+      ? icpMetadata.salesHook
+      : (typeof icpMetadata?.hook === 'string' ? icpMetadata.hook : null);
     const icpAngle = typeof icpMetadata?.angle === 'string'
       ? icpMetadata.angle
       : Array.isArray(icpMetadata?.angle)
         ? (icpMetadata.angle as unknown[]).filter((a): a is string => typeof a === 'string').join(', ')
         : null;
+
+    const requiredIcpHook = icpHook && icpHook.trim().length > 0
+      ? icpHook.trim()
+      : (icpAngle && icpAngle.trim().length > 0
+        ? icpAngle.trim()
+        : (icpProfile?.description ? `Hook: ${icpProfile.description.split('.').at(0)?.trim()}` : null));
+    if (!requiredIcpHook) {
+      logger.warn({ jobId: job.id, leadId, icpProfileId }, 'ICP sales hook missing; message quality may degrade');
+    }
 
     const groundingContext = {
       leadName: `${lead.firstName} ${lead.lastName}`,
@@ -418,7 +432,7 @@ export async function handleMessageGenerateJob(
       blendedScore: latestScore?.blendedScore ?? 0,
       icpDescription: icpProfile?.description ?? 'No ICP description available',
       businessIntelligence,
-      icpHook,
+      icpHook: requiredIcpHook,
       icpAngle,
       customRole,
       customSystemPrompt,
@@ -624,10 +638,12 @@ export async function handleMessageGenerateJob(
       }
     }
 
-    // Guard: if body looks like raw JSON, replace with fallback
+    // Guard: if body looks like raw JSON or leaked JSON fragment, replace with fallback
     if (
-      messageContent.bodyText.trim().startsWith('{') &&
-      (messageContent.bodyText.includes('"insights"') || messageContent.bodyText.includes('"message"'))
+      /^\s*\{[\s\S]*\}\s*$/.test(messageContent.bodyText.trim()) ||
+      messageContent.bodyText.includes('{"insights"') ||
+      messageContent.bodyText.includes('{"message"') ||
+      /```json/i.test(messageContent.bodyText)
     ) {
       logger.warn(
         { jobId: job.id, leadId },
@@ -769,3 +785,17 @@ export async function handleMessageGenerateJob(
     throw classifyError(error);
   }
 }
+  const sanitizeInsights = (value: string): string => {
+    const trimmed = value.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+        if (typeof parsed.insights === 'string' && parsed.insights.trim().length > 0) {
+          return parsed.insights.trim();
+        }
+      } catch {
+        // keep original text fallback
+      }
+    }
+    return value.replace(/```json[\s\S]*?```/gi, '').trim();
+  };

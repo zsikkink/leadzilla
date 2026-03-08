@@ -923,7 +923,7 @@ export default function ControlsSettingsPage() {
       </div>
 
       {/* ── Pipeline Settings ───────────────────────────────────────── */}
-      <div className="relative">
+      <div id="pipeline-settings" className="relative scroll-mt-20">
         <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-zbooni-teal/[0.02] via-transparent to-zbooni-green/[0.02]" />
         <div className="relative space-y-4 rounded-3xl border border-border/30 p-6">
           <div className="flex items-center gap-2">

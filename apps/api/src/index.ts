@@ -411,6 +411,11 @@ async function main(): Promise<void> {
       const lead = await prisma.lead.findUnique({
         where: { id: leadId, deletedAt: null },
         include: {
+          enrichmentRecords: {
+            orderBy: [{ enrichedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+            take: 1,
+            select: { normalizedPayload: true },
+          },
           businessConversions: {
             take: 1,
             orderBy: { createdAt: 'desc' },
@@ -424,8 +429,11 @@ async function main(): Promise<void> {
       });
       if (!lead) return null;
       const biz = lead.businessConversions[0]?.business;
+      const latestEnrichmentPayload =
+        (lead.enrichmentRecords[0]?.normalizedPayload as Prisma.JsonValue | null | undefined) ?? null;
       return {
         ...lead,
+        enrichmentData: latestEnrichmentPayload ?? lead.enrichmentData,
         businessCountryCode: biz?.countryCode ?? null,
         businessCountry: biz?.country ?? null,
         businessCity: biz?.city ?? null,

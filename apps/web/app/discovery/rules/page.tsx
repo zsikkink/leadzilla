@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Shield,
   Weight,
@@ -81,6 +81,7 @@ interface SimFormState {
   depositMilestoneSignals: boolean;
   bankTransferReliance: boolean;
   icpSegmentPriority: number;
+  aiSimilarityScore: number;
 }
 
 const DEFAULT_SIM: SimFormState = {
@@ -123,6 +124,7 @@ const DEFAULT_SIM: SimFormState = {
   depositMilestoneSignals: false,
   bankTransferReliance: false,
   icpSegmentPriority: 2,
+  aiSimilarityScore: 0.5,
 };
 
 const COUNTRY_OPTIONS = ['AE', 'SA', 'JO', 'EG', 'KW', 'BH', 'QA', 'OM', 'Other'];
@@ -258,8 +260,16 @@ function evaluateRule(rule: QualificationRuleResponse, form: SimFormState): bool
 function simulateScore(
   rules: QualificationRuleResponse[],
   form: SimFormState,
-): { score: number; passedHard: boolean; breakdown: Array<{ rule: string; passed: boolean; contribution: number }> } {
-  const breakdown: Array<{ rule: string; passed: boolean; contribution: number }> = [];
+  blendWeights: { deterministic: number; ai: number },
+): {
+  score: number;
+  deterministicScore: number;
+  aiScore: number;
+  passedHard: boolean;
+  breakdown: Array<{ rule: string; passed: boolean; contribution: number; group: 'hard_filters' | 'positive' | 'negative' }>;
+  equation: string;
+} {
+  const breakdown: Array<{ rule: string; passed: boolean; contribution: number; group: 'hard_filters' | 'positive' | 'negative' }> = [];
   let passedHard = true;
   let weightSum = 0;
   let maxPossibleWeight = 0;
@@ -272,30 +282,45 @@ function simulateScore(
 
     if (category === 'HARD_FILTER') {
       if (!passed) passedHard = false;
-      breakdown.push({ rule: rule.name, passed, contribution: 0 });
+      breakdown.push({ rule: rule.name, passed, contribution: 0, group: 'hard_filters' });
     } else if (category === 'WEIGHTED') {
       const w = rule.weight ?? 0;
       maxPossibleWeight += w;
       const contribution = passed ? w : 0;
       weightSum += contribution;
-      breakdown.push({ rule: rule.name, passed, contribution });
+      breakdown.push({ rule: rule.name, passed, contribution, group: 'positive' });
     } else {
       // ANTI_FIT: negative weight when matched
       const w = rule.weight ?? 0;
       const contribution = passed ? w : 0;
       weightSum += contribution;
-      breakdown.push({ rule: rule.name, passed, contribution });
+      breakdown.push({ rule: rule.name, passed, contribution, group: 'negative' });
     }
   }
 
   if (!passedHard) {
-    return { score: 0, passedHard: false, breakdown };
+    return {
+      score: 0,
+      deterministicScore: 0,
+      aiScore: form.aiSimilarityScore,
+      passedHard: false,
+      breakdown,
+      equation: `final = (hard filters failed) => 0`,
+    };
   }
 
-  const normalizedScore = maxPossibleWeight > 0 ? weightSum / maxPossibleWeight : 0;
-  const finalScore = Math.max(0, Math.min(1, normalizedScore));
+  const deterministicScore = Math.max(0, Math.min(1, maxPossibleWeight > 0 ? weightSum / maxPossibleWeight : 0));
+  const aiScore = Math.max(0, Math.min(1, form.aiSimilarityScore));
+  const finalScore = Math.max(0, Math.min(1, blendWeights.deterministic * deterministicScore + blendWeights.ai * aiScore));
 
-  return { score: finalScore, passedHard: true, breakdown };
+  return {
+    score: finalScore,
+    deterministicScore,
+    aiScore,
+    passedHard: true,
+    breakdown,
+    equation: `final = (${blendWeights.deterministic.toFixed(2)} × deterministic ${deterministicScore.toFixed(2)}) + (${blendWeights.ai.toFixed(2)} × ai/sim ${aiScore.toFixed(2)}) = ${finalScore.toFixed(2)}`,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -336,6 +361,8 @@ export default function ICPRulesPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [simForm, setSimForm] = useState<SimFormState>(DEFAULT_SIM);
   const [showSimulation, setShowSimulation] = useState(false);
+  const [blendWeights, setBlendWeights] = useState({ deterministic: 0.6, ai: 0.4 });
+  const [qualificationThreshold, setQualificationThreshold] = useState(0.4);
 
   // Add Rule state
   const [showAddRule, setShowAddRule] = useState(false);
@@ -412,9 +439,24 @@ export default function ICPRulesPage() {
     setSubmittingRules(false);
   };
 
+  useEffect(() => {
+    void apiClient.listPipelineSettings().then((res) => {
+      const blend = res.items.find((i) => i.key === 'deterministicAiBlend');
+      const threshold = res.items.find((i) => i.key === 'scoreQualificationThreshold');
+      const d = typeof blend?.value === 'number' ? blend.value : Number(blend?.value);
+      if (Number.isFinite(d) && d >= 0 && d <= 1) {
+        setBlendWeights({ deterministic: d, ai: 1 - d });
+      }
+      const t = typeof threshold?.value === 'number' ? threshold.value : Number(threshold?.value);
+      if (Number.isFinite(t) && t >= 0 && t <= 1) {
+        setQualificationThreshold(t);
+      }
+    }).catch(() => undefined);
+  }, [apiClient]);
+
   const simResult = useMemo(
-    () => (selectedProfile ? simulateScore(rules, simForm) : null),
-    [selectedProfile, rules, simForm],
+    () => (selectedProfile ? simulateScore(rules, simForm, blendWeights) : null),
+    [selectedProfile, rules, simForm, blendWeights],
   );
 
   const tier = simResult ? scoreTier(simResult.score) : null;
@@ -927,6 +969,17 @@ export default function ICPRulesPage() {
                   <input type="checkbox" checked={simForm.bankTransferReliance} onChange={(e) => setSimForm((prev) => ({ ...prev, bankTransferReliance: e.target.checked }))} />
                   Bank Transfer Reliance
                 </label>
+                <label className="col-span-full text-[13px]">
+                  <span className="mb-1 block text-xs text-muted-foreground/70">AI / Similarity Score: {Math.round(simForm.aiSimilarityScore * 100)}%</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={Math.round(simForm.aiSimilarityScore * 100)}
+                    onChange={(e) => setSimForm((prev) => ({ ...prev, aiSimilarityScore: Number(e.target.value) / 100 }))}
+                    className="h-2 w-full cursor-pointer appearance-none rounded-full bg-zbooni-dark/40 accent-zbooni-teal"
+                  />
+                </label>
               </div>
 
               <div className="mt-3 flex gap-2">
@@ -964,7 +1017,7 @@ export default function ICPRulesPage() {
                     <div className="flex items-center justify-between">
                       <div>
                         <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                          Estimated Deterministic Score
+                          Estimated Blended Score
                         </span>
                         <p className="mt-1 text-4xl font-extrabold tabular-nums tracking-tight text-foreground">
                           {simResult.score.toFixed(2)}
@@ -983,6 +1036,12 @@ export default function ICPRulesPage() {
                         Failed one or more hard filter requirements. Lead would be rejected.
                       </p>
                     ) : null}
+                    <p className="mt-2 text-xs text-muted-foreground/70">
+                      {simResult.equation}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground/60">
+                      Runtime threshold: {(qualificationThreshold * 100).toFixed(0)}%
+                    </p>
                   </div>
 
                   <div className="mt-4">

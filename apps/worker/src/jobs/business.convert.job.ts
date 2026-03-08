@@ -71,6 +71,8 @@ interface HunterContact {
   verification: string | null;
 }
 
+type ContactResolutionStatus = 'verified' | 'discovered' | 'unresolved';
+
 type HunterDomainSearchResult =
   | { status: 'success'; contacts: HunterContact[] }
   | { status: 'retryable_error'; failure: { classification: 'retryable' | 'terminal'; statusCode: number | null; message: string; raw: unknown } }
@@ -206,7 +208,22 @@ export interface BusinessConvertJobDependencies {
   } | undefined;
   openAiAdapter?: OpenAiInsightGenerator | undefined;
   linkedInSearchAdapter?: {
-    searchCompanyPeople(companyName: string, maxResults?: number): Promise<
+    searchCompanyPeople(
+      companyName: string,
+      cityOrCountry?: string | null,
+      maxResults?: number,
+    ): Promise<
+      | { status: 'success'; data: Array<{ name: string; title: string | null; linkedinUrl: string }> }
+      | { status: 'retryable_error'; failure: { message: string } }
+      | { status: 'terminal_error'; failure: { message: string } }
+    >;
+    searchPersonVerification(input: {
+      name: string;
+      companyName: string;
+      cityOrCountry?: string | null;
+      titleOrFunction?: string | null;
+      maxResults?: number;
+    }): Promise<
       | { status: 'success'; data: Array<{ name: string; title: string | null; linkedinUrl: string }> }
       | { status: 'retryable_error'; failure: { message: string } }
       | { status: 'terminal_error'; failure: { message: string } }
@@ -233,6 +250,22 @@ export interface BusinessConvertLogger {
 function isCacheValid(scrapedAt: Date | null): boolean {
   if (!scrapedAt) return false;
   return Date.now() - scrapedAt.getTime() < SCRAPE_CACHE_TTL_MS;
+}
+
+function scoreCandidateConfidence(input: {
+  source: 'website_scrape' | 'instagram' | 'hunter' | 'apollo';
+  hasEmail: boolean;
+  hasLinkedin: boolean;
+  seniority: 'executive' | 'director' | 'manager' | 'other';
+}): number {
+  let score = 0.35;
+  if (input.hasEmail) score += 0.25;
+  if (input.hasLinkedin) score += 0.2;
+  if (input.source === 'website_scrape') score += 0.1;
+  if (input.source === 'apollo') score += 0.05;
+  if (input.seniority === 'executive') score += 0.1;
+  if (input.seniority === 'director') score += 0.05;
+  return Math.max(0, Math.min(1, Number(score.toFixed(3))));
 }
 
 function isGenericEmail(email: string): boolean {
@@ -782,6 +815,9 @@ export async function handleBusinessConvertJob(
     seniority: 'executive' | 'director' | 'manager' | 'other';
     positionRank: number;
     source: 'website_scrape' | 'instagram' | 'hunter' | 'apollo';
+    sourceStage?: 'V1' | 'V2' | 'D1' | 'D2' | undefined;
+    matchedSignals?: string[] | undefined;
+    confidence?: number | undefined;
     rawJson: unknown;
   }
 
@@ -1176,52 +1212,75 @@ export async function handleBusinessConvertJob(
     }
   }
 
-  // ── 5i. LinkedIn verification for top candidates (B8) — limit to 1-2 searches
+  // ── 5i. Brave-based 4-stage contact intelligence ─────────────────────
+  // Path A (found contacts): V1 people verify + V2 LinkedIn verify
+  // Path B (no contacts): D1 people discover + D2 LinkedIn discover
+  const locality = [business.city, business.countryCode].filter(Boolean).join(', ') || null;
   if (deps.linkedInSearchAdapter?.isConfigured) {
-    const liResult = await deps.linkedInSearchAdapter.searchCompanyPeople(business.name, 3);
+    const candidatesWithNames = allCandidates
+      .filter((c) => c.name !== 'Unknown Contact' && isValidPersonName(c.name, business.name))
+      .slice(0, 3);
 
-    if (liResult.status === 'success' && liResult.data.length > 0) {
-      logger.info(
-        { ...logCtx, linkedInResults: liResult.data.length },
-        'LinkedIn search returned results',
-      );
-
-      for (const liProfile of liResult.data) {
-        // Try to match LinkedIn profiles to existing candidates
-        const liNameLower = liProfile.name.toLowerCase();
-        let matched = false;
-
-        for (const candidate of allCandidates) {
-          const candidateNameLower = candidate.name.toLowerCase();
-          // Fuzzy match: same name or significant overlap
-          if (
-            candidateNameLower === liNameLower ||
-            candidateNameLower.includes(liNameLower) ||
-            liNameLower.includes(candidateNameLower)
-          ) {
-            candidate.linkedinUrl = liProfile.linkedinUrl;
-            matched = true;
-            break;
+    if (candidatesWithNames.length > 0) {
+      for (const candidate of candidatesWithNames) {
+        const verifyResult = await deps.linkedInSearchAdapter.searchPersonVerification({
+          name: candidate.name,
+          companyName: business.name,
+          cityOrCountry: locality,
+          titleOrFunction: candidate.title,
+          maxResults: 3,
+        });
+        if (verifyResult.status === 'success' && verifyResult.data.length > 0) {
+          const exact = verifyResult.data.find((p) =>
+            p.name.toLowerCase() === candidate.name.toLowerCase(),
+          ) ?? verifyResult.data[0];
+          if (exact) {
+            candidate.linkedinUrl = exact.linkedinUrl;
+            candidate.sourceStage = 'V2';
+            candidate.matchedSignals = ['name_match', 'company_match', 'linkedin_profile'];
           }
-        }
-
-        // If no match found, add as a new candidate (but without email)
-        if (!matched && isValidPersonName(liProfile.name, business.name)) {
-          allCandidates.push({
-            name: liProfile.name,
-            title: liProfile.title,
-            email: null,
-            phone: null,
-            linkedinUrl: liProfile.linkedinUrl,
-            seniority: liProfile.title ? classifySeniorityLocal(liProfile.title) : 'other',
-            positionRank: 40,
-            source: 'website_scrape', // Best available source designation
-            rawJson: { matchType: 'linkedin_search', linkedinUrl: liProfile.linkedinUrl },
-          });
         }
       }
     } else {
-      logger.info(logCtx, 'LinkedIn search returned no results or failed');
+      const discoverResult = await deps.linkedInSearchAdapter.searchCompanyPeople(
+        business.name,
+        locality,
+        5,
+      );
+      if (discoverResult.status === 'success') {
+        for (const profile of discoverResult.data) {
+          if (!isValidPersonName(profile.name, business.name)) continue;
+          const exists = allCandidates.some(
+            (c) => c.name.toLowerCase() === profile.name.toLowerCase(),
+          );
+          if (exists) continue;
+          allCandidates.push({
+            name: profile.name,
+            title: profile.title,
+            email: null,
+            phone: null,
+            linkedinUrl: profile.linkedinUrl,
+            seniority: profile.title ? classifySeniorityLocal(profile.title) : 'other',
+            positionRank: 45,
+            source: 'website_scrape',
+            sourceStage: 'D2',
+            matchedSignals: ['company_match', 'linkedin_profile'],
+            rawJson: { matchType: 'brave_discovery', linkedinUrl: profile.linkedinUrl },
+          });
+        }
+      }
+    }
+  }
+
+  // Calculate confidence for all candidates before ranking.
+  for (const candidate of allCandidates) {
+    if (candidate.confidence === undefined) {
+      candidate.confidence = scoreCandidateConfidence({
+        source: candidate.source,
+        hasEmail: candidate.email !== null,
+        hasLinkedin: candidate.linkedinUrl !== null,
+        seniority: candidate.seniority,
+      });
     }
   }
 
@@ -1231,6 +1290,8 @@ export async function handleBusinessConvertJob(
   const sortedCandidates = [...allCandidates].sort((a, b) => {
     const senDiff = seniorityRank(a.seniority) - seniorityRank(b.seniority);
     if (senDiff !== 0) return senDiff;
+    const confDiff = (b.confidence ?? 0) - (a.confidence ?? 0);
+    if (confDiff !== 0) return confDiff;
     return a.positionRank - b.positionRank;
   });
 
@@ -1357,9 +1418,11 @@ export async function handleBusinessConvertJob(
     return;
   }
 
-  // Determine if this should be auto-rejected as NO_DECISION_MAKER (B10)
   const hasRealDecisionMaker = contactEmail !== null && resolvedContact !== null &&
     isValidPersonName(resolvedContact.name, business.name);
+  const contactStatus: ContactResolutionStatus = hasRealDecisionMaker
+    ? (resolvedContact?.linkedinUrl ? 'verified' : 'discovered')
+    : 'unresolved';
   const shouldAutoReject = !hasRealDecisionMaker;
 
   // ── 7. Derive lead source from actual provider ───────────────────────────
@@ -1420,10 +1483,22 @@ export async function handleBusinessConvertJob(
             : Prisma.JsonNull,
           apolloHasEmail,
           apolloHasDirectPhone,
-          metadata: toInputJson({ discoveryRunId }),
-          ...(businessInsights !== null ? { businessInsights } : {}),
-        },
-      }).catch((err: unknown) => {
+              metadata: toInputJson({
+                discoveryRunId,
+                contactStatus,
+                contactProvenance: allCandidates.slice(0, 5).map((c) => ({
+                  name: c.name,
+                  source: c.source,
+                  sourceStage: c.sourceStage ?? null,
+                  confidence: c.confidence ?? null,
+                  matchedSignals: c.matchedSignals ?? [],
+                  hasEmail: c.email !== null,
+                  hasLinkedin: c.linkedinUrl !== null,
+                })),
+              }),
+              ...(businessInsights !== null ? { businessInsights } : {}),
+            },
+          }).catch((err: unknown) => {
         if (
           err instanceof Prisma.PrismaClientKnownRequestError &&
           err.code === 'P2002'
@@ -1509,6 +1584,8 @@ export async function handleBusinessConvertJob(
           metadata: toInputJson({
             candidateCount: allCandidates.length,
             hasGenericEmailOnly: contactEmail === null && businessEmailField !== null,
+            contactStatus,
+            failedHardFilters: ['NO_DECISION_MAKER'],
           }),
         },
       });
@@ -1531,7 +1608,20 @@ export async function handleBusinessConvertJob(
           : Prisma.JsonNull,
         apolloHasEmail,
         apolloHasDirectPhone,
-        metadata: toInputJson({ contactSource: resolvedContact?.source ?? 'unknown', discoveryRunId }),
+        metadata: toInputJson({
+          contactSource: resolvedContact?.source ?? 'unknown',
+          contactStatus,
+          contactProvenance: allCandidates.slice(0, 5).map((c) => ({
+            name: c.name,
+            source: c.source,
+            sourceStage: c.sourceStage ?? null,
+            confidence: c.confidence ?? null,
+            matchedSignals: c.matchedSignals ?? [],
+            hasEmail: c.email !== null,
+            hasLinkedin: c.linkedinUrl !== null,
+          })),
+          discoveryRunId,
+        }),
         ...(businessInsights !== null ? { businessInsights } : {}),
       },
     });

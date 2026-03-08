@@ -910,6 +910,11 @@ export default function DiscoverPage() {
                       {batch.errorMessages[0]}
                     </p>
                   ) : null}
+                  {batch.overallStatus === 'PARTIAL' ? (
+                    <p className="mt-2 rounded bg-yellow-500/10 px-2 py-1 text-[10px] text-yellow-300">
+                      Partial completion: {batch.totalFailed} item{batch.totalFailed === 1 ? '' : 's'} failed while other items succeeded.
+                    </p>
+                  ) : null}
                 </Link>
               );
             })}

@@ -496,7 +496,14 @@ export default function LeadDetailPage() {
   const [businessData, setBusinessData] = useState<BusinessScrapeData | null>(null);
   const [businessId, setBusinessId] = useState<string | null>(null);
   const [teamMembers, setTeamMembers] = useState<Array<{ id: string; fullName: string; jobTitle: string | null; email: string | null; linkedinUrl: string | null; source: string | null }>>([]);
-  const [instagramPosts, setInstagramPosts] = useState<Array<{ caption: string; likes: number; comments: number; timestamp: string; url: string | null }>>([]);
+  const [instagramPosts, setInstagramPosts] = useState<Array<{
+    caption: string;
+    likes: number;
+    comments: number;
+    timestamp: string;
+    url: string | null;
+    thumbnailUrl: string | null;
+  }>>([]);
   const [leadPhoneSource, setLeadPhoneSource] = useState<string | null>(null);
   const [leadBusinessEmail, setLeadBusinessEmail] = useState<string | null>(null);
   useEffect(() => {
@@ -593,10 +600,17 @@ export default function LeadDetailPage() {
             .slice(0, 6)
             .map((p) => ({
               caption: typeof p.caption === 'string' ? p.caption : '',
-              likes: typeof p.likes === 'number' ? p.likes : (typeof p.likesCount === 'number' ? p.likesCount : 0),
-              comments: typeof p.comments === 'number' ? p.comments : (typeof p.commentsCount === 'number' ? p.commentsCount : 0),
+              likes: typeof p.likeCount === 'number'
+                ? p.likeCount
+                : (typeof p.likes === 'number' ? p.likes : (typeof p.likesCount === 'number' ? p.likesCount : 0)),
+              comments: typeof p.commentCount === 'number'
+                ? p.commentCount
+                : (typeof p.comments === 'number' ? p.comments : (typeof p.commentsCount === 'number' ? p.commentsCount : 0)),
               timestamp: typeof p.timestamp === 'string' ? p.timestamp : (typeof p.takenAtTimestamp === 'string' ? p.takenAtTimestamp : ''),
               url: typeof p.url === 'string' ? p.url : (typeof p.shortCode === 'string' ? `https://instagram.com/p/${p.shortCode}` : null),
+              thumbnailUrl: typeof p.thumbnailUrl === 'string'
+                ? p.thumbnailUrl
+                : (typeof p.displayUrl === 'string' ? p.displayUrl : null),
             }));
           setInstagramPosts(posts);
         }
@@ -920,7 +934,11 @@ export default function LeadDetailPage() {
         <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
           <div className="flex items-center gap-3 text-muted-foreground/60">
             <AlertCircle className="h-5 w-5" />
-            <p className="text-sm">No enrichment data available yet. This lead may still be processing.</p>
+            <p className="text-sm">
+              {l.status === 'enriched' || l.status === 'scored' || l.status === 'qualified' || l.status === 'drafted' || l.status === 'messaged' || l.status === 'replied'
+                ? 'Enrichment completed, but no normalized enrichment fields are available for this lead yet.'
+                : 'No enrichment data available yet. This lead may still be processing.'}
+            </p>
           </div>
         </div>
       ) : null}
@@ -1007,16 +1025,27 @@ export default function LeadDetailPage() {
           <div className="space-y-3">
             {instagramPosts.map((post, i) => (
               <div key={i} className="rounded-lg border border-border/20 bg-zbooni-dark/30 px-4 py-3">
-                <p className="text-sm text-muted-foreground/80 line-clamp-3">{post.caption || 'No caption'}</p>
-                <div className="mt-2 flex items-center gap-4 text-[11px] text-muted-foreground/50">
-                  <span>{post.likes.toLocaleString()} likes</span>
-                  <span>{post.comments.toLocaleString()} comments</span>
-                  {post.timestamp ? <span>{new Date(post.timestamp).toLocaleDateString()}</span> : null}
-                  {post.url ? (
-                    <a href={post.url} target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 text-pink-400 hover:text-pink-300 transition-colors">
-                      View <ExternalLink className="h-2.5 w-2.5" />
-                    </a>
+                <div className="flex gap-3">
+                  {post.thumbnailUrl ? (
+                    <img
+                      src={post.thumbnailUrl}
+                      alt="Instagram post preview"
+                      className="h-20 w-20 shrink-0 rounded-md border border-border/30 object-cover"
+                    />
                   ) : null}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-muted-foreground/80 line-clamp-3">{post.caption || 'No caption'}</p>
+                    <div className="mt-2 flex items-center gap-4 text-[11px] text-muted-foreground/50">
+                      <span>{post.likes.toLocaleString()} likes</span>
+                      <span>{post.comments.toLocaleString()} comments</span>
+                      {post.timestamp ? <span>{new Date(post.timestamp).toLocaleDateString()}</span> : null}
+                      {post.url ? (
+                        <a href={post.url} target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 text-pink-400 hover:text-pink-300 transition-colors">
+                          View <ExternalLink className="h-2.5 w-2.5" />
+                        </a>
+                      ) : null}
+                    </div>
+                  </div>
                 </div>
               </div>
             ))}
