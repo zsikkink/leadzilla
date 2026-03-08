@@ -10,6 +10,7 @@ import {
   ListDiscoveryRecordsResponseSchema,
   ListDiscoveryRunsQuerySchema,
   ListDiscoveryRunsResponseSchema,
+  normalizeDiscoveryCountryCode,
 } from '@lead-flood/contracts';
 
 import { z } from 'zod';
@@ -135,6 +136,29 @@ function sendValidationError(reply: FastifyReply, requestId: string, message: st
   });
 }
 
+function normalizeDiscoveryRunBody(body: unknown): unknown {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return body;
+  }
+
+  const payload = body as Record<string, unknown>;
+  if (!Array.isArray(payload.countries)) {
+    return body;
+  }
+
+  const normalizedCountries = payload.countries.map((country) => {
+    if (typeof country !== 'string') {
+      return country;
+    }
+    return normalizeDiscoveryCountryCode(country) ?? country;
+  });
+
+  return {
+    ...payload,
+    countries: normalizedCountries,
+  };
+}
+
 function handleModuleError(error: unknown, request: FastifyRequest, reply: FastifyReply): boolean {
   if (error instanceof DiscoveryRunNotFoundError) {
     reply.status(404).send(
@@ -173,7 +197,8 @@ export function registerDiscoveryRoutes(
   });
 
   app.post('/v1/discovery/runs', async (request, reply) => {
-    const parsed = CreateDiscoveryRunRequestSchema.safeParse(request.body);
+    const normalizedBody = normalizeDiscoveryRunBody(request.body);
+    const parsed = CreateDiscoveryRunRequestSchema.safeParse(normalizedBody);
     if (!parsed.success) {
       const details = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
       return sendValidationError(reply, request.id, `Invalid discovery run payload: ${details}`);

@@ -1,3 +1,9 @@
+import {
+  normalizeDiscoveryCountryCode,
+  normalizeDiscoveryCountryCodes,
+  type DiscoveryCountryCodeContract,
+} from '@lead-flood/contracts';
+
 /** ISO 3166-1 alpha-2 → full country name for MENA region + common codes */
 const COUNTRY_NAMES: Record<string, string> = {
   // MENA core (18 countries)
@@ -36,5 +42,21 @@ const COUNTRY_NAMES: Record<string, string> = {
  */
 export function countryName(code: string | null | undefined): string {
   if (!code) return '';
+  const normalizedCode = normalizeDiscoveryCountryCode(code);
+  if (normalizedCode) {
+    return COUNTRY_NAMES[normalizedCode] ?? normalizedCode;
+  }
   return COUNTRY_NAMES[code.toUpperCase()] ?? code;
+}
+
+export function toDiscoveryCountryCode(
+  value: string | null | undefined,
+): DiscoveryCountryCodeContract | null {
+  return normalizeDiscoveryCountryCode(value);
+}
+
+export function toDiscoveryCountryCodes(
+  values: readonly (string | null | undefined)[],
+): DiscoveryCountryCodeContract[] {
+  return normalizeDiscoveryCountryCodes(values);
 }

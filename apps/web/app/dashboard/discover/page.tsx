@@ -1,6 +1,6 @@
 'use client';
 
-import type { DiscoveryCountryCodeContract, IcpProfileResponse, PipelineRunStatus } from '@lead-flood/contracts';
+import type { IcpProfileResponse, PipelineRunStatus } from '@lead-flood/contracts';
 import {
   AlertCircle,
   CheckCircle2,
@@ -22,7 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
-import { countryName } from '../../../src/lib/countries.js';
+import { countryName, toDiscoveryCountryCodes } from '../../../src/lib/countries.js';
 import { getSupabaseBrowserClient } from '../../../src/lib/supabase-client.js';
 import { cn } from '../../../src/lib/utils.js';
 
@@ -378,14 +378,14 @@ export default function DiscoverPage() {
   // Derive countries from selected ICPs
   const derivedCountries = useMemo(() => {
     if (!icps.data) return [];
-    const countries = new Set<string>();
+    const targetCountries: string[] = [];
     for (const id of selectedIcpIds) {
       const icp = icps.data.items.find((i) => i.id === id);
       if (icp) {
-        for (const c of icp.targetCountries) countries.add(c);
+        targetCountries.push(...icp.targetCountries);
       }
     }
-    return Array.from(countries).sort();
+    return toDiscoveryCountryCodes(targetCountries).sort((a, b) => a.localeCompare(b));
   }, [selectedIcpIds, icps.data]);
 
   // Available cities based on derived countries
@@ -446,7 +446,7 @@ export default function DiscoverPage() {
       // Single API call with all selected ICPs — limit is split server-side
       await apiClient.createDiscoveryRun({
         icpProfileIds: Array.from(selectedIcpIds),
-        countries: derivedCountries as DiscoveryCountryCodeContract[],
+        countries: derivedCountries,
         ...(cities ? { cities } : {}),
         includeWebsiteAnalysis,
         includeSocialMediaAnalysis,

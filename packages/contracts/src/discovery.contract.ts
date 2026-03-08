@@ -9,6 +9,74 @@ export const DiscoveryCountryCodeSchema = z.enum([
 ]);
 
 export type DiscoveryCountryCodeContract = z.infer<typeof DiscoveryCountryCodeSchema>;
+export const DiscoveryCountryCodes = DiscoveryCountryCodeSchema.options;
+
+const DISCOVERY_COUNTRY_CODE_SET = new Set<DiscoveryCountryCodeContract>(DiscoveryCountryCodes);
+
+const DISCOVERY_COUNTRY_ALIAS_TO_CODE: Record<string, DiscoveryCountryCodeContract> = {
+  // Common aliases
+  uae: 'AE',
+  ksa: 'SA',
+  // Canonical names
+  jordan: 'JO',
+  'saudi arabia': 'SA',
+  'united arab emirates': 'AE',
+  egypt: 'EG',
+  qatar: 'QA',
+  bahrain: 'BH',
+  kuwait: 'KW',
+  oman: 'OM',
+  lebanon: 'LB',
+  iraq: 'IQ',
+  morocco: 'MA',
+  tunisia: 'TN',
+  algeria: 'DZ',
+  libya: 'LY',
+  yemen: 'YE',
+  syria: 'SY',
+  palestine: 'PS',
+  sudan: 'SD',
+  // Common alternates
+  'palestinian territories': 'PS',
+};
+
+function normalizeCountryAliasKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+}
+
+export function normalizeDiscoveryCountryCode(
+  value: string | null | undefined,
+): DiscoveryCountryCodeContract | null {
+  if (!value) {
+    return null;
+  }
+
+  const upper = value.trim().toUpperCase();
+  if (DISCOVERY_COUNTRY_CODE_SET.has(upper as DiscoveryCountryCodeContract)) {
+    return upper as DiscoveryCountryCodeContract;
+  }
+
+  return DISCOVERY_COUNTRY_ALIAS_TO_CODE[normalizeCountryAliasKey(value)] ?? null;
+}
+
+export function normalizeDiscoveryCountryCodes(
+  values: readonly (string | null | undefined)[],
+): DiscoveryCountryCodeContract[] {
+  const result: DiscoveryCountryCodeContract[] = [];
+  const seen = new Set<DiscoveryCountryCodeContract>();
+
+  for (const value of values) {
+    const normalized = normalizeDiscoveryCountryCode(value);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    result.push(normalized);
+  }
+
+  return result;
+}
 
 export const DiscoveryProviderSchema = z.enum([
   'BRAVE_SEARCH',
