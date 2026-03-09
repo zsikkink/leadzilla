@@ -181,7 +181,7 @@ async function checkStaleJobs(
 ): Promise<void> {
   try {
     const rows = await prisma.$queryRawUnsafe<StaleJobRow[]>(
-      `SELECT name, count(*) FROM pgboss.job WHERE state = 'active' AND startedon < NOW() - INTERVAL '${staleMinutes} minutes' GROUP BY name`,
+      `SELECT name, count(*) FROM pgboss.job WHERE state = 'active' AND started_on < NOW() - INTERVAL '${staleMinutes} minutes' GROUP BY name`,
     );
 
     let hasWarning = false;

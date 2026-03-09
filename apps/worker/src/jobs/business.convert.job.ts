@@ -1,4 +1,11 @@
 import { Prisma, prisma, toInputJson } from '@lead-flood/db';
+import type {
+  ContactRecoveryAttempt,
+  ContactRecoveryCandidate,
+  ContactRecoveryOutcome,
+  ContactRecoverySnapshot,
+  ContactRecoveryTelemetry,
+} from '@lead-flood/contracts';
 import type { Job, SendOptions } from 'pg-boss';
 
 import { RetryableError } from '../errors.js';
@@ -73,6 +80,51 @@ interface HunterContact {
 }
 
 type ContactResolutionStatus = 'verified' | 'discovered' | 'unresolved';
+type ContactVerificationVerdict = 'verified' | 'not_verified' | 'inconclusive' | 'skipped';
+type ContactDiscoveryQueryFamily =
+  | 'V1_linkedin_exact'
+  | 'V2_company_domain_exact'
+  | 'V3_public_web_exact'
+  | 'V4_exact_without_title'
+  | 'D1_linkedin_roles'
+  | 'D2_company_team_pages'
+  | 'D3_company_about_pages'
+  | 'D4_press_news_mentions'
+  | 'D5_public_web_role_queries'
+  | 'D6_locality_first_queries';
+
+export interface RecoveryEvidenceStrength {
+  evidenceScore: number;
+  candidateCount: number;
+  linkedinCandidateCount: number;
+  sendableCandidateCount: number;
+  namedCandidateCount: number;
+}
+
+interface ContactRecoveryTelemetryState {
+  cseVerifyAttempted: boolean;
+  cseVerifySucceeded: boolean;
+  cseDiscoverAttempted: boolean;
+  cseDiscoverSucceeded: boolean;
+  cseRawResults: number;
+  cseValidProfiles: number;
+  cseCandidatesAdded: number;
+  cseCandidatesValidated: number;
+  cseEmailsInferred: number;
+  topSourceFamily: 'linkedin' | 'company_page' | 'public_web' | 'mixed' | 'unknown';
+  finalOutcome: ContactRecoveryOutcome;
+  verificationVerdict: ContactVerificationVerdict;
+  supportingUrls: string[];
+  diagnostics: Array<{
+    stage: string;
+    sourceFamily: 'linkedin' | 'company_page' | 'public_web' | 'mixed' | 'unknown';
+    queryFamily: ContactDiscoveryQueryFamily;
+    rawResultCount: number;
+    promotedCount: number;
+    verdict: ContactVerificationVerdict;
+  }>;
+  topQueryFamily: ContactDiscoveryQueryFamily | null;
+}
 
 type HunterDomainSearchResult =
   | { status: 'success'; contacts: HunterContact[] }
@@ -209,23 +261,73 @@ export interface BusinessConvertJobDependencies {
   } | undefined;
   openAiAdapter?: OpenAiInsightGenerator | undefined;
   linkedInSearchAdapter?: {
-    searchCompanyPeople(
-      companyName: string,
-      cityOrCountry?: string | null,
-      maxResults?: number,
-    ): Promise<
-      | { status: 'success'; data: Array<{ name: string; title: string | null; linkedinUrl: string | null }> }
+    searchCompanyPeople(input: {
+      companyName: string;
+      companyDomain?: string | null | undefined;
+      cityOrCountry?: string | null | undefined;
+      maxResults?: number | undefined;
+    }): Promise<
+      | {
+          status: 'success';
+          data: Array<{
+            name: string;
+            title: string | null;
+            linkedinUrl: string | null;
+            sourceType: string;
+            sourceUrl: string;
+            sourceDomain: string | null;
+            companyHint: string | null;
+            matchSignals: string[];
+            relevanceScore: number;
+          }>;
+          diagnostics: Array<{
+            stage: string;
+            query: string;
+            sourceFamily: 'linkedin' | 'company_page' | 'public_web' | 'mixed' | 'unknown';
+            queryFamily: ContactDiscoveryQueryFamily;
+            rawResultCount: number;
+            promotedCount: number;
+            verdict: ContactVerificationVerdict;
+          }>;
+          topSourceFamily: 'linkedin' | 'company_page' | 'public_web' | 'mixed' | 'unknown';
+          topQueryFamily: ContactDiscoveryQueryFamily | null;
+        }
       | { status: 'retryable_error'; failure: { message: string } }
       | { status: 'terminal_error'; failure: { message: string } }
     >;
     searchPersonVerification(input: {
       name: string;
       companyName: string;
-      cityOrCountry?: string | null;
-      titleOrFunction?: string | null;
-      maxResults?: number;
+      companyDomain?: string | null | undefined;
+      cityOrCountry?: string | null | undefined;
+      titleOrFunction?: string | null | undefined;
+      maxResults?: number | undefined;
     }): Promise<
-      | { status: 'success'; data: Array<{ name: string; title: string | null; linkedinUrl: string | null }> }
+      | {
+          status: 'success';
+          data: Array<{
+            name: string;
+            title: string | null;
+            linkedinUrl: string | null;
+            sourceType: string;
+            sourceUrl: string;
+            sourceDomain: string | null;
+            companyHint: string | null;
+            matchSignals: string[];
+            relevanceScore: number;
+          }>;
+          diagnostics: Array<{
+            stage: string;
+            query: string;
+            sourceFamily: 'linkedin' | 'company_page' | 'public_web' | 'mixed' | 'unknown';
+            queryFamily: ContactDiscoveryQueryFamily;
+            rawResultCount: number;
+            promotedCount: number;
+            verdict: ContactVerificationVerdict;
+          }>;
+          topSourceFamily: 'linkedin' | 'company_page' | 'public_web' | 'mixed' | 'unknown';
+          topQueryFamily: ContactDiscoveryQueryFamily | null;
+        }
       | { status: 'retryable_error'; failure: { message: string } }
       | { status: 'terminal_error'; failure: { message: string } }
     >;
@@ -254,7 +356,7 @@ function isCacheValid(scrapedAt: Date | null): boolean {
 }
 
 function scoreCandidateConfidence(input: {
-  source: 'website_scrape' | 'instagram' | 'hunter' | 'apollo';
+  source: 'website_scrape' | 'instagram' | 'hunter' | 'apollo' | 'google_custom_search';
   hasEmail: boolean;
   hasLinkedin: boolean;
   seniority: 'executive' | 'director' | 'manager' | 'other';
@@ -264,15 +366,93 @@ function scoreCandidateConfidence(input: {
   if (input.hasLinkedin) score += 0.2;
   if (input.source === 'website_scrape') score += 0.1;
   if (input.source === 'apollo') score += 0.05;
+  if (input.source === 'google_custom_search') score += 0.08;
   if (input.seniority === 'executive') score += 0.1;
   if (input.seniority === 'director') score += 0.05;
   return Math.max(0, Math.min(1, Number(score.toFixed(3))));
+}
+
+export function calculateRecoveryEvidenceStrength(input: {
+  evidenceScore: number;
+  topCandidates: Array<{
+    name: string;
+    linkedinUrl: string | null;
+    email: string | null;
+  }>;
+}): RecoveryEvidenceStrength {
+  return {
+    evidenceScore: Number(input.evidenceScore.toFixed(3)),
+    candidateCount: input.topCandidates.length,
+    linkedinCandidateCount: input.topCandidates.filter((candidate) => candidate.linkedinUrl !== null).length,
+    sendableCandidateCount: input.topCandidates.filter((candidate) => candidate.email !== null).length,
+    namedCandidateCount: input.topCandidates.filter((candidate) => candidate.name.trim().length > 0).length,
+  };
+}
+
+export function hasMaterialRecoveryEvidenceImprovement(
+  previous: RecoveryEvidenceStrength | null,
+  next: RecoveryEvidenceStrength,
+): boolean {
+  if (!previous) {
+    return true;
+  }
+
+  return (
+    next.sendableCandidateCount > previous.sendableCandidateCount ||
+    next.linkedinCandidateCount > previous.linkedinCandidateCount ||
+    next.namedCandidateCount > previous.namedCandidateCount ||
+    next.candidateCount > previous.candidateCount ||
+    next.evidenceScore - previous.evidenceScore >= 0.05
+  );
 }
 
 function isGenericEmail(email: string): boolean {
   const prefix = email.split('@')[0]?.toLowerCase();
   if (!prefix) return true;
   return GENERIC_EMAIL_PREFIXES.has(prefix);
+}
+
+const PLACEHOLDER_PERSON_NAMES = new Set([
+  'john doe',
+  'jane doe',
+  'test user',
+  'test contact',
+  'example person',
+]);
+
+const WEBSITE_CHROME_PHRASES = [
+  'contact us',
+  'about us',
+  'our team',
+  'our services',
+  'book now',
+  'learn more',
+  'limited founder memberships available',
+];
+
+const BLOCKED_PERSONAL_EMAIL_DOMAINS = [
+  'wixpress.com',
+  'sentry.wixpress.com',
+  'sentry-next.wixpress.com',
+  'example.com',
+  'mysite.com',
+  'doe.com',
+];
+
+const BLOCKED_PERSONAL_EMAIL_PREFIXES = ['example', 'test', 'demo', 'sample'];
+
+export function isJunkPersonalEmail(email: string): boolean {
+  const normalized = email.trim().toLowerCase();
+  const [prefix, domain] = normalized.split('@');
+  if (!prefix || !domain) {
+    return true;
+  }
+
+  if (BLOCKED_PERSONAL_EMAIL_PREFIXES.some((value) => prefix === value || prefix.startsWith(`${value}+`))) {
+    return true;
+  }
+
+  return BLOCKED_PERSONAL_EMAIL_DOMAINS.some((blocked) => domain === blocked || domain.endsWith(`.${blocked}`));
 }
 
 /** Pages that indicate a person-specific context for phone numbers. */
@@ -472,20 +652,23 @@ const ROLE_WORDS = new Set([
  * Validate that a name represents a real person, not a company name or role.
  * Returns true if the name passes validation (is likely a real person).
  */
-function isValidPersonName(name: string, businessName: string): boolean {
+export function isValidPersonName(name: string, businessName: string): boolean {
   const trimmed = name.trim();
+  const lowerTrimmed = trimmed.toLowerCase();
 
   // Length checks
   if (trimmed.length < 2 || trimmed.length > 50) return false;
 
   // Reject placeholder names
-  if (trimmed.toLowerCase() === 'unknown contact') return false;
+  if (lowerTrimmed === 'unknown contact' || PLACEHOLDER_PERSON_NAMES.has(lowerTrimmed)) return false;
+
+  if (WEBSITE_CHROME_PHRASES.some((phrase) => lowerTrimmed.includes(phrase))) return false;
 
   // Just numbers or special characters
   if (/^[\d\W]+$/.test(trimmed)) return false;
 
   // Matches business name (case-insensitive)
-  if (trimmed.toLowerCase() === businessName.toLowerCase()) return false;
+  if (lowerTrimmed === businessName.toLowerCase()) return false;
 
   // All uppercase (company names are often ALL CAPS, e.g., "JOVIAL EVENTS")
   // Allow 2-3 letter names that might be initials
@@ -503,6 +686,10 @@ function isValidPersonName(name: string, businessName: string): boolean {
   if (lowerWords.every((w) => ROLE_WORDS.has(w) || ROLE_WORDS.has(w.replace(/s$/, '')))) return false;
 
   return true;
+}
+
+function dedupeUrls(urls: readonly string[]): string[] {
+  return [...new Set(urls.filter((value) => value.length > 0))];
 }
 
 async function persistCostEvents(
@@ -535,6 +722,144 @@ function resolveDiscoveryProvider(
     }
   }
   return 'SERPAPI';
+}
+
+function toRecoveryCandidate(input: {
+  name: string;
+  title: string | null;
+  source: string;
+  sourceStage?: string | undefined;
+  seniority: string;
+  confidence?: number | undefined;
+  linkedinUrl: string | null;
+  email: string | null;
+  phone: string | null;
+  matchedSignals?: string[] | undefined;
+  verificationVerdict?: ContactVerificationVerdict | undefined;
+  supportingUrls?: string[] | undefined;
+}): ContactRecoveryCandidate {
+  const evidenceScore = calculateRecoveryEvidenceStrength({
+    evidenceScore: input.confidence ?? 0.35,
+    topCandidates: [{ name: input.name, linkedinUrl: input.linkedinUrl, email: input.email }],
+  }).evidenceScore;
+
+  return {
+    name: input.name,
+    title: input.title,
+    source: input.source,
+    sourceStage: input.sourceStage ?? null,
+    seniority: input.seniority,
+    confidence: input.confidence ?? null,
+    linkedinUrl: input.linkedinUrl,
+    email: input.email,
+    phone: input.phone,
+    matchedSignals: input.matchedSignals ?? [],
+    evidenceScore,
+    isSendable: input.email !== null && !isGenericEmail(input.email),
+    verificationVerdict: input.verificationVerdict ?? 'skipped',
+    supportingUrls: dedupeUrls(input.supportingUrls ?? []),
+  };
+}
+
+function extractStrengthFromSnapshot(snapshot: ContactRecoverySnapshot): RecoveryEvidenceStrength {
+  return calculateRecoveryEvidenceStrength({
+    evidenceScore: snapshot.topCandidates[0]?.evidenceScore ?? 0,
+    topCandidates: snapshot.topCandidates,
+  });
+}
+
+function buildContactRecoverySnapshot(input: {
+  businessId: string;
+  domain: string;
+  locality: string | null;
+  businessInsights: string | null;
+  genericBusinessEmail: string | null;
+  telemetry: ContactRecoveryTelemetry;
+  attempts: ContactRecoveryAttempt[];
+  topCandidates: ContactRecoveryCandidate[];
+  websiteIntelligence: unknown;
+  instagramIntelligence: unknown;
+}): ContactRecoverySnapshot {
+  return {
+    businessId: input.businessId,
+    domain: input.domain,
+    locality: input.locality,
+    generatedAt: new Date().toISOString(),
+    businessInsights: input.businessInsights,
+    genericBusinessEmail: input.genericBusinessEmail,
+    telemetry: input.telemetry,
+    attempts: input.attempts,
+    topCandidates: input.topCandidates,
+    websiteIntelligence: input.websiteIntelligence,
+    instagramIntelligence: input.instagramIntelligence,
+  };
+}
+
+async function upsertContactRecoveryItem(input: {
+  businessId: string;
+  icpProfileId: string;
+  discoveryRunId: string;
+  reason: 'NO_CONTACTS_FOUND' | 'NO_EMAIL';
+  snapshot: ContactRecoverySnapshot;
+}): Promise<void> {
+  const nextStrength = extractStrengthFromSnapshot(input.snapshot);
+  const existing = await prisma.contactRecoveryItem.findUnique({
+    where: {
+      businessId_icpProfileId: {
+        businessId: input.businessId,
+        icpProfileId: input.icpProfileId,
+      },
+    },
+    select: {
+      id: true,
+      status: true,
+      recoverySnapshot: true,
+    },
+  });
+
+  const previousSnapshot =
+    existing?.recoverySnapshot && typeof existing.recoverySnapshot === 'object' && !Array.isArray(existing.recoverySnapshot)
+      ? existing.recoverySnapshot as ContactRecoverySnapshot
+      : null;
+  const shouldReopen = existing?.status === 'REJECTED'
+    ? hasMaterialRecoveryEvidenceImprovement(
+        previousSnapshot ? extractStrengthFromSnapshot(previousSnapshot) : null,
+        nextStrength,
+      )
+    : false;
+
+  if (existing?.status === 'REJECTED' && !shouldReopen) {
+    return;
+  }
+
+  await prisma.contactRecoveryItem.upsert({
+    where: {
+      businessId_icpProfileId: {
+        businessId: input.businessId,
+        icpProfileId: input.icpProfileId,
+      },
+    },
+    create: {
+      businessId: input.businessId,
+      icpProfileId: input.icpProfileId,
+      discoveryRunId: input.discoveryRunId,
+      status: 'OPEN',
+      reason: input.reason,
+      evidenceScore: nextStrength.evidenceScore,
+      candidateCount: nextStrength.candidateCount,
+      recoverySnapshot: toInputJson(input.snapshot),
+    },
+    update: {
+      discoveryRunId: input.discoveryRunId,
+      status: 'OPEN',
+      reason: input.reason,
+      evidenceScore: nextStrength.evidenceScore,
+      candidateCount: nextStrength.candidateCount,
+      recoverySnapshot: toInputJson(input.snapshot),
+      rejectedBy: null,
+      rejectedAt: null,
+    },
+  });
 }
 
 // ── Handler ─────────────────────────────────────────────────────────────
@@ -838,10 +1163,12 @@ export async function handleBusinessConvertJob(
     linkedinUrl: string | null;
     seniority: 'executive' | 'director' | 'manager' | 'other';
     positionRank: number;
-    source: 'website_scrape' | 'instagram' | 'hunter' | 'apollo';
+    source: 'website_scrape' | 'instagram' | 'hunter' | 'apollo' | 'google_custom_search';
     sourceStage?: 'V1' | 'V2' | 'D1' | 'D2' | undefined;
     matchedSignals?: string[] | undefined;
     confidence?: number | undefined;
+    verificationVerdict?: ContactVerificationVerdict | undefined;
+    supportingUrls?: string[] | undefined;
     rawJson: unknown;
   }
 
@@ -849,13 +1176,31 @@ export async function handleBusinessConvertJob(
   let apolloContactJson: unknown = null;
   let hunterContactJson: unknown = null;
   const costEvents: Array<{ provider: 'APOLLO' | 'HUNTER' | 'SERPAPI' | 'GOOGLE_CUSTOM_SEARCH'; costCents: number; apiCallType: string }> = [];
+  const recoveryAttempts: ContactRecoveryAttempt[] = [];
+  const recoveryTelemetry: ContactRecoveryTelemetryState = {
+    cseVerifyAttempted: false,
+    cseVerifySucceeded: false,
+    cseDiscoverAttempted: false,
+    cseDiscoverSucceeded: false,
+    cseRawResults: 0,
+    cseValidProfiles: 0,
+    cseCandidatesAdded: 0,
+    cseCandidatesValidated: 0,
+    cseEmailsInferred: 0,
+    topSourceFamily: 'unknown',
+    finalOutcome: 'no_contact_terminal',
+    verificationVerdict: 'skipped',
+    supportingUrls: [],
+    diagnostics: [],
+    topQueryFamily: null,
+  };
   const estimatedEmployees = websiteScrapeData?.businessSignals?.estimatedEmployeeCount ?? null;
 
   // 5a. Website scrape decision makers (max 5, already ranked by positionRank)
   if (websiteScrapeData?.decisionMakers && websiteScrapeData.decisionMakers.length > 0) {
     for (const dm of websiteScrapeData.decisionMakers) {
       // Filter generic emails
-      const email = dm.email && !isGenericEmail(dm.email) ? dm.email : null;
+      const email = dm.email && !isGenericEmail(dm.email) && !isJunkPersonalEmail(dm.email) ? dm.email : null;
       // Filter generic phones using context-aware heuristic
       const phone = dm.phone && !isGenericPhone(dm.phone, true, estimatedEmployees, dm.source)
         ? dm.phone : null;
@@ -887,7 +1232,7 @@ export async function handleBusinessConvertJob(
   }
 
   // 5b. Instagram business email as a contact
-  if (instagramData?.businessEmail && !isGenericEmail(instagramData.businessEmail)) {
+  if (instagramData?.businessEmail && !isGenericEmail(instagramData.businessEmail) && !isJunkPersonalEmail(instagramData.businessEmail)) {
     let igEmailValid = true;
     if (deps.smtpVerifier?.isConfigured) {
       const verification = await deps.smtpVerifier.verify(instagramData.businessEmail);
@@ -918,7 +1263,7 @@ export async function handleBusinessConvertJob(
     }));
 
     for (const { email: rawEmail } of websiteScrapeData.contactInfo.emails) {
-      if (isGenericEmail(rawEmail)) continue;
+      if (isGenericEmail(rawEmail) || isJunkPersonalEmail(rawEmail)) continue;
       if (assignedEmails.has(rawEmail.toLowerCase())) continue;
 
       const match = matchEmailToDecisionMaker(rawEmail, dms);
@@ -969,7 +1314,7 @@ export async function handleBusinessConvertJob(
       // Also include scraped emails matched to names from the page
       if (websiteScrapeData.contactInfo?.emails) {
         for (const { email: rawEmail } of websiteScrapeData.contactInfo.emails) {
-          if (isGenericEmail(rawEmail)) continue;
+          if (isGenericEmail(rawEmail) || isJunkPersonalEmail(rawEmail)) continue;
           const dms = websiteScrapeData.decisionMakers.map((dm) => ({
             name: dm.name,
             title: dm.title,
@@ -1034,7 +1379,7 @@ export async function handleBusinessConvertJob(
       if (hunterResult.status === 'success' && hunterResult.contacts.length > 0) {
         hunterContactJson = hunterResult.contacts;
         for (const hc of hunterResult.contacts) {
-          if (isGenericEmail(hc.email)) continue;
+          if (isGenericEmail(hc.email) || isJunkPersonalEmail(hc.email)) continue;
 
           // Skip emails Hunter marks as invalid
           if (hc.verification === 'invalid') {
@@ -1088,6 +1433,14 @@ export async function handleBusinessConvertJob(
         { ...logCtx, hunterStatus: hunterResult.status, contactsFound: hunterResult.status === 'success' ? hunterResult.contacts.length : 0 },
         'Hunter domain search completed (fallback)',
       );
+      recoveryAttempts.push({
+        stage: 'contact_recovery',
+        provider: 'HUNTER',
+        mode: 'discover',
+        status: hunterResult.status,
+        resultCount: hunterResult.status === 'success' ? hunterResult.contacts.length : 0,
+        notes: [],
+      });
     }
 
     // Apollo (more expensive — only if pre-screen says email exists + within budget)
@@ -1100,7 +1453,7 @@ export async function handleBusinessConvertJob(
       const apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
       if (apolloResult.status === 'success' && apolloResult.contacts.length > 0) {
         for (const ac of apolloResult.contacts) {
-          if (isGenericEmail(ac.email)) continue;
+          if (isGenericEmail(ac.email) || isJunkPersonalEmail(ac.email)) continue;
 
           // SMTP verify Apollo email if verifier is available
           if (deps.smtpVerifier?.isConfigured) {
@@ -1137,6 +1490,14 @@ export async function handleBusinessConvertJob(
         { ...logCtx, apolloStatus: apolloResult.status, contactsFound: apolloResult.status === 'success' ? apolloResult.contacts.length : 0 },
         'Apollo contact search completed (fallback)',
       );
+      recoveryAttempts.push({
+        stage: 'contact_recovery',
+        provider: 'APOLLO',
+        mode: 'discover',
+        status: apolloResult.status,
+        resultCount: apolloResult.status === 'success' ? apolloResult.contacts.length : 0,
+        notes: [],
+      });
     }
   } else {
     logger.info(
@@ -1166,7 +1527,7 @@ export async function handleBusinessConvertJob(
         );
 
         for (const llmC of llmContacts) {
-          const llmEmail = llmC.email && !isGenericEmail(llmC.email) ? llmC.email : null;
+          const llmEmail = llmC.email && !isGenericEmail(llmC.email) && !isJunkPersonalEmail(llmC.email) ? llmC.email : null;
           allCandidates.push({
             name: llmC.name,
             title: llmC.title,
@@ -1246,40 +1607,127 @@ export async function handleBusinessConvertJob(
       .slice(0, 3);
 
     if (candidatesWithNames.length > 0) {
+      recoveryTelemetry.cseVerifyAttempted = true;
+      let verifyMatches = 0;
       for (const candidate of candidatesWithNames) {
         const verifyResult = await deps.linkedInSearchAdapter.searchPersonVerification({
           name: candidate.name,
           companyName: business.name,
+          companyDomain: domain,
           cityOrCountry: locality,
           titleOrFunction: candidate.title,
           maxResults: 3,
         });
         costEvents.push({ provider: 'GOOGLE_CUSTOM_SEARCH', costCents: 0, apiCallType: 'linkedin_verify' });
-        if (verifyResult.status === 'success' && verifyResult.data.length > 0) {
-          const exact = verifyResult.data.find((p) =>
+        if (verifyResult.status === 'success') {
+          recoveryTelemetry.cseRawResults += verifyResult.diagnostics.reduce(
+            (sum, diagnostic) => sum + diagnostic.rawResultCount,
+            0,
+          );
+          recoveryTelemetry.diagnostics.push(
+            ...verifyResult.diagnostics.map((diagnostic) => ({
+              stage: diagnostic.stage,
+              sourceFamily: diagnostic.sourceFamily,
+              queryFamily: diagnostic.queryFamily,
+              rawResultCount: diagnostic.rawResultCount,
+              promotedCount: diagnostic.promotedCount,
+              verdict: diagnostic.verdict,
+            })),
+          );
+          const validProfiles = verifyResult.data.filter((profile) => isValidPersonName(profile.name, business.name));
+          recoveryTelemetry.cseValidProfiles += validProfiles.length;
+          recoveryTelemetry.topSourceFamily =
+            recoveryTelemetry.topSourceFamily === 'unknown'
+              ? verifyResult.topSourceFamily
+              : recoveryTelemetry.topSourceFamily;
+          recoveryTelemetry.topQueryFamily = recoveryTelemetry.topQueryFamily ?? verifyResult.topQueryFamily;
+          const exactMatch = verifyResult.data.find((p) =>
             p.name.toLowerCase() === candidate.name.toLowerCase(),
-          ) ?? verifyResult.data[0];
-          if (exact) {
-            candidate.linkedinUrl = exact.linkedinUrl;
-            candidate.sourceStage = 'V2';
-            candidate.matchedSignals = ['name_match', 'company_match', ...(exact.linkedinUrl ? ['linkedin_profile'] : [])];
+          );
+          if (exactMatch) {
+            candidate.verificationVerdict = 'verified';
+            candidate.supportingUrls = dedupeUrls([...(candidate.supportingUrls ?? []), exactMatch.sourceUrl]);
+            recoveryTelemetry.supportingUrls = dedupeUrls([...recoveryTelemetry.supportingUrls, exactMatch.sourceUrl]);
+            verifyMatches += 1;
+            recoveryTelemetry.cseCandidatesValidated += 1;
+          } else if (verifyResult.data[0]) {
+            candidate.verificationVerdict = 'inconclusive';
+            candidate.supportingUrls = dedupeUrls([...(candidate.supportingUrls ?? []), verifyResult.data[0].sourceUrl]);
           }
         }
       }
+      recoveryTelemetry.cseVerifySucceeded = verifyMatches > 0;
+      recoveryTelemetry.verificationVerdict = verifyMatches > 0 ? 'verified' : 'inconclusive';
+      recoveryAttempts.push({
+        stage: 'contact_recovery',
+        provider: 'GOOGLE_CUSTOM_SEARCH',
+        mode: 'verify',
+        status: verifyMatches > 0 ? 'success' : 'empty',
+        resultCount: verifyMatches,
+        notes: verifyMatches > 0
+          ? [`Verification resolved via ${recoveryTelemetry.topSourceFamily.replace('_', ' ')}`]
+          : [],
+      });
     } else {
-      const discoverResult = await deps.linkedInSearchAdapter.searchCompanyPeople(
-        business.name,
-        locality,
-        5,
-      );
+      recoveryTelemetry.verificationVerdict = 'skipped';
+      recoveryAttempts.push({
+        stage: 'contact_recovery',
+        provider: 'GOOGLE_CUSTOM_SEARCH',
+        mode: 'verify',
+        status: 'skipped',
+        resultCount: 0,
+        notes: ['No validated named candidates were available to verify'],
+      });
+    }
+
+    const hasStrongVerifiedCandidate = allCandidates.some(
+      (candidate) => candidate.linkedinUrl !== null || candidate.email !== null,
+    );
+    if (!hasStrongVerifiedCandidate) {
+      recoveryTelemetry.cseDiscoverAttempted = true;
+      const seenNames = new Set(allCandidates.map((candidate) => candidate.name.toLowerCase()));
+      let addedCandidates = 0;
+      const discoverResult = await deps.linkedInSearchAdapter.searchCompanyPeople({
+        companyName: business.name,
+        companyDomain: domain,
+        cityOrCountry: locality,
+        maxResults: 5,
+      });
       costEvents.push({ provider: 'GOOGLE_CUSTOM_SEARCH', costCents: 0, apiCallType: 'linkedin_discover' });
       if (discoverResult.status === 'success') {
+        recoveryTelemetry.cseRawResults += discoverResult.diagnostics.reduce(
+          (sum, diagnostic) => sum + diagnostic.rawResultCount,
+          0,
+        );
+        recoveryTelemetry.diagnostics.push(
+          ...discoverResult.diagnostics.map((diagnostic) => ({
+            stage: diagnostic.stage,
+            sourceFamily: diagnostic.sourceFamily,
+            queryFamily: diagnostic.queryFamily,
+            rawResultCount: diagnostic.rawResultCount,
+            promotedCount: diagnostic.promotedCount,
+            verdict: diagnostic.verdict,
+          })),
+        );
+        recoveryTelemetry.topSourceFamily = discoverResult.topSourceFamily;
+        recoveryTelemetry.topQueryFamily = recoveryTelemetry.topQueryFamily ?? discoverResult.topQueryFamily;
+
         for (const profile of discoverResult.data) {
-          if (!isValidPersonName(profile.name, business.name)) continue;
-          const exists = allCandidates.some(
-            (c) => c.name.toLowerCase() === profile.name.toLowerCase(),
-          );
-          if (exists) continue;
+          if (!isValidPersonName(profile.name, business.name)) {
+            continue;
+          }
+
+          recoveryTelemetry.cseValidProfiles += 1;
+
+          const normalizedName = profile.name.toLowerCase();
+          if (seenNames.has(normalizedName)) {
+            continue;
+          }
+
+          seenNames.add(normalizedName);
+          addedCandidates += 1;
+          recoveryTelemetry.cseCandidatesAdded += 1;
+          recoveryTelemetry.cseCandidatesValidated += 1;
           allCandidates.push({
             name: profile.name,
             title: profile.title,
@@ -1287,14 +1735,55 @@ export async function handleBusinessConvertJob(
             phone: null,
             linkedinUrl: profile.linkedinUrl,
             seniority: profile.title ? classifySeniorityLocal(profile.title) : 'other',
-            positionRank: 45,
-            source: 'website_scrape',
-            sourceStage: 'D2',
-            matchedSignals: ['company_match', ...(profile.linkedinUrl ? ['linkedin_profile'] : [])],
-            rawJson: { matchType: 'google_cse_discovery', linkedinUrl: profile.linkedinUrl },
+            positionRank:
+              profile.sourceType === 'linkedin_profile' ? 45
+                : profile.sourceType === 'company_team_page' ? 46
+                  : profile.sourceType === 'company_about_page' ? 47
+                    : 49,
+            source: 'google_custom_search',
+            sourceStage:
+              profile.sourceType === 'linkedin_profile' ? 'D2'
+                : profile.sourceType === 'company_team_page' || profile.sourceType === 'company_about_page'
+                  ? 'D1'
+                  : 'D2',
+            matchedSignals: profile.matchSignals,
+            confidence: profile.relevanceScore,
+            verificationVerdict: 'skipped',
+            supportingUrls: [profile.sourceUrl],
+            rawJson: {
+              matchType: 'google_cse_discovery',
+              sourceType: profile.sourceType,
+              sourceUrl: profile.sourceUrl,
+              sourceDomain: profile.sourceDomain,
+            },
           });
         }
+        recoveryTelemetry.cseDiscoverSucceeded = addedCandidates > 0;
       }
+
+      recoveryAttempts.push({
+        stage: 'contact_recovery',
+        provider: 'GOOGLE_CUSTOM_SEARCH',
+        mode: 'discover',
+        status: addedCandidates > 0 ? 'success' : 'empty',
+        resultCount: discoverResult.status === 'success'
+          ? discoverResult.diagnostics.reduce((sum, diagnostic) => sum + diagnostic.rawResultCount, 0)
+          : 0,
+        notes: addedCandidates > 0
+          ? [
+              `Added ${addedCandidates} validated candidate${addedCandidates === 1 ? '' : 's'} from ${discoverResult.status === 'success' ? discoverResult.topSourceFamily.replace('_', ' ') : 'google search'}`,
+            ]
+          : ['No new validated decision-makers were discovered'],
+      });
+    } else {
+      recoveryAttempts.push({
+        stage: 'contact_recovery',
+        provider: 'GOOGLE_CUSTOM_SEARCH',
+        mode: 'discover',
+        status: 'skipped',
+        resultCount: 0,
+        notes: ['Skipped broader discovery because a strong candidate already existed'],
+      });
     }
   }
 
@@ -1322,6 +1811,7 @@ export async function handleBusinessConvertJob(
   });
 
   // 6a. Try to infer email for high-authority candidates who lack one (B3)
+  let inferredEmailCount = 0;
   for (const candidate of sortedCandidates) {
     if (candidate.email !== null) continue;
     if (seniorityRank(candidate.seniority) > 1) break; // Only for executives and directors
@@ -1343,7 +1833,14 @@ export async function handleBusinessConvertJob(
       );
 
       if (inferred.length > 0) {
+        if (isJunkPersonalEmail(inferred[0]!.email)) {
+          continue;
+        }
         candidate.email = inferred[0]!.email;
+        inferredEmailCount += 1;
+        if (candidate.source === 'google_custom_search') {
+          recoveryTelemetry.cseEmailsInferred += 1;
+        }
         logger.info(
           { ...logCtx, email: candidate.email, candidate: candidate.name, pattern: inferred[0]!.pattern },
           'Inferred email for high-authority candidate via pattern detection',
@@ -1352,9 +1849,34 @@ export async function handleBusinessConvertJob(
     }
   }
 
+  recoveryAttempts.push({
+    stage: 'contact_recovery',
+    provider: 'EMAIL_PATTERN_INFERENCE',
+    mode: 'discover',
+    status: inferredEmailCount > 0 ? 'success' : 'empty',
+    resultCount: inferredEmailCount,
+    notes: inferredEmailCount > 0
+      ? ['Recovered sendable email addresses from known company-domain patterns']
+      : ['No company-domain email pattern could be inferred for top candidates'],
+  });
+
   // 6b. Select the lead — prefer candidates with email, then by seniority
   const leadCandidates = sortedCandidates.filter((c) => c.email !== null);
   let resolvedContact = leadCandidates[0] ?? null;
+  const cseTopCandidates = sortedCandidates
+    .filter((candidate) => candidate.source === 'google_custom_search')
+    .slice(0, 3)
+    .map((candidate) => ({
+      name: candidate.name,
+      title: candidate.title,
+      sourceStage: candidate.sourceStage ?? null,
+      linkedinUrl: candidate.linkedinUrl,
+      email: candidate.email,
+      confidence: candidate.confidence ?? null,
+      matchedSignals: candidate.matchedSignals ?? [],
+      verificationVerdict: candidate.verificationVerdict ?? 'skipped',
+      supportingUrls: dedupeUrls(candidate.supportingUrls ?? []),
+    }));
 
   // If no candidate has an email but a high-authority person exists, prefer them
   if (!resolvedContact && sortedCandidates.length > 0) {
@@ -1386,6 +1908,10 @@ export async function handleBusinessConvertJob(
   let contactEmail: string | null = resolvedContact?.email ?? null;
   let businessEmailField: string | null = null;
 
+  if (contactEmail && isJunkPersonalEmail(contactEmail)) {
+    contactEmail = null;
+  }
+
   if (contactEmail && isGenericEmail(contactEmail)) {
     // Generic email goes to businessEmail, not the primary email field
     businessEmailField = contactEmail;
@@ -1412,46 +1938,67 @@ export async function handleBusinessConvertJob(
     }
   }
 
-  // ── 6f. No usable contact → auto-reject or skip (B10) ────────────────
-  // If we have no personal email AND no generic email, can't create a lead
-  if (!contactEmail && !businessEmailField) {
-    if (!resolvedContact) {
-      logger.warn(
-        { ...logCtx, reason: 'NO_CONTACTS_FOUND', candidateCount: allCandidates.length },
-        'No decision-maker contacts found — cannot create lead',
-      );
-      await prisma.business.update({
-        where: { id: businessId },
-        data: { preQualified: false, disqualificationReason: 'NO_CONTACTS_FOUND' },
-      });
-      await persistCostEvents(prisma, discoveryRunId, businessId, costEvents);
-      await tryFinalizeDiscoveryRun(discoveryRunId, logger);
-      return;
-    }
-  }
+  // ── 6f. No sendable personal email → open recovery queue item ──────────
+  if (!contactEmail) {
+    const recoveryReason = resolvedContact ? 'NO_EMAIL' : 'NO_CONTACTS_FOUND';
+    recoveryTelemetry.finalOutcome = 'recovery_opened';
 
-  // Need a unique email for lead creation (Prisma unique constraint)
-  const leadEmail = contactEmail ?? businessEmailField;
-  if (!leadEmail) {
+    const recoverySnapshot = buildContactRecoverySnapshot({
+      businessId,
+      domain,
+      locality,
+      businessInsights,
+      genericBusinessEmail: businessEmailField,
+      telemetry: recoveryTelemetry,
+      attempts: recoveryAttempts,
+      topCandidates: sortedCandidates.slice(0, 5).map((candidate) =>
+        toRecoveryCandidate({
+          name: candidate.name,
+          title: candidate.title,
+          source: candidate.source,
+          sourceStage: candidate.sourceStage,
+          seniority: candidate.seniority,
+          confidence: candidate.confidence,
+          linkedinUrl: candidate.linkedinUrl,
+          email: candidate.email,
+          phone: candidate.phone,
+          matchedSignals: candidate.matchedSignals,
+          verificationVerdict: candidate.verificationVerdict,
+          supportingUrls: candidate.supportingUrls,
+        })),
+      websiteIntelligence: websiteScrapeData ?? null,
+      instagramIntelligence: instagramData ?? null,
+    });
+
+    await upsertContactRecoveryItem({
+      businessId,
+      icpProfileId,
+      discoveryRunId,
+      reason: recoveryReason,
+      snapshot: recoverySnapshot,
+    });
+
     logger.warn(
-      { ...logCtx, reason: 'NO_EMAIL', candidateCount: allCandidates.length },
-      'No email found from any source — cannot create lead',
+      { ...logCtx, reason: recoveryReason, candidateCount: allCandidates.length },
+      'No sendable personal email found — opened contact recovery item',
     );
     await prisma.business.update({
       where: { id: businessId },
-      data: { preQualified: false, disqualificationReason: 'NO_EMAIL' },
+      data: { preQualified: false, disqualificationReason: recoveryReason },
     });
     await persistCostEvents(prisma, discoveryRunId, businessId, costEvents);
     await tryFinalizeDiscoveryRun(discoveryRunId, logger);
     return;
   }
 
-  const hasRealDecisionMaker = contactEmail !== null && resolvedContact !== null &&
-    isValidPersonName(resolvedContact.name, business.name);
+  const leadEmail = contactEmail;
+
+  const hasRealDecisionMaker = resolvedContact !== null && isValidPersonName(resolvedContact.name, business.name);
   const contactStatus: ContactResolutionStatus = hasRealDecisionMaker
-    ? (resolvedContact?.linkedinUrl ? 'verified' : 'discovered')
+    ? (resolvedContact?.verificationVerdict === 'verified' || resolvedContact?.linkedinUrl ? 'verified' : 'discovered')
     : 'unresolved';
-  const shouldAutoReject = !hasRealDecisionMaker;
+  const shouldAutoReject = false;
+  recoveryTelemetry.finalOutcome = 'lead_created';
 
   // ── 7. Derive lead source from actual provider ───────────────────────────
   let leadSource = 'SERPAPI_DISCOVERY';
@@ -1514,12 +2061,24 @@ export async function handleBusinessConvertJob(
               metadata: toInputJson({
                 discoveryRunId,
                 contactStatus,
+                contactRecovery: {
+                  telemetry: recoveryTelemetry,
+                  attempts: recoveryAttempts,
+                  topSourceFamily: recoveryTelemetry.topSourceFamily,
+                  topQueryFamily: recoveryTelemetry.topQueryFamily,
+                  diagnostics: recoveryTelemetry.diagnostics,
+                  verificationVerdict: recoveryTelemetry.verificationVerdict,
+                  supportingUrls: recoveryTelemetry.supportingUrls,
+                  topCandidates: cseTopCandidates,
+                },
                 contactProvenance: allCandidates.slice(0, 5).map((c) => ({
                   name: c.name,
                   source: c.source,
                   sourceStage: c.sourceStage ?? null,
                   confidence: c.confidence ?? null,
                   matchedSignals: c.matchedSignals ?? [],
+                  verificationVerdict: c.verificationVerdict ?? 'skipped',
+                  supportingUrls: dedupeUrls(c.supportingUrls ?? []),
                   hasEmail: c.email !== null,
                   hasLinkedin: c.linkedinUrl !== null,
                 })),
@@ -1629,12 +2188,24 @@ export async function handleBusinessConvertJob(
         metadata: toInputJson({
           contactSource: resolvedContact?.source ?? 'unknown',
           contactStatus,
+          contactRecovery: {
+            telemetry: recoveryTelemetry,
+            attempts: recoveryAttempts,
+            topSourceFamily: recoveryTelemetry.topSourceFamily,
+            topQueryFamily: recoveryTelemetry.topQueryFamily,
+            diagnostics: recoveryTelemetry.diagnostics,
+            verificationVerdict: recoveryTelemetry.verificationVerdict,
+            supportingUrls: recoveryTelemetry.supportingUrls,
+            topCandidates: cseTopCandidates,
+          },
           contactProvenance: allCandidates.slice(0, 5).map((c) => ({
             name: c.name,
             source: c.source,
             sourceStage: c.sourceStage ?? null,
             confidence: c.confidence ?? null,
             matchedSignals: c.matchedSignals ?? [],
+            verificationVerdict: c.verificationVerdict ?? 'skipped',
+            supportingUrls: dedupeUrls(c.supportingUrls ?? []),
             hasEmail: c.email !== null,
             hasLinkedin: c.linkedinUrl !== null,
           })),
@@ -1666,6 +2237,13 @@ export async function handleBusinessConvertJob(
     await persistCostEvents(tx as unknown as typeof prisma, discoveryRunId, businessId, costEvents);
 
     return { lead, isNew: true };
+  });
+
+  await prisma.contactRecoveryItem.deleteMany({
+    where: {
+      businessId: business.id,
+      icpProfileId,
+    },
   });
 
   // Persist canonical pipeline lineage records used by feature/scoring analytics.

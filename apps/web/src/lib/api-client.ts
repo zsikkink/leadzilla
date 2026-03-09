@@ -1,4 +1,5 @@
 import type {
+  ContactRecoveryDetailResponse,
   ConversationResponse,
   CreateDiscoveryRunRequest,
   CreateDiscoveryRunResponse,
@@ -12,6 +13,8 @@ import type {
   FunnelResponse,
   GetLeadResponse,
   IcpProfileResponse,
+  ListContactRecoveryItemsQuery,
+  ListContactRecoveryItemsResponse,
   ListDiscoveryRecordsQuery,
   ListDiscoveryRecordsResponse,
   ListDiscoveryRunsQuery,
@@ -116,6 +119,24 @@ export class ApiClient {
 
   getLead(id: string): Promise<GetLeadResponse> {
     return this.request(`/v1/leads/${id}`);
+  }
+
+  listContactRecoveryItems(query: ListContactRecoveryItemsQuery): Promise<ListContactRecoveryItemsResponse> {
+    return this.request(`/v1/leads/recovery?${toSearchParams(query as Record<string, unknown>)}`);
+  }
+
+  getContactRecoveryItem(id: string): Promise<ContactRecoveryDetailResponse> {
+    return this.request(`/v1/leads/recovery/${id}`);
+  }
+
+  rejectContactRecoveryItem(
+    id: string,
+    data?: { reason?: string | undefined },
+  ): Promise<ContactRecoveryDetailResponse> {
+    return this.request(`/v1/leads/recovery/${id}/reject`, {
+      method: 'PATCH',
+      body: JSON.stringify(data ?? {}),
+    });
   }
 
   createLead(data: CreateLeadRequest): Promise<CreateLeadResponse> {

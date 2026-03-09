@@ -1,12 +1,13 @@
 'use client';
 
 import type { LeadScoreBand, LeadStatus } from '@lead-flood/contracts';
-import { Building2, Eye, Loader2, MessageSquare, Phone, ShieldX, Undo2, X } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import { Eye, Loader2, MessageSquare, Phone, Undo2, X } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
 import { CustomSelect } from '../../../src/components/custom-select.js';
+import { LeadsNav } from '../../../src/components/leads-nav.js';
 import { LeadStatusBadge } from '../../../src/components/lead-status-badge.js';
 import { ScoreBandBadge } from '../../../src/components/score-band-badge.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
@@ -114,6 +115,7 @@ interface RejectedLeadRow {
 export default function LeadsPage() {
   const { apiClient, token } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [activeTab, setActiveTab] = useState<Tab>('active');
   const [page, setPage] = useState(1);
@@ -130,6 +132,12 @@ export default function LeadsPage() {
   const [rejectedLeads, setRejectedLeads] = useState<RejectedLeadRow[]>([]);
   const [rejectedLoading, setRejectedLoading] = useState(false);
   const [unrejectingLead, setUnrejectingLead] = useState<string | null>(null);
+
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    setActiveTab(tab === 'rejected' ? 'rejected' : 'active');
+    setPage(1);
+  }, [searchParams]);
 
   // Load qualification threshold from pipeline settings
   useEffect(() => {
@@ -346,42 +354,7 @@ export default function LeadsPage() {
         </p>
       </div>
 
-      {/* Tab navigation */}
-      <div className="flex items-center gap-0.5 border-b border-border/30">
-        <button
-          type="button"
-          onClick={() => { setActiveTab('active'); setPage(1); }}
-          className={cn(
-            'relative px-4 py-2.5 text-sm font-semibold transition-colors',
-            activeTab === 'active'
-              ? 'text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-zbooni-teal'
-              : 'text-muted-foreground/60 hover:text-foreground',
-          )}
-        >
-          Active
-        </button>
-        <button
-          type="button"
-          onClick={() => router.push('/dashboard/leads/businesses')}
-          className="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-muted-foreground/60 transition-colors hover:text-foreground"
-        >
-          <Building2 className="h-3.5 w-3.5" />
-          Business Intel
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('rejected')}
-          className={cn(
-            'relative flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors',
-            activeTab === 'rejected'
-              ? 'text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-red-400'
-              : 'text-muted-foreground/60 hover:text-foreground',
-          )}
-        >
-          <ShieldX className="h-3.5 w-3.5" />
-          Rejected
-        </button>
-      </div>
+      <LeadsNav active={activeTab === 'rejected' ? 'rejected' : 'main'} />
 
       {/* ────── Active tab ────── */}
       {activeTab === 'active' && (

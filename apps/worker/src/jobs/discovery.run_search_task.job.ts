@@ -81,6 +81,10 @@ interface RunState {
   activeSlots: number;
 }
 
+export function shouldFinalizeAfterEmptyPoll(state: Pick<RunState, 'activeSlots'>): boolean {
+  return state.activeSlots <= 1;
+}
+
 function getRunKey(job: Job<DiscoveryRunSearchTaskJobPayload>): string {
   if (job.data.jobRunId) {
     return `jobRun:${job.data.jobRunId}`;
@@ -215,8 +219,12 @@ async function updateDiscoveryRunProgress(discoveryRunId: string, state: RunStat
     ? existing.result as Record<string, unknown>
     : {};
 
-  await prisma.jobExecution.update({
-    where: { id: discoveryRunId },
+  await prisma.jobExecution.updateMany({
+    where: {
+      id: discoveryRunId,
+      status: { in: ['queued', 'running'] },
+      finishedAt: null,
+    },
     data: {
       status: 'running',
       result: toInputJson({
@@ -542,6 +550,21 @@ export async function handleDiscoveryRunSearchTaskJob(
   }
 
   if (effectiveMaxTasks !== undefined && runResult.status === 'EMPTY') {
+    if (!shouldFinalizeAfterEmptyPoll(runState)) {
+      logger.info(
+        {
+          slot,
+          correlationId,
+          activeSlots: runState.activeSlots,
+          processedTaskCount: runState.processedTaskCount,
+          maxTasks: effectiveMaxTasks,
+        },
+        'Empty poll observed while sibling slots are still active — deferring finalization',
+      );
+      releaseSlot(runKey, runState);
+      return;
+    }
+
     if (job.data.jobRunId) {
       await finalizeJobRun(job.data.jobRunId, runState, 'SUCCESS', null);
       releaseSlot(runKey, runState);

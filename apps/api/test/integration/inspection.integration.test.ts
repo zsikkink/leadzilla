@@ -218,6 +218,7 @@ describe('inspection endpoints integration', () => {
       logger: createLogger({ service: 'api-test', env: 'test', level: 'error' }),
       verifyAccessToken: async () => ({ sub: 'user_1', email: null, firstName: null, lastName: null }),
       checkDatabaseHealth: async () => true,
+      checkSchemaHealth: async () => ({ status: 'ok', missingTables: [], missingEnumValues: [] }),
       authenticateUser: async () => null,
       createLeadAndEnqueue: async () => ({ leadId: 'lead_1', jobId: 'job_1' }),
       getLeadById: async () => null,
@@ -300,6 +301,9 @@ describe('inspection endpoints integration', () => {
           total,
         };
       },
+      listContactRecoveryItems: async () => ({ items: [], page: 1, pageSize: 20, total: 0 }),
+      getContactRecoveryItem: async () => null,
+      rejectContactRecoveryItem: async () => null,
       getJobById: async () => null,
     });
 

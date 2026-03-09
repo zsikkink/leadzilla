@@ -33,9 +33,13 @@ describe('POST /v1/auth/login integration', () => {
       logger: createLogger({ service: 'api-test', env: 'test', level: 'error' }),
       verifyAccessToken: async () => ({ sub: 'user_1', email: null, firstName: null, lastName: null }),
       checkDatabaseHealth: async () => true,
+      checkSchemaHealth: async () => ({ status: 'ok', missingTables: [], missingEnumValues: [] }),
       createLeadAndEnqueue: async () => ({ leadId: 'lead_1', jobId: 'job_1' }),
       getLeadById: async () => null,
       listLeads: async () => ({ items: [], page: 1, pageSize: 20, total: 0 }),
+      listContactRecoveryItems: async () => ({ items: [], page: 1, pageSize: 20, total: 0 }),
+      getContactRecoveryItem: async () => null,
+      rejectContactRecoveryItem: async () => null,
       getJobById: async () => null,
     });
 

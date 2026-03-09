@@ -20,6 +20,7 @@ export interface DiscoveryRunJobPayload {
   includeWebsiteAnalysis?: boolean | undefined;
   includeSocialMediaAnalysis?: boolean | undefined;
   limit?: number | undefined;
+  validationMode?: boolean | undefined;
   minReviewCount?: number | undefined;
   requestedByUserId?: string | undefined;
 }
@@ -57,6 +58,8 @@ export function buildDiscoveryService(
 
   return {
     async createDiscoveryRun(input) {
+      await repository.assertDiscoveryWorkerAvailable();
+
       const runId = randomUUID();
       const icpProfileIds = resolveIcpProfileIds(input);
 
@@ -107,6 +110,7 @@ export function buildDiscoveryService(
             includeWebsiteAnalysis: input.includeWebsiteAnalysis,
             includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
             limit: icpLimit,
+            validationMode: (input.limit ?? 0) <= 10,
             minReviewCount: input.advancedSettings?.minReviewCount,
             requestedByUserId: input.requestedByUserId,
           });

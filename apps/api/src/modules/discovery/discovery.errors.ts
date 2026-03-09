@@ -11,3 +11,12 @@ export class DiscoveryRunNotFoundError extends Error {
     this.name = 'DiscoveryRunNotFoundError';
   }
 }
+
+export class DiscoveryWorkerUnavailableError extends Error {
+  constructor(
+    message = 'Discovery worker is offline. Start the worker before creating a discovery run.',
+  ) {
+    super(message);
+    this.name = 'DiscoveryWorkerUnavailableError';
+  }
+}

@@ -3,6 +3,67 @@ import { z } from 'zod';
 export const LeadStatusSchema = z.enum(['new', 'processing', 'enriched', 'scored', 'qualified', 'drafted', 'rejected', 'stuck', 'failed', 'messaged', 'replied', 'cold']);
 export const JobStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']);
 export const LeadScoreBandSchema = z.enum(['LOW', 'MEDIUM', 'HIGH']);
+export const LeadContactDiscoverySourceFamilySchema = z.enum(['linkedin', 'company_page', 'public_web', 'mixed', 'unknown']);
+export const LeadContactDiscoveryOutcomeSchema = z.enum(['lead_created', 'recovery_opened', 'no_contact_terminal']);
+export const LeadContactVerificationVerdictSchema = z.enum(['verified', 'not_verified', 'inconclusive', 'skipped']);
+export const LeadContactDiscoveryQueryFamilySchema = z.enum([
+  'V1_linkedin_exact',
+  'V2_company_domain_exact',
+  'V3_public_web_exact',
+  'V4_exact_without_title',
+  'D1_linkedin_roles',
+  'D2_company_team_pages',
+  'D3_company_about_pages',
+  'D4_press_news_mentions',
+  'D5_public_web_role_queries',
+  'D6_locality_first_queries',
+]);
+
+export const LeadContactDiscoveryDiagnosticSchema = z
+  .object({
+    stage: z.string().min(1),
+    sourceFamily: LeadContactDiscoverySourceFamilySchema,
+    queryFamily: LeadContactDiscoveryQueryFamilySchema,
+    rawResultCount: z.number().int().min(0),
+    promotedCount: z.number().int().min(0),
+    verdict: LeadContactVerificationVerdictSchema,
+  })
+  .strict();
+
+export const LeadContactDiscoveryCandidateSchema = z
+  .object({
+    name: z.string().min(1),
+    title: z.string().nullable(),
+    sourceStage: z.string().nullable(),
+    linkedinUrl: z.string().url().nullable(),
+    email: z.string().email().nullable(),
+    confidence: z.number().min(0).max(1).nullable(),
+    matchedSignals: z.array(z.string()),
+    verificationVerdict: LeadContactVerificationVerdictSchema,
+    supportingUrls: z.array(z.string().url()),
+  })
+  .strict();
+
+export const LeadContactDiscoverySchema = z
+  .object({
+    cseVerifyAttempted: z.boolean(),
+    cseVerifySucceeded: z.boolean(),
+    cseDiscoverAttempted: z.boolean(),
+    cseDiscoverSucceeded: z.boolean(),
+    cseRawResults: z.number().int().min(0),
+    cseValidProfiles: z.number().int().min(0),
+    cseCandidatesAdded: z.number().int().min(0),
+    cseCandidatesValidated: z.number().int().min(0),
+    cseEmailsInferred: z.number().int().min(0),
+    topSourceFamily: LeadContactDiscoverySourceFamilySchema,
+    finalOutcome: LeadContactDiscoveryOutcomeSchema,
+    verificationVerdict: LeadContactVerificationVerdictSchema,
+    supportingUrls: z.array(z.string().url()),
+    diagnostics: z.array(LeadContactDiscoveryDiagnosticSchema),
+    topQueryFamily: LeadContactDiscoveryQueryFamilySchema.nullable(),
+    topCandidates: z.array(LeadContactDiscoveryCandidateSchema),
+  })
+  .strict();
 
 export const CreateLeadRequestSchema = z.object({
   firstName: z.string().min(1),
@@ -32,6 +93,7 @@ export const GetLeadResponseSchema = z.object({
   businessCountry: z.string().nullable().optional(),
   businessCity: z.string().nullable().optional(),
   businessCategory: z.string().nullable().optional(),
+  contactDiscovery: LeadContactDiscoverySchema.nullable().optional(),
 });
 
 export const GetJobStatusResponseSchema = z.object({
@@ -109,6 +171,13 @@ export const ListLeadsResponseSchema = z
 
 export type LeadStatus = z.infer<typeof LeadStatusSchema>;
 export type JobStatus = z.infer<typeof JobStatusSchema>;
+export type LeadContactDiscoverySourceFamily = z.infer<typeof LeadContactDiscoverySourceFamilySchema>;
+export type LeadContactDiscoveryOutcome = z.infer<typeof LeadContactDiscoveryOutcomeSchema>;
+export type LeadContactVerificationVerdict = z.infer<typeof LeadContactVerificationVerdictSchema>;
+export type LeadContactDiscoveryQueryFamily = z.infer<typeof LeadContactDiscoveryQueryFamilySchema>;
+export type LeadContactDiscoveryDiagnostic = z.infer<typeof LeadContactDiscoveryDiagnosticSchema>;
+export type LeadContactDiscoveryCandidate = z.infer<typeof LeadContactDiscoveryCandidateSchema>;
+export type LeadContactDiscovery = z.infer<typeof LeadContactDiscoverySchema>;
 export type CreateLeadRequest = z.infer<typeof CreateLeadRequestSchema>;
 export type CreateLeadResponse = z.infer<typeof CreateLeadResponseSchema>;
 export type GetLeadResponse = z.infer<typeof GetLeadResponseSchema>;

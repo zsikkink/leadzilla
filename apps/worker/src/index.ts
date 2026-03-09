@@ -1,6 +1,6 @@
 import PgBoss, { type Job } from 'pg-boss';
 
-import { prisma } from '@lead-flood/db';
+import { checkPipelineSchemaHealth, prisma } from '@lead-flood/db';
 import {
   FallbackDiscoveryProvider,
   GooglePlacesDiscoveryProvider,
@@ -224,6 +224,14 @@ async function main(): Promise<void> {
     env: env.APP_ENV,
     level: env.LOG_LEVEL,
   });
+
+  const schemaHealth = await checkPipelineSchemaHealth(prisma);
+  if (schemaHealth.status !== 'ok') {
+    logger.error({ schemaHealth }, 'Worker schema guard failed');
+    throw new Error(
+      `Worker schema guard failed: missingTables=${schemaHealth.missingTables.join(',') || 'none'} missingEnumValues=${schemaHealth.missingEnumValues.join(',') || 'none'}`,
+    );
+  }
 
   const boss = new PgBoss({
     connectionString: env.DATABASE_URL,
@@ -582,8 +590,7 @@ async function main(): Promise<void> {
         smtpVerifier: new SmtpVerifier(),
         openAiAdapter: openAiAdapter.isConfigured ? openAiAdapter : undefined,
         linkedInSearchAdapter: {
-          searchCompanyPeople: (companyName, cityOrCountry, maxResults) =>
-            linkedInSearchAdapter.searchCompanyPeople(companyName, cityOrCountry, maxResults),
+          searchCompanyPeople: (input) => linkedInSearchAdapter.searchCompanyPeople(input),
           searchPersonVerification: (input) => linkedInSearchAdapter.searchPersonVerification(input),
           isConfigured: linkedInSearchAdapter.isConfigured,
         },

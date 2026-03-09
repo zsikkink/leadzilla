@@ -5,6 +5,8 @@ import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
 import {
+  ContactRecoveryDetailResponseSchema,
+  ContactRecoveryIdParamsSchema,
   CreateLeadRequestSchema,
   CreateLeadResponseSchema,
   ErrorResponseSchema,
@@ -12,12 +14,18 @@ import {
   GetLeadResponseSchema,
   HealthResponseSchema,
   LeadRejectionResponseSchema,
+  ListContactRecoveryItemsQuerySchema,
+  ListContactRecoveryItemsResponseSchema,
   ListLeadsQuerySchema,
   ListLeadsResponseSchema,
+  RejectContactRecoveryRequestSchema,
   RejectLeadRequestSchema,
   type RunDiscoverySeedRequest,
   type RunDiscoveryTasksRequest,
   type TriggerJobRunResponse,
+  type ContactRecoveryDetailResponse,
+  type ListContactRecoveryItemsQuery,
+  type ListContactRecoveryItemsResponse,
   type CreateLeadRequest,
   type ListLeadsQuery,
   type ListLeadsResponse,
@@ -27,6 +35,7 @@ import {
   type LeadStatus,
   type ReplyClassifyJobPayload,
   ReadyResponseSchema,
+  type ReadySchemaHealth,
 } from '@lead-flood/contracts';
 import { Prisma, prisma } from '@lead-flood/db';
 
@@ -138,6 +147,7 @@ export interface LeadRecord {
   businessCountry?: string | null | undefined;
   businessCity?: string | null | undefined;
   businessCategory?: string | null | undefined;
+  contactDiscovery?: unknown | null | undefined;
 }
 
 export interface JobRecord {
@@ -159,6 +169,7 @@ export interface BuildServerOptions {
   logger: FastifyBaseLogger;
   verifyAccessToken?: VerifyAccessToken | undefined;
   checkDatabaseHealth: () => Promise<boolean>;
+  checkSchemaHealth: () => Promise<ReadySchemaHealth>;
   authenticateUser?: ((input: LoginRequest) => Promise<LoginResponse | null>) | undefined;
   createLeadAndEnqueue: (input: CreateLeadRequest) => Promise<{ leadId: string; jobId: string }>;
   enqueueDiscoveryRun?: (payload: DiscoveryRunJobPayload) => Promise<void>;
@@ -176,6 +187,13 @@ export interface BuildServerOptions {
   getLeadById: (leadId: string) => Promise<LeadRecord | null>;
   softDeleteLead?: ((leadId: string) => Promise<boolean>) | undefined;
   listLeads: (query: ListLeadsQuery) => Promise<ListLeadsResponse>;
+  listContactRecoveryItems: (query: ListContactRecoveryItemsQuery) => Promise<ListContactRecoveryItemsResponse>;
+  getContactRecoveryItem: (id: string) => Promise<ContactRecoveryDetailResponse | null>;
+  rejectContactRecoveryItem: (input: {
+    id: string;
+    rejectedBy: string;
+    reason?: string | undefined;
+  }) => Promise<ContactRecoveryDetailResponse | null>;
   getJobById: (jobId: string) => Promise<JobRecord | null>;
 }
 
@@ -213,13 +231,21 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 
   app.get('/ready', async (_request, reply) => {
     const databaseReady = await options.checkDatabaseHealth();
+    const schemaHealth = databaseReady
+      ? await options.checkSchemaHealth()
+      : { status: 'fail', missingTables: [], missingEnumValues: [] } satisfies ReadySchemaHealth;
 
     if (!databaseReady) {
       reply.status(503);
-      return ReadyResponseSchema.parse({ status: 'not_ready', db: 'fail' });
+      return ReadyResponseSchema.parse({ status: 'not_ready', db: 'fail', schema: schemaHealth });
     }
 
-    return ReadyResponseSchema.parse({ status: 'ready', db: 'ok' });
+    if (schemaHealth.status !== 'ok') {
+      reply.status(503);
+      return ReadyResponseSchema.parse({ status: 'not_ready', db: 'ok', schema: schemaHealth });
+    }
+
+    return ReadyResponseSchema.parse({ status: 'ready', db: 'ok', schema: schemaHealth });
   });
 
   app.post('/v1/auth/login', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => {
@@ -363,7 +389,53 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         businessCountry: lead.businessCountry ?? null,
         businessCity: lead.businessCity ?? null,
         businessCategory: lead.businessCategory ?? null,
+        contactDiscovery: lead.contactDiscovery ?? null,
       });
+    });
+
+    api.get('/v1/leads/recovery', async (request, reply) => {
+      const parsedQuery = ListContactRecoveryItemsQuerySchema.safeParse(request.query);
+      if (!parsedQuery.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'Invalid contact recovery query',
+          requestId: request.id,
+        });
+      }
+
+      try {
+        const result = await options.listContactRecoveryItems(parsedQuery.data);
+        return ListContactRecoveryItemsResponseSchema.parse(result);
+      } catch (error: unknown) {
+        request.log.error({ error }, 'Failed to list contact recovery items');
+        reply.status(500);
+        return ErrorResponseSchema.parse({
+          error: 'Failed to list contact recovery items',
+          requestId: request.id,
+        });
+      }
+    });
+
+    api.get('/v1/leads/recovery/:id', async (request, reply) => {
+      const parsedParams = ContactRecoveryIdParamsSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'Invalid contact recovery id',
+          requestId: request.id,
+        });
+      }
+
+      const item = await options.getContactRecoveryItem(parsedParams.data.id);
+      if (!item) {
+        reply.status(404);
+        return ErrorResponseSchema.parse({
+          error: 'Contact recovery item not found',
+          requestId: request.id,
+        });
+      }
+
+      return ContactRecoveryDetailResponseSchema.parse(item);
     });
 
     api.delete('/v1/leads/:id', async (request, reply) => {
@@ -473,6 +545,39 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         score: rejection.score,
         metadata: rejection.metadata as Record<string, unknown> | null,
       });
+    });
+
+    api.patch('/v1/leads/recovery/:id/reject', async (request, reply) => {
+      const parsedParams = ContactRecoveryIdParamsSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({ error: 'Invalid contact recovery id', requestId: request.id });
+      }
+
+      const parsedBody = RejectContactRecoveryRequestSchema.safeParse(request.body ?? {});
+      if (!parsedBody.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({ error: 'Invalid contact recovery rejection payload', requestId: request.id });
+      }
+
+      const rejectedBy = request.user?.sub;
+      if (!rejectedBy) {
+        reply.status(401);
+        return ErrorResponseSchema.parse({ error: 'Authentication required', requestId: request.id });
+      }
+
+      const result = await options.rejectContactRecoveryItem({
+        id: parsedParams.data.id,
+        rejectedBy,
+        reason: parsedBody.data.reason,
+      });
+
+      if (!result) {
+        reply.status(404);
+        return ErrorResponseSchema.parse({ error: 'Contact recovery item not found', requestId: request.id });
+      }
+
+      return ContactRecoveryDetailResponseSchema.parse(result);
     });
 
     api.patch('/v1/leads/:id/unreject', async (request, reply) => {

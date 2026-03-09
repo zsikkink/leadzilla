@@ -14,6 +14,16 @@ import { prisma, type Prisma } from '@lead-flood/db';
 
 import { DiscoveryAdminBadRequestError, DiscoveryAdminNotFoundError } from './discovery-admin.errors.js';
 
+const DEFAULT_PG_BOSS_SCHEMA = 'pgboss';
+
+function readPgBossSchema(): string {
+  const schema = process.env.PG_BOSS_SCHEMA ?? DEFAULT_PG_BOSS_SCHEMA;
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
+    throw new DiscoveryAdminBadRequestError('Invalid pg-boss schema configuration');
+  }
+  return schema;
+}
+
 const SCORE_WEIGHTS = {
   hasWhatsapp: 0.2,
   hasInstagram: 0.1,
@@ -592,17 +602,39 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
       throw new DiscoveryAdminNotFoundError('Discovery run not found');
     }
 
-    const terminalStatuses = ['completed', 'failed', 'cancelled'] as const;
+    if (run.status === 'cancelled') {
+      return { success: true };
+    }
+
+    const terminalStatuses = ['completed', 'failed'] as const;
     if (terminalStatuses.includes(run.status as (typeof terminalStatuses)[number])) {
       throw new DiscoveryAdminBadRequestError('Run already in terminal state');
     }
 
-    await prisma.jobExecution.update({
-      where: { id },
-      data: {
-        status: 'cancelled',
-        finishedAt: new Date(),
-      },
+    const schema = readPgBossSchema();
+
+    await prisma.$transaction(async (tx) => {
+      await tx.jobExecution.update({
+        where: { id },
+        data: {
+          status: 'cancelled',
+          finishedAt: new Date(),
+        },
+      });
+
+      await tx.$executeRawUnsafe(
+        `
+          delete from ${schema}.job
+          where state = 'created'
+            and name in ('discovery.seed', 'discovery.run_search_task')
+            and (
+              data ->> 'discoveryRunId' = $1
+              or singleton_key like $2
+            )
+        `,
+        id,
+        `%${id}%`,
+      );
     });
 
     return { success: true };

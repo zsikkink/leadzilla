@@ -47,6 +47,7 @@ export interface DiscoverySeedJobPayload {
   icpProfileId?: string | undefined;
   includeWebsiteAnalysis?: boolean | undefined;
   includeSocialMediaAnalysis?: boolean | undefined;
+  validationMode?: boolean | undefined;
   minReviewCount?: number | undefined;
 }
 
@@ -279,6 +280,29 @@ export async function handleDiscoverySeedJob(
           icpProfileId: job.data.icpProfileId,
         },
         'Computed adaptive search task budget from historical rates',
+      );
+    }
+
+    if (job.data.validationMode && job.data.maxTasks !== undefined && job.data.maxTasks <= 10) {
+      const manualValidationTaskCap = Math.min(12, Math.max(job.data.maxTasks * 2, job.data.maxTasks));
+      const validationBusinessCap = Math.min(40, Math.max(job.data.maxTasks * 4, job.data.maxTasks));
+      seedConfig = { ...seedConfig, maxTasks: Math.min(seedConfig.maxTasks, manualValidationTaskCap) };
+      targetUniqueBusinesses = targetUniqueBusinesses === undefined
+        ? validationBusinessCap
+        : Math.min(targetUniqueBusinesses, validationBusinessCap);
+
+      logger.info(
+        {
+          jobId: job.id,
+          queue: job.name,
+          correlationId,
+          requestedLeads: job.data.maxTasks,
+          manualValidationTaskCap,
+          validationBusinessCap,
+          finalMaxTasks: seedConfig.maxTasks,
+          targetUniqueBusinesses,
+        },
+        'Applied manual validation cap for small discovery run',
       );
     }
 

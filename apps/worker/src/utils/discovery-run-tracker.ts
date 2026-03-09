@@ -45,6 +45,12 @@ interface SearchTaskCounters {
   yieldRate: number;
 }
 
+function toNonNegativeCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : 0;
+}
+
 /**
  * Mark search tasks as complete but keep the discovery run in `running` status.
  * Stores counters and a timestamp for safety timeout tracking.
@@ -308,7 +314,7 @@ export async function tryFinalizeDiscoveryRun(
     }
   } else if (terminalCount > 0) {
     // Not ready to finalize, but update progress so the frontend shows accurate lead count
-    const newBiz = typeof result.newBusinesses === 'number' ? result.newBusinesses : 0;
+    const newBiz = toNonNegativeCount(result.newBusinesses);
     const alreadyKnownBiz = Math.max(0, totalBusinesses - newBiz);
     const convertedLeads = completedLeads + failedLeads;
 
@@ -317,8 +323,10 @@ export async function tryFinalizeDiscoveryRun(
       data: {
         result: toInputJson({
           ...result,
+          totalItems: newBiz,
           processedItems: terminalCount,
-          failedItems: failedLeads + disqualifiedIds.size,
+          failedItems: failedLeads,
+          leadFailedItems: failedLeads,
           // Full funnel counts for frontend display
           totalFound: totalBusinesses,
           alreadyKnown: alreadyKnownBiz,
@@ -417,14 +425,13 @@ async function finalizeRun(
   totalBusinesses: number = 0,
   disqualificationReasons: Record<string, number> = {},
 ): Promise<void> {
-  const failedItems = failedLeads + disqualifiedCount;
+  const failedItems = failedLeads;
 
   // Derive full funnel counts from run data
-  const newBusinesses = typeof currentResult.newBusinesses === 'number'
-    ? currentResult.newBusinesses
-    : 0;
+  const newBusinesses = toNonNegativeCount(currentResult.newBusinesses);
   const alreadyKnown = Math.max(0, totalBusinesses - newBusinesses);
   const converted = completedLeads + failedLeads; // leads created (both successful and failed)
+  const terminalItems = completedLeads + failedLeads + disqualifiedCount;
 
   // Atomic update: only finalize if still running (prevents double-finalization)
   const updated = await prisma.jobExecution.updateMany({
@@ -432,13 +439,16 @@ async function finalizeRun(
     data: {
       status,
       finishedAt: new Date(),
-      ...(error ? { error } : {}),
+      error: error ?? null,
       result: toInputJson({
         ...currentResult,
         pipelineCompleted: true,
-        processedItems: completedLeads + failedItems,
+        totalItems: newBusinesses,
+        processedItems: terminalItems,
+        failedItems,
+        leadFailedItems: failedLeads,
         completedLeads,
-        pipelineFailedItems: failedItems,
+        pipelineFailedItems: failedLeads,
         // Full funnel counts for frontend display
         totalFound: totalBusinesses,
         alreadyKnown,

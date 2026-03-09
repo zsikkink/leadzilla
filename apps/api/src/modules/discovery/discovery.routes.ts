@@ -15,8 +15,12 @@ import {
 
 import { z } from 'zod';
 
-import { DiscoveryNotImplementedError, DiscoveryRunNotFoundError } from './discovery.errors.js';
-import { PrismaDiscoveryRepository } from './discovery.repository.js';
+import {
+  DiscoveryNotImplementedError,
+  DiscoveryRunNotFoundError,
+  DiscoveryWorkerUnavailableError,
+} from './discovery.errors.js';
+import { PrismaDiscoveryRepository, readRunProgress } from './discovery.repository.js';
 import {
   buildDiscoveryService,
   type DiscoveryRunJobPayload,
@@ -172,6 +176,16 @@ function handleModuleError(error: unknown, request: FastifyRequest, reply: Fasti
 
   if (error instanceof DiscoveryNotImplementedError) {
     reply.status(501).send(
+      ErrorResponseSchema.parse({
+        error: error.message,
+        requestId: request.id,
+      }),
+    );
+    return true;
+  }
+
+  if (error instanceof DiscoveryWorkerUnavailableError) {
+    reply.status(503).send(
       ErrorResponseSchema.parse({
         error: error.message,
         requestId: request.id,
@@ -371,7 +385,7 @@ export function registerDiscoveryRoutes(
 
       const businessIds = businesses.map((b) => b.id);
 
-      const [searchTasks, conversionRows] = await Promise.all([
+      const [searchTasks, conversionRows, recoveryItems] = await Promise.all([
         prisma.searchTask.findMany({
           where: { discoveryRunId: runId },
           select: {
@@ -410,7 +424,25 @@ export function registerDiscoveryRoutes(
               },
             })
           : Promise.resolve([]),
+        businessIds.length > 0
+          ? prisma.contactRecoveryItem.findMany({
+              where: { businessId: { in: businessIds }, discoveryRunId: runId },
+              select: {
+                businessId: true,
+                status: true,
+                reason: true,
+                evidenceScore: true,
+                candidateCount: true,
+                recoverySnapshot: true,
+                updatedAt: true,
+              },
+            })
+          : Promise.resolve([]),
       ]);
+
+      const recoveryByBusinessId = new Map(
+        recoveryItems.map((item) => [item.businessId, item] as const),
+      );
 
       const leads = conversionRows
         .filter((row) => {
@@ -422,10 +454,105 @@ export function registerDiscoveryRoutes(
         })
         .map((row) => row.lead);
 
+      const experimentStats = new Map<string, {
+        queryFamily: string;
+        rawResultCount: number;
+        promotedCount: number;
+        verifiedCount: number;
+        notVerifiedCount: number;
+        inconclusiveCount: number;
+        skippedCount: number;
+      }>();
+
+      const addDiagnostics = (diagnostics: unknown): void => {
+        if (!Array.isArray(diagnostics)) {
+          return;
+        }
+
+        for (const item of diagnostics) {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) {
+            continue;
+          }
+
+          const diagnostic = item as Record<string, unknown>;
+          const queryFamily = typeof diagnostic.queryFamily === 'string' ? diagnostic.queryFamily : null;
+          if (!queryFamily) {
+            continue;
+          }
+
+          const current = experimentStats.get(queryFamily) ?? {
+            queryFamily,
+            rawResultCount: 0,
+            promotedCount: 0,
+            verifiedCount: 0,
+            notVerifiedCount: 0,
+            inconclusiveCount: 0,
+            skippedCount: 0,
+          };
+
+          current.rawResultCount += typeof diagnostic.rawResultCount === 'number' ? diagnostic.rawResultCount : 0;
+          current.promotedCount += typeof diagnostic.promotedCount === 'number' ? diagnostic.promotedCount : 0;
+
+          switch (diagnostic.verdict) {
+            case 'verified':
+              current.verifiedCount += 1;
+              break;
+            case 'not_verified':
+              current.notVerifiedCount += 1;
+              break;
+            case 'inconclusive':
+              current.inconclusiveCount += 1;
+              break;
+            case 'skipped':
+              current.skippedCount += 1;
+              break;
+          }
+
+          experimentStats.set(queryFamily, current);
+        }
+      };
+
+      for (const row of conversionRows) {
+        if (!row.metadata || typeof row.metadata !== 'object' || Array.isArray(row.metadata)) {
+          continue;
+        }
+        const metadata = row.metadata as Record<string, unknown>;
+        const contactRecovery =
+          metadata.contactRecovery && typeof metadata.contactRecovery === 'object' && !Array.isArray(metadata.contactRecovery)
+            ? metadata.contactRecovery as Record<string, unknown>
+            : null;
+        const telemetry =
+          contactRecovery?.telemetry && typeof contactRecovery.telemetry === 'object' && !Array.isArray(contactRecovery.telemetry)
+            ? contactRecovery.telemetry as Record<string, unknown>
+            : null;
+        addDiagnostics(telemetry?.diagnostics);
+      }
+
+      for (const item of recoveryItems) {
+        if (!item.recoverySnapshot || typeof item.recoverySnapshot !== 'object' || Array.isArray(item.recoverySnapshot)) {
+          continue;
+        }
+        const snapshot = item.recoverySnapshot as Record<string, unknown>;
+        const telemetry =
+          snapshot.telemetry && typeof snapshot.telemetry === 'object' && !Array.isArray(snapshot.telemetry)
+            ? snapshot.telemetry as Record<string, unknown>
+            : null;
+        addDiagnostics(telemetry?.diagnostics);
+      }
+
+      const queryExperimentFamilies = [...experimentStats.values()]
+        .sort((left, right) => {
+          if (right.promotedCount !== left.promotedCount) {
+            return right.promotedCount - left.promotedCount;
+          }
+          return right.rawResultCount - left.rawResultCount;
+        });
+
       // Get run counters from result JSON
       const resultJson = (jobExecution.result && typeof jobExecution.result === 'object' && !Array.isArray(jobExecution.result))
         ? jobExecution.result as Record<string, unknown>
         : {};
+      const progress = readRunProgress(resultJson);
       const totalFound = typeof resultJson.totalFound === 'number'
         ? resultJson.totalFound
         : businesses.length;
@@ -438,18 +565,16 @@ export function registerDiscoveryRoutes(
       const disqualified = typeof resultJson.disqualified === 'number'
         ? resultJson.disqualified
         : null;
-      const converted = typeof resultJson.converted === 'number'
-        ? resultJson.converted
-        : leads.length;
+      const converted = leads.length;
 
       const run = {
         id: runId,
         status: jobExecution.status,
         icpProfileId: typeof payload.icpProfileId === 'string' ? payload.icpProfileId : null,
         config: payload,
-        tasksTotal: typeof resultJson.totalItems === 'number' ? resultJson.totalItems : searchTasks.length,
-        tasksCompleted: typeof resultJson.processedItems === 'number' ? resultJson.processedItems : 0,
-        tasksFailed: typeof resultJson.failedItems === 'number' ? resultJson.failedItems : 0,
+        tasksTotal: progress.totalItems || searchTasks.length,
+        tasksCompleted: progress.processedItems,
+        tasksFailed: progress.failedItems,
         businessesFound: businesses.length,
         leadsConverted: leads.length,
         totalFound,
@@ -457,6 +582,10 @@ export function registerDiscoveryRoutes(
         newFound,
         disqualified,
         converted,
+        queryExperiment: {
+          bestFamily: queryExperimentFamilies[0]?.queryFamily ?? null,
+          families: queryExperimentFamilies,
+        },
         createdAt: jobExecution.createdAt.toISOString(),
         errorMessage: jobExecution.error ?? null,
         outcome: typeof resultJson.outcome === 'object' && resultJson.outcome !== null
@@ -491,6 +620,30 @@ export function registerDiscoveryRoutes(
           error: t.error ?? null,
         })),
         businesses: businesses.map((b) => ({
+          recoveryItem: (() => {
+            const recoveryItem = recoveryByBusinessId.get(b.id);
+            if (!recoveryItem) {
+              return null;
+            }
+
+            const snapshot =
+              recoveryItem.recoverySnapshot && typeof recoveryItem.recoverySnapshot === 'object' && !Array.isArray(recoveryItem.recoverySnapshot)
+                ? recoveryItem.recoverySnapshot as Record<string, unknown>
+                : null;
+            const telemetry =
+              snapshot?.telemetry && typeof snapshot.telemetry === 'object' && !Array.isArray(snapshot.telemetry)
+                ? snapshot.telemetry as Record<string, unknown>
+                : null;
+
+            return {
+              status: recoveryItem.status,
+              reason: recoveryItem.reason,
+              evidenceScore: recoveryItem.evidenceScore,
+              candidateCount: recoveryItem.candidateCount,
+              updatedAt: recoveryItem.updatedAt.toISOString(),
+              telemetry,
+            };
+          })(),
           id: b.id,
           name: b.name,
           websiteDomain: b.websiteDomain,

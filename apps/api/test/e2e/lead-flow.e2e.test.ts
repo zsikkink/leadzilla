@@ -134,6 +134,7 @@ describe('lead pipeline e2e', () => {
           return false;
         }
       },
+      checkSchemaHealth: async () => ({ status: 'ok', missingTables: [], missingEnumValues: [] }),
       authenticateUser: async () => null,
       createLeadAndEnqueue: async (input) => {
         try {
@@ -190,6 +191,9 @@ describe('lead pipeline e2e', () => {
         });
       },
       listLeads: async () => ({ items: [], page: 1, pageSize: 20, total: 0 }),
+      listContactRecoveryItems: async () => ({ items: [], page: 1, pageSize: 20, total: 0 }),
+      getContactRecoveryItem: async () => null,
+      rejectContactRecoveryItem: async () => null,
       getJobById: async (jobId) => {
         return prisma.jobExecution.findUnique({
           where: { id: jobId },

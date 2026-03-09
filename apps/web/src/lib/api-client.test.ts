@@ -92,4 +92,87 @@ describe('ApiClient', () => {
       client.listLeads({ page: 1, pageSize: 20, includeQualityMetrics: false }),
     ).rejects.toThrow('Unable to reach API');
   });
+
+  it('requests contact recovery list with query params', async () => {
+    const mockResponse = { items: [], page: 1, pageSize: 20, total: 0 };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify(mockResponse), { status: 200 }),
+    );
+
+    await client.listContactRecoveryItems({ page: 1, pageSize: 20, status: 'OPEN' });
+
+    const calledUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
+    expect(calledUrl).toContain('/v1/leads/recovery');
+    expect(calledUrl).toContain('status=OPEN');
+  });
+
+  it('rejects a contact recovery item', async () => {
+    const mockResponse = {
+      id: 'recovery_1',
+      businessId: 'business_1',
+      icpProfileId: 'icp_1',
+      icpProfileName: 'Clinics',
+      discoveryRunId: 'run_1',
+      status: 'REJECTED',
+      reason: 'NO_EMAIL',
+      evidenceScore: 0.61,
+      candidateCount: 1,
+      rejectedBy: 'user_1',
+      rejectedAt: '2026-03-08T00:00:00.000Z',
+      createdAt: '2026-03-08T00:00:00.000Z',
+      updatedAt: '2026-03-08T00:00:00.000Z',
+      business: {
+        id: 'business_1',
+        name: 'Atlas Clinic',
+        city: 'Amman',
+        country: 'Jordan',
+        countryCode: 'JO',
+        websiteDomain: 'atlas.example',
+        instagramHandle: null,
+        category: 'Dental Clinic',
+        deterministicScore: 0.81,
+        scoreBand: 'HIGH',
+        preQualified: false,
+        disqualificationReason: 'NO_EMAIL',
+      },
+      snapshot: {
+        businessId: 'business_1',
+        domain: 'atlas.example',
+        locality: 'Amman, JO',
+        generatedAt: '2026-03-08T00:00:00.000Z',
+        businessInsights: null,
+        genericBusinessEmail: null,
+        telemetry: {
+          cseVerifyAttempted: false,
+          cseVerifySucceeded: false,
+          cseDiscoverAttempted: true,
+          cseDiscoverSucceeded: true,
+          cseRawResults: 2,
+          cseValidProfiles: 1,
+          cseCandidatesAdded: 1,
+          cseCandidatesValidated: 1,
+          cseEmailsInferred: 0,
+          topSourceFamily: 'company_page',
+          finalOutcome: 'recovery_opened',
+        },
+        attempts: [],
+        topCandidates: [],
+        websiteIntelligence: null,
+        instagramIntelligence: null,
+      },
+    };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify(mockResponse), { status: 200 }),
+    );
+
+    await client.rejectContactRecoveryItem('recovery_1', { reason: 'Not a fit' });
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/v1/leads/recovery/recovery_1/reject'),
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ reason: 'Not a fit' }),
+      }),
+    );
+  });
 });

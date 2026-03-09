@@ -9,10 +9,15 @@ import type {
   PipelineRunStatus,
 } from '@lead-flood/contracts';
 
-import { DiscoveryNotImplementedError, DiscoveryRunNotFoundError } from './discovery.errors.js';
+import {
+  DiscoveryNotImplementedError,
+  DiscoveryRunNotFoundError,
+  DiscoveryWorkerUnavailableError,
+} from './discovery.errors.js';
 import type { DiscoveryRunJobPayload } from './discovery.service.js';
 
 const DISCOVERY_RUN_JOB_TYPE = 'discovery.run';
+const DEFAULT_PG_BOSS_SCHEMA = 'pgboss';
 
 interface DiscoveryRunProgress {
   totalItems: number;
@@ -33,7 +38,7 @@ function toCount(value: unknown): number {
   return 0;
 }
 
-function readRunProgress(result: unknown): DiscoveryRunProgress {
+export function readRunProgress(result: unknown): DiscoveryRunProgress {
   if (!result || typeof result !== 'object' || Array.isArray(result)) {
     return {
       totalItems: 0,
@@ -43,10 +48,35 @@ function readRunProgress(result: unknown): DiscoveryRunProgress {
   }
 
   const payload = result as Record<string, unknown>;
+  const totalItems = (() => {
+    const newFound = toCount(payload.newFound);
+    if (newFound > 0) {
+      return newFound;
+    }
+
+    const newBusinesses = toCount(payload.newBusinesses);
+    if (newBusinesses > 0) {
+      return newBusinesses;
+    }
+
+    return toCount(payload.totalItems);
+  })();
+
+  const failedItems = (() => {
+    const explicitLeadFailures = toCount(payload.leadFailedItems);
+    if (explicitLeadFailures > 0) {
+      return explicitLeadFailures;
+    }
+
+    const rawFailedItems = toCount(payload.failedItems);
+    const disqualified = toCount(payload.disqualified);
+    return Math.max(0, rawFailedItems - disqualified);
+  })();
+
   return {
-    totalItems: toCount(payload.totalItems),
+    totalItems,
     processedItems: toCount(payload.processedItems),
-    failedItems: toCount(payload.failedItems),
+    failedItems,
   };
 }
 
@@ -76,6 +106,7 @@ function mapJobStatusToPipelineStatus(
 }
 
 export interface DiscoveryRepository {
+  assertDiscoveryWorkerAvailable(): Promise<void>;
   createDiscoveryRun(
     runId: string,
     input: CreateDiscoveryRunRequest,
@@ -88,6 +119,10 @@ export interface DiscoveryRepository {
 }
 
 export class StubDiscoveryRepository implements DiscoveryRepository {
+  async assertDiscoveryWorkerAvailable(): Promise<void> {
+    throw new DiscoveryNotImplementedError('TODO: discovery worker availability check');
+  }
+
   async createDiscoveryRun(
     _runId: string,
     _input: CreateDiscoveryRunRequest,
@@ -114,6 +149,28 @@ export class StubDiscoveryRepository implements DiscoveryRepository {
 }
 
 export class PrismaDiscoveryRepository implements DiscoveryRepository {
+  async assertDiscoveryWorkerAvailable(): Promise<void> {
+    const schema = process.env.PG_BOSS_SCHEMA ?? DEFAULT_PG_BOSS_SCHEMA;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
+      throw new DiscoveryWorkerUnavailableError('Invalid pg-boss schema configuration');
+    }
+
+    const [row] = await prisma.$queryRawUnsafe<Array<{ active: boolean }>>(
+      `
+        select exists (
+          select 1
+          from ${schema}.job
+          where name = 'system.heartbeat'
+            and completed_on >= now() - interval '3 minutes'
+        ) as active
+      `,
+    );
+
+    if (!row?.active) {
+      throw new DiscoveryWorkerUnavailableError();
+    }
+  }
+
   async createDiscoveryRun(
     runId: string,
     input: CreateDiscoveryRunRequest,

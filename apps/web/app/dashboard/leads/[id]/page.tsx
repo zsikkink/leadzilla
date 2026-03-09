@@ -17,6 +17,7 @@ import {
   Monitor,
   Phone,
   RefreshCw,
+  Search,
   Shield,
   TrendingUp,
   User,
@@ -91,6 +92,44 @@ function extractScoreInfo(data: unknown): ScoreInfo | null {
     scoreBand: typeof s.scoreBand === 'string' ? s.scoreBand : undefined,
     reasoning: Array.isArray(s.reasoning) ? (s.reasoning as string[]) : undefined,
   };
+}
+
+function formatSourceFamily(sourceFamily: string): string {
+  switch (sourceFamily) {
+    case 'linkedin':
+      return 'LinkedIn';
+    case 'company_page':
+      return 'Company page';
+    case 'public_web':
+      return 'Public web';
+    case 'mixed':
+      return 'Mixed';
+    default:
+      return 'Unknown';
+  }
+}
+
+function formatVerificationVerdict(verdict: string): string {
+  switch (verdict) {
+    case 'verified':
+      return 'Verified';
+    case 'not_verified':
+      return 'Not verified';
+    case 'inconclusive':
+      return 'Inconclusive';
+    default:
+      return 'Not attempted';
+  }
+}
+
+function formatQueryFamily(queryFamily: string | null): string {
+  if (!queryFamily) {
+    return 'No dominant query';
+  }
+
+  return queryFamily
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 
@@ -797,6 +836,156 @@ export default function LeadDetailPage() {
           </div>
         ) : null}
       </div>
+
+      {l.contactDiscovery ? (
+        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+          <div className="flex items-center gap-2">
+            <Search className="h-4 w-4 text-zbooni-teal" />
+            <h2 className="text-base font-bold tracking-tight">Contact Discovery</h2>
+            <span className="ml-auto rounded-full bg-muted/20 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+              {formatSourceFamily(l.contactDiscovery.topSourceFamily)}
+            </span>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Verification</p>
+              <p className="mt-1 text-sm font-bold">{formatVerificationVerdict(l.contactDiscovery.verificationVerdict)}</p>
+            </div>
+            <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Discovery</p>
+              <p className="mt-1 text-sm font-bold">
+                {l.contactDiscovery.cseDiscoverAttempted
+                  ? (l.contactDiscovery.cseDiscoverSucceeded ? 'Succeeded' : 'Attempted')
+                  : 'Not used'}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Valid Candidates</p>
+              <p className="mt-1 text-sm font-bold">{l.contactDiscovery.cseCandidatesValidated}</p>
+            </div>
+            <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Emails Inferred</p>
+              <p className="mt-1 text-sm font-bold">{l.contactDiscovery.cseEmailsInferred}</p>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+            <div className="rounded-xl border border-border/20 bg-zbooni-dark/25 p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Recovery Summary</p>
+              <div className="mt-3 space-y-2 text-sm text-muted-foreground">
+                <p>Final outcome: <span className="font-medium text-foreground">{l.contactDiscovery.finalOutcome.replace(/_/g, ' ')}</span></p>
+                <p>Raw Google results: <span className="font-medium text-foreground">{l.contactDiscovery.cseRawResults}</span></p>
+                <p>Valid profiles: <span className="font-medium text-foreground">{l.contactDiscovery.cseValidProfiles}</span></p>
+                <p>Promoted candidates: <span className="font-medium text-foreground">{l.contactDiscovery.cseCandidatesAdded}</span></p>
+                <p>Top query family: <span className="font-medium text-foreground">{formatQueryFamily(l.contactDiscovery.topQueryFamily)}</span></p>
+              </div>
+              {l.contactDiscovery.supportingUrls.length > 0 ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {l.contactDiscovery.supportingUrls.slice(0, 3).map((url) => (
+                    <a
+                      key={url}
+                      href={url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 rounded-full bg-zbooni-teal/10 px-2 py-1 text-[11px] font-semibold text-zbooni-teal"
+                    >
+                      Evidence
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="rounded-xl border border-border/20 bg-zbooni-dark/25 p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Top Recovered Candidates</p>
+              {l.contactDiscovery.topCandidates.length > 0 ? (
+                <div className="mt-3 grid gap-2">
+                  {l.contactDiscovery.topCandidates.map((candidate) => (
+                    <div key={`${candidate.name}-${candidate.sourceStage ?? 'none'}`} className="rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2.5">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-foreground">{candidate.name}</p>
+                          <p className="text-[11px] text-muted-foreground/60">{candidate.title ?? 'Title unavailable'}</p>
+                        </div>
+                        {candidate.confidence !== null ? (
+                          <span className="font-mono text-[11px] font-bold text-zbooni-teal">
+                            {Math.round(candidate.confidence * 100)}%
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
+                        {candidate.sourceStage ? (
+                          <span className="rounded-full bg-muted/20 px-2 py-0.5 font-semibold text-muted-foreground/70">
+                            {candidate.sourceStage}
+                          </span>
+                        ) : null}
+                        {candidate.matchedSignals.map((signal) => (
+                          <span key={signal} className="rounded-full bg-zbooni-teal/10 px-2 py-0.5 font-semibold text-zbooni-teal">
+                            {signal.replace(/_/g, ' ')}
+                          </span>
+                        ))}
+                        <span className="rounded-full bg-muted/20 px-2 py-0.5 font-semibold text-muted-foreground/70">
+                          {formatVerificationVerdict(candidate.verificationVerdict)}
+                        </span>
+                      </div>
+                      {candidate.supportingUrls.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {candidate.supportingUrls.slice(0, 2).map((url) => (
+                            <a
+                              key={url}
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-[11px] font-medium text-zbooni-teal hover:text-zbooni-green"
+                            >
+                              Evidence link
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 text-sm text-muted-foreground/50">No recovered candidates were preserved for this lead.</p>
+              )}
+            </div>
+          </div>
+
+          {l.contactDiscovery.diagnostics.length > 0 ? (
+            <div className="mt-4 rounded-xl border border-border/20 bg-zbooni-dark/25 p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Search Evidence</p>
+              <div className="mt-3 overflow-x-auto">
+                <table className="min-w-full text-left text-xs text-muted-foreground">
+                  <thead>
+                    <tr className="border-b border-border/20 text-[10px] uppercase tracking-wider text-muted-foreground/60">
+                      <th className="pb-2 pr-4">Family</th>
+                      <th className="pb-2 pr-4">Source</th>
+                      <th className="pb-2 pr-4">Raw Hits</th>
+                      <th className="pb-2 pr-4">Promoted</th>
+                      <th className="pb-2">Verdict</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {l.contactDiscovery.diagnostics.map((diagnostic, index) => (
+                      <tr key={`${diagnostic.queryFamily}-${index}`} className="border-b border-border/10 last:border-0">
+                        <td className="py-2 pr-4 font-medium text-foreground">{formatQueryFamily(diagnostic.queryFamily)}</td>
+                        <td className="py-2 pr-4">{formatSourceFamily(diagnostic.sourceFamily)}</td>
+                        <td className="py-2 pr-4">{diagnostic.rawResultCount}</td>
+                        <td className="py-2 pr-4">{diagnostic.promotedCount}</td>
+                        <td className="py-2">{formatVerificationVerdict(diagnostic.verdict)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* About This Business (D1) */}
       {businessData ? (

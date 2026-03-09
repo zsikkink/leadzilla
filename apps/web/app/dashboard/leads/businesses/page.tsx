@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   AlertTriangle,
-  ArrowLeft,
   Building2,
   ChevronDown,
   ChevronRight,
@@ -24,6 +23,7 @@ import {
 } from 'lucide-react';
 
 import { AboutBusinessCard } from '@/components/about-business-card.js';
+import { LeadsNav } from '@/components/leads-nav.js';
 import { SocialLinkIcon } from '@/components/social-link-icon.js';
 import { cn } from '@/lib/utils.js';
 import { getSupabaseBrowserClient } from '@/lib/supabase-client.js';
@@ -840,13 +840,7 @@ export default function BusinessIntelligencePage() {
 
   return (
     <div className="space-y-4">
-      {/* Back to leads */}
-      <a
-        href="/dashboard/leads"
-        className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <ArrowLeft className="h-4 w-4" /> Back to Leads
-      </a>
+      <LeadsNav active="business-intel" />
 
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">

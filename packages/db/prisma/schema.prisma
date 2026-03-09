@@ -23,6 +23,16 @@ enum LeadStatus {
   cold
 }
 
+enum ContactRecoveryStatus {
+  OPEN
+  REJECTED
+}
+
+enum ContactRecoveryReason {
+  NO_CONTACTS_FOUND
+  NO_EMAIL
+}
+
 enum JobStatus {
   queued
   running
@@ -314,6 +324,7 @@ model IcpProfile {
   scorePredictions     LeadScorePrediction[]
   analyticsDailyRollups AnalyticsDailyRollup[]
   messageDrafts        MessageDraft[]
+  contactRecoveryItems ContactRecoveryItem[]
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
 
@@ -759,6 +770,7 @@ model Business {
   businessConversions      BusinessConversion[]
   costEvents               DiscoveryCostEvent[]
   contacts                 BusinessContact[]    @relation("businessContacts")
+  contactRecoveryItems     ContactRecoveryItem[]
 
   @@index([countryCode, city])
   @@index([websiteDomain])
@@ -766,6 +778,31 @@ model Business {
   @@index([discoveryRunId])
   @@index([preQualified])
   @@map("businesses")
+}
+
+model ContactRecoveryItem {
+  id               String                @id @default(cuid())
+  businessId       String                @map("business_id")
+  business         Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  icpProfileId     String                @map("icp_profile_id")
+  icpProfile       IcpProfile            @relation(fields: [icpProfileId], references: [id], onDelete: Cascade)
+  discoveryRunId   String                @map("discovery_run_id")
+  status           ContactRecoveryStatus @default(OPEN)
+  reason           ContactRecoveryReason
+  evidenceScore    Float                 @default(0) @map("evidence_score")
+  candidateCount   Int                   @default(0) @map("candidate_count")
+  recoverySnapshot Json                  @map("recovery_snapshot")
+  rejectedBy       String?               @map("rejected_by")
+  rejectedAt       DateTime?             @map("rejected_at")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
+
+  @@unique([businessId, icpProfileId])
+  @@index([status, updatedAt])
+  @@index([reason])
+  @@index([discoveryRunId])
+  @@index([icpProfileId, status])
+  @@map("contact_recovery_items")
 }
 
 model BusinessEvidence {

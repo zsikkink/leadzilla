@@ -25,6 +25,8 @@ const MOBILE_NAV = [
 function getPageTitle(pathname: string): string {
   if (pathname === '/dashboard') return 'Pipeline Overview';
   if (pathname === '/dashboard/discover') return 'Discover Leads';
+  if (pathname === '/dashboard/leads/businesses') return 'Business Intelligence';
+  if (pathname === '/dashboard/leads/recovery') return 'Contact Recovery';
   if (pathname.startsWith('/dashboard/leads/')) return 'Lead Detail';
   if (pathname === '/dashboard/leads') return 'Leads';
   if (pathname === '/dashboard/messages') return 'Message Queue';

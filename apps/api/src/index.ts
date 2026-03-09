@@ -1,12 +1,17 @@
 import PgBoss from 'pg-boss';
 
-import { Prisma, prisma, toInputJson } from '@lead-flood/db';
+import { Prisma, checkPipelineSchemaHealth, prisma, toInputJson } from '@lead-flood/db';
 import { createLogger } from '@lead-flood/observability';
 import type {
+  ContactRecoveryDetailResponse,
+  ContactRecoverySnapshot,
+  ListContactRecoveryItemsQuery,
+  ListContactRecoveryItemsResponse,
   RunDiscoverySeedRequest,
   RunDiscoveryTasksRequest,
   TriggerJobRunResponse,
 } from '@lead-flood/contracts';
+import { ContactRecoverySnapshotSchema } from '@lead-flood/contracts';
 
 import { buildSupabaseAccessTokenVerifier } from './auth/supabase.js';
 import { loadApiEnv } from './env.js';
@@ -21,6 +26,72 @@ import { buildServer, LeadAlreadyExistsError } from './server.js';
 function toDayStart(value: string): Date {
   const source = new Date(value);
   return new Date(Date.UTC(source.getUTCFullYear(), source.getUTCMonth(), source.getUTCDate()));
+}
+
+function mapContactRecoveryItem(record: {
+  id: string;
+  businessId: string;
+  icpProfileId: string;
+  discoveryRunId: string;
+  status: 'OPEN' | 'REJECTED';
+  reason: 'NO_CONTACTS_FOUND' | 'NO_EMAIL';
+  evidenceScore: number;
+  candidateCount: number;
+  recoverySnapshot: Prisma.JsonValue;
+  rejectedBy: string | null;
+  rejectedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  business: {
+    id: string;
+    name: string;
+    city: string | null;
+    country: string | null;
+    countryCode: string;
+    websiteDomain: string | null;
+    instagramHandle: string | null;
+    category: string | null;
+    deterministicScore: number;
+    scoreBand: 'LOW' | 'MEDIUM' | 'HIGH' | null;
+    preQualified: boolean | null;
+    disqualificationReason: string | null;
+  };
+  icpProfile: {
+    name: string;
+  };
+}): ContactRecoveryDetailResponse {
+  const snapshot = ContactRecoverySnapshotSchema.parse(record.recoverySnapshot) as ContactRecoverySnapshot;
+
+  return {
+    id: record.id,
+    businessId: record.businessId,
+    icpProfileId: record.icpProfileId,
+    icpProfileName: record.icpProfile.name,
+    discoveryRunId: record.discoveryRunId,
+    status: record.status,
+    reason: record.reason,
+    evidenceScore: Number(record.evidenceScore.toFixed(3)),
+    candidateCount: record.candidateCount,
+    rejectedBy: record.rejectedBy,
+    rejectedAt: record.rejectedAt?.toISOString() ?? null,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+    business: {
+      id: record.business.id,
+      name: record.business.name,
+      city: record.business.city,
+      country: record.business.country,
+      countryCode: record.business.countryCode,
+      websiteDomain: record.business.websiteDomain,
+      instagramHandle: record.business.instagramHandle,
+      category: record.business.category,
+      deterministicScore: record.business.deterministicScore,
+      scoreBand: record.business.scoreBand,
+      preQualified: record.business.preQualified,
+      disqualificationReason: record.business.disqualificationReason,
+    },
+    snapshot,
+  };
 }
 
 async function main(): Promise<void> {
@@ -229,6 +300,18 @@ async function main(): Promise<void> {
         return false;
       }
     },
+    checkSchemaHealth: async () => {
+      try {
+        return await checkPipelineSchemaHealth(prisma);
+      } catch (error: unknown) {
+        logger.error({ error }, 'Schema readiness check failed');
+        return {
+          status: 'fail',
+          missingTables: [],
+          missingEnumValues: [],
+        };
+      }
+    },
     createLeadAndEnqueue: async (input) => {
       try {
         // B5 fix: resolve icpProfileId for manual leads — use first active ICP
@@ -358,6 +441,7 @@ async function main(): Promise<void> {
           includeWebsiteAnalysis: payload.includeWebsiteAnalysis,
           includeSocialMediaAnalysis: payload.includeSocialMediaAnalysis,
           ...(payload.limit !== undefined ? { maxTasks: payload.limit } : {}),
+          ...(payload.validationMode !== undefined ? { validationMode: payload.validationMode } : {}),
           ...(payload.minReviewCount !== undefined ? { minReviewCount: payload.minReviewCount } : {}),
           enqueueRunTasks: true,
         },
@@ -429,6 +513,21 @@ async function main(): Promise<void> {
       });
       if (!lead) return null;
       const biz = lead.businessConversions[0]?.business;
+      const conversionMetadata =
+        lead.businessConversions[0]?.metadata && typeof lead.businessConversions[0].metadata === 'object' && !Array.isArray(lead.businessConversions[0].metadata)
+          ? lead.businessConversions[0].metadata as Record<string, unknown>
+          : null;
+      const contactRecovery =
+        conversionMetadata?.contactRecovery && typeof conversionMetadata.contactRecovery === 'object' && !Array.isArray(conversionMetadata.contactRecovery)
+          ? conversionMetadata.contactRecovery as Record<string, unknown>
+          : null;
+      const telemetry =
+        contactRecovery?.telemetry && typeof contactRecovery.telemetry === 'object' && !Array.isArray(contactRecovery.telemetry)
+          ? contactRecovery.telemetry as Record<string, unknown>
+          : null;
+      const topCandidates = Array.isArray(contactRecovery?.topCandidates)
+        ? contactRecovery.topCandidates
+        : [];
       const latestEnrichmentPayload =
         (lead.enrichmentRecords[0]?.normalizedPayload as Prisma.JsonValue | null | undefined) ?? null;
       return {
@@ -438,6 +537,136 @@ async function main(): Promise<void> {
         businessCountry: biz?.country ?? null,
         businessCity: biz?.city ?? null,
         businessCategory: biz?.category ?? null,
+        contactDiscovery: telemetry
+          ? {
+              cseVerifyAttempted: telemetry.cseVerifyAttempted === true,
+              cseVerifySucceeded: telemetry.cseVerifySucceeded === true,
+              cseDiscoverAttempted: telemetry.cseDiscoverAttempted === true,
+              cseDiscoverSucceeded: telemetry.cseDiscoverSucceeded === true,
+              cseRawResults: typeof telemetry.cseRawResults === 'number' ? telemetry.cseRawResults : 0,
+              cseValidProfiles: typeof telemetry.cseValidProfiles === 'number' ? telemetry.cseValidProfiles : 0,
+              cseCandidatesAdded: typeof telemetry.cseCandidatesAdded === 'number' ? telemetry.cseCandidatesAdded : 0,
+              cseCandidatesValidated: typeof telemetry.cseCandidatesValidated === 'number' ? telemetry.cseCandidatesValidated : 0,
+              cseEmailsInferred: typeof telemetry.cseEmailsInferred === 'number' ? telemetry.cseEmailsInferred : 0,
+              verificationVerdict:
+                telemetry.verificationVerdict === 'verified'
+                || telemetry.verificationVerdict === 'not_verified'
+                || telemetry.verificationVerdict === 'inconclusive'
+                || telemetry.verificationVerdict === 'skipped'
+                  ? telemetry.verificationVerdict
+                  : 'skipped',
+              supportingUrls: Array.isArray(telemetry.supportingUrls)
+                ? telemetry.supportingUrls.filter((url): url is string => typeof url === 'string')
+                : Array.isArray(contactRecovery?.supportingUrls)
+                  ? contactRecovery.supportingUrls.filter((url): url is string => typeof url === 'string')
+                  : [],
+              diagnostics: Array.isArray(telemetry.diagnostics)
+                ? telemetry.diagnostics
+                  .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+                  .map((item) => ({
+                    stage: typeof item.stage === 'string' ? item.stage : 'unknown',
+                    sourceFamily:
+                      item.sourceFamily === 'linkedin'
+                      || item.sourceFamily === 'company_page'
+                      || item.sourceFamily === 'public_web'
+                      || item.sourceFamily === 'mixed'
+                      || item.sourceFamily === 'unknown'
+                        ? item.sourceFamily
+                        : 'unknown',
+                    queryFamily:
+                      item.queryFamily === 'V1_linkedin_exact'
+                      || item.queryFamily === 'V2_company_domain_exact'
+                      || item.queryFamily === 'V3_public_web_exact'
+                      || item.queryFamily === 'V4_exact_without_title'
+                      || item.queryFamily === 'D1_linkedin_roles'
+                      || item.queryFamily === 'D2_company_team_pages'
+                      || item.queryFamily === 'D3_company_about_pages'
+                      || item.queryFamily === 'D4_press_news_mentions'
+                      || item.queryFamily === 'D5_public_web_role_queries'
+                      || item.queryFamily === 'D6_locality_first_queries'
+                        ? item.queryFamily
+                        : 'D5_public_web_role_queries',
+                    rawResultCount: typeof item.rawResultCount === 'number' ? item.rawResultCount : 0,
+                    promotedCount: typeof item.promotedCount === 'number' ? item.promotedCount : 0,
+                    verdict:
+                      item.verdict === 'verified'
+                      || item.verdict === 'not_verified'
+                      || item.verdict === 'inconclusive'
+                      || item.verdict === 'skipped'
+                        ? item.verdict
+                        : 'skipped',
+                  }))
+                : [],
+              topQueryFamily:
+                telemetry.topQueryFamily === 'V1_linkedin_exact'
+                || telemetry.topQueryFamily === 'V2_company_domain_exact'
+                || telemetry.topQueryFamily === 'V3_public_web_exact'
+                || telemetry.topQueryFamily === 'V4_exact_without_title'
+                || telemetry.topQueryFamily === 'D1_linkedin_roles'
+                || telemetry.topQueryFamily === 'D2_company_team_pages'
+                || telemetry.topQueryFamily === 'D3_company_about_pages'
+                || telemetry.topQueryFamily === 'D4_press_news_mentions'
+                || telemetry.topQueryFamily === 'D5_public_web_role_queries'
+                || telemetry.topQueryFamily === 'D6_locality_first_queries'
+                  ? telemetry.topQueryFamily
+                  : contactRecovery?.topQueryFamily === 'V1_linkedin_exact'
+                    || contactRecovery?.topQueryFamily === 'V2_company_domain_exact'
+                    || contactRecovery?.topQueryFamily === 'V3_public_web_exact'
+                    || contactRecovery?.topQueryFamily === 'V4_exact_without_title'
+                    || contactRecovery?.topQueryFamily === 'D1_linkedin_roles'
+                    || contactRecovery?.topQueryFamily === 'D2_company_team_pages'
+                    || contactRecovery?.topQueryFamily === 'D3_company_about_pages'
+                    || contactRecovery?.topQueryFamily === 'D4_press_news_mentions'
+                    || contactRecovery?.topQueryFamily === 'D5_public_web_role_queries'
+                    || contactRecovery?.topQueryFamily === 'D6_locality_first_queries'
+                      ? contactRecovery.topQueryFamily
+                      : null,
+              topSourceFamily:
+                telemetry.topSourceFamily === 'linkedin'
+                || telemetry.topSourceFamily === 'company_page'
+                || telemetry.topSourceFamily === 'public_web'
+                || telemetry.topSourceFamily === 'mixed'
+                || telemetry.topSourceFamily === 'unknown'
+                  ? telemetry.topSourceFamily
+                  : contactRecovery?.topSourceFamily === 'linkedin'
+                    || contactRecovery?.topSourceFamily === 'company_page'
+                    || contactRecovery?.topSourceFamily === 'public_web'
+                    || contactRecovery?.topSourceFamily === 'mixed'
+                    || contactRecovery?.topSourceFamily === 'unknown'
+                      ? contactRecovery.topSourceFamily
+                  : 'unknown',
+              finalOutcome:
+                telemetry.finalOutcome === 'lead_created'
+                || telemetry.finalOutcome === 'recovery_opened'
+                || telemetry.finalOutcome === 'no_contact_terminal'
+                  ? telemetry.finalOutcome
+                  : 'lead_created',
+              topCandidates: topCandidates
+                .filter((candidate): candidate is Record<string, unknown> => Boolean(candidate) && typeof candidate === 'object' && !Array.isArray(candidate))
+                .slice(0, 3)
+                .map((candidate) => ({
+                  name: typeof candidate.name === 'string' ? candidate.name : 'Unknown',
+                  title: typeof candidate.title === 'string' ? candidate.title : null,
+                  sourceStage: typeof candidate.sourceStage === 'string' ? candidate.sourceStage : null,
+                  linkedinUrl: typeof candidate.linkedinUrl === 'string' ? candidate.linkedinUrl : null,
+                  email: typeof candidate.email === 'string' ? candidate.email : null,
+                  confidence: typeof candidate.confidence === 'number' ? candidate.confidence : null,
+                  verificationVerdict:
+                    candidate.verificationVerdict === 'verified'
+                    || candidate.verificationVerdict === 'not_verified'
+                    || candidate.verificationVerdict === 'inconclusive'
+                    || candidate.verificationVerdict === 'skipped'
+                      ? candidate.verificationVerdict
+                      : 'skipped',
+                  supportingUrls: Array.isArray(candidate.supportingUrls)
+                    ? candidate.supportingUrls.filter((url): url is string => typeof url === 'string')
+                    : [],
+                  matchedSignals: Array.isArray(candidate.matchedSignals)
+                    ? candidate.matchedSignals.filter((signal): signal is string => typeof signal === 'string')
+                    : [],
+                })),
+            }
+          : null,
       };
     },
     softDeleteLead: async (leadId) => {
@@ -610,6 +839,149 @@ async function main(): Promise<void> {
         pageSize: query.pageSize,
         total,
       };
+    },
+    listContactRecoveryItems: async (query: ListContactRecoveryItemsQuery): Promise<ListContactRecoveryItemsResponse> => {
+      const where: Prisma.ContactRecoveryItemWhereInput = {
+        ...(query.status ? { status: query.status } : {}),
+        ...(query.icpProfileId ? { icpProfileId: query.icpProfileId } : {}),
+        ...(query.from || query.to
+          ? {
+              createdAt: {
+                ...(query.from ? { gte: new Date(query.from) } : {}),
+                ...(query.to ? { lte: new Date(query.to) } : {}),
+              },
+            }
+          : {}),
+        ...(query.q
+          ? {
+              OR: [
+                { business: { name: { contains: query.q, mode: 'insensitive' } } },
+                { business: { websiteDomain: { contains: query.q, mode: 'insensitive' } } },
+                { business: { city: { contains: query.q, mode: 'insensitive' } } },
+                { business: { category: { contains: query.q, mode: 'insensitive' } } },
+              ],
+            }
+          : {}),
+      };
+
+      const [total, rows] = await Promise.all([
+        prisma.contactRecoveryItem.count({ where }),
+        prisma.contactRecoveryItem.findMany({
+          where,
+          orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          skip: (query.page - 1) * query.pageSize,
+          take: query.pageSize,
+          include: {
+            business: {
+              select: {
+                id: true,
+                name: true,
+                city: true,
+                country: true,
+                countryCode: true,
+                websiteDomain: true,
+                instagramHandle: true,
+                category: true,
+                deterministicScore: true,
+                scoreBand: true,
+                preQualified: true,
+                disqualificationReason: true,
+              },
+            },
+            icpProfile: {
+              select: { name: true },
+            },
+          },
+        }),
+      ]);
+
+      return {
+        items: rows.map(mapContactRecoveryItem),
+        page: query.page,
+        pageSize: query.pageSize,
+        total,
+      };
+    },
+    getContactRecoveryItem: async (id: string): Promise<ContactRecoveryDetailResponse | null> => {
+      const row = await prisma.contactRecoveryItem.findUnique({
+        where: { id },
+        include: {
+          business: {
+            select: {
+              id: true,
+              name: true,
+              city: true,
+              country: true,
+              countryCode: true,
+              websiteDomain: true,
+              instagramHandle: true,
+              category: true,
+              deterministicScore: true,
+              scoreBand: true,
+              preQualified: true,
+              disqualificationReason: true,
+            },
+          },
+          icpProfile: {
+            select: { name: true },
+          },
+        },
+      });
+
+      return row ? mapContactRecoveryItem(row) : null;
+    },
+    rejectContactRecoveryItem: async ({ id, rejectedBy, reason }): Promise<ContactRecoveryDetailResponse | null> => {
+      const existing = await prisma.contactRecoveryItem.findUnique({
+        where: { id },
+        select: { id: true, recoverySnapshot: true },
+      });
+
+      if (!existing) {
+        return null;
+      }
+
+      const snapshotObject =
+        existing.recoverySnapshot && typeof existing.recoverySnapshot === 'object' && !Array.isArray(existing.recoverySnapshot)
+          ? existing.recoverySnapshot as Record<string, unknown>
+          : {};
+
+      const nextSnapshot = {
+        ...snapshotObject,
+        rejectedReason: reason ?? null,
+      } satisfies Record<string, unknown>;
+
+      const updated = await prisma.contactRecoveryItem.update({
+        where: { id },
+        data: {
+          status: 'REJECTED',
+          rejectedBy,
+          rejectedAt: new Date(),
+          recoverySnapshot: toInputJson(nextSnapshot),
+        },
+        include: {
+          business: {
+            select: {
+              id: true,
+              name: true,
+              city: true,
+              country: true,
+              countryCode: true,
+              websiteDomain: true,
+              instagramHandle: true,
+              category: true,
+              deterministicScore: true,
+              scoreBand: true,
+              preQualified: true,
+              disqualificationReason: true,
+            },
+          },
+          icpProfile: {
+            select: { name: true },
+          },
+        },
+      });
+
+      return mapContactRecoveryItem(updated);
     },
     getJobById: async (jobId) => {
       return prisma.jobExecution.findUnique({
