@@ -1,17 +1,28 @@
 import type { CreateScoringRunRequest } from '@lead-flood/contracts';
-import { createHash } from 'node:crypto';
-import { Prisma, prisma } from '@lead-flood/db';
+import { prisma, toInputJson } from '@lead-flood/db';
 import type { OpenAiAdapter } from '@lead-flood/providers';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { classifyError } from '../errors.js';
+import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
 import {
   evaluateDeterministicScore,
   toScoreBand,
   type DeterministicRule,
 } from '../scoring/deterministic.js';
-import { predictLogistic, type LogisticModel } from '../scoring/logistic.js';
+import { predictLogistic } from '../scoring/logistic.js';
+import {
+  asDeterministicRules,
+  computeBlendRatio,
+  ensureBaselineModelVersion,
+  extractFeatureVectorForModel,
+  findActiveTrainedModel,
+  getQualificationThreshold,
+} from '../scoring/shared.js';
+import { getDeterministicAiBlend, getScoreTierBands } from '../utils/pipeline-settings.js';
 
 export const SCORING_COMPUTE_JOB_NAME = 'scoring.compute';
+/** Batch/API-triggered scoring singleton key. Per-lead scoring (from features.compute) uses a 3-part key: scoring.compute:${runId}:${leadId}:${icpProfileId} */
 export const SCORING_COMPUTE_IDEMPOTENCY_KEY_PATTERN = 'scoring.compute:${runId}';
 
 export const SCORING_COMPUTE_RETRY_OPTIONS: Pick<
@@ -40,234 +51,25 @@ export interface ScoringComputeJobDependencies {
   openAiAdapter?: OpenAiAdapter;
   deterministicWeight?: number;
   aiWeight?: number;
+  enqueueMessageGenerate?: ((payload: {
+    leadId: string;
+    icpProfileId: string;
+    scorePredictionId: string;
+    runId: string;
+    correlationId?: string | undefined;
+    channel?: string | undefined;
+  }) => Promise<void>) | undefined;
+  enqueueApolloEnrich?: ((payload: {
+    leadId: string;
+    icpProfileId: string;
+    scorePredictionId: string;
+    runId: string;
+    scoreBand: 'LOW' | 'MEDIUM' | 'HIGH';
+    apolloHasEmail: boolean;
+    apolloHasDirectPhone: boolean;
+    correlationId?: string | undefined;
+  }) => Promise<void>) | undefined;
 }
-
-const BASELINE_TRAINING_RUN_TRIGGER = 'MANUAL';
-const BASELINE_MODEL_VERSION_TAG = 'deterministic-baseline-v1';
-const BASELINE_FEATURE_EXTRACTOR_VERSION = 'features_v1';
-const BASELINE_FEATURE_KEYS = [
-  'source_provider',
-  'has_email',
-  'has_domain',
-  'has_company_name',
-  'country',
-  'industry',
-  'industry_supported',
-  'has_whatsapp',
-  'has_instagram',
-  'accepts_online_payments',
-  'review_count',
-  'follower_count',
-  'physical_address_present',
-  'physical_location',
-  'physical_store_present',
-  'recent_activity',
-  'custom_order_signals',
-  'pure_self_serve_ecom',
-  'shopify_detected',
-  'abandonment_signal_detected',
-  'multi_staff_detected',
-  'follower_growth_signal',
-  'high_engagement_signal',
-  'has_booking_or_contact_form',
-  'variable_pricing_detected',
-  'industry_match',
-  'industry_match_reason',
-  'geo_match',
-  'geo_match_reason',
-  'employee_size_bucket',
-  'enrichment_success_rate',
-  'discovery_attempt_count',
-  'enrichment_attempt_count',
-  'days_since_discovery',
-  'rule_match_count',
-  'hard_filter_passed',
-] as const;
-
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
-}
-
-function deterministicChecksum(input: string): string {
-  return createHash('sha256').update(input).digest('hex');
-}
-
-function asDeterministicRules(value: Awaited<ReturnType<typeof prisma.qualificationRule.findMany>>): DeterministicRule[] {
-  return value.map((rule) => ({
-    id: rule.id,
-    name: rule.name,
-    ruleType: rule.ruleType,
-    isRequired: rule.isRequired,
-    fieldKey: rule.fieldKey,
-    operator: rule.operator,
-    valueJson: rule.valueJson,
-    weight: rule.weight,
-    isActive: rule.isActive,
-    orderIndex: rule.orderIndex,
-    priority: rule.priority,
-  }));
-}
-
-async function ensureBaselineModelVersion(): Promise<string> {
-  const existing = await prisma.modelVersion.findUnique({
-    where: { versionTag: BASELINE_MODEL_VERSION_TAG },
-    select: { id: true },
-  });
-  if (existing) {
-    return existing.id;
-  }
-
-  const now = new Date();
-  const checksumSource = JSON.stringify({
-    versionTag: BASELINE_MODEL_VERSION_TAG,
-    sourceVersion: BASELINE_FEATURE_EXTRACTOR_VERSION,
-    featureKeys: BASELINE_FEATURE_KEYS,
-  });
-
-  try {
-    const created = await prisma.$transaction(async (tx) => {
-      const trainingRun = await tx.trainingRun.create({
-        data: {
-          modelType: 'LOGISTIC_REGRESSION',
-          status: 'SUCCEEDED',
-          trigger: BASELINE_TRAINING_RUN_TRIGGER,
-          configJson: {
-            baseline: true,
-            sourceVersion: BASELINE_FEATURE_EXTRACTOR_VERSION,
-          },
-          trainingWindowStart: new Date(now.getTime() - 86_400_000),
-          trainingWindowEnd: now,
-          datasetSize: 0,
-          positiveCount: 0,
-          negativeCount: 0,
-          startedAt: now,
-          endedAt: now,
-        },
-      });
-
-      return tx.modelVersion.create({
-        data: {
-          trainingRunId: trainingRun.id,
-          modelType: 'LOGISTIC_REGRESSION',
-          versionTag: BASELINE_MODEL_VERSION_TAG,
-          stage: 'ACTIVE',
-          featureSchemaJson: {
-            sourceVersion: BASELINE_FEATURE_EXTRACTOR_VERSION,
-            keys: BASELINE_FEATURE_KEYS,
-          },
-          coefficientsJson: Prisma.JsonNull,
-          intercept: 0,
-          deterministicWeightsJson: {},
-          checksum: deterministicChecksum(checksumSource),
-          trainedAt: now,
-          activatedAt: now,
-        },
-      });
-    });
-
-    return created.id;
-  } catch (error: unknown) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-      const fallback = await prisma.modelVersion.findUnique({
-        where: { versionTag: BASELINE_MODEL_VERSION_TAG },
-        select: { id: true },
-      });
-      if (fallback) {
-        return fallback.id;
-      }
-    }
-    throw error;
-  }
-}
-
-/** Feature keys used by the trained logistic model (must match model.train NUMERIC_FEATURE_KEYS). */
-const TRAINED_MODEL_FEATURE_KEYS = [
-  'has_email',
-  'has_domain',
-  'has_company_name',
-  'industry_supported',
-  'has_whatsapp',
-  'has_instagram',
-  'accepts_online_payments',
-  'review_count',
-  'follower_count',
-  'physical_address_present',
-  'physical_store_present',
-  'recent_activity',
-  'custom_order_signals',
-  'pure_self_serve_ecom',
-  'shopify_detected',
-  'abandonment_signal_detected',
-  'multi_staff_detected',
-  'follower_growth_signal',
-  'high_engagement_signal',
-  'has_booking_or_contact_form',
-  'variable_pricing_detected',
-  'industry_match',
-  'geo_match',
-  'enrichment_success_rate',
-  'discovery_attempt_count',
-  'enrichment_attempt_count',
-  'days_since_discovery',
-  'rule_match_count',
-  'hard_filter_passed',
-] as const;
-
-function extractFeatureVectorForModel(featuresJson: Record<string, unknown>): number[] {
-  const vector: number[] = [];
-  for (const key of TRAINED_MODEL_FEATURE_KEYS) {
-    const raw = featuresJson[key];
-    if (typeof raw === 'number' && Number.isFinite(raw)) {
-      vector.push(raw);
-    } else if (typeof raw === 'boolean') {
-      vector.push(raw ? 1 : 0);
-    } else if (typeof raw === 'string') {
-      const parsed = Number(raw);
-      vector.push(Number.isFinite(parsed) ? parsed : 0);
-    } else {
-      vector.push(0);
-    }
-  }
-  return vector;
-}
-
-function parseTrainedModel(coefficientsJson: unknown): LogisticModel | null {
-  if (!coefficientsJson || typeof coefficientsJson !== 'object') return null;
-  const payload = coefficientsJson as Record<string, unknown>;
-  const values = payload['values'];
-  const intercept = payload['intercept'];
-  const featureStats = payload['featureStats'];
-  if (!Array.isArray(values) || typeof intercept !== 'number' || !Array.isArray(featureStats)) {
-    return null;
-  }
-  return {
-    coefficients: values as number[],
-    intercept,
-    featureStats: featureStats as { mean: number; std: number }[],
-  };
-}
-
-async function findActiveTrainedModel(): Promise<{ id: string; model: LogisticModel } | null> {
-  const active = await prisma.modelVersion.findFirst({
-    where: {
-      stage: 'ACTIVE',
-      modelType: 'LOGISTIC_REGRESSION',
-      // Exclude the baseline version — it has no real coefficients
-      versionTag: { not: BASELINE_MODEL_VERSION_TAG },
-    },
-    orderBy: { createdAt: 'desc' },
-    select: { id: true, coefficientsJson: true },
-  });
-  if (!active) return null;
-
-  const model = parseTrainedModel(active.coefficientsJson);
-  if (!model) return null;
-
-  return { id: active.id, model };
-}
-
-const DEFAULT_DETERMINISTIC_WEIGHT = 0.6;
-const DEFAULT_AI_WEIGHT = 0.4;
 
 export async function handleScoringComputeJob(
   logger: ScoringComputeLogger,
@@ -291,6 +93,9 @@ export async function handleScoringComputeJob(
   );
 
   try {
+    // Dynamic qualification threshold from PipelineSetting table
+    const qualificationThreshold = await getQualificationThreshold();
+
     const effectiveModelVersionId =
       modelVersionId ??
       (await ensureBaselineModelVersion());
@@ -327,9 +132,22 @@ export async function handleScoringComputeJob(
         ? job.data.leadIds
         : (
             await prisma.lead.findMany({
+              where: { deletedAt: null },
               select: { id: true },
             })
           ).map((lead) => lead.id);
+
+    // Pre-load phone data for channel resolution
+    const leadPhoneMap = new Map<string, { phone: string | null; decisionMakerPhone: string | null }>();
+    if (deps?.enqueueMessageGenerate && targetLeadIds.length > 0) {
+      const leadsWithPhone = await prisma.lead.findMany({
+        where: { id: { in: targetLeadIds } },
+        select: { id: true, phone: true, decisionMakerPhone: true },
+      });
+      for (const l of leadsWithPhone) {
+        leadPhoneMap.set(l.id, { phone: l.phone, decisionMakerPhone: l.decisionMakerPhone });
+      }
+    }
 
     const rulesByIcp = new Map<string, DeterministicRule[]>();
     for (const icpId of targetIcpIds) {
@@ -345,6 +163,13 @@ export async function handleScoringComputeJob(
 
     // Look up a trained logistic model (not the baseline stub)
     const trainedModel = await findActiveTrainedModel();
+
+    // Read UI-configured blend override and tier bands (same pattern as scoring.batch)
+    const deterministicAiBlend = await getDeterministicAiBlend();
+    const blendRatio = deterministicAiBlend !== null
+      ? { deterministicWeight: deterministicAiBlend, aiWeight: 1 - deterministicAiBlend }
+      : await computeBlendRatio();
+    const scoreTierBands = await getScoreTierBands();
 
     let persistedPredictions = 0;
     for (const targetLeadId of targetLeadIds) {
@@ -365,8 +190,23 @@ export async function handleScoringComputeJob(
           latestSnapshot.featuresJson && typeof latestSnapshot.featuresJson === 'object'
             ? (latestSnapshot.featuresJson as Record<string, unknown>)
             : {};
+
+        // Data alignment hard filter: override scoring when cross-source data mismatch is severe
+        const dataAlignmentScore = typeof featurePayload.data_alignment_score === 'number'
+          ? featurePayload.data_alignment_score
+          : null;
+        const dataAlignmentFailed = dataAlignmentScore !== null && dataAlignmentScore < 0.3;
+
         const rules = rulesByIcp.get(targetIcpId) ?? [];
         const deterministic = evaluateDeterministicScore(rules, featurePayload);
+
+        if (dataAlignmentFailed) {
+          deterministic.hardFilterPassed = false;
+          deterministic.qualificationScore = 0;
+          deterministic.qualificationPath = 'HARD_FILTERED';
+          deterministic.reasonCodes.push('HARD_FILTER_FAILED_DATA_ALIGNMENT_SCORE');
+        }
+
         const deterministicScore = deterministic.qualificationScore;
 
         let logisticScore = 0;
@@ -409,14 +249,16 @@ export async function handleScoringComputeJob(
           }
         }
 
-        const dWeight = deps?.deterministicWeight ?? DEFAULT_DETERMINISTIC_WEIGHT;
-        const aWeight = deps?.aiWeight ?? DEFAULT_AI_WEIGHT;
-        const blendedScore = logisticScore > 0
-          ? dWeight * deterministicScore + aWeight * logisticScore
-          : deterministicScore;
-        const scoreBand = toScoreBand(blendedScore);
+        const dWeight = deps?.deterministicWeight ?? blendRatio.deterministicWeight;
+        const aWeight = deps?.aiWeight ?? blendRatio.aiWeight;
+        const blendedScore = Math.min(1, Math.max(0,
+          usedTrainedModel || logisticScore > 0
+            ? dWeight * deterministicScore + aWeight * logisticScore
+            : deterministicScore,
+        ));
+        const scoreBand = toScoreBand(blendedScore, scoreTierBands);
 
-        await prisma.leadScorePrediction.upsert({
+        const prediction = await prisma.leadScorePrediction.upsert({
           where: {
             leadId_icpProfileId_featureSnapshotId_modelVersionId: {
               leadId: targetLeadId,
@@ -437,8 +279,11 @@ export async function handleScoringComputeJob(
             reasonsJson: toInputJson({
               reasonCodes: deterministic.reasonCodes,
               hardFilterPassed: deterministic.hardFilterPassed,
+              categoryScores: deterministic.categoryScores,
+              qualificationPath: deterministic.qualificationPath,
               aiReasoning: aiReasoning.length > 0 ? aiReasoning : undefined,
               usedTrainedModel,
+              blendWeights: { deterministic: dWeight, ai: aWeight },
             }),
             ruleEvaluationJson: toInputJson(deterministic.ruleEvaluation),
             predictedAt: new Date(),
@@ -451,8 +296,11 @@ export async function handleScoringComputeJob(
             reasonsJson: toInputJson({
               reasonCodes: deterministic.reasonCodes,
               hardFilterPassed: deterministic.hardFilterPassed,
+              categoryScores: deterministic.categoryScores,
+              qualificationPath: deterministic.qualificationPath,
               aiReasoning: aiReasoning.length > 0 ? aiReasoning : undefined,
               usedTrainedModel,
+              blendWeights: { deterministic: dWeight, ai: aWeight },
             }),
             ruleEvaluationJson: toInputJson(deterministic.ruleEvaluation),
             predictedAt: new Date(),
@@ -460,7 +308,128 @@ export async function handleScoringComputeJob(
         });
 
         persistedPredictions += 1;
+
+        // ── Lead status transition + rejection tracking ──────────────
+        // Preserve downstream lifecycle states (messaged/replied/cold) during scheduled rescoring.
+        const isRejected = !deterministic.hardFilterPassed || blendedScore < qualificationThreshold;
+        const statusUpdated = await prisma.lead.updateMany({
+          where: {
+            id: targetLeadId,
+            status: { in: ['new', 'processing', 'enriched', 'scored', 'qualified', 'rejected', 'stuck'] },
+          },
+          data: { status: isRejected ? 'rejected' : 'qualified' },
+        });
+        if (statusUpdated.count === 0) {
+          logger.info(
+            { jobId: job.id, leadId: targetLeadId },
+            'Skipped lead status update to preserve downstream lifecycle state',
+          );
+          await tryFinalizeDiscoveryRun(runId, logger);
+          continue;
+        }
+
+        if (isRejected) {
+          const rejectionReason = !deterministic.hardFilterPassed ? 'HARD_FILTER_FAILED' : 'BELOW_THRESHOLD';
+          const failedFilters = deterministic.reasonCodes
+            .filter((c) => c.startsWith('HARD_FILTER_FAILED_'))
+            .map((c) => c.replace('HARD_FILTER_FAILED_', ''));
+
+          await prisma.leadRejection.upsert({
+            where: { leadId: targetLeadId },
+            create: {
+              leadId: targetLeadId,
+              icpProfileId: targetIcpId,
+              score: blendedScore,
+              reason: rejectionReason,
+              rejectedBy: 'SYSTEM',
+              metadata: toInputJson({
+                failedHardFilters: failedFilters,
+                threshold: qualificationThreshold,
+              }),
+            },
+            update: {
+              icpProfileId: targetIcpId,
+              score: blendedScore,
+              reason: rejectionReason,
+              rejectedBy: 'SYSTEM',
+              rejectedAt: new Date(),
+              metadata: toInputJson({
+                failedHardFilters: failedFilters,
+                threshold: qualificationThreshold,
+              }),
+            },
+          });
+
+          logger.info(
+            { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, blendedScore, reason: rejectionReason },
+            `Lead rejected — ${rejectionReason}`,
+          );
+        }
+
+        if (blendedScore >= qualificationThreshold) {
+          // Prefer apollo.enrich (post-scoring reveal) over direct message.generate
+          if (deps?.enqueueApolloEnrich) {
+            // Look up BusinessConversion for apolloHasEmail/apolloHasDirectPhone
+            const businessConversion = await prisma.businessConversion.findFirst({
+              where: { leadId: targetLeadId, icpProfileId: targetIcpId },
+              select: { apolloHasEmail: true, apolloHasDirectPhone: true },
+              orderBy: { createdAt: 'desc' },
+            });
+
+            await deps.enqueueApolloEnrich({
+              leadId: targetLeadId,
+              icpProfileId: targetIcpId,
+              scorePredictionId: prediction.id,
+              runId,
+              scoreBand: scoreBand as 'LOW' | 'MEDIUM' | 'HIGH',
+              apolloHasEmail: businessConversion?.apolloHasEmail ?? false,
+              apolloHasDirectPhone: businessConversion?.apolloHasDirectPhone ?? false,
+              correlationId: effectiveCorrelationId,
+            });
+            logger.info(
+              { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, blendedScore, scoreBand },
+              'Enqueued apollo.enrich for qualifying lead',
+            );
+          } else if (deps?.enqueueMessageGenerate) {
+            // Fallback: direct to message.generate if apollo.enrich not wired
+            const phoneData = leadPhoneMap.get(targetLeadId);
+            const hasPhone = Boolean(phoneData?.decisionMakerPhone || phoneData?.phone);
+            const channel = blendedScore >= 0.67 && hasPhone ? 'WHATSAPP' : 'EMAIL';
+            await deps.enqueueMessageGenerate({
+              leadId: targetLeadId,
+              icpProfileId: targetIcpId,
+              scorePredictionId: prediction.id,
+              runId,
+              correlationId: effectiveCorrelationId,
+              channel,
+            });
+            logger.info(
+              { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, blendedScore },
+              'Enqueued message.generate for qualifying lead (no apollo.enrich)',
+            );
+          }
+        }
+
+        // Always check if discovery run can finalize or update progress
+        // (LOW scores are terminal; HIGH/MEDIUM may still be in-flight but
+        // tryFinalizeDiscoveryRun handles that correctly)
+        await tryFinalizeDiscoveryRun(runId, logger);
       }
+    }
+
+    // Update JobExecution tracking records for scored leads
+    const scoredLeadIds = job.data.mode === 'BY_LEAD_IDS' && job.data.leadIds
+      ? job.data.leadIds
+      : targetLeadIds;
+    if (scoredLeadIds.length > 0) {
+      await prisma.jobExecution.updateMany({
+        where: {
+          type: SCORING_COMPUTE_JOB_NAME,
+          status: 'queued',
+          leadId: { in: scoredLeadIds },
+        },
+        data: { status: 'completed', finishedAt: new Date() },
+      });
     }
 
     logger.info(
@@ -475,6 +444,19 @@ export async function handleScoringComputeJob(
       'Completed scoring.compute job',
     );
   } catch (error: unknown) {
+    // Mark JobExecution as failed for tracked leads
+    const failedLeadIds = job.data.leadIds ?? [];
+    if (failedLeadIds.length > 0) {
+      await prisma.jobExecution.updateMany({
+        where: {
+          type: SCORING_COMPUTE_JOB_NAME,
+          status: 'queued',
+          leadId: { in: failedLeadIds },
+        },
+        data: { status: 'failed', finishedAt: new Date() },
+      }).catch(() => { /* best-effort */ });
+    }
+
     logger.error(
       {
         jobId: job.id,
@@ -486,6 +468,6 @@ export async function handleScoringComputeJob(
       'Failed scoring.compute job',
     );
 
-    throw error;
+    throw classifyError(error);
   }
 }

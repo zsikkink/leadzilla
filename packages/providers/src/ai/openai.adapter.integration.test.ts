@@ -18,17 +18,11 @@ function makeOpenAiResponse(content: string) {
 }
 
 const VALID_GENERATION_RESPONSE = {
-  variant_a: {
+  message: {
     subject: 'Boost your fintech payments',
     bodyText: 'Hi Sara, I noticed Acme is growing fast...',
     bodyHtml: '<p>Hi Sara, I noticed Acme is growing fast...</p>',
     ctaText: 'Schedule a demo',
-  },
-  variant_b: {
-    subject: 'Quick question about payments',
-    bodyText: 'Hey Sara, just saw what Acme is up to...',
-    bodyHtml: null,
-    ctaText: null,
   },
 };
 
@@ -57,7 +51,7 @@ const SCORING_CONTEXT = {
 
 describe('OpenAiAdapter integration', () => {
   describe('generateMessageVariants', () => {
-    it('returns parsed variant pair on success', async () => {
+    it('returns parsed single message on success', async () => {
       const fetchImpl = vi.fn(async () => {
         return new Response(
           makeOpenAiResponse(JSON.stringify(VALID_GENERATION_RESPONSE)),
@@ -71,8 +65,8 @@ describe('OpenAiAdapter integration', () => {
       expect(result.status).toBe('success');
       if (result.status !== 'success') throw new Error('Expected success');
       expect(result.data.model).toBe('gpt-4o');
-      expect(result.data.variant_a.subject).toBe('Boost your fintech payments');
-      expect(result.data.variant_b.bodyText).toContain('Sara');
+      expect(result.data.message.subject).toBe('Boost your fintech payments');
+      expect(result.data.message.bodyText).toContain('Sara');
     });
 
     it('strips markdown fences from response', async () => {
@@ -89,7 +83,7 @@ describe('OpenAiAdapter integration', () => {
 
       expect(result.status).toBe('success');
       if (result.status !== 'success') throw new Error('Expected success');
-      expect(result.data.variant_a.subject).toBe('Boost your fintech payments');
+      expect(result.data.message.subject).toBe('Boost your fintech payments');
     });
 
     it('returns terminal_error when API key is missing', async () => {

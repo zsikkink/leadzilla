@@ -3,9 +3,16 @@ import type {
   DiscoveryProvider as SerpDiscoveryProvider,
   DiscoveryRuntimeConfig,
 } from '@lead-flood/discovery';
-import { prisma, type Prisma } from '@lead-flood/db';
+import { prisma, toInputJson } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
+
+import { classifyError } from '../errors.js';
+import {
+  markSearchTasksComplete,
+  tryFinalizeDiscoveryRun,
+  isLeadTargetReached,
+} from '../utils/discovery-run-tracker.js';
 
 export const DISCOVERY_RUN_SEARCH_TASK_JOB_NAME = 'discovery.run_search_task';
 export const DISCOVERY_RUN_SEARCH_TASK_IDEMPOTENCY_KEY_PATTERN =
@@ -28,6 +35,15 @@ export interface DiscoveryRunSearchTaskJobPayload {
   jobRunId?: string;
   maxTasks?: number;
   timeBucket?: string;
+  /** Pipeline v2 fields — passed from discovery.seed to enable business.prequalify chaining. */
+  discoveryRunId?: string | undefined;
+  icpProfileId?: string | undefined;
+  includeWebsiteAnalysis?: boolean | undefined;
+  includeSocialMediaAnalysis?: boolean | undefined;
+  /** Early-stop: stop searching when this many unique businesses are found. */
+  targetUniqueBusinesses?: number | undefined;
+  /** User-configured minimum review count for pre-qualification. */
+  minReviewCount?: number | undefined;
 }
 
 export interface DiscoveryRunSearchTaskLogger {
@@ -41,6 +57,15 @@ export interface DiscoveryRunSearchTaskDependencies {
   provider: SerpDiscoveryProvider;
   config: DiscoveryRuntimeConfig;
   maxTasks?: number;
+  enqueueBusinessPrequalify?: ((payload: {
+    businessId: string;
+    discoveryRunId: string;
+    icpProfileId: string;
+    includeWebsiteAnalysis?: boolean | undefined;
+    includeSocialMediaAnalysis?: boolean | undefined;
+    minReviewCount?: number | undefined;
+    correlationId?: string | undefined;
+  }) => Promise<void>) | undefined;
 }
 
 interface RunState {
@@ -53,10 +78,12 @@ interface RunState {
   serpapiRequests: number;
   startedAtMs: number;
   finalized: boolean;
+  /** Number of concurrent slots actively using this state. */
+  activeSlots: number;
 }
 
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
+export function shouldFinalizeAfterEmptyPoll(state: Pick<RunState, 'activeSlots'>): boolean {
+  return state.activeSlots <= 1;
 }
 
 function getRunKey(job: Job<DiscoveryRunSearchTaskJobPayload>): string {
@@ -70,6 +97,12 @@ function getRunKey(job: Job<DiscoveryRunSearchTaskJobPayload>): string {
 }
 
 const runStates = new Map<string, RunState>();
+
+function toNonNegativeCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : 0;
+}
 
 function getRunState(runKey: string): RunState {
   const existing = runStates.get(runKey);
@@ -86,9 +119,58 @@ function getRunState(runKey: string): RunState {
     serpapiRequests: 0,
     startedAtMs: Date.now(),
     finalized: false,
+    activeSlots: 0,
   };
   runStates.set(runKey, created);
   return created;
+}
+
+async function hydrateRunStateFromExecution(
+  discoveryRunId: string,
+  state: RunState,
+): Promise<void> {
+  if (
+    state.processedTaskCount > 0 ||
+    state.doneCount > 0 ||
+    state.failedCount > 0 ||
+    state.newBusinesses > 0 ||
+    state.newSources > 0 ||
+    state.serpapiRequests > 0
+  ) {
+    return;
+  }
+
+  const execution = await prisma.jobExecution.findUnique({
+    where: { id: discoveryRunId },
+    select: { result: true },
+  });
+
+  const result = execution?.result && typeof execution.result === 'object' && !Array.isArray(execution.result)
+    ? execution.result as Record<string, unknown>
+    : {};
+
+  state.processedTaskCount = Math.max(state.processedTaskCount, toNonNegativeCount(result.searchTasksProcessed));
+  state.failedCount = Math.max(state.failedCount, toNonNegativeCount(result.failedItems));
+  state.newBusinesses = Math.max(state.newBusinesses, toNonNegativeCount(result.newBusinesses));
+  state.newSources = Math.max(state.newSources, toNonNegativeCount(result.newSources));
+  state.serpapiRequests = Math.max(state.serpapiRequests, toNonNegativeCount(result.serpapiRequests));
+}
+
+/**
+ * Release a slot from the run state. Cleans up the Map entry only when
+ * no more concurrent slots are using it (with a grace period).
+ */
+function releaseSlot(runKey: string, state: RunState): void {
+  state.activeSlots = Math.max(0, state.activeSlots - 1);
+  if (state.finalized && state.activeSlots === 0) {
+    // Grace period: let any in-flight slot finish before removing
+    setTimeout(() => {
+      const current = runStates.get(runKey);
+      if (current && current.finalized && current.activeSlots === 0) {
+        runStates.delete(runKey);
+      }
+    }, 30_000);
+  }
 }
 
 function nextPollDelaySeconds(status: 'EMPTY' | 'DONE' | 'FAILED' | 'SKIPPED'): number {
@@ -126,6 +208,78 @@ async function updateJobRunProgress(jobRunId: string, state: RunState): Promise<
       }),
     },
   });
+}
+
+async function updateDiscoveryRunProgress(discoveryRunId: string, state: RunState, targetLeads?: number | undefined): Promise<void> {
+  // Read existing result to preserve processedItems set by downstream pipeline jobs
+  const existing = await prisma.jobExecution.findUnique({
+    where: { id: discoveryRunId },
+    select: { result: true },
+  });
+  const existingResult = existing?.result && typeof existing.result === 'object'
+    ? existing.result as Record<string, unknown>
+    : {};
+
+  await prisma.jobExecution.updateMany({
+    where: {
+      id: discoveryRunId,
+      status: { in: ['queued', 'running'] },
+      finishedAt: null,
+    },
+    data: {
+      status: 'running',
+      result: toInputJson({
+        ...existingResult,
+        // Preserve processedItems from downstream jobs (leads at terminal state)
+        // — don't overwrite with search task count
+        ...(targetLeads !== undefined ? { totalItems: targetLeads } : {}),
+        searchTasksProcessed: state.processedTaskCount,
+        failedItems: state.failedCount,
+        newBusinesses: state.newBusinesses,
+        newSources: state.newSources,
+        serpapiRequests: state.serpapiRequests,
+      }),
+    },
+  });
+}
+
+/**
+ * Mark search tasks as complete and check if the pipeline can be finalized.
+ * The run stays in 'running' until ALL leads reach a terminal pipeline state
+ * (message drafted, scored LOW, or failed).
+ */
+async function completeSearchPhase(
+  discoveryRunId: string,
+  state: RunState,
+  logger: DiscoveryRunSearchTaskLogger,
+  icpProfileId?: string | undefined,
+): Promise<void> {
+  if (state.finalized) {
+    return;
+  }
+  state.finalized = true;
+
+  const yieldRate = state.processedTaskCount > 0
+    ? state.newBusinesses / state.processedTaskCount
+    : 0;
+
+  await markSearchTasksComplete(
+    discoveryRunId,
+    {
+      searchTasksProcessed: state.processedTaskCount,
+      failedItems: state.failedCount,
+      newBusinesses: state.newBusinesses,
+      newSources: state.newSources,
+      serpapiRequests: state.serpapiRequests,
+      durationMs: Math.max(0, Date.now() - state.startedAtMs),
+      yieldRate,
+    },
+    icpProfileId,
+    logger,
+  );
+
+  // Check if the pipeline is already complete (e.g. zero businesses found)
+  await tryFinalizeDiscoveryRun(discoveryRunId, logger);
 }
 
 async function finalizeJobRun(
@@ -177,12 +331,21 @@ export async function handleDiscoveryRunSearchTaskJob(
   const correlationId = job.data.correlationId ?? job.id;
   const runKey = getRunKey(job);
   const runState = getRunState(runKey);
+  runState.activeSlots += 1;
   const effectiveMaxTasks = job.data.maxTasks ?? dependencies.maxTasks;
+  try {
+  if (job.data.discoveryRunId) {
+    await hydrateRunStateFromExecution(job.data.discoveryRunId, runState);
+  }
 
   if (effectiveMaxTasks !== undefined && runState.processedTaskCount >= effectiveMaxTasks) {
     if (job.data.jobRunId) {
       await finalizeJobRun(job.data.jobRunId, runState, 'SUCCESS', null);
-      runStates.delete(runKey);
+      releaseSlot(runKey, runState);
+    }
+    if (job.data.discoveryRunId) {
+      await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
+      releaseSlot(runKey, runState);
     }
     logger.info(
       {
@@ -199,8 +362,64 @@ export async function handleDiscoveryRunSearchTaskJob(
   const runResult = await runSearchTask(
     dependencies.provider,
     dependencies.config,
-    job.data.timeBucket ? { timeBucket: job.data.timeBucket } : {},
+    {
+      ...(job.data.timeBucket ? { timeBucket: job.data.timeBucket } : {}),
+      ...(job.data.discoveryRunId ? { discoveryRunId: job.data.discoveryRunId } : {}),
+    },
   );
+
+  // ── Enqueue business.prequalify for each newly created business ──
+  // B8: Cross-ICP dedup — skip businesses that already have leads from other ICPs
+  if (
+    runResult.newBusinessIds.length > 0 &&
+    dependencies.enqueueBusinessPrequalify &&
+    job.data.discoveryRunId &&
+    job.data.icpProfileId
+  ) {
+    // Check which new businesses already have leads (converted by another ICP run)
+    const existingConversions = runResult.newBusinessIds.length > 0
+      ? await prisma.businessConversion.findMany({
+          where: { businessId: { in: runResult.newBusinessIds } },
+          select: { businessId: true },
+        })
+      : [];
+    const alreadyConvertedIds = new Set(existingConversions.map((c) => c.businessId));
+
+    let enqueuedCount = 0;
+    let skippedCount = 0;
+
+    for (const businessId of runResult.newBusinessIds) {
+      if (alreadyConvertedIds.has(businessId)) {
+        skippedCount += 1;
+        continue;
+      }
+      await dependencies.enqueueBusinessPrequalify({
+        businessId,
+        discoveryRunId: job.data.discoveryRunId,
+        icpProfileId: job.data.icpProfileId,
+        ...(job.data.includeWebsiteAnalysis !== undefined
+          ? { includeWebsiteAnalysis: job.data.includeWebsiteAnalysis }
+          : {}),
+        ...(job.data.includeSocialMediaAnalysis !== undefined
+          ? { includeSocialMediaAnalysis: job.data.includeSocialMediaAnalysis }
+          : {}),
+        ...(job.data.minReviewCount !== undefined ? { minReviewCount: job.data.minReviewCount } : {}),
+        ...(correlationId ? { correlationId } : {}),
+      });
+      enqueuedCount += 1;
+    }
+
+    logger.info(
+      {
+        jobId: job.id,
+        queue: job.name,
+        discoveryRunId: job.data.discoveryRunId,
+        enqueuedPrequalifyCount: enqueuedCount,
+        skippedAlreadyConvertedCount: skippedCount,
+      },
+      'Enqueued business.prequalify for newly discovered businesses',
+    );
+  }
 
   if (runResult.taskId) {
     runState.processedTaskCount += 1;
@@ -221,9 +440,21 @@ export async function handleDiscoveryRunSearchTaskJob(
   if (job.data.jobRunId) {
     if (runResult.status === 'FAILED' && effectiveMaxTasks === undefined) {
       await finalizeJobRun(job.data.jobRunId, runState, 'FAILED', runResult.error ?? 'Task failed');
-      runStates.delete(runKey);
+      releaseSlot(runKey, runState);
     } else {
       await updateJobRunProgress(job.data.jobRunId, runState);
+    }
+  }
+
+  // Update discovery run progress counters
+  if (job.data.discoveryRunId) {
+    if (runResult.status === 'FAILED' && effectiveMaxTasks === undefined) {
+      // Search task failed in unbounded mode — mark search phase complete
+      // and let tryFinalizeDiscoveryRun decide if pipeline items are still in flight
+      await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
+      releaseSlot(runKey, runState);
+    } else {
+      await updateDiscoveryRunProgress(job.data.discoveryRunId, runState, job.data.targetUniqueBusinesses);
     }
   }
 
@@ -275,7 +506,11 @@ export async function handleDiscoveryRunSearchTaskJob(
   if (effectiveMaxTasks !== undefined && runState.processedTaskCount >= effectiveMaxTasks) {
     if (job.data.jobRunId) {
       await finalizeJobRun(job.data.jobRunId, runState, 'SUCCESS', null);
-      runStates.delete(runKey);
+      releaseSlot(runKey, runState);
+    }
+    if (job.data.discoveryRunId) {
+      await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
+      releaseSlot(runKey, runState);
     }
     logger.info(
       {
@@ -289,10 +524,76 @@ export async function handleDiscoveryRunSearchTaskJob(
     return;
   }
 
-  if (effectiveMaxTasks !== undefined && runResult.status === 'EMPTY') {
+  // Early-stop: enough unique businesses found for the lead target.
+  // Use 2x buffer because not all discovered businesses become qualified leads
+  // (disqualification, low scores, missing contacts reduce yield).
+  const targetBiz = job.data.targetUniqueBusinesses;
+  const earlyStopThreshold = targetBiz !== undefined ? targetBiz * 2 : undefined;
+  if (earlyStopThreshold !== undefined && runState.newBusinesses >= earlyStopThreshold) {
+    if (job.data.discoveryRunId) {
+      await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
+      releaseSlot(runKey, runState);
+    }
     if (job.data.jobRunId) {
       await finalizeJobRun(job.data.jobRunId, runState, 'SUCCESS', null);
-      runStates.delete(runKey);
+      releaseSlot(runKey, runState);
+    }
+    logger.info(
+      {
+        slot,
+        correlationId,
+        newBusinesses: runState.newBusinesses,
+        targetUniqueBusinesses: targetBiz,
+      },
+      'Early-stop: reached target unique business count',
+    );
+    return;
+  }
+
+  // Early-stop: lead target already reached (flagged by business.convert)
+  if (job.data.discoveryRunId && await isLeadTargetReached(job.data.discoveryRunId)) {
+    if (job.data.discoveryRunId) {
+      await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
+      releaseSlot(runKey, runState);
+    }
+    if (job.data.jobRunId) {
+      await finalizeJobRun(job.data.jobRunId, runState, 'SUCCESS', null);
+      releaseSlot(runKey, runState);
+    }
+    logger.info(
+      {
+        slot,
+        correlationId,
+        newBusinesses: runState.newBusinesses,
+      },
+      'Early-stop: lead target reached — stopping search task loop',
+    );
+    return;
+  }
+
+  if (effectiveMaxTasks !== undefined && runResult.status === 'EMPTY') {
+    if (!shouldFinalizeAfterEmptyPoll(runState)) {
+      logger.info(
+        {
+          slot,
+          correlationId,
+          activeSlots: runState.activeSlots,
+          processedTaskCount: runState.processedTaskCount,
+          maxTasks: effectiveMaxTasks,
+        },
+        'Empty poll observed while sibling slots are still active — deferring finalization',
+      );
+      releaseSlot(runKey, runState);
+      return;
+    }
+
+    if (job.data.jobRunId) {
+      await finalizeJobRun(job.data.jobRunId, runState, 'SUCCESS', null);
+      releaseSlot(runKey, runState);
+    }
+    if (job.data.discoveryRunId) {
+      await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
+      releaseSlot(runKey, runState);
     }
     logger.info(
       {
@@ -306,7 +607,27 @@ export async function handleDiscoveryRunSearchTaskJob(
     return;
   }
 
+  // ── Cancel check: stop loop gracefully if the run was cancelled ──
+  if (job.data.discoveryRunId) {
+    const execution = await prisma.jobExecution.findUnique({
+      where: { id: job.data.discoveryRunId },
+      select: { status: true },
+    });
+    if (execution?.status === 'cancelled') {
+      logger.warn(
+        { jobId: job.id, queue: job.name, discoveryRunId: job.data.discoveryRunId, slot },
+        'Discovery run cancelled — stopping search task loop',
+      );
+      await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
+      releaseSlot(runKey, runState);
+      return;
+    }
+  }
+
   const startAfterSeconds = nextPollDelaySeconds(runResult.status);
+  // singletonKey prevents duplicate loops if pg-boss retries while self-enqueue is pending
+  const runId = job.data.discoveryRunId ?? job.data.jobRunId ?? correlationId;
+  const singletonKey = `discovery.run_search_task:${runId}:slot-${slot}`;
   await dependencies.boss.send(
     DISCOVERY_RUN_SEARCH_TASK_JOB_NAME,
     {
@@ -316,10 +637,32 @@ export async function handleDiscoveryRunSearchTaskJob(
       jobRunId: job.data.jobRunId,
       maxTasks: effectiveMaxTasks,
       timeBucket: job.data.timeBucket,
+      discoveryRunId: job.data.discoveryRunId,
+      icpProfileId: job.data.icpProfileId,
+      includeWebsiteAnalysis: job.data.includeWebsiteAnalysis,
+      includeSocialMediaAnalysis: job.data.includeSocialMediaAnalysis,
+      targetUniqueBusinesses: job.data.targetUniqueBusinesses,
+      minReviewCount: job.data.minReviewCount,
     },
     {
       startAfter: startAfterSeconds,
+      singletonKey,
       ...DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,
     },
   );
+  } catch (error: unknown) {
+    releaseSlot(runKey, runState);
+    logger.error(
+      {
+        jobId: job.id,
+        queue: job.name,
+        slot,
+        correlationId,
+        error,
+      },
+      'Failed discovery.run_search_task job',
+    );
+    throw classifyError(error);
+  }
+  releaseSlot(runKey, runState);
 }

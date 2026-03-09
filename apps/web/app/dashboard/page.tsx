@@ -1,6 +1,6 @@
 'use client';
 
-import { Calendar, MessageSquare, TrendingUp, Users, Zap } from 'lucide-react';
+import { Calendar, DollarSign, MessageSquare, TrendingUp, Users, Zap } from 'lucide-react';
 import { useCallback, useState } from 'react';
 
 import { CustomSelect } from '../../src/components/custom-select.js';
@@ -19,8 +19,8 @@ interface TodayCardProps {
 
 function TodayCard({ icon: Icon, label, value, accent }: TodayCardProps) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3">
-      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${accent}`}>
+    <div className="group flex items-center gap-3 rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:border-border/50 hover:shadow-lg hover:shadow-black/20">
+      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-shadow duration-200 group-hover:shadow-md ${accent}`}>
         <Icon className="h-4 w-4" />
       </div>
       <div>
@@ -62,6 +62,21 @@ export default function DashboardPage() {
     ),
   );
 
+  // Fetch leads data to sync pipeline numbers
+  const leads = useApiQuery(
+    useCallback(
+      () =>
+        apiClient.listLeads({
+          page: 1,
+          pageSize: 1,
+          includeQualityMetrics: false,
+          ...(icpFilter ? { icpProfileId: icpFilter } : {}),
+        }),
+      [apiClient, icpFilter],
+    ),
+    [icpFilter],
+  );
+
   const icpOptions = [
     { value: '', label: 'All ICPs' },
     ...(icps.data?.items.map((icp) => ({ value: icp.id, label: icp.name })) ?? []),
@@ -72,6 +87,9 @@ export default function DashboardPage() {
   const newLeadsToday = funnel.data?.discoveredCount ?? 0;
   const sentToday = funnel.data?.messagesSentCount ?? 0;
 
+  // Cost per lead from analytics API (already in dollars)
+  const costPerLead = funnel.data?.costPerLead ?? 0;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -79,15 +97,20 @@ export default function DashboardPage() {
           <h1 className="text-2xl font-extrabold tracking-tight">Pipeline Overview</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
             Real-time conversion funnel across all stages
+            {leads.data ? ` \u00b7 ${leads.data.total.toLocaleString()} total leads` : ''}
           </p>
         </div>
 
-        <CustomSelect
-          value={icpFilter ?? ''}
-          onChange={(v) => setIcpFilter(v || undefined)}
-          options={icpOptions}
-          placeholder="All ICPs"
-        />
+        {/* Fixed: constrain dropdown to prevent horizontal overflow */}
+        <div className="relative shrink-0">
+          <CustomSelect
+            value={icpFilter ?? ''}
+            onChange={(v) => setIcpFilter(v || undefined)}
+            options={icpOptions}
+            placeholder="All ICPs"
+            className="[&>div:last-child]:right-0 [&>div:last-child]:left-auto"
+          />
+        </div>
       </div>
 
       {funnel.error ? (
@@ -99,7 +122,7 @@ export default function DashboardPage() {
         <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
           <div className="mb-3 flex items-center gap-2">
             <Calendar className="h-4 w-4 text-zbooni-teal" />
-            <h2 className="text-sm font-bold tracking-tight">Today&apos;s Snapshot</h2>
+            <h2 className="text-sm font-bold tracking-tight">Current Snapshot</h2>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <TodayCard
@@ -132,7 +155,7 @@ export default function DashboardPage() {
 
       {/* KPI Cards */}
       {funnel.data ? (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
           <KpiCard label="Discovered" value={funnel.data.discoveredCount} />
           <KpiCard label="Messaged" value={funnel.data.messagesSentCount} />
           <KpiCard label="Replies" value={funnel.data.repliesCount} />
@@ -145,6 +168,13 @@ export default function DashboardPage() {
             }
             sublabel="%"
           />
+          <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Cost / Lead</p>
+            <div className="mt-1.5 flex items-baseline gap-1">
+              <DollarSign className="h-4 w-4 text-muted-foreground/50" />
+              <p className="text-3xl font-extrabold tracking-tight">{costPerLead.toFixed(2)}</p>
+            </div>
+          </div>
         </div>
       ) : null}
 

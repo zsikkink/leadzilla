@@ -1,6 +1,8 @@
 import type {
   FunnelQuery,
   FunnelResponse,
+  ManagerRecommendationsQuery,
+  ManagerRecommendationsResponse,
   ModelMetricsQuery,
   ModelMetricsResponse,
   RecomputeRollupRequest,
@@ -31,6 +33,7 @@ export interface AnalyticsService {
   getModelMetrics(query: ModelMetricsQuery): Promise<ModelMetricsResponse>;
   getRetrainStatus(query: RetrainStatusQuery): Promise<RetrainStatusResponse>;
   recomputeRollup(input: RecomputeRollupRequest): Promise<void>;
+  getManagerRecommendations(query: ManagerRecommendationsQuery): Promise<ManagerRecommendationsResponse>;
 }
 
 export function buildAnalyticsService(
@@ -63,6 +66,9 @@ export function buildAnalyticsService(
         return;
       }
       await repository.recomputeRollup(input);
+    },
+    async getManagerRecommendations(query) {
+      return repository.getManagerRecommendations(query);
     },
   };
 }

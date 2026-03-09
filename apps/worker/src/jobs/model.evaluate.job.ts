@@ -3,12 +3,14 @@ import { Prisma, prisma } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { formatErrorMessage } from '../errors.js';
 import {
   evaluateModel,
   predictLogistic,
   splitDataset,
   type LogisticModel,
 } from '../scoring/logistic.js';
+import { getModelActivationAuc } from '../utils/pipeline-settings.js';
 import { FEATURE_KEYS_FOR_TRAINING } from './model.train.job.js';
 
 export const MODEL_EVALUATE_JOB_NAME = 'model.evaluate';
@@ -42,9 +44,6 @@ export interface ModelEvaluateLogger {
 export interface ModelEvaluateJobDependencies {
   boss: Pick<PgBoss, 'send'>;
 }
-
-/** Minimum AUC to activate a model. */
-const ACTIVATION_AUC_THRESHOLD = 0.60;
 
 function extractFeatureVector(featuresJson: unknown): number[] | null {
   if (!featuresJson || typeof featuresJson !== 'object') return null;
@@ -95,6 +94,7 @@ export async function handleModelEvaluateJob(
   deps?: ModelEvaluateJobDependencies,
 ): Promise<void> {
   const { runId, correlationId, trainingRunId, modelVersionId, split, activateIfPass } = job.data;
+  const activationAucThreshold = await getModelActivationAuc();
 
   logger.info(
     {
@@ -217,7 +217,7 @@ export async function handleModelEvaluateJob(
 
     // 6. Activation logic
     if (split === 'TEST' && activateIfPass === true) {
-      if (metrics.auc >= ACTIVATION_AUC_THRESHOLD) {
+      if (metrics.auc >= activationAucThreshold) {
         // Activate this model, retire previous active
         await prisma.$transaction(async (tx) => {
           await tx.modelVersion.updateMany({
@@ -256,7 +256,7 @@ export async function handleModelEvaluateJob(
             jobId: job.id,
             modelVersionId,
             auc: metrics.auc,
-            threshold: ACTIVATION_AUC_THRESHOLD,
+            threshold: activationAucThreshold,
           },
           'Model rejected: AUC below threshold',
         );
@@ -264,7 +264,7 @@ export async function handleModelEvaluateJob(
     }
 
     // 7. If VALIDATION passed, chain to TEST evaluation
-    if (split === 'VALIDATION' && metrics.auc >= ACTIVATION_AUC_THRESHOLD && deps?.boss) {
+    if (split === 'VALIDATION' && metrics.auc >= activationAucThreshold && deps?.boss) {
       const testPayload: ModelEvaluateJobPayload = {
         runId: `eval-test-${modelVersionId.slice(0, 8)}-${Date.now()}`,
         trainingRunId,
@@ -301,6 +301,17 @@ export async function handleModelEvaluateJob(
       'Completed model.evaluate job',
     );
   } catch (error: unknown) {
+    // Compensating write: mark ModelVersion as ARCHIVED on failure
+    // so it doesn't remain stuck in SHADOW stage indefinitely
+    try {
+      await prisma.modelVersion.update({
+        where: { id: modelVersionId },
+        data: { stage: 'ARCHIVED' },
+      });
+    } catch {
+      // Swallow — we want to rethrow the original error
+    }
+
     logger.error(
       {
         jobId: job.id,
@@ -309,7 +320,7 @@ export async function handleModelEvaluateJob(
         trainingRunId,
         modelVersionId,
         correlationId: correlationId ?? job.id,
-        error,
+        error: formatErrorMessage(error),
       },
       'Failed model.evaluate job',
     );

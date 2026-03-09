@@ -71,7 +71,8 @@ export class WhatsAppRateLimiter {
     this.bizEnd = config.businessHoursEnd ?? DEFAULT_BIZ_END;
   }
 
-  async canSend(): Promise<RateLimitResult> {
+  async canSend(overrideDailyLimit?: number | undefined): Promise<RateLimitResult> {
+    const effectiveLimit = overrideDailyLimit ?? this.dailySendLimit;
     const uaeNow = getUaeNow(this.offsetHours);
     const uaeHour = uaeNow.getUTCHours();
 
@@ -89,12 +90,12 @@ export class WhatsAppRateLimiter {
     const count = await this.prisma.messageSend.count({
       where: {
         channel: 'WHATSAPP',
-        status: { in: ['SENT', 'QUEUED'] },
+        status: 'SENT',
         createdAt: { gte: dayStartUtc },
       },
     });
 
-    if (count >= this.dailySendLimit) {
+    if (count >= effectiveLimit) {
       return {
         allowed: false,
         nextWindowAt: getNextWindowUtc(uaeNow, this.offsetHours, this.bizStart),

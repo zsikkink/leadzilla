@@ -1,19 +1,5 @@
 import type { DiscoverySeedProfile } from '../config.js';
-import type { DiscoveryCountryCode, DiscoveryLanguageCode } from '../providers/types.js';
-
-export const initialCitiesByCountry: Record<DiscoveryCountryCode, string[]> = {
-  JO: ['Amman', 'Irbid', 'Zarqa', 'Aqaba'],
-  SA: ['Riyadh', 'Jeddah', 'Dammam', 'Mecca'],
-  AE: ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman'],
-  EG: ['Cairo', 'Alexandria', 'Giza', 'Mansoura'],
-};
-
-export const smallInitialCitiesByCountry: Record<DiscoveryCountryCode, string[]> = {
-  JO: ['Amman'],
-  SA: ['Riyadh', 'Jeddah'],
-  AE: ['Dubai', 'Abu Dhabi'],
-  EG: ['Cairo'],
-};
+import type { DiscoveryLanguageCode } from '../providers/types.js';
 
 export const categoryTaxonomyEN: string[] = [
   'bakery',
@@ -92,30 +78,24 @@ export const smallCategoryTaxonomyAR: string[] = [
 ];
 
 export const queryTemplatesEN: string[] = [
-  '{category} in {city} {country} contact us WhatsApp',
-  '{category} in {city} {country} DM for orders Instagram',
-  '{category} in {city} {country} order now send payment link',
+  '{category} in {city} contact us WhatsApp',
+  '{category} in {city} DM for orders Instagram',
+  '{category} in {city} order now send payment link',
 ];
 
 export const smallQueryTemplatesEN: string[] = [
-  '{category} in {city} {country} contact us WhatsApp',
+  '{category} in {city} contact us WhatsApp',
 ];
 
 export const queryTemplatesAR: string[] = [
-  '{category} في {city} {country} تواصل معنا واتساب',
-  '{category} في {city} {country} اطلب عبر انستقرام',
-  '{category} في {city} {country} اطلب الآن رابط دفع',
+  '{category} في {city} تواصل معنا واتساب',
+  '{category} في {city} اطلب عبر انستقرام',
+  '{category} في {city} اطلب الآن رابط دفع',
 ];
 
 export const smallQueryTemplatesAR: string[] = [
-  '{category} في {city} {country} تواصل معنا واتساب',
+  '{category} في {city} تواصل معنا واتساب',
 ];
-
-export function getInitialCitiesByCountry(
-  profile: DiscoverySeedProfile,
-): Record<DiscoveryCountryCode, string[]> {
-  return profile === 'small' ? smallInitialCitiesByCountry : initialCitiesByCountry;
-}
 
 export function getCategoryTaxonomy(
   language: DiscoveryLanguageCode,
@@ -136,3 +116,105 @@ export function getQueryTemplates(
   }
   return language === 'ar' ? queryTemplatesAR : queryTemplatesEN;
 }
+
+/* ------------------------------------------------------------------ */
+/* V2 additions — ICP-driven discovery                                */
+/* ------------------------------------------------------------------ */
+
+/** V2 query templates (English). Use with generateTasksV2. */
+export const queryTemplatesV2EN: string[] = [
+  '{category} in {city}',
+];
+
+/** ISO 3166-1 alpha-2 → human-readable country name. */
+export const COUNTRY_NAMES: Record<string, string> = {
+  AE: 'United Arab Emirates',
+  SA: 'Saudi Arabia',
+  JO: 'Jordan',
+  EG: 'Egypt',
+  QA: 'Qatar',
+  BH: 'Bahrain',
+  KW: 'Kuwait',
+  OM: 'Oman',
+  LB: 'Lebanon',
+  IQ: 'Iraq',
+  MA: 'Morocco',
+  TN: 'Tunisia',
+  DZ: 'Algeria',
+  LY: 'Libya',
+  YE: 'Yemen',
+  SY: 'Syria',
+  PS: 'Palestine',
+  SD: 'Sudan',
+  US: 'United States',
+  GB: 'United Kingdom',
+};
+
+/**
+ * Common country name/abbreviation → ISO alpha-2 code.
+ * Used to normalize ICP targetCountries (which may contain "UAE", "KSA", etc.)
+ * into the ISO codes expected by generateTasksV2.
+ */
+export const COUNTRY_NAME_TO_ISO: Record<string, string> = {
+  uae: 'AE',
+  ksa: 'SA',
+  egypt: 'EG',
+  jordan: 'JO',
+  bahrain: 'BH',
+  kuwait: 'KW',
+  oman: 'OM',
+  qatar: 'QA',
+  lebanon: 'LB',
+  iraq: 'IQ',
+  morocco: 'MA',
+  tunisia: 'TN',
+  algeria: 'DZ',
+  libya: 'LY',
+  yemen: 'YE',
+  syria: 'SY',
+  palestine: 'PS',
+  sudan: 'SD',
+  'united arab emirates': 'AE',
+  'saudi arabia': 'SA',
+  // Already ISO codes (passthrough)
+  ae: 'AE',
+  sa: 'SA',
+  eg: 'EG',
+  jo: 'JO',
+  bh: 'BH',
+  kw: 'KW',
+  om: 'OM',
+  qa: 'QA',
+  lb: 'LB',
+  iq: 'IQ',
+  ma: 'MA',
+  tn: 'TN',
+  dz: 'DZ',
+  ly: 'LY',
+  ye: 'YE',
+  sy: 'SY',
+  ps: 'PS',
+  sd: 'SD',
+};
+
+/** Default cities per country code for V2 discovery. */
+export const defaultCitiesByCountry: Record<string, string[]> = {
+  AE: ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman'],
+  SA: ['Riyadh', 'Jeddah', 'Dammam', 'Mecca'],
+  JO: ['Amman', 'Irbid', 'Zarqa', 'Aqaba'],
+  EG: ['Cairo', 'Alexandria', 'Giza', 'Mansoura'],
+  QA: ['Doha'],
+  BH: ['Manama'],
+  KW: ['Kuwait City'],
+  OM: ['Muscat'],
+  LB: ['Beirut'],
+  IQ: ['Baghdad', 'Erbil', 'Basra'],
+  MA: ['Casablanca', 'Rabat', 'Marrakech'],
+  TN: ['Tunis', 'Sfax'],
+  DZ: ['Algiers', 'Oran'],
+  LY: ['Tripoli', 'Benghazi'],
+  YE: ['Sanaa', 'Aden'],
+  SY: ['Damascus', 'Aleppo'],
+  PS: ['Ramallah', 'Gaza'],
+  SD: ['Khartoum'],
+};

@@ -15,8 +15,6 @@ const env: ApiEnv = {
   API_PORT: 5050,
   CORS_ORIGIN: 'http://localhost:3000',
   LOG_LEVEL: 'error',
-  JWT_ACCESS_SECRET: 'test-access-secret-test-access-secret',
-  JWT_REFRESH_SECRET: 'test-refresh-secret-test-refresh-secret',
   PG_BOSS_SCHEMA: 'pgboss',
   DATABASE_URL: databaseUrl,
   DIRECT_URL: directUrl,
@@ -33,11 +31,15 @@ describe('POST /v1/auth/login integration', () => {
     const server = buildServer({
       env,
       logger: createLogger({ service: 'api-test', env: 'test', level: 'error' }),
-      accessTokenSecret: env.JWT_ACCESS_SECRET!,
+      verifyAccessToken: async () => ({ sub: 'user_1', email: null, firstName: null, lastName: null }),
       checkDatabaseHealth: async () => true,
+      checkSchemaHealth: async () => ({ status: 'ok', missingTables: [], missingEnumValues: [] }),
       createLeadAndEnqueue: async () => ({ leadId: 'lead_1', jobId: 'job_1' }),
       getLeadById: async () => null,
       listLeads: async () => ({ items: [], page: 1, pageSize: 20, total: 0 }),
+      listContactRecoveryItems: async () => ({ items: [], page: 1, pageSize: 20, total: 0 }),
+      getContactRecoveryItem: async () => null,
+      rejectContactRecoveryItem: async () => null,
       getJobById: async () => null,
     });
 

@@ -15,7 +15,7 @@ const CsvStringListSchema = z.preprocess((value) => {
 
 const OptionalCsvStringListSchema = CsvStringListSchema.optional();
 
-export const AdminLeadSortBySchema = z.enum(['score_desc', 'recent', 'review_count']);
+export const AdminLeadSortBySchema = z.enum(['score_desc', 'recent', 'review_count', 'newest']);
 export const SearchTaskSortBySchema = z.enum(['updated_desc', 'run_after_asc', 'attempts_desc']);
 export const SearchTaskTypeSchema = z.enum(['SERP_GOOGLE', 'SERP_GOOGLE_LOCAL', 'SERP_MAPS_LOCAL']);
 export const SearchTaskStatusSchema = z.enum(['PENDING', 'RUNNING', 'DONE', 'FAILED', 'SKIPPED']);
@@ -25,7 +25,7 @@ export const AdminListLeadsQuerySchema = z
   .object({
     page: z.coerce.number().int().min(1).default(1),
     pageSize: z.coerce.number().int().min(1).max(100).default(20),
-    sortBy: AdminLeadSortBySchema.default('score_desc'),
+    sortBy: AdminLeadSortBySchema.default('newest'),
     scoreMin: z.coerce.number().min(0).max(1).optional(),
     scoreMax: z.coerce.number().min(0).max(1).optional(),
     countries: OptionalCsvStringListSchema,

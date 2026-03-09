@@ -1,53 +1,63 @@
 'use client';
 
-import type { DiscoveryProvider, IcpProfileResponse, PipelineRunStatus } from '@lead-flood/contracts';
+import type { IcpProfileResponse, PipelineRunStatus } from '@lead-flood/contracts';
 import {
   AlertCircle,
   CheckCircle2,
   ChevronRight,
+  Globe,
   Loader2,
+  MapPin,
   Play,
   Rocket,
   Search,
   Target,
   TrendingUp,
-  Users,
   Zap,
 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { CustomSelect } from '../../../src/components/custom-select.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
+import { countryName, toDiscoveryCountryCodes } from '../../../src/lib/countries.js';
+import { getSupabaseBrowserClient } from '../../../src/lib/supabase-client.js';
+import { cn } from '../../../src/lib/utils.js';
 
-const PROVIDER_OPTIONS = [
-  { value: '', label: 'Auto (Best Match)' },
-  { value: 'APOLLO', label: 'Apollo' },
-  { value: 'BRAVE_SEARCH', label: 'Brave Search' },
-  { value: 'GOOGLE_PLACES', label: 'Google Places' },
-  { value: 'LINKEDIN_SCRAPE', label: 'LinkedIn Scrape' },
-  { value: 'COMPANY_SEARCH_FREE', label: 'Company Search' },
-];
+// ── City mapping by country ──────────────────────────────
+const COUNTRY_CITIES: Record<string, string[]> = {
+  AE: ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Ras Al Khaimah', 'Fujairah', 'Umm Al Quwain', 'Al Ain'],
+  SA: ['Riyadh', 'Jeddah', 'Dammam', 'Mecca', 'Medina', 'Khobar', 'Tabuk', 'Abha'],
+  BH: ['Manama', 'Muharraq', 'Riffa', 'Hamad Town'],
+  KW: ['Kuwait City', 'Hawalli', 'Salmiya', 'Jahra'],
+  QA: ['Doha', 'Al Wakrah', 'Al Khor', 'Lusail'],
+  OM: ['Muscat', 'Salalah', 'Sohar', 'Nizwa'],
+  EG: ['Cairo', 'Alexandria', 'Giza', 'Sharm El Sheikh'],
+  JO: ['Amman', 'Irbid', 'Zarqa', 'Aqaba'],
+  LB: ['Beirut', 'Tripoli', 'Sidon', 'Jounieh'],
+  IQ: ['Baghdad', 'Erbil', 'Basra', 'Sulaymaniyah'],
+  MA: ['Casablanca', 'Rabat', 'Marrakech', 'Fez', 'Tangier'],
+  TN: ['Tunis', 'Sfax', 'Sousse', 'Kairouan'],
+  DZ: ['Algiers', 'Oran', 'Constantine', 'Annaba'],
+  LY: ['Tripoli', 'Benghazi', 'Misrata', 'Sabha'],
+  YE: ['Sanaa', 'Aden', 'Taiz', 'Hodeidah'],
+  SY: ['Damascus', 'Aleppo', 'Homs', 'Latakia'],
+  PS: ['Ramallah', 'Gaza', 'Nablus', 'Hebron', 'Bethlehem'],
+  SD: ['Khartoum', 'Omdurman', 'Port Sudan', 'Kassala'],
+};
 
 const LIMIT_OPTIONS = [
-  { value: '25', label: '25 leads' },
-  { value: '50', label: '50 leads' },
-  { value: '100', label: '100 leads' },
-  { value: '250', label: '250 leads' },
-  { value: '500', label: '500 leads' },
-  { value: '1000', label: '1000 leads' },
+  { value: '5', label: '5' },
+  { value: '10', label: '10' },
+  { value: '25', label: '25' },
+  { value: '50', label: '50' },
+  { value: '100', label: '100' },
+  { value: '250', label: '250' },
+  { value: '500', label: '500' },
+  { value: '1000', label: '1000' },
 ];
 
-interface RunState {
-  runId: string;
-  status: PipelineRunStatus;
-  totalItems: number;
-  processedItems: number;
-  failedItems: number;
-  startedAt: string | null;
-  endedAt: string | null;
-  errorMessage: string | null;
-}
+// ── Sub-components ──────────────────────────────────────
 
 function StatusIcon({ status }: { status: PipelineRunStatus }) {
   switch (status) {
@@ -70,7 +80,7 @@ function ProgressBar({ processed, total }: { processed: number; total: number })
     <div className="w-full">
       <div className="mb-1.5 flex items-center justify-between text-xs">
         <span className="font-medium text-muted-foreground">
-          {processed} / {total} processed
+          {processed} / {total} leads
         </span>
         <span className="font-bold text-foreground">{pct}%</span>
       </div>
@@ -84,113 +94,253 @@ function ProgressBar({ processed, total }: { processed: number; total: number })
   );
 }
 
-function IcpPreviewCard({ icp }: { icp: IcpProfileResponse }) {
-  return (
-    <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-zbooni-teal/10">
-          <Target className="h-5 w-5 text-zbooni-teal" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="font-bold">{icp.name}</p>
-          {icp.description ? (
-            <p className="mt-0.5 text-sm text-muted-foreground line-clamp-2">{icp.description}</p>
-          ) : null}
-        </div>
-      </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Industries</p>
-          <div className="mt-1 flex flex-wrap gap-1">
-            {icp.targetIndustries.length > 0 ? (
-              icp.targetIndustries.map((i) => (
-                <span key={i} className="rounded-full bg-zbooni-dark/60 px-2 py-0.5 text-xs text-muted-foreground">{i}</span>
-              ))
-            ) : (
-              <span className="text-xs text-muted-foreground/40">Any</span>
-            )}
-          </div>
-        </div>
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Countries</p>
-          <div className="mt-1 flex flex-wrap gap-1">
-            {icp.targetCountries.length > 0 ? (
-              icp.targetCountries.map((c) => (
-                <span key={c} className="rounded-full bg-zbooni-teal/10 px-2 py-0.5 text-xs text-zbooni-teal">{c}</span>
-              ))
-            ) : (
-              <span className="text-xs text-muted-foreground/40">Any</span>
-            )}
-          </div>
-        </div>
-        {icp.minCompanySize !== null || icp.maxCompanySize !== null ? (
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Company Size</p>
-            <p className="mt-1 text-xs font-medium">
-              {icp.minCompanySize ?? 0} - {icp.maxCompanySize ?? '10,000+'}
-            </p>
-          </div>
-        ) : null}
-        {icp.requiredTechnologies.length > 0 ? (
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Technologies</p>
-            <div className="mt-1 flex flex-wrap gap-1">
-              {icp.requiredTechnologies.map((t) => (
-                <span key={t} className="rounded-full bg-purple-500/10 px-2 py-0.5 text-xs text-purple-400">{t}</span>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    </div>
+// ── Pill selector components ──────────────────────────────
+
+function PillOption({
+  selected,
+  onClick,
+  children,
+  className,
+}: {
+  selected: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  className?: string | undefined;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-all duration-150',
+        selected
+          ? 'border-zbooni-teal/40 bg-zbooni-teal/10 text-zbooni-teal shadow-sm'
+          : 'border-border/40 bg-zbooni-dark/30 text-muted-foreground hover:border-border/60 hover:bg-zbooni-dark/50 hover:text-foreground',
+        className,
+      )}
+    >
+      {children}
+    </button>
   );
 }
+
+function IcpCheckbox({
+  icp,
+  selected,
+  onToggle,
+}: {
+  icp: IcpProfileResponse;
+  selected: boolean;
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(icp.id)}
+      className={cn(
+        'flex items-start gap-3 rounded-xl border p-3 text-left transition-all duration-150',
+        selected
+          ? 'border-zbooni-teal/40 bg-zbooni-teal/5 shadow-sm'
+          : 'border-border/30 bg-zbooni-dark/20 hover:border-border/50 hover:bg-zbooni-dark/40',
+      )}
+    >
+      {/* Checkbox indicator */}
+      <div
+        className={cn(
+          'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 transition-colors duration-150',
+          selected
+            ? 'border-zbooni-teal bg-zbooni-teal text-zbooni-dark'
+            : 'border-border/50 bg-transparent',
+        )}
+      >
+        {selected ? (
+          <svg className="h-3 w-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={2.5}>
+            <path d="M2 6l3 3 5-5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ) : null}
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className={cn('text-sm font-semibold', selected ? 'text-foreground' : 'text-muted-foreground')}>
+            {icp.name}
+          </span>
+        </div>
+        {icp.description ? (
+          <p className="mt-0.5 text-xs text-muted-foreground/70 line-clamp-1">{icp.description}</p>
+        ) : null}
+        {icp.targetIndustries.length > 0 ? (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {icp.targetIndustries.slice(0, 3).map((ind) => (
+              <span key={ind} className="rounded bg-zbooni-dark/60 px-1.5 py-0.5 text-[10px] text-muted-foreground/60">
+                {ind}
+              </span>
+            ))}
+            {icp.targetIndustries.length > 3 ? (
+              <span className="text-[10px] text-muted-foreground/40">+{icp.targetIndustries.length - 3}</span>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </button>
+  );
+}
+
+// ── Batch grouping — runs created within 5s = one batch ──────
+interface RunBatch {
+  batchKey: string;
+  runs: Array<{
+    runId: string;
+    status: PipelineRunStatus;
+    icpProfileId: string | null;
+    icpProfileIds?: string[] | undefined;
+    countries: string[];
+    limit: number;
+    processedItems: number;
+    failedItems: number;
+    startedAt: string | null;
+    finishedAt: string | null;
+    createdAt: string;
+    errorMessage: string | null;
+  }>;
+  icpNames: string[];
+  countries: string[];
+  totalLimit: number;
+  totalProcessed: number;
+  totalFailed: number;
+  overallStatus: PipelineRunStatus;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  errorMessages: string[];
+}
+
+const STATUS_PRIORITY: Record<string, number> = {
+  FAILED: 0,
+  RUNNING: 1,
+  QUEUED: 2,
+  PARTIAL: 3,
+  SUCCEEDED: 4,
+};
+
+function groupRunsIntoBatches(
+  runs: RunBatch['runs'],
+  icpItems: Array<{ id: string; name: string }> | undefined,
+): RunBatch[] {
+  if (runs.length === 0) return [];
+
+  const sorted = [...runs].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const batches: RunBatch[] = [];
+  let currentBatch: RunBatch['runs'] = [sorted[0]!];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = new Date(sorted[i - 1]!.createdAt).getTime();
+    const curr = new Date(sorted[i]!.createdAt).getTime();
+    if (prev - curr <= 5000) {
+      currentBatch.push(sorted[i]!);
+    } else {
+      batches.push(buildBatch(currentBatch, icpItems));
+      currentBatch = [sorted[i]!];
+    }
+  }
+  batches.push(buildBatch(currentBatch, icpItems));
+  return batches;
+}
+
+function buildBatch(
+  runs: RunBatch['runs'],
+  icpItems: Array<{ id: string; name: string }> | undefined,
+): RunBatch {
+  const icpNames = Array.from(new Set(runs.flatMap((r) => {
+    const ids = r.icpProfileIds?.length
+      ? r.icpProfileIds
+      : (r.icpProfileId ? [r.icpProfileId] : []);
+    return ids.map((id) => icpItems?.find((i) => i.id === id)?.name ?? 'ICP');
+  })));
+  const uniqueCountries = Array.from(new Set(runs.flatMap((r) => r.countries)));
+  const overallStatus = runs.reduce<PipelineRunStatus>((worst, r) => {
+    return (STATUS_PRIORITY[r.status] ?? 5) < (STATUS_PRIORITY[worst] ?? 5) ? r.status : worst;
+  }, 'SUCCEEDED');
+  const errors = runs.map((r) => r.errorMessage).filter((e): e is string => e !== null);
+  const startedAt = runs.map((r) => r.startedAt).filter((s): s is string => s !== null).sort()[0] ?? null;
+  const finishedAt = runs.every((r) => r.finishedAt) ? runs.map((r) => r.finishedAt).filter((s): s is string => s !== null).sort().reverse()[0] ?? null : null;
+
+  return {
+    batchKey: runs.map((r) => r.runId).join('-'),
+    runs,
+    icpNames,
+    countries: uniqueCountries,
+    totalLimit: runs.reduce((sum, r) => sum + r.limit, 0),
+    totalProcessed: runs.reduce((sum, r) => sum + r.processedItems, 0),
+    totalFailed: runs.reduce((sum, r) => sum + r.failedItems, 0),
+    overallStatus,
+    createdAt: runs[0]!.createdAt,
+    startedAt,
+    finishedAt,
+    errorMessages: errors,
+  };
+}
+
+// ── Main page ──────────────────────────────────────
 
 export default function DiscoverPage() {
   const { apiClient, user } = useAuth();
 
-  // Form state
-  const [selectedIcpId, setSelectedIcpId] = useState('');
-  const [provider, setProvider] = useState('');
+  // Form state: multi-ICP selection + pipeline v2 settings
+  const [selectedIcpIds, setSelectedIcpIds] = useState<Set<string>>(new Set());
+  const [selectedCities, setSelectedCities] = useState<Set<string>>(new Set());
+  const [includeWebsiteAnalysis, setIncludeWebsiteAnalysis] = useState(true);
+  const [includeSocialMediaAnalysis, setIncludeSocialMediaAnalysis] = useState(true);
   const [limit, setLimit] = useState('25');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Run tracking
-  const [activeRun, setActiveRun] = useState<RunState | null>(null);
+  // Discovery yield rates for cost estimate
+  const [yieldRates, setYieldRates] = useState<Map<string, number>>(new Map());
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchYieldRates() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data } = await supabase
+          .from('pipeline_settings')
+          .select('key, valueJson')
+          .like('key', 'discovery_yield_rate:%');
+        if (!data || cancelled) return;
+        const map = new Map<string, number>();
+        for (const row of data) {
+          const icpId = (row.key as string).replace('discovery_yield_rate:', '');
+          const rate = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
+          if (!isNaN(rate) && rate > 0) map.set(icpId, rate);
+        }
+        setYieldRates(map);
+      } catch {
+        // Non-critical
+      }
+    }
+    void fetchYieldRates();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Run tracking — multi-run via API
+  const [runsRefreshKey, setRunsRefreshKey] = useState(0);
+  const discoveryRuns = useApiQuery(
+    useCallback(
+      () => apiClient.listDiscoveryRuns({ page: 1, pageSize: 20 }),
+      [apiClient, runsRefreshKey],
+    ),
+    [runsRefreshKey],
+  );
+
+  // Poll for runs when any are QUEUED or RUNNING
+  const hasActiveRuns = discoveryRuns.data?.runs.some(
+    (r) => r.status === 'QUEUED' || r.status === 'RUNNING',
+  );
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Load ICPs
-  const icps = useApiQuery(
-    useCallback(() => apiClient.listIcps({ page: 1, pageSize: 50, isActive: true }), [apiClient]),
-  );
-
-  const selectedIcp = icps.data?.items.find((i) => i.id === selectedIcpId) ?? null;
-
-  const icpOptions = [
-    { value: '', label: 'Select an ICP Profile...' },
-    ...(icps.data?.items.map((icp) => ({ value: icp.id, label: icp.name })) ?? []),
-  ];
-
-  // Recent discovery records
-  const records = useApiQuery(
-    useCallback(
-      () =>
-        apiClient.listDiscoveryRecords({
-          page: 1,
-          pageSize: 10,
-          includeQualityMetrics: true,
-          ...(selectedIcpId ? { icpProfileId: selectedIcpId } : {}),
-        }),
-      [apiClient, selectedIcpId],
-    ),
-    [selectedIcpId],
-  );
-
-  // Poll for run status
   useEffect(() => {
-    if (!activeRun || activeRun.status === 'SUCCEEDED' || activeRun.status === 'FAILED') {
+    if (!hasActiveRuns) {
       if (pollRef.current) {
         clearInterval(pollRef.current);
         pollRef.current = null;
@@ -198,26 +348,8 @@ export default function DiscoverPage() {
       return;
     }
 
-    pollRef.current = setInterval(async () => {
-      try {
-        const status = await apiClient.getDiscoveryRunStatus(activeRun.runId);
-        setActiveRun({
-          runId: status.runId,
-          status: status.status,
-          totalItems: status.totalItems,
-          processedItems: status.processedItems,
-          failedItems: status.failedItems,
-          startedAt: status.startedAt,
-          endedAt: status.endedAt,
-          errorMessage: status.errorMessage,
-        });
-
-        if (status.status === 'SUCCEEDED' || status.status === 'FAILED' || status.status === 'PARTIAL') {
-          records.refetch();
-        }
-      } catch {
-        // silently retry
-      }
+    pollRef.current = setInterval(() => {
+      setRunsRefreshKey((k) => k + 1);
     }, 3000);
 
     return () => {
@@ -226,32 +358,97 @@ export default function DiscoverPage() {
         pollRef.current = null;
       }
     };
-  }, [activeRun, apiClient, records]);
+  }, [hasActiveRuns]);
+
+  // Load ICPs
+  const icps = useApiQuery(
+    useCallback(() => apiClient.listIcps({ page: 1, pageSize: 50, isActive: true }), [apiClient]),
+  );
+
+  // Group discovery runs into batches (runs within 5s = same batch)
+  const runBatches = useMemo(
+    () => groupRunsIntoBatches(discoveryRuns.data?.runs ?? [], icps.data?.items),
+    [discoveryRuns.data, icps.data],
+  );
+
+  // Derive countries from selected ICPs
+  const derivedCountries = useMemo(() => {
+    if (!icps.data) return [];
+    const targetCountries: string[] = [];
+    for (const id of selectedIcpIds) {
+      const icp = icps.data.items.find((i) => i.id === id);
+      if (icp) {
+        targetCountries.push(...icp.targetCountries);
+      }
+    }
+    return toDiscoveryCountryCodes(targetCountries).sort((a, b) => a.localeCompare(b));
+  }, [selectedIcpIds, icps.data]);
+
+  // Available cities based on derived countries
+  const availableCities = useMemo(() => {
+    const cities = new Set<string>();
+    for (const country of derivedCountries) {
+      const mapped = COUNTRY_CITIES[country];
+      if (mapped) for (const c of mapped) cities.add(c);
+    }
+    return Array.from(cities).sort();
+  }, [derivedCountries]);
+
+  // Reset city selection when countries change
+  useEffect(() => {
+    setSelectedCities((prev) => {
+      const citySet = new Set(availableCities);
+      const filtered = new Set(Array.from(prev).filter((c) => citySet.has(c)));
+      return filtered.size !== prev.size ? filtered : prev;
+    });
+  }, [availableCities]);
+
+  const toggleCity = (city: string) => {
+    setSelectedCities((prev) => {
+      const next = new Set(prev);
+      if (next.has(city)) {
+        next.delete(city);
+      } else {
+        next.add(city);
+      }
+      return next;
+    });
+  };
+
+  const toggleIcp = (id: string) => {
+    setSelectedIcpIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   const handleStartDiscovery = async () => {
-    if (!selectedIcpId) return;
+    if (selectedIcpIds.size === 0 || derivedCountries.length === 0) return;
 
     setIsSubmitting(true);
     setSubmitError(null);
 
+    const cities = selectedCities.size > 0 ? Array.from(selectedCities) : undefined;
+
     try {
-      const result = await apiClient.createDiscoveryRun({
-        icpProfileId: selectedIcpId,
-        ...(provider ? { provider: provider as DiscoveryProvider } : {}),
+      // Single API call with all selected ICPs — limit is split server-side
+      await apiClient.createDiscoveryRun({
+        icpProfileIds: Array.from(selectedIcpIds),
+        countries: derivedCountries,
+        ...(cities ? { cities } : {}),
+        includeWebsiteAnalysis,
+        includeSocialMediaAnalysis,
         limit: parseInt(limit, 10),
         ...(user?.id ? { requestedByUserId: user.id } : {}),
       });
 
-      setActiveRun({
-        runId: result.runId,
-        status: result.status,
-        totalItems: 0,
-        processedItems: 0,
-        failedItems: 0,
-        startedAt: null,
-        endedAt: null,
-        errorMessage: null,
-      });
+      // Refresh run list to show new runs
+      setRunsRefreshKey((k) => k + 1);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Failed to start discovery');
     } finally {
@@ -259,7 +456,7 @@ export default function DiscoverPage() {
     }
   };
 
-  const isRunning = activeRun && (activeRun.status === 'QUEUED' || activeRun.status === 'RUNNING');
+  const isRunning = hasActiveRuns;
 
   return (
     <div className="space-y-6">
@@ -285,58 +482,221 @@ export default function DiscoverPage() {
           Configure Search
         </h2>
 
-        <div className="space-y-5">
-          {/* Step 1: Select ICP */}
+        <div className="space-y-6">
+          {/* Step 1: Select ICPs (multi-select with checkboxes) */}
           <div>
-            <div className="mb-2 flex items-center gap-2">
+            <div className="mb-3 flex items-center gap-2">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zbooni-teal/10 text-xs font-bold text-zbooni-teal">
                 1
               </span>
-              <label className="text-sm font-semibold">Select ICP Profile</label>
+              <label className="text-sm font-semibold">Select ICP Profiles</label>
+              {selectedIcpIds.size > 0 ? (
+                <span className="rounded-full bg-zbooni-teal/10 px-2 py-0.5 text-[11px] font-semibold text-zbooni-teal">
+                  {selectedIcpIds.size} selected
+                </span>
+              ) : null}
             </div>
-            <CustomSelect
-              value={selectedIcpId}
-              onChange={setSelectedIcpId}
-              options={icpOptions}
-              placeholder="Select an ICP Profile..."
-            />
+
+            {icps.isLoading ? (
+              <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
+                Loading profiles...
+              </div>
+            ) : null}
+
+            {!icps.isLoading && icps.error ? (
+              <div className="flex items-center gap-3 rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-400">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span className="flex-1">Failed to load ICP profiles: {icps.error}</span>
+                <button
+                  type="button"
+                  onClick={icps.refetch}
+                  className="shrink-0 rounded-md bg-red-500/20 px-2.5 py-1 text-xs font-semibold text-red-300 transition-colors hover:bg-red-500/30"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : null}
+
+            {icps.data && icps.data.items.length > 0 ? (
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {icps.data.items.map((icp) => (
+                  <IcpCheckbox
+                    key={icp.id}
+                    icp={icp}
+                    selected={selectedIcpIds.has(icp.id)}
+                    onToggle={toggleIcp}
+                  />
+                ))}
+              </div>
+            ) : null}
+
+            {icps.data && icps.data.items.length === 0 ? (
+              <p className="text-sm text-muted-foreground/60">No active ICP profiles found. Create one first.</p>
+            ) : null}
           </div>
 
-          {/* ICP Preview */}
-          {selectedIcp ? <IcpPreviewCard icp={selectedIcp} /> : null}
-
-          {/* Step 2: Provider */}
+          {/* Step 2: Search Settings — countries, cities, analysis toggles */}
           <div>
-            <div className="mb-2 flex items-center gap-2">
+            <div className="mb-3 flex items-center gap-2">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zbooni-teal/10 text-xs font-bold text-zbooni-teal">
                 2
               </span>
-              <label className="text-sm font-semibold">Data Source</label>
-              <span className="text-xs text-muted-foreground">(optional)</span>
+              <label className="text-sm font-semibold">Search Settings</label>
             </div>
-            <CustomSelect
-              value={provider}
-              onChange={setProvider}
-              options={PROVIDER_OPTIONS}
-              placeholder="Auto (Best Match)"
-            />
+
+            <div className="space-y-4 rounded-xl border border-border/30 bg-zbooni-dark/10 p-4">
+              {/* Countries (derived from ICP, read-only display) */}
+              <div>
+                <div className="mb-2 flex items-center gap-1.5">
+                  <Globe className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-xs font-semibold text-muted-foreground">Target Countries</span>
+                </div>
+                {derivedCountries.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {derivedCountries.map((c) => (
+                      <span key={c} className="rounded-full bg-zbooni-teal/10 px-2.5 py-1 text-xs font-medium text-zbooni-teal">
+                        {countryName(c)}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground/50">Select an ICP profile to see target countries</p>
+                )}
+              </div>
+
+              {/* Cities (optional multi-select) */}
+              {availableCities.length > 0 ? (
+                <div>
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-xs font-semibold text-muted-foreground">Cities</span>
+                      <span className="text-[10px] text-muted-foreground/50">(optional — empty = all cities)</span>
+                    </div>
+                    {selectedCities.size > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCities(new Set())}
+                        className="text-[10px] font-medium text-muted-foreground/60 hover:text-foreground"
+                      >
+                        Clear all
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {availableCities.map((city) => (
+                      <PillOption
+                        key={city}
+                        selected={selectedCities.has(city)}
+                        onClick={() => toggleCity(city)}
+                        className="px-2.5 py-1 text-xs"
+                      >
+                        {city}
+                      </PillOption>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Analysis toggles */}
+              <div className="flex flex-wrap gap-4">
+                <label className="flex cursor-pointer items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={includeWebsiteAnalysis}
+                    onChange={(e) => setIncludeWebsiteAnalysis(e.target.checked)}
+                    className="h-4 w-4 rounded border-border/50 bg-zbooni-dark/30 text-zbooni-teal accent-zbooni-teal"
+                  />
+                  <span className="text-sm font-medium">Website analysis</span>
+                  <span className="text-[10px] text-muted-foreground/50">Scrape website</span>
+                </label>
+                <label className="flex cursor-pointer items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={includeSocialMediaAnalysis}
+                    onChange={(e) => setIncludeSocialMediaAnalysis(e.target.checked)}
+                    className="h-4 w-4 rounded border-border/50 bg-zbooni-dark/30 text-zbooni-teal accent-zbooni-teal"
+                  />
+                  <span className="text-sm font-medium">Social media analysis</span>
+                  <span className="text-[10px] text-muted-foreground/50">Instagram data</span>
+                </label>
+              </div>
+
+            </div>
           </div>
 
-          {/* Step 3: Limit */}
+          {/* Step 3: Limit — expanded inline pill selector */}
           <div>
-            <div className="mb-2 flex items-center gap-2">
+            <div className="mb-3 flex items-center gap-2">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zbooni-teal/10 text-xs font-bold text-zbooni-teal">
                 3
               </span>
               <label className="text-sm font-semibold">Number of Leads</label>
             </div>
-            <CustomSelect
-              value={limit}
-              onChange={setLimit}
-              options={LIMIT_OPTIONS}
-              placeholder="25 leads"
-            />
+            <div className="flex flex-wrap gap-2">
+              {LIMIT_OPTIONS.map((opt) => (
+                <PillOption
+                  key={opt.value}
+                  selected={limit === opt.value}
+                  onClick={() => setLimit(opt.value)}
+                  className="min-w-[56px] justify-center"
+                >
+                  {opt.label}
+                </PillOption>
+              ))}
+            </div>
           </div>
+
+          {/* Cost Estimate */}
+          {selectedIcpIds.size > 0 && parseInt(limit, 10) > 0 ? (() => {
+            const desiredLeads = parseInt(limit, 10);
+            // Compute blended yield rate from selected ICPs
+            const selectedRates = Array.from(selectedIcpIds)
+              .map((id) => yieldRates.get(id))
+              .filter((r): r is number => r !== undefined);
+            const avgYieldRate = selectedRates.length > 0
+              ? selectedRates.reduce((a, b) => a + b, 0) / selectedRates.length
+              : 0.15; // default 15%
+            const hasHistoricalData = selectedRates.length > 0;
+            const searchBudget = Math.ceil(desiredLeads / avgYieldRate * 1.5);
+            // ~50% of discovered businesses pass prequalification and reach Hunter
+            const hunterLookups = Math.ceil(searchBudget * 0.5);
+            const estLeads = desiredLeads;
+            // Dollar cost: SerpAPI $0.01/search, Hunter $0.03/lookup (Starter plan: 2000 credits @ ~$49)
+            const serpApiCost = searchBudget * 0.01;
+            const hunterCost = hunterLookups * 0.03;
+            const totalCost = serpApiCost + hunterCost;
+            return (
+              <div className="rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 px-4 py-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <TrendingUp className="h-3.5 w-3.5 text-zbooni-teal" />
+                  <span className="text-xs font-semibold text-zbooni-teal">Cost Estimate</span>
+                  {!hasHistoricalData ? (
+                    <span className="text-[10px] text-muted-foreground/50">(using default 15% yield)</span>
+                  ) : null}
+                </div>
+                <div className="space-y-1.5">
+                  <p className="text-sm text-muted-foreground">
+                    ~<strong className="text-foreground">{searchBudget}</strong> search tasks
+                    {' + ~'}<strong className="text-foreground">{hunterLookups}</strong> Hunter lookups
+                    {' → est. '}<strong className="text-zbooni-green">{estLeads}</strong> leads
+                    {hasHistoricalData ? (
+                      <span className="text-muted-foreground/60">
+                        {' '}(based on {Math.round(avgYieldRate * 100)}% yield)
+                      </span>
+                    ) : null}
+                  </p>
+                  <p className="text-xs text-muted-foreground/70">
+                    Est. cost: <strong className="text-foreground">~${totalCost.toFixed(2)}</strong>
+                    <span className="text-muted-foreground/50">
+                      {' '}(SerpAPI ${serpApiCost.toFixed(2)} + Hunter ${hunterCost.toFixed(2)})
+                    </span>
+                  </p>
+                </div>
+              </div>
+            );
+          })() : null}
 
           {/* Error */}
           {submitError ? (
@@ -350,7 +710,7 @@ export default function DiscoverPage() {
           <button
             type="button"
             onClick={handleStartDiscovery}
-            disabled={!selectedIcpId || isSubmitting || !!isRunning}
+            disabled={selectedIcpIds.size === 0 || derivedCountries.length === 0 || isSubmitting || !!isRunning}
             className="inline-flex w-full items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-zbooni-green to-zbooni-teal px-6 py-3 text-sm font-bold text-zbooni-dark shadow-lg shadow-zbooni-green/20 transition-all hover:shadow-xl hover:shadow-zbooni-green/30 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
           >
             {isSubmitting ? (
@@ -358,182 +718,165 @@ export default function DiscoverPage() {
             ) : (
               <Play className="h-4 w-4" />
             )}
-            {isSubmitting ? 'Starting...' : isRunning ? 'Discovery Running...' : 'Start Discovery'}
+            {isSubmitting
+              ? 'Starting...'
+              : isRunning
+                ? 'Discovery Running...'
+                : selectedIcpIds.size > 1
+                  ? `Start Discovery (${selectedIcpIds.size} ICPs)`
+                  : 'Start Discovery'}
           </button>
         </div>
       </div>
 
-      {/* Active Run Status */}
-      {activeRun ? (
-        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-base font-bold tracking-tight">
-              <Zap className="h-4 w-4 text-zbooni-green" />
-              Discovery Run
-            </h2>
-            <div className="flex items-center gap-2">
-              <StatusIcon status={activeRun.status} />
-              <span
-                className={`text-sm font-semibold ${
-                  activeRun.status === 'SUCCEEDED'
-                    ? 'text-zbooni-green'
-                    : activeRun.status === 'FAILED'
-                      ? 'text-red-400'
-                      : 'text-zbooni-teal'
-                }`}
-              >
-                {activeRun.status}
-              </span>
-            </div>
-          </div>
-
-          {/* Progress */}
-          {activeRun.totalItems > 0 || activeRun.status === 'RUNNING' ? (
-            <ProgressBar processed={activeRun.processedItems} total={activeRun.totalItems || parseInt(limit, 10)} />
-          ) : null}
-
-          {/* Stats */}
-          <div className="mt-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Total</p>
-              <p className="mt-0.5 text-lg font-bold">{activeRun.totalItems}</p>
-            </div>
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Processed</p>
-              <p className="mt-0.5 text-lg font-bold text-zbooni-green">{activeRun.processedItems}</p>
-            </div>
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Failed</p>
-              <p className="mt-0.5 text-lg font-bold text-red-400">{activeRun.failedItems}</p>
-            </div>
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Duration</p>
-              <p className="mt-0.5 text-lg font-bold">
-                {activeRun.startedAt
-                  ? activeRun.endedAt
-                    ? `${Math.round((new Date(activeRun.endedAt).getTime() - new Date(activeRun.startedAt).getTime()) / 1000)}s`
-                    : 'Running...'
-                  : 'Queued'}
-              </p>
-            </div>
-          </div>
-
-          {/* Error message */}
-          {activeRun.errorMessage ? (
-            <div className="mt-4 flex items-center gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              {activeRun.errorMessage}
-            </div>
-          ) : null}
-
-          {/* Success message */}
-          {activeRun.status === 'SUCCEEDED' ? (
-            <div className="mt-4 flex items-center gap-2 rounded-lg bg-zbooni-green/10 px-3 py-2 text-sm text-zbooni-green">
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
-              Discovery complete! {activeRun.processedItems} leads found. Check the Leads page to review them.
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/* Recent Discovery Records */}
+      {/* Discovery Runs */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-base font-bold tracking-tight">
-            <Users className="h-4 w-4 text-zbooni-teal" />
-            Recent Discoveries
+            <Zap className="h-4 w-4 text-zbooni-green" />
+            Discovery Runs
           </h2>
-          {records.data?.qualityMetrics ? (
-            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <span>
-                Emails: <strong className="text-foreground">{records.data.qualityMetrics.validEmailCount}</strong>
-              </span>
-              <span>
-                Industry match:{' '}
-                <strong className="text-foreground">
-                  {Math.round(records.data.qualityMetrics.industryMatchRate * 100)}%
-                </strong>
-              </span>
-              <span>
-                Geo match:{' '}
-                <strong className="text-foreground">
-                  {Math.round(records.data.qualityMetrics.geoMatchRate * 100)}%
-                </strong>
-              </span>
-            </div>
-          ) : null}
+          <button
+            type="button"
+            onClick={() => setRunsRefreshKey((k) => k + 1)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/40"
+          >
+            <Loader2 className={cn('h-3 w-3', discoveryRuns.isLoading && 'animate-spin')} />
+            Refresh
+          </button>
         </div>
 
-        {records.isLoading ? (
+        {discoveryRuns.isLoading && !discoveryRuns.data ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
-            Loading records...
+            Loading runs...
           </div>
         ) : null}
 
-        {!records.isLoading && records.data?.items.length === 0 ? (
+        {runBatches.length === 0 && discoveryRuns.data ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="mb-3 flex h-16 w-16 items-center justify-center rounded-2xl bg-zbooni-dark/60">
               <Search className="h-7 w-7 text-muted-foreground/40" />
             </div>
-            <p className="font-medium text-muted-foreground/60">No discoveries yet</p>
+            <p className="font-medium text-muted-foreground/60">No discovery runs yet</p>
             <p className="mt-1 max-w-sm text-sm text-muted-foreground/40">
-              Select an ICP profile above and start discovering leads matching your criteria.
+              Configure search above and start discovering leads.
             </p>
           </div>
         ) : null}
 
-        {records.data && records.data.items.length > 0 ? (
-          <div className="overflow-hidden rounded-xl border border-border/30">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border/30 bg-zbooni-dark/30">
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Provider</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Lead</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Discovered</th>
-                </tr>
-              </thead>
-              <tbody>
-                {records.data.items.map((record) => (
-                  <tr key={record.id} className="border-b border-border/20 last:border-0 transition-colors hover:bg-accent/30">
-                    <td className="px-4 py-2.5">
-                      <span className="rounded-full bg-zbooni-teal/10 px-2 py-0.5 text-xs font-medium text-zbooni-teal">
-                        {record.provider.replace(/_/g, ' ')}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <span
-                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                          record.status === 'DISCOVERED'
-                            ? 'bg-zbooni-green/15 text-zbooni-green'
-                            : record.status === 'DUPLICATE'
-                              ? 'bg-yellow-500/15 text-yellow-400'
-                              : record.status === 'ERROR'
-                                ? 'bg-red-500/15 text-red-400'
-                                : 'bg-gray-500/15 text-gray-400'
-                        }`}
-                      >
-                        {record.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                      {record.leadId.slice(0, 12)}...
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                      {new Date(record.discoveredAt).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
+        {runBatches.length > 0 ? (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {runBatches.map((batch) => {
+              const statusColors: Record<string, string> = {
+                QUEUED: 'bg-gray-500/15 text-gray-400',
+                RUNNING: 'bg-zbooni-teal/15 text-zbooni-teal',
+                SUCCEEDED: 'bg-zbooni-green/15 text-zbooni-green',
+                FAILED: 'bg-red-500/15 text-red-400',
+                PARTIAL: 'bg-yellow-500/15 text-yellow-400',
+              };
+              const isTerminal = batch.overallStatus === 'SUCCEEDED' || batch.overallStatus === 'FAILED' || batch.overallStatus === 'PARTIAL';
+              const duration = batch.startedAt
+                ? batch.finishedAt
+                  ? `${Math.round((new Date(batch.finishedAt).getTime() - new Date(batch.startedAt).getTime()) / 1000)}s`
+                  : isTerminal
+                    ? 'Completed'
+                    : 'Running...'
+                : 'Queued';
+              const firstWords = batch.icpNames.map((n) => n.split(/\s+/)[0] ?? n);
+              const icpLabel = firstWords.length <= 3
+                ? firstWords.join(' & ')
+                : `${firstWords.slice(0, 2).join(' & ')} +${firstWords.length - 2}`;
 
-        {records.data && records.data.total > 10 ? (
-          <p className="mt-3 text-center text-xs text-muted-foreground/60">
-            Showing 10 of {records.data.total} records. View all in the Leads page.
-          </p>
+              const primaryRunId = batch.runs[0]?.runId;
+
+              return (
+                <Link
+                  key={batch.batchKey}
+                  href={primaryRunId ? `/dashboard/jobs/${primaryRunId}` : '#'}
+                  className="block rounded-xl border border-border/30 bg-zbooni-dark/20 p-4 transition-colors hover:border-border/50 hover:bg-zbooni-dark/30"
+                >
+                  {/* Header: status + time */}
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <StatusIcon status={batch.overallStatus} />
+                      <span
+                        className={cn(
+                          'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider',
+                          statusColors[batch.overallStatus] ?? 'bg-muted/20 text-muted-foreground',
+                        )}
+                      >
+                        {batch.overallStatus}
+                      </span>
+                      {batch.runs.length > 1 ? (
+                        <span className="text-[10px] text-muted-foreground/40">
+                          {batch.runs.length} runs
+                        </span>
+                      ) : null}
+                    </div>
+                    <span className="text-[10px] tabular-nums text-muted-foreground/50">
+                      {new Date(batch.createdAt).toLocaleString()}
+                    </span>
+                  </div>
+
+                  {/* ICP + countries */}
+                  <div className="mb-3 space-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <Target className="h-3 w-3 text-zbooni-teal" />
+                      <span className="text-xs font-semibold">{icpLabel}</span>
+                    </div>
+                    {batch.countries.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {batch.countries.map((c) => (
+                          <span key={c} className="rounded bg-zbooni-teal/10 px-1.5 py-0.5 text-[10px] text-zbooni-teal">
+                            {countryName(c)}
+                          </span>
+                        ))}
+                        {batch.totalLimit > 0 ? (
+                          <span className="rounded bg-muted/20 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                            {batch.totalLimit} leads
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* Progress bar */}
+                  {batch.totalLimit > 0 || batch.overallStatus === 'RUNNING' ? (
+                    <ProgressBar
+                      processed={batch.totalProcessed}
+                      total={batch.totalLimit || 1}
+                    />
+                  ) : null}
+
+                  {/* Stats row */}
+                  <div className="mt-2 flex items-center gap-3 text-[10px] text-muted-foreground/60">
+                    <span>
+                      Processed: <strong className="text-foreground">{batch.totalProcessed}</strong>
+                    </span>
+                    {batch.totalFailed > 0 ? (
+                      <span>
+                        Failed: <strong className="text-red-400">{batch.totalFailed}</strong>
+                      </span>
+                    ) : null}
+                    <span className="ml-auto">{duration}</span>
+                  </div>
+
+                  {/* Errors */}
+                  {batch.errorMessages.length > 0 ? (
+                    <p className="mt-2 truncate rounded bg-red-500/10 px-2 py-1 text-[10px] text-red-400" title={batch.errorMessages.join('; ')}>
+                      {batch.errorMessages[0]}
+                    </p>
+                  ) : null}
+                  {batch.overallStatus === 'PARTIAL' ? (
+                    <p className="mt-2 rounded bg-yellow-500/10 px-2 py-1 text-[10px] text-yellow-300">
+                      Partial completion: {batch.totalFailed} item{batch.totalFailed === 1 ? '' : 's'} failed while other items succeeded.
+                    </p>
+                  ) : null}
+                </Link>
+              );
+            })}
+          </div>
         ) : null}
       </div>
 

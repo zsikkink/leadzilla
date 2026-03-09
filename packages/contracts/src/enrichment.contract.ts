@@ -3,7 +3,6 @@ import { z } from 'zod';
 export const EnrichmentProviderSchema = z.enum([
   'HUNTER',
   'CLEARBIT',
-  'OTHER_FREE',
   'PEOPLE_DATA_LABS',
 ]);
 
@@ -15,6 +14,7 @@ export const EnrichmentPipelineRunStatusSchema = z.enum([
   'SUCCEEDED',
   'FAILED',
   'PARTIAL',
+  'CANCELLED',
 ]);
 
 export const EnrichmentRunIdParamsSchema = z

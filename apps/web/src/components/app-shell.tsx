@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 
 import { useAuth } from '../hooks/use-auth.js';
+import { useSidebarCollapse } from '../hooks/use-sidebar-collapse.js';
 import { cn } from '../lib/utils.js';
 import { Header } from './header.js';
 import { Sidebar } from './sidebar.js';
@@ -17,6 +18,7 @@ interface AppShellProps {
 export function AppShell({ children, contentClassName }: AppShellProps) {
   const { isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
+  const { collapsed, toggle, hydrated } = useSidebarCollapse();
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -47,7 +49,7 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
       >
         Skip to main content
       </a>
-      <Sidebar />
+      {hydrated && <Sidebar collapsed={collapsed} onToggle={toggle} />}
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header />
         <main id="main-content" className={cn('flex-1 overflow-auto p-6', contentClassName)}>

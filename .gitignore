@@ -7,6 +7,7 @@ dist/
 .next/
 coverage/
 playwright-report/
+.playwright-cli/
 .turbo/
 *.tsbuildinfo
 
@@ -28,6 +29,17 @@ pnpm-debug.log*
 .DS_Store
 .vscode/
 .idea/
+
+# Claude Code personal config (team CLAUDE.md files are committed)
+.claude/
+.agents/
+
+# Screenshots and temp images
+Screenshot *.png
+e2e-*.png
+docs/e2e-screenshots/
+docs/Untitled
+scripts/backups/
 
 # Supabase local/linked artifacts (keep supabase/migrations committed)
 .supabase/

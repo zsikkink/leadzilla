@@ -10,7 +10,7 @@ import {
   type DiscoveryRuntimeConfig,
   type SearchTaskType,
 } from '@lead-flood/discovery';
-import { prisma, type Prisma } from '@lead-flood/db';
+import { prisma, toInputJson, type Prisma } from '@lead-flood/db';
 
 const COUNTRY_SET = new Set<DiscoveryCountryCode>(['JO', 'SA', 'AE', 'EG']);
 const LANGUAGE_SET = new Set<DiscoveryLanguageCode>(['en', 'ar']);
@@ -71,10 +71,6 @@ export interface JobRequestDispatcherDependencies {
   pollMs: number;
   maxPerTick: number;
   workerId: string;
-}
-
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
 
 function normalizePositiveInt(value: unknown): number | undefined {

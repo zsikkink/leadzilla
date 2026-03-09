@@ -1,26 +1,22 @@
 import PgBoss, { type Job } from 'pg-boss';
 
-import { prisma } from '@lead-flood/db';
+import { checkPipelineSchemaHealth, prisma } from '@lead-flood/db';
 import {
+  GooglePlacesDiscoveryProvider,
   loadDiscoveryRuntimeConfig,
-  SerpApiDiscoveryProvider,
   type DiscoveryRuntimeConfig,
+  type DiscoveryProvider as V2DiscoveryProvider,
 } from '@lead-flood/discovery';
-import type { DiscoveryProvider } from '@lead-flood/contracts';
 import { createLogger } from '@lead-flood/observability';
 import {
   ApolloDiscoveryAdapter,
-  BraveSearchAdapter,
-  CompanySearchAdapter,
-  ClearbitAdapter,
-  GooglePlacesAdapter,
   HunterEnrichmentAdapter,
-  LinkedInScrapeAdapter,
-  PdlEnrichmentAdapter,
-  PublicWebLookupAdapter,
+  InstagramScraperAdapter,
   OpenAiAdapter,
   ResendAdapter,
   TrengoAdapter,
+  WebsiteScraperAdapter,
+  SmtpVerifier,
 } from '@lead-flood/providers';
 
 import { loadWorkerEnv } from './env.js';
@@ -30,10 +26,17 @@ import {
   type AnalyticsRollupJobPayload,
 } from './jobs/analytics.rollup.job.js';
 import {
-  DISCOVERY_RUN_JOB_NAME,
-  handleDiscoveryRunJob,
-  type DiscoveryRunJobPayload,
-} from './jobs/discovery.run.job.js';
+  BUSINESS_CONVERT_JOB_NAME,
+  BUSINESS_CONVERT_RETRY_OPTIONS,
+  handleBusinessConvertJob,
+  type BusinessConvertJobPayload,
+} from './jobs/business.convert.job.js';
+import {
+  BUSINESS_PREQUALIFY_JOB_NAME,
+  BUSINESS_PREQUALIFY_RETRY_OPTIONS,
+  handleBusinessPrequalifyJob,
+  type BusinessPrequalifyJobPayload,
+} from './jobs/business.prequalify.job.js';
 import {
   DISCOVERY_RUN_SEARCH_TASK_JOB_NAME,
   DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,
@@ -47,12 +50,8 @@ import {
   type DiscoverySeedJobPayload,
 } from './jobs/discovery.seed.job.js';
 import {
-  ENRICHMENT_RUN_JOB_NAME,
-  handleEnrichmentRunJob,
-  type EnrichmentRunJobPayload,
-} from './jobs/enrichment.run.job.js';
-import {
   FEATURES_COMPUTE_JOB_NAME,
+  FEATURES_COMPUTE_RETRY_OPTIONS,
   handleFeaturesComputeJob,
   type FeaturesComputeJobPayload,
 } from './jobs/features.compute.job.js';
@@ -61,6 +60,11 @@ import {
   handleFollowupCheckJob,
   type FollowupCheckJobPayload,
 } from './jobs/followup.check.job.js';
+import {
+  MANAGER_ANALYZE_JOB_NAME,
+  handleManagerAnalyzeJob,
+  type ManagerAnalyzeJobPayload,
+} from './jobs/manager.analyze.job.js';
 import { handleHeartbeatJob, type HeartbeatJobPayload } from './jobs/heartbeat.job.js';
 import {
   LABELS_GENERATE_JOB_NAME,
@@ -69,6 +73,7 @@ import {
 } from './jobs/labels.generate.job.js';
 import {
   MESSAGE_GENERATE_JOB_NAME,
+  MESSAGE_GENERATE_RETRY_OPTIONS,
   handleMessageGenerateJob,
   type MessageGenerateJobPayload,
 } from './jobs/message.generate.job.js';
@@ -84,6 +89,7 @@ import {
 } from './jobs/model.evaluate.job.js';
 import {
   MODEL_TRAIN_JOB_NAME,
+  MODEL_TRAIN_RETRY_OPTIONS,
   handleModelTrainJob,
   type ModelTrainJobPayload,
 } from './jobs/model.train.job.js';
@@ -94,6 +100,11 @@ import {
   NOTIFY_SALES_RETRY_OPTIONS,
 } from './jobs/notify.sales.job.js';
 import {
+  PIPELINE_HEALTH_JOB_NAME,
+  handlePipelineHealthJob,
+  type PipelineHealthJobPayload,
+} from './jobs/pipeline.health.job.js';
+import {
   REPLY_CLASSIFY_JOB_NAME,
   handleReplyClassifyJob,
   type ReplyClassifyJobPayload,
@@ -103,9 +114,55 @@ import {
   handleScoringComputeJob,
   type ScoringComputeJobPayload,
 } from './jobs/scoring.compute.job.js';
+import {
+  APOLLO_ENRICH_JOB_NAME,
+  APOLLO_ENRICH_RETRY_OPTIONS,
+  handleApolloEnrichJob,
+  type ApolloEnrichJobPayload,
+} from './jobs/apollo.enrich.job.js';
+import {
+  SCORING_BATCH_JOB_NAME,
+  handleScoringBatchJob,
+  type ScoringBatchJobPayload,
+} from './jobs/scoring.batch.job.js';
+import {
+  DLQ_JOB_NAME,
+  handleDlqProcessJob,
+  type DlqProcessJobPayload,
+} from './jobs/dlq.process.job.js';
+import {
+  LEAD_RECOVERY_JOB_NAME,
+  handleLeadRecoveryJob,
+  type LeadRecoveryJobPayload,
+} from './jobs/lead.recovery.job.js';
+import {
+  DATA_RETENTION_JOB_NAME,
+  handleDataRetentionJob,
+  type DataRetentionJobPayload,
+} from './jobs/data.retention.job.js';
+import {
+  MODEL_DRIFT_JOB_NAME,
+  handleModelDriftJob,
+  type ModelDriftJobPayload,
+} from './jobs/model.drift.job.js';
+import {
+  SEARCH_TASK_RECOVERY_JOB_NAME,
+  handleSearchTaskRecoveryJob,
+  type SearchTaskRecoveryJobPayload,
+} from './jobs/search-task.recovery.job.js';
+import {
+  OUTBOX_CLEANUP_JOB_NAME,
+  handleOutboxCleanupJob,
+  type OutboxCleanupJobPayload,
+} from './jobs/outbox.cleanup.job.js';
 import { buildDefaultWorkerId, startJobRequestDispatcher } from './job-requests/dispatcher.js';
+import { EmailRateLimiter } from './messaging/email-rate-limiter.js';
 import { WhatsAppRateLimiter } from './messaging/rate-limiter.js';
 import { dispatchPendingOutboxEvents } from './outbox-dispatcher.js';
+import {
+  checkStaleDiscoveryRuns,
+  sweepStaleDiscoveryPipelineJobs,
+} from './utils/discovery-run-tracker.js';
 import { ensureWorkerQueues, HEARTBEAT_QUEUE_NAME } from './queues.js';
 import { registerWorkerSchedules } from './schedules.js';
 
@@ -167,6 +224,14 @@ async function main(): Promise<void> {
     level: env.LOG_LEVEL,
   });
 
+  const schemaHealth = await checkPipelineSchemaHealth(prisma);
+  if (schemaHealth.status !== 'ok') {
+    logger.error({ schemaHealth }, 'Worker schema guard failed');
+    throw new Error(
+      `Worker schema guard failed: missingTables=${schemaHealth.missingTables.join(',') || 'none'} missingEnumValues=${schemaHealth.missingEnumValues.join(',') || 'none'}`,
+    );
+  }
+
   const boss = new PgBoss({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
@@ -175,14 +240,17 @@ async function main(): Promise<void> {
   const workerSchedulesEnabled =
     env.WORKER_ENABLE_SCHEDULES ?? env.APP_ENV !== 'local';
   const discoveryQueueWorkersEnabled =
-    env.DISCOVERY_QUEUE_WORKERS_ENABLED ?? env.APP_ENV !== 'local';
+    env.DISCOVERY_QUEUE_WORKERS_ENABLED ?? true;
 
   await boss.start();
   logger.info({}, 'Worker started');
 
   await ensureWorkerQueues(boss);
   if (workerSchedulesEnabled) {
-    await registerWorkerSchedules(boss);
+    await registerWorkerSchedules(boss, {
+      discoveryScheduleEnabled: env.DISCOVERY_SCHEDULE_ENABLED,
+      logger,
+    });
   } else {
     logger.info(
       {
@@ -198,37 +266,6 @@ async function main(): Promise<void> {
     minRequestIntervalMs: env.APOLLO_RATE_LIMIT_MS,
   });
 
-  const braveSearchAdapter = new BraveSearchAdapter({
-    enabled: env.BRAVE_SEARCH_ENABLED,
-    apiKey: env.BRAVE_SEARCH_API_KEY,
-    baseUrl: env.BRAVE_SEARCH_BASE_URL,
-    minRequestIntervalMs: env.BRAVE_SEARCH_RATE_LIMIT_MS,
-  });
-
-  const googlePlacesAdapter = new GooglePlacesAdapter({
-    enabled: env.GOOGLE_PLACES_ENABLED,
-    apiKey: env.GOOGLE_PLACES_API_KEY,
-    baseUrl: env.GOOGLE_PLACES_BASE_URL,
-    minRequestIntervalMs: env.GOOGLE_PLACES_RATE_LIMIT_MS,
-  });
-
-  const linkedInScrapeAdapter = new LinkedInScrapeAdapter({
-    enabled: env.LINKEDIN_SCRAPE_ENABLED,
-    scrapeEndpoint: env.LINKEDIN_SCRAPE_ENDPOINT,
-    apiKey: env.LINKEDIN_SCRAPE_API_KEY,
-  });
-
-  const companySearchAdapter = new CompanySearchAdapter({
-    enabled: env.COMPANY_SEARCH_ENABLED,
-    baseUrl: env.COMPANY_SEARCH_BASE_URL,
-  });
-
-  const pdlAdapter = new PdlEnrichmentAdapter({
-    apiKey: env.PDL_API_KEY ?? '',
-    baseUrl: env.PDL_BASE_URL,
-    minRequestIntervalMs: env.PDL_RATE_LIMIT_MS,
-  });
-
   const hunterAdapter = new HunterEnrichmentAdapter({
     enabled: env.HUNTER_ENABLED,
     apiKey: env.HUNTER_API_KEY,
@@ -236,84 +273,80 @@ async function main(): Promise<void> {
     minRequestIntervalMs: env.HUNTER_RATE_LIMIT_MS,
   });
 
-  const clearbitAdapter = new ClearbitAdapter({
-    apiKey: env.CLEARBIT_API_KEY,
-    personBaseUrl: env.CLEARBIT_PERSON_BASE_URL,
-    companyBaseUrl: env.CLEARBIT_COMPANY_BASE_URL,
+  const websiteScraperAdapter = new WebsiteScraperAdapter({
+    enablePlaywright: env.WEBSITE_SCRAPER_PLAYWRIGHT_ENABLED,
+    ...(env.WEBSITE_SCRAPER_CHROMIUM_PATH ? { chromiumPath: env.WEBSITE_SCRAPER_CHROMIUM_PATH } : {}),
   });
-
-  const publicWebLookupAdapter = new PublicWebLookupAdapter({
-    enabled: env.OTHER_FREE_ENRICHMENT_ENABLED,
-    baseUrl: env.PUBLIC_LOOKUP_BASE_URL,
+  const instagramScraperAdapter = new InstagramScraperAdapter({
+    ...(env.INSTAGRAM_USERNAME ? { username: env.INSTAGRAM_USERNAME } : {}),
+    ...(env.INSTAGRAM_PASSWORD ? { password: env.INSTAGRAM_PASSWORD } : {}),
+    ...(env.INSTAGRAM_COOKIES ? { cookies: env.INSTAGRAM_COOKIES } : {}),
+    ...(env.INSTAGRAM_RATE_LIMIT_PER_MIN !== undefined
+      ? { rateLimitPerMinute: env.INSTAGRAM_RATE_LIMIT_PER_MIN }
+      : {}),
   });
-  const discoveryProviderOrder: DiscoveryProvider[] = [];
-
   let discoveryRuntimeConfig: DiscoveryRuntimeConfig | null = null;
-  let serpApiProvider: SerpApiDiscoveryProvider | null = null;
-  if (env.SERPAPI_DISCOVERY_ENABLED) {
-    try {
-      discoveryRuntimeConfig = loadDiscoveryRuntimeConfig(process.env);
-      if (discoveryRuntimeConfig.mapsZoomWarning) {
-        logger.warn(
-          {
-            warning: discoveryRuntimeConfig.mapsZoomWarning,
-          },
-          'Using default discovery maps zoom',
-        );
-      }
-      serpApiProvider = new SerpApiDiscoveryProvider({
-        apiKey: discoveryRuntimeConfig.serpApiKey,
-        rps: discoveryRuntimeConfig.rps,
-        enableCache: discoveryRuntimeConfig.enableCache,
-        maxAttempts: discoveryRuntimeConfig.maxTaskAttempts,
-        backoffBaseSeconds: discoveryRuntimeConfig.backoffBaseSeconds,
-        mapsZoom: discoveryRuntimeConfig.mapsZoom,
-      });
-      logger.info(
-        {
-          provider: 'SERPAPI',
-          enabled: true,
-          rps: discoveryRuntimeConfig.rps,
-          concurrency: discoveryRuntimeConfig.concurrency,
-          maxTaskAttempts: discoveryRuntimeConfig.maxTaskAttempts,
-          runMaxTasks: env.DISCOVERY_RUN_MAX_TASKS ?? null,
-          countries: discoveryRuntimeConfig.countries,
-          languages: discoveryRuntimeConfig.languages,
-          discoveryQueueWorkersEnabled,
-          jobRequestPollMs: env.JOB_REQUEST_POLL_MS,
-          jobRequestMaxPerTick: env.JOB_REQUEST_MAX_PER_TICK,
-          jobRequestWorkerId: env.JOB_REQUEST_WORKER_ID ?? buildDefaultWorkerId(),
-        },
-        'Discovery search-task pipeline configured',
-      );
-    } catch (error: unknown) {
+  let v2SearchProvider: V2DiscoveryProvider | null = null;
+  try {
+    discoveryRuntimeConfig = loadDiscoveryRuntimeConfig(process.env);
+    if (discoveryRuntimeConfig.mapsZoomWarning) {
       logger.warn(
-        {
-          provider: 'SERPAPI',
-          enabled: false,
-          error: error instanceof Error ? error.message : 'invalid discovery runtime config',
-        },
-        'SerpAPI discovery runtime disabled; set SERPAPI_API_KEY and discovery env vars to enable',
+        { warning: discoveryRuntimeConfig.mapsZoomWarning },
+        'Using default discovery maps zoom',
       );
     }
-  } else {
+
+    const hasGooglePlaces = Boolean(discoveryRuntimeConfig.googlePlacesApiKey);
+
+    const providerLogContext = {
+      enabled: true,
+      rps: discoveryRuntimeConfig.rps,
+      concurrency: discoveryRuntimeConfig.concurrency,
+      maxTaskAttempts: discoveryRuntimeConfig.maxTaskAttempts,
+      runMaxTasks: env.DISCOVERY_RUN_MAX_TASKS ?? null,
+      countries: discoveryRuntimeConfig.countries,
+      languages: discoveryRuntimeConfig.languages,
+      discoveryQueueWorkersEnabled,
+      jobRequestPollMs: env.JOB_REQUEST_POLL_MS,
+      jobRequestMaxPerTick: env.JOB_REQUEST_MAX_PER_TICK,
+      jobRequestWorkerId: env.JOB_REQUEST_WORKER_ID ?? buildDefaultWorkerId(),
+    };
+
+    const googlePlacesProvider = hasGooglePlaces
+      ? new GooglePlacesDiscoveryProvider({
+          apiKey: discoveryRuntimeConfig.googlePlacesApiKey!,
+          rps: discoveryRuntimeConfig.rps,
+          maxAttempts: discoveryRuntimeConfig.maxTaskAttempts,
+          backoffBaseSeconds: discoveryRuntimeConfig.backoffBaseSeconds,
+        })
+      : null;
+
+    if (discoveryRuntimeConfig.searchProvider === 'GOOGLE_PLACES' && googlePlacesProvider) {
+      v2SearchProvider = googlePlacesProvider;
+      logger.info(
+        { ...providerLogContext, provider: 'GOOGLE_PLACES', mode: 'strict_initial_discovery' },
+        'Discovery pipeline configured (Google Places only, strict initial discovery mode)',
+      );
+    } else {
+      logger.warn(
+        {
+          searchProvider: discoveryRuntimeConfig.searchProvider,
+          hasGooglePlacesKey: hasGooglePlaces,
+        },
+        'No discovery search provider configured — set GOOGLE_PLACES_API_KEY',
+      );
+    }
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : 'invalid discovery runtime config';
+    if (discoveryQueueWorkersEnabled) {
+      logger.error({ error: reason }, 'Discovery runtime config invalid; refusing worker startup');
+      throw new Error(`Discovery runtime config invalid: ${reason}`);
+    }
     logger.warn(
-      {
-        provider: 'SERPAPI',
-        enabled: false,
-      },
-      'SerpAPI discovery runtime disabled via SERPAPI_DISCOVERY_ENABLED=false',
+      { error: reason },
+      'Discovery queue workers disabled; skipping discovery runtime initialization',
     );
   }
-
-  logger.info(
-    {
-      legacyDiscoveryRunEnabled: env.DISCOVERY_ENABLED,
-      legacyDefaultProvider: 'BRAVE_SEARCH',
-      legacyProviderOrder: discoveryProviderOrder,
-    },
-    'Legacy discovery.run provider pipeline configuration',
-  );
 
   const openAiAdapter = new OpenAiAdapter({
     apiKey: env.OPENAI_API_KEY,
@@ -331,11 +364,17 @@ async function main(): Promise<void> {
     apiKey: env.TRENGO_API_KEY,
     baseUrl: env.TRENGO_BASE_URL,
     channelId: env.TRENGO_CHANNEL_ID,
+    templateId: env.TRENGO_TEMPLATE_ID,
   });
 
   const whatsAppRateLimiter = new WhatsAppRateLimiter(prisma, {
     dailySendLimit: env.WHATSAPP_DAILY_SEND_LIMIT,
   });
+
+  const emailRateLimiter = new EmailRateLimiter(prisma, {
+    maxDaily: env.EMAIL_DAILY_SEND_LIMIT,
+  });
+
 
   let outboxDispatchRunning = false;
   const runOutboxDispatch = async (): Promise<void> => {
@@ -357,41 +396,58 @@ async function main(): Promise<void> {
   };
 
   await runOutboxDispatch();
+  await sweepStaleDiscoveryPipelineJobs({
+    boss: {
+      cancel: (name, id) => boss.cancel(name, id),
+      send: (name, data, options) => (
+        options
+          ? boss.send(name, data, options)
+          : boss.send(name, data)
+      ),
+    },
+    logger,
+    staleMinutes: env.DISCOVERY_STALE_JOB_MINUTES,
+    retryOptionsByQueue: {
+      [BUSINESS_PREQUALIFY_JOB_NAME]: BUSINESS_PREQUALIFY_RETRY_OPTIONS,
+      [BUSINESS_CONVERT_JOB_NAME]: BUSINESS_CONVERT_RETRY_OPTIONS,
+      [DISCOVERY_SEED_JOB_NAME]: DISCOVERY_SEED_RETRY_OPTIONS,
+      [DISCOVERY_RUN_SEARCH_TASK_JOB_NAME]: DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,
+    },
+  }).catch((error: unknown) => {
+    logger.warn({ error }, 'Failed stale discovery pipeline sweep on worker startup');
+  });
   const outboxInterval = setInterval(() => {
     void runOutboxDispatch();
   }, 5000);
 
-  await registerWorker<HeartbeatJobPayload>(boss, logger, HEARTBEAT_QUEUE_NAME, handleHeartbeatJob);
-  if (discoveryQueueWorkersEnabled) {
-    await registerWorker<DiscoveryRunJobPayload>(boss, logger, DISCOVERY_RUN_JOB_NAME, (jobLogger, job) =>
-      handleDiscoveryRunJob(jobLogger, job, {
-        boss,
-        apolloAdapter,
-        braveSearchAdapter,
-        googlePlacesAdapter,
-        linkedInScrapeAdapter,
-        companySearchAdapter,
-        discoveryEnabled: env.DISCOVERY_ENABLED,
-        apolloEnabled: env.APOLLO_ENABLED,
-        braveSearchEnabled: env.BRAVE_SEARCH_ENABLED,
-        googlePlacesEnabled: env.GOOGLE_PLACES_ENABLED,
-        linkedInScrapeEnabled: env.LINKEDIN_SCRAPE_ENABLED,
-        companySearchEnabled: env.COMPANY_SEARCH_ENABLED,
-        defaultProvider: 'BRAVE_SEARCH',
-        providerOrder: discoveryProviderOrder,
-        defaultEnrichmentProvider: env.ENRICHMENT_DEFAULT_PROVIDER,
-      }),
-    );
-  } else {
-    logger.info(
-      {
-        discoveryQueueWorkersEnabled,
+  // Periodic check for stale discovery runs (safety timeout enforcement)
+  const staleRunCheckInterval = setInterval(() => {
+    void checkStaleDiscoveryRuns(logger);
+    void sweepStaleDiscoveryPipelineJobs({
+      boss: {
+        cancel: (name, id) => boss.cancel(name, id),
+        send: (name, data, options) => (
+          options
+            ? boss.send(name, data, options)
+            : boss.send(name, data)
+        ),
       },
-      'Legacy discovery queue consumers disabled for this environment',
-    );
-  }
+      logger,
+      staleMinutes: env.DISCOVERY_STALE_JOB_MINUTES,
+      retryOptionsByQueue: {
+        [BUSINESS_PREQUALIFY_JOB_NAME]: BUSINESS_PREQUALIFY_RETRY_OPTIONS,
+        [BUSINESS_CONVERT_JOB_NAME]: BUSINESS_CONVERT_RETRY_OPTIONS,
+        [DISCOVERY_SEED_JOB_NAME]: DISCOVERY_SEED_RETRY_OPTIONS,
+        [DISCOVERY_RUN_SEARCH_TASK_JOB_NAME]: DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,
+      },
+    }).catch((error: unknown) => {
+      logger.warn({ error }, 'Failed stale discovery pipeline sweep in periodic check');
+    });
+  }, 5 * 60 * 1000); // every 5 minutes
 
-  if (discoveryRuntimeConfig && serpApiProvider) {
+  await registerWorker<HeartbeatJobPayload>(boss, logger, HEARTBEAT_QUEUE_NAME, handleHeartbeatJob);
+
+  if (discoveryRuntimeConfig && v2SearchProvider) {
     if (discoveryQueueWorkersEnabled) {
       await registerWorker<DiscoverySeedJobPayload>(
         boss,
@@ -411,11 +467,17 @@ async function main(): Promise<void> {
         (jobLogger, job) =>
           handleDiscoveryRunSearchTaskJob(jobLogger, job, {
             boss,
-            provider: serpApiProvider,
+            provider: v2SearchProvider,
             config: discoveryRuntimeConfig,
             ...(env.DISCOVERY_RUN_MAX_TASKS !== undefined
               ? { maxTasks: env.DISCOVERY_RUN_MAX_TASKS }
               : {}),
+            enqueueBusinessPrequalify: async (payload) => {
+              await boss.send(BUSINESS_PREQUALIFY_JOB_NAME, payload, {
+                singletonKey: `business.prequalify:${payload.businessId}`,
+                ...BUSINESS_PREQUALIFY_RETRY_OPTIONS,
+              });
+            },
           }),
         {
           batchSize: discoveryRuntimeConfig.concurrency,
@@ -476,7 +538,7 @@ async function main(): Promise<void> {
     const dispatcher = startJobRequestDispatcher({
       logger,
       config: discoveryRuntimeConfig,
-      provider: serpApiProvider,
+      provider: v2SearchProvider,
       pollMs: env.JOB_REQUEST_POLL_MS,
       maxPerTick: env.JOB_REQUEST_MAX_PER_TICK,
       workerId: env.JOB_REQUEST_WORKER_ID ?? buildDefaultWorkerId(),
@@ -484,25 +546,78 @@ async function main(): Promise<void> {
     stopJobRequestDispatcher = dispatcher.stop;
   }
 
-  await registerWorker<EnrichmentRunJobPayload>(
+  // ── Pipeline: business.prequalify → business.convert → features.compute ──
+  await registerWorker<BusinessPrequalifyJobPayload>(
     boss,
     logger,
-    ENRICHMENT_RUN_JOB_NAME,
+    BUSINESS_PREQUALIFY_JOB_NAME,
     (jobLogger, job) =>
-      handleEnrichmentRunJob(jobLogger, job, {
-        boss,
-        pdlAdapter,
-        hunterAdapter,
-        clearbitAdapter,
-        publicWebLookupAdapter,
-        enrichmentEnabled: env.ENRICHMENT_ENABLED,
-        pdlEnabled: env.PDL_ENABLED,
-        hunterEnabled: env.HUNTER_ENABLED,
-        clearbitEnabled: env.CLEARBIT_ENABLED,
-        otherFreeEnabled: env.OTHER_FREE_ENRICHMENT_ENABLED,
-        defaultProvider: env.ENRICHMENT_DEFAULT_PROVIDER,
+      handleBusinessPrequalifyJob(jobLogger, job, {
+        enqueueBusinessConvert: async (payload) => {
+          await boss.send(BUSINESS_CONVERT_JOB_NAME, payload, {
+            singletonKey: `business.convert:${payload.businessId}`,
+            ...BUSINESS_CONVERT_RETRY_OPTIONS,
+          });
+        },
       }),
+    {
+      batchSize: env.WORKER_PREQUALIFY_CONCURRENCY,
+      pollingIntervalSeconds: 1,
+      concurrent: true,
+    },
   );
+
+  await registerWorker<BusinessConvertJobPayload>(
+    boss,
+    logger,
+    BUSINESS_CONVERT_JOB_NAME,
+    (jobLogger, job) =>
+      handleBusinessConvertJob(jobLogger, job, {
+        apolloAdapter: {
+          searchContactsByDomain: (domain) => apolloAdapter.searchContactsByDomain(domain),
+          preScreenDomain: (domain) => apolloAdapter.preScreenDomain(domain),
+          isConfigured: Boolean(env.APOLLO_API_KEY),
+        },
+        hunterAdapter: {
+          searchDomainContacts: (domain) => hunterAdapter.searchDomainContacts(domain),
+          isConfigured: Boolean(env.HUNTER_API_KEY),
+        },
+        websiteScraperAdapter,
+        instagramScraperAdapter,
+        smtpVerifier: new SmtpVerifier(),
+        openAiAdapter: openAiAdapter.isConfigured ? openAiAdapter : undefined,
+        llmExtractionConfig: openAiAdapter.isConfigured
+          ? {
+              openAiApiKey: env.OPENAI_API_KEY,
+              openAiBaseUrl: env.OPENAI_BASE_URL,
+              model: env.OPENAI_GENERATION_MODEL,
+            }
+          : undefined,
+        enqueueFeaturesCompute: async (payload) => {
+          const featuresPayload: FeaturesComputeJobPayload = {
+            runId: payload.runId,
+            leadId: payload.leadId,
+            icpProfileId: payload.icpProfileId,
+            snapshotVersion: payload.snapshotVersion,
+            ...(payload.correlationId !== undefined ? { correlationId: payload.correlationId } : {}),
+          };
+          await boss.send(
+            FEATURES_COMPUTE_JOB_NAME,
+            featuresPayload,
+            {
+              singletonKey: `features.compute:${payload.leadId}:${payload.snapshotVersion}`,
+              ...FEATURES_COMPUTE_RETRY_OPTIONS,
+            },
+          );
+        },
+      }),
+    {
+      batchSize: env.WORKER_CONVERT_CONCURRENCY,
+      pollingIntervalSeconds: 1,
+      concurrent: true,
+    },
+  );
+
   await registerWorker<FeaturesComputeJobPayload>(
     boss,
     logger,
@@ -511,12 +626,25 @@ async function main(): Promise<void> {
       handleFeaturesComputeJob(jobLogger, job, {
         boss,
       }),
+    {
+      batchSize: env.WORKER_FEATURES_CONCURRENCY,
+      pollingIntervalSeconds: 1,
+      concurrent: true,
+    },
   );
   await registerWorker<LabelsGenerateJobPayload>(
     boss,
     logger,
     LABELS_GENERATE_JOB_NAME,
-    (jobLogger, job) => handleLabelsGenerateJob(jobLogger, job),
+    (jobLogger, job) =>
+      handleLabelsGenerateJob(jobLogger, job, {
+        enqueueModelTrain: async (payload) => {
+          await boss.send(MODEL_TRAIN_JOB_NAME, payload, {
+            singletonKey: `model.train:labels-triggered:${job.data.runId}`,
+            ...MODEL_TRAIN_RETRY_OPTIONS,
+          });
+        },
+      }),
   );
   await registerWorker<ScoringComputeJobPayload>(
     boss,
@@ -527,6 +655,66 @@ async function main(): Promise<void> {
         openAiAdapter,
         deterministicWeight: env.SCORING_DETERMINISTIC_WEIGHT,
         aiWeight: env.SCORING_AI_WEIGHT,
+        enqueueApolloEnrich: async (payload) => {
+          await boss.send(APOLLO_ENRICH_JOB_NAME, payload, {
+            singletonKey: `apollo.enrich:${payload.leadId}:${payload.icpProfileId}`,
+            ...APOLLO_ENRICH_RETRY_OPTIONS,
+          });
+        },
+        enqueueMessageGenerate: async (payload) => {
+          await boss.send(MESSAGE_GENERATE_JOB_NAME, payload, {
+            singletonKey: `message.generate:${payload.leadId}:${payload.icpProfileId}`,
+            ...MESSAGE_GENERATE_RETRY_OPTIONS,
+          });
+        },
+      }),
+    {
+      pollingIntervalSeconds: 1,
+    },
+  );
+  await registerWorker<ApolloEnrichJobPayload>(
+    boss,
+    logger,
+    APOLLO_ENRICH_JOB_NAME,
+    (jobLogger, job) =>
+      handleApolloEnrichJob(jobLogger, job, {
+        apolloAdapter: {
+          searchContactsByDomain: (d) => apolloAdapter.searchContactsByDomain(d),
+          isConfigured: Boolean(env.APOLLO_API_KEY),
+        },
+        enqueueMessageGenerate: async (payload) => {
+          await boss.send(MESSAGE_GENERATE_JOB_NAME, payload, {
+            singletonKey: `message.generate:${payload.leadId}:${payload.icpProfileId}`,
+            ...MESSAGE_GENERATE_RETRY_OPTIONS,
+          });
+        },
+      }),
+  );
+  await registerWorker<ScoringBatchJobPayload>(
+    boss,
+    logger,
+    SCORING_BATCH_JOB_NAME,
+    (jobLogger, job) =>
+      handleScoringBatchJob(jobLogger, job, {
+        enqueueMessageGenerate: async (payload) => {
+          await boss.send(
+            MESSAGE_GENERATE_JOB_NAME,
+            {
+              runId: job.data.runId,
+              leadId: payload.leadId,
+              icpProfileId: payload.icpProfileId,
+              scorePredictionId: payload.scorePredictionId,
+              knowledgeEntryIds: [],
+              promptVersion: 'v1',
+              correlationId: job.data.correlationId ?? job.id,
+              ...(payload.channel !== undefined ? { channel: payload.channel as 'EMAIL' | 'WHATSAPP' } : {}),
+            } satisfies MessageGenerateJobPayload,
+            {
+              singletonKey: `message.generate:${payload.leadId}:${payload.icpProfileId}`,
+              ...MESSAGE_GENERATE_RETRY_OPTIONS,
+            },
+          );
+        },
       }),
   );
   await registerWorker<ModelTrainJobPayload>(
@@ -550,6 +738,9 @@ async function main(): Promise<void> {
         openAiAdapter,
         boss,
       }),
+    {
+      pollingIntervalSeconds: 1,
+    },
   );
   await registerWorker<MessageSendJobPayload>(
     boss,
@@ -560,6 +751,7 @@ async function main(): Promise<void> {
         resendAdapter,
         trengoAdapter,
         rateLimiter: whatsAppRateLimiter,
+        emailRateLimiter,
         boss,
       }),
   );
@@ -597,7 +789,73 @@ async function main(): Promise<void> {
         trengoApiKey: env.TRENGO_API_KEY,
         trengoBaseUrl: env.TRENGO_BASE_URL,
         trengoInternalConversationId: env.TRENGO_INTERNAL_CONVERSATION_ID,
+        resendAdapter,
+        salesNotificationEmail: env.SALES_NOTIFICATION_EMAIL,
       }),
+  );
+  await registerWorker<DlqProcessJobPayload>(
+    boss,
+    logger,
+    DLQ_JOB_NAME,
+    (jobLogger, job) =>
+      handleDlqProcessJob(jobLogger, job, { boss, slackWebhookUrl: env.SLACK_WEBHOOK_URL }),
+  );
+
+  await registerWorker<ManagerAnalyzeJobPayload>(
+    boss,
+    logger,
+    MANAGER_ANALYZE_JOB_NAME,
+    handleManagerAnalyzeJob,
+  );
+
+  await registerWorker<PipelineHealthJobPayload>(
+    boss,
+    logger,
+    PIPELINE_HEALTH_JOB_NAME,
+    (jobLogger, job) =>
+      handlePipelineHealthJob(jobLogger, job, {
+        slackWebhookUrl: env.SLACK_WEBHOOK_URL,
+        minSuccessRate: env.PIPELINE_MIN_SUCCESS_RATE,
+        minEnrichmentRate: env.PIPELINE_MIN_ENRICHMENT_RATE,
+      }),
+  );
+
+  await registerWorker<OutboxCleanupJobPayload>(
+    boss,
+    logger,
+    OUTBOX_CLEANUP_JOB_NAME,
+    handleOutboxCleanupJob,
+  );
+
+  await registerWorker<LeadRecoveryJobPayload>(
+    boss,
+    logger,
+    LEAD_RECOVERY_JOB_NAME,
+    handleLeadRecoveryJob,
+  );
+
+  await registerWorker<DataRetentionJobPayload>(
+    boss,
+    logger,
+    DATA_RETENTION_JOB_NAME,
+    handleDataRetentionJob,
+  );
+
+  await registerWorker<ModelDriftJobPayload>(
+    boss,
+    logger,
+    MODEL_DRIFT_JOB_NAME,
+    (driftLogger, driftJob) =>
+      handleModelDriftJob(driftLogger, driftJob, {
+        slackWebhookUrl: env.SLACK_WEBHOOK_URL,
+      }),
+  );
+
+  await registerWorker<SearchTaskRecoveryJobPayload>(
+    boss,
+    logger,
+    SEARCH_TASK_RECOVERY_JOB_NAME,
+    handleSearchTaskRecoveryJob,
   );
 
   const shutdown = async (signal: string): Promise<void> => {
@@ -607,6 +865,7 @@ async function main(): Promise<void> {
       stopJobRequestDispatcher = null;
     }
     clearInterval(outboxInterval);
+    clearInterval(staleRunCheckInterval);
     await boss.stop({ graceful: true, timeout: 30_000 });
   };
 

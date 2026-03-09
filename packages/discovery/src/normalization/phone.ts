@@ -1,6 +1,6 @@
 import type { DiscoveryCountryCode } from '../providers/types.js';
 
-const COUNTRY_DIALING_CODE: Record<DiscoveryCountryCode, string> = {
+const COUNTRY_DIALING_CODE: Partial<Record<DiscoveryCountryCode, string>> = {
   JO: '962',
   SA: '966',
   AE: '971',

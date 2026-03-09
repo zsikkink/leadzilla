@@ -5,7 +5,20 @@ import type {
   SearchRefreshBucket,
 } from './providers/types.js';
 
-const COUNTRY_SET = new Set<DiscoveryCountryCode>(['JO', 'SA', 'AE', 'EG']);
+/**
+ * All valid MENA country codes — must match DiscoveryCountryCode exactly.
+ * `satisfies` ensures compile error if the type changes but this array doesn't.
+ */
+const ALL_COUNTRY_CODES = [
+  'JO', 'SA', 'AE', 'EG',
+  'QA', 'BH', 'KW', 'OM', 'LB',
+  'IQ', 'MA', 'TN', 'DZ', 'LY',
+  'YE', 'SY', 'PS', 'SD',
+] as const satisfies readonly DiscoveryCountryCode[];
+
+const COUNTRY_SET = new Set<DiscoveryCountryCode>(ALL_COUNTRY_CODES);
+
+export { ALL_COUNTRY_CODES };
 const LANGUAGE_SET = new Set<DiscoveryLanguageCode>(['en', 'ar']);
 const DEFAULT_DISCOVERY_MAPS_ZOOM = 13;
 const TASK_TYPE_SET = new Set<SearchTaskType>([
@@ -13,6 +26,39 @@ const TASK_TYPE_SET = new Set<SearchTaskType>([
   'SERP_GOOGLE_LOCAL',
   'SERP_MAPS_LOCAL',
 ]);
+
+/**
+ * Hard safety ceiling on search tasks per lead-count tier.
+ * Prevents runaway loops regardless of formula output.
+ * Key = desired lead count, Value = max search tasks allowed.
+ */
+export const LEAD_TIER_TASK_CAPS: Record<number, number> = {
+  5: 15,
+  10: 25,
+  25: 50,
+  50: 80,
+  100: 150,
+  250: 350,
+  500: 600,
+  1000: 1000,
+};
+
+/** Fallback: 2x desired leads, capped at 1500. */
+export function getTaskCapForLeadTarget(desiredLeads: number): number {
+  const exact = LEAD_TIER_TASK_CAPS[desiredLeads];
+  if (exact !== undefined) return exact;
+
+  // Find the nearest tier above
+  const tiers = Object.keys(LEAD_TIER_TASK_CAPS)
+    .map(Number)
+    .sort((a, b) => a - b);
+  for (const tier of tiers) {
+    if (tier >= desiredLeads) return LEAD_TIER_TASK_CAPS[tier]!;
+  }
+
+  // Above all tiers — linear cap
+  return Math.min(desiredLeads * 2, 1500);
+}
 
 function parseCsv(source: string | undefined): string[] {
   if (!source) {
@@ -95,8 +141,12 @@ export interface DiscoverySeedConfig {
   seedBucket: string | null;
 }
 
+export type DiscoverySearchProvider = 'GOOGLE_PLACES';
+
 export interface DiscoveryRuntimeConfig extends DiscoverySeedConfig {
-  serpApiKey: string;
+  searchProvider: DiscoverySearchProvider;
+  serpApiKey: string | null;
+  googlePlacesApiKey: string | null;
   rps: number;
   concurrency: number;
   enableCache: boolean;
@@ -140,17 +190,17 @@ function loadBaseSeedConfig(source: NodeJS.ProcessEnv): DiscoverySeedConfig {
     .map((value) => normalizeTaskType(value))
     .filter((value): value is SearchTaskType => value !== null);
   const normalizedSeedTaskTypes: SearchTaskType[] =
-    seedTaskTypes.length > 0 ? seedTaskTypes : ['SERP_MAPS_LOCAL', 'SERP_GOOGLE_LOCAL'];
+    seedTaskTypes.length > 0 ? seedTaskTypes : ['SERP_GOOGLE_LOCAL'];
 
   const maxPagesPerQuery =
     seedProfile === 'small'
       ? parsePositiveInt(source.DISCOVERY_SEED_MAX_PAGES, 1)
-      : parsePositiveInt(source.DISCOVERY_MAX_PAGES_PER_QUERY, 3);
+      : parsePositiveInt(source.DISCOVERY_MAX_PAGES_PER_QUERY, 1);
 
   const taskTypes: SearchTaskType[] =
     seedProfile === 'small'
       ? normalizedSeedTaskTypes
-      : (['SERP_GOOGLE', 'SERP_GOOGLE_LOCAL', 'SERP_MAPS_LOCAL'] satisfies SearchTaskType[]);
+      : (['SERP_GOOGLE_LOCAL'] satisfies SearchTaskType[]);
 
   const seedBucket = source.DISCOVERY_SEED_BUCKET?.trim() || null;
 
@@ -175,10 +225,23 @@ export function loadDiscoverySeedConfig(source: NodeJS.ProcessEnv): DiscoverySee
 }
 
 export function loadDiscoveryRuntimeConfig(source: NodeJS.ProcessEnv): DiscoveryRuntimeConfig {
-  const serpApiKey = source.SERPAPI_API_KEY?.trim() ?? '';
-  if (!serpApiKey) {
-    throw new Error('SERPAPI_API_KEY is required');
+  const googlePlacesApiKey = source.GOOGLE_PLACES_API_KEY?.trim() || null;
+
+  const providerRaw = source.DISCOVERY_SEARCH_PROVIDER?.trim().toUpperCase();
+  if (providerRaw === 'SERPAPI') {
+    throw new Error(
+      'Initial discovery provider SERPAPI is disabled. ' +
+      'Set DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES.',
+    );
   }
+
+  if (!googlePlacesApiKey) {
+    throw new Error(
+      'No discovery search provider API key configured. ' +
+      'Set GOOGLE_PLACES_API_KEY.',
+    );
+  }
+  const searchProvider: DiscoverySearchProvider = 'GOOGLE_PLACES';
 
   const baseConfig = loadBaseSeedConfig(source);
   const mapsZoomRaw = source.DISCOVERY_MAPS_ZOOM?.trim();
@@ -196,7 +259,9 @@ export function loadDiscoveryRuntimeConfig(source: NodeJS.ProcessEnv): Discovery
 
   return {
     ...baseConfig,
-    serpApiKey,
+    searchProvider,
+    serpApiKey: source.SERPAPI_API_KEY?.trim() || null,
+    googlePlacesApiKey,
     rps: parsePositiveInt(source.DISCOVERY_RPS, 1),
     concurrency: parsePositiveInt(source.DISCOVERY_CONCURRENCY, 3),
     enableCache: parseBoolean(source.DISCOVERY_ENABLE_CACHE, true),

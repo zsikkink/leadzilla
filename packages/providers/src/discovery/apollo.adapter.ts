@@ -46,6 +46,26 @@ export interface ApolloDiscoveryAdapterConfig {
   fetchImpl?: typeof fetch;
 }
 
+export interface ApolloContactSearchContact {
+  email: string;
+  phone: string | null;
+  firstName: string;
+  lastName: string;
+  title: string | null;
+  companyName: string | null;
+}
+
+export type ApolloContactSearchResult =
+  | { status: 'success'; contacts: ApolloContactSearchContact[] }
+  | {
+      status: 'retryable_error';
+      failure: { classification: 'retryable'; statusCode: number | null; message: string; raw: unknown };
+    }
+  | {
+      status: 'terminal_error';
+      failure: { classification: 'terminal'; statusCode: number | null; message: string; raw: unknown };
+    };
+
 interface ApolloPeopleSearchResponse {
   people?: unknown;
   pagination?: {
@@ -165,6 +185,39 @@ export function buildApolloSearchRequestBody(
   return requestBody;
 }
 
+function parseJsonSafe(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+const TITLE_RANK_MAP: ReadonlyArray<readonly [string, number]> = [
+  ['owner', 1],
+  ['ceo', 2],
+  ['chief executive', 2],
+  ['founder', 3],
+  ['co-founder', 3],
+  ['cofounder', 3],
+  ['director', 4],
+  ['vp', 5],
+  ['vice president', 5],
+  ['manager', 6],
+  ['head', 6],
+];
+
+function titleRank(title: string | null): number {
+  if (!title) return 99;
+  const lower = title.toLowerCase();
+  for (const [keyword, rank] of TITLE_RANK_MAP) {
+    if (lower.includes(keyword)) {
+      return rank;
+    }
+  }
+  return 99;
+}
+
 export class ApolloRateLimitError extends Error {
   readonly retryAfterSeconds: number;
 
@@ -191,6 +244,10 @@ export class ApolloDiscoveryAdapter {
     this.minRequestIntervalMs = config.minRequestIntervalMs ?? DEFAULT_APOLLO_MIN_REQUEST_INTERVAL_MS;
     this.timeoutMs = config.timeoutMs ?? DEFAULT_APOLLO_TIMEOUT_MS;
     this.fetchImpl = config.fetchImpl ?? fetch;
+  }
+
+  get isConfigured(): boolean {
+    return Boolean(this.apiKey && this.apiKey.length > 0);
   }
 
   async discoverLeads(input: ApolloDiscoveryRequest): Promise<ApolloDiscoveryResult> {
@@ -294,6 +351,228 @@ export class ApolloDiscoveryAdapter {
       country: normalizeString(value.country),
       raw: rawPerson,
     };
+  }
+
+  async searchContactsByDomain(domain: string): Promise<ApolloContactSearchResult> {
+    await this.waitForRateLimit();
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}/api/v1/mixed_people/search`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': this.apiKey,
+          'user-agent': 'LeadFlood/1.0 (+https://leadflood.io)',
+        },
+        body: JSON.stringify({
+          q_organization_domains: [domain],
+          per_page: 10,
+        }),
+        signal: controller.signal,
+      });
+    } catch (error: unknown) {
+      return {
+        status: 'retryable_error',
+        failure: {
+          classification: 'retryable',
+          statusCode: null,
+          message: error instanceof Error ? error.message : 'Apollo contact search request failed',
+          raw: error,
+        },
+      };
+    } finally {
+      clearTimeout(timeout);
+      this.nextAllowedRequestAt = Date.now() + this.minRequestIntervalMs;
+    }
+
+    const rawText = await response.text();
+
+    if (response.status === 429) {
+      return {
+        status: 'retryable_error',
+        failure: {
+          classification: 'retryable',
+          statusCode: 429,
+          message: 'Apollo contact search rate limited',
+          raw: parseJsonSafe(rawText),
+        },
+      };
+    }
+
+    if (!response.ok) {
+      if (response.status >= 500) {
+        return {
+          status: 'retryable_error',
+          failure: {
+            classification: 'retryable',
+            statusCode: response.status,
+            message: `Apollo contact search failed with status ${response.status}`,
+            raw: parseJsonSafe(rawText),
+          },
+        };
+      }
+      return {
+        status: 'terminal_error',
+        failure: {
+          classification: 'terminal',
+          statusCode: response.status,
+          message: `Apollo contact search failed with status ${response.status}`,
+          raw: parseJsonSafe(rawText),
+        },
+      };
+    }
+
+    const payload = parseJsonSafe(rawText);
+    const data = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+    const rawPeople = Array.isArray(data.people) ? data.people : [];
+
+    const contacts: ApolloContactSearchContact[] = rawPeople
+      .map((person: unknown) => {
+        if (!person || typeof person !== 'object') return null;
+        const p = person as Record<string, unknown>;
+
+        const email = normalizeEmail(p.email);
+        if (!email) return null;
+
+        const phone = normalizeString(
+          p.sanitized_phone ??
+          (Array.isArray(p.phone_numbers) && p.phone_numbers[0] && typeof p.phone_numbers[0] === 'object'
+            ? (p.phone_numbers[0] as Record<string, unknown>).sanitized_number
+            : null),
+        );
+
+        const organization = p.organization && typeof p.organization === 'object'
+          ? (p.organization as Record<string, unknown>)
+          : null;
+
+        return {
+          email,
+          phone,
+          firstName: normalizeString(p.first_name) ?? '',
+          lastName: normalizeString(p.last_name) ?? '',
+          title: normalizeString(p.title),
+          companyName: normalizeString(organization?.name),
+        };
+      })
+      .filter((c): c is ApolloContactSearchContact => c !== null);
+
+    // Rank by title: owner > CEO > founder > director > manager > other
+    const ranked = contacts.sort((a, b) => titleRank(a.title) - titleRank(b.title));
+
+    return {
+      status: 'success',
+      contacts: ranked.slice(0, 5),
+    };
+  }
+
+  /**
+   * Pre-screen a domain via Apollo's People Search endpoint.
+   * This is a FREE call (zero credits) — it returns metadata about whether
+   * contacts at this domain have emails/phones without revealing the actual data.
+   */
+  async preScreenDomain(domain: string): Promise<
+    | { status: 'success'; hasEmail: boolean; hasDirectPhone: boolean; topContactTitle: string | null }
+    | { status: 'retryable_error'; failure: { classification: 'retryable'; statusCode: number | null; message: string; raw: unknown } }
+    | { status: 'terminal_error'; failure: { classification: 'terminal'; statusCode: number | null; message: string; raw: unknown } }
+  > {
+    if (!this.isConfigured) {
+      return {
+        status: 'terminal_error',
+        failure: { classification: 'terminal', statusCode: null, message: 'Apollo API key not configured', raw: null },
+      };
+    }
+
+    await this.waitForRateLimit();
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}/api/v1/mixed_people/search`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': this.apiKey,
+          'user-agent': 'LeadFlood/1.0 (+https://leadflood.io)',
+        },
+        body: JSON.stringify({
+          q_organization_domains: [domain],
+          per_page: 1,
+        }),
+        signal: controller.signal,
+      });
+    } catch (error: unknown) {
+      return {
+        status: 'retryable_error',
+        failure: {
+          classification: 'retryable',
+          statusCode: null,
+          message: error instanceof Error ? error.message : 'Apollo pre-screen request failed',
+          raw: error,
+        },
+      };
+    } finally {
+      clearTimeout(timeout);
+      this.nextAllowedRequestAt = Date.now() + this.minRequestIntervalMs;
+    }
+
+    const rawText = await response.text();
+
+    if (response.status === 429) {
+      return {
+        status: 'retryable_error',
+        failure: {
+          classification: 'retryable',
+          statusCode: 429,
+          message: 'Apollo pre-screen rate limited',
+          raw: parseJsonSafe(rawText),
+        },
+      };
+    }
+
+    if (!response.ok) {
+      if (response.status >= 500) {
+        return {
+          status: 'retryable_error',
+          failure: {
+            classification: 'retryable',
+            statusCode: response.status,
+            message: `Apollo pre-screen failed with status ${response.status}`,
+            raw: parseJsonSafe(rawText),
+          },
+        };
+      }
+      return {
+        status: 'terminal_error',
+        failure: {
+          classification: 'terminal',
+          statusCode: response.status,
+          message: `Apollo pre-screen failed with status ${response.status}`,
+          raw: parseJsonSafe(rawText),
+        },
+      };
+    }
+
+    const payload = parseJsonSafe(rawText);
+    const data = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+    const rawPeople = Array.isArray(data.people) ? data.people : [];
+
+    if (rawPeople.length === 0) {
+      return { status: 'success', hasEmail: false, hasDirectPhone: false, topContactTitle: null };
+    }
+
+    const topPerson = rawPeople[0] as Record<string, unknown>;
+    const hasEmail = typeof topPerson.email === 'string' && topPerson.email.includes('@');
+    const phoneNumbers = Array.isArray(topPerson.phone_numbers) ? topPerson.phone_numbers : [];
+    const hasDirectPhone = phoneNumbers.length > 0 || typeof topPerson.sanitized_phone === 'string';
+    const topContactTitle = normalizeString(topPerson.title);
+
+    return { status: 'success', hasEmail, hasDirectPhone, topContactTitle };
   }
 
   private matchesIcpFilters(lead: NormalizedDiscoveredLead, filters?: DiscoveryIcpFilters): boolean {

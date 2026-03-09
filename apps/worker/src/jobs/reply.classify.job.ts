@@ -4,7 +4,9 @@ import type { OpenAiAdapter } from '@lead-flood/providers';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { RetryableError } from '../errors.js';
 import { computeOooFollowUpAfter } from '../utils/jitter.js';
+import { recordPipelineEvent } from '../utils/pipeline-events.js';
 
 export const REPLY_CLASSIFY_JOB_NAME = 'reply.classify';
 
@@ -49,6 +51,7 @@ export async function handleReplyClassifyJob(
   deps: ReplyClassifyJobDependencies,
 ): Promise<void> {
   const { runId, correlationId, feedbackEventId, replyText, leadId, messageSendId } = job.data;
+  const startMs = Date.now();
 
   logger.info(
     { jobId: job.id, queue: job.name, runId, correlationId: correlationId ?? job.id, feedbackEventId, leadId },
@@ -56,6 +59,26 @@ export async function handleReplyClassifyJob(
   );
 
   try {
+    // Idempotency: skip if already classified (e.g. duplicate Trengo webhook)
+    const existingEvent = await prisma.feedbackEvent.findUnique({
+      where: { id: feedbackEventId },
+      select: { replyClassification: true },
+    });
+    if (existingEvent?.replyClassification) {
+      logger.info({ jobId: job.id, feedbackEventId }, 'Already classified, skipping');
+      return;
+    }
+
+    // Skip soft-deleted leads
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { deletedAt: true },
+    });
+    if (!lead || lead.deletedAt) {
+      logger.warn({ jobId: job.id, feedbackEventId, leadId }, lead?.deletedAt ? 'Skipping soft-deleted lead' : 'Lead not found');
+      return;
+    }
+
     // Voice note / media-only: no text to classify
     if (!replyText || replyText.trim().length === 0) {
       await prisma.lead.update({ where: { id: leadId }, data: { status: 'replied' } });
@@ -71,7 +94,19 @@ export async function handleReplyClassifyJob(
         correlationId: correlationId ?? job.id,
       };
 
-      await deps.boss.send(deps.notifySalesJobName, notifyPayload, deps.notifySalesRetryOptions);
+      await deps.boss.send(deps.notifySalesJobName, notifyPayload, {
+        ...deps.notifySalesRetryOptions,
+        singletonKey: `notify.sales:${feedbackEventId}`,
+      });
+
+      await recordPipelineEvent({
+        leadId,
+        stage: 'REPLY_CLASSIFY',
+        status: 'MEDIA_ONLY',
+        jobId: job.id,
+        durationMs: Date.now() - startMs,
+        metadata: { feedbackEventId, reason: 'MEDIA_ONLY' },
+      });
 
       logger.info(
         { jobId: job.id, feedbackEventId, leadId },
@@ -91,12 +126,21 @@ export async function handleReplyClassifyJob(
       );
 
       if (result.status === 'retryable_error') {
-        throw new Error(`OpenAI retryable: ${result.failure.message}`);
+        throw new RetryableError(`OpenAI retryable: ${result.failure.message}`);
       }
 
       // Terminal error: mark as replied (safe default), notify team for manual review
       await prisma.lead.update({ where: { id: leadId }, data: { status: 'replied' } });
       await cancelFollowUps(leadId);
+
+      await recordPipelineEvent({
+        leadId,
+        stage: 'REPLY_CLASSIFY',
+        status: 'CLASSIFICATION_FAILED',
+        jobId: job.id,
+        durationMs: Date.now() - startMs,
+        metadata: { feedbackEventId, failure: result.failure.message },
+      });
 
       await deps.boss.send(
         deps.notifySalesJobName,
@@ -109,7 +153,10 @@ export async function handleReplyClassifyJob(
           reason: 'CLASSIFICATION_FAILED',
           correlationId: correlationId ?? job.id,
         } satisfies NotifySalesJobPayload,
-        deps.notifySalesRetryOptions,
+        {
+          ...deps.notifySalesRetryOptions,
+          singletonKey: `notify.sales:${feedbackEventId}`,
+        },
       );
       return;
     }
@@ -136,7 +183,10 @@ export async function handleReplyClassifyJob(
             classification,
             correlationId: correlationId ?? job.id,
           } satisfies NotifySalesJobPayload,
-          deps.notifySalesRetryOptions,
+          {
+            ...deps.notifySalesRetryOptions,
+            singletonKey: `notify.sales:${feedbackEventId}`,
+          },
         );
         break;
       }
@@ -145,6 +195,21 @@ export async function handleReplyClassifyJob(
       case 'UNSUBSCRIBE': {
         await prisma.lead.update({ where: { id: leadId }, data: { status: 'cold' } });
         await cancelFollowUps(leadId);
+
+        // Write suppression record so message.send blocks future sends
+        if (classification === 'UNSUBSCRIBE') {
+          await prisma.feedbackEvent.create({
+            data: {
+              leadId,
+              messageSendId: messageSendId ?? null,
+              eventType: 'UNSUBSCRIBED',
+              source: 'MANUAL',
+              replyClassification: 'UNSUBSCRIBE',
+              dedupeKey: `unsubscribe:${feedbackEventId}`,
+              occurredAt: new Date(),
+            },
+          });
+        }
         break;
       }
 
@@ -161,6 +226,15 @@ export async function handleReplyClassifyJob(
         break;
       }
     }
+
+    await recordPipelineEvent({
+      leadId,
+      stage: 'REPLY_CLASSIFY',
+      status: classification,
+      jobId: job.id,
+      durationMs: Date.now() - startMs,
+      metadata: { feedbackEventId, classification, confidence: result.data.confidence },
+    });
 
     logger.info(
       {

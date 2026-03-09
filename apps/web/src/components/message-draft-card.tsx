@@ -1,7 +1,7 @@
 'use client';
 
 import type { MessageDraftResponse, MessageVariantResponse } from '@lead-flood/contracts';
-import { Check, ChevronDown, ChevronUp, Pencil, Send, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Pencil, Send } from 'lucide-react';
 import { useState } from 'react';
 
 import { useAuth } from '../hooks/use-auth.js';
@@ -9,7 +9,7 @@ import { useAuth } from '../hooks/use-auth.js';
 interface MessageDraftCardProps {
   draft: MessageDraftResponse;
   leadName?: string | undefined;
-  leadEmail?: string | undefined;
+  companyName?: string | undefined;
   onAction: () => void;
 }
 
@@ -54,7 +54,7 @@ function VariantEditor({
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-            {variant.variantKey}
+            Message
           </span>
           <span
             className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
@@ -67,11 +67,6 @@ function VariantEditor({
           </span>
         </div>
         <div className="flex items-center gap-2">
-          {variant.qualityScore !== null ? (
-            <span className="text-xs text-muted-foreground">
-              Q: {(variant.qualityScore * 100).toFixed(0)}%
-            </span>
-          ) : null}
           {!isEditing ? (
             <button
               type="button"
@@ -159,11 +154,9 @@ function VariantEditor({
   );
 }
 
-export function MessageDraftCard({ draft, leadName, leadEmail, onAction }: MessageDraftCardProps) {
+export function MessageDraftCard({ draft, leadName, companyName, onAction }: MessageDraftCardProps) {
   const { apiClient, user } = useAuth();
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
-  const [rejectReason, setRejectReason] = useState('');
-  const [showReject, setShowReject] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
 
@@ -182,24 +175,6 @@ export function MessageDraftCard({ draft, leadName, leadEmail, onAction }: Messa
       setError(err instanceof Error ? err.message : 'Approve failed');
     } finally {
       setActionInProgress(null);
-    }
-  };
-
-  const handleReject = async () => {
-    if (!rejectReason.trim()) return;
-    setActionInProgress('reject');
-    setError(null);
-    try {
-      await apiClient.rejectDraft(draft.id, {
-        rejectedByUserId: userId,
-        rejectedReason: rejectReason,
-      });
-      onAction();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Reject failed');
-    } finally {
-      setActionInProgress(null);
-      setShowReject(false);
     }
   };
 
@@ -223,11 +198,35 @@ export function MessageDraftCard({ draft, leadName, leadEmail, onAction }: Messa
   const isPending = draft.approvalStatus === 'PENDING';
   const isApproved = draft.approvalStatus === 'APPROVED' || draft.approvalStatus === 'AUTO_APPROVED';
 
-  // Extract a preview from the first variant
+  // Determine primary channel from first variant
+  const primaryChannel = draft.variants[0]?.channel ?? 'EMAIL';
+  const channelLabel = primaryChannel === 'WHATSAPP' ? 'WhatsApp' : 'Email';
+  const channelColorClass = primaryChannel === 'WHATSAPP'
+    ? 'bg-[#25D366]/15 text-[#25D366]'
+    : 'bg-[#3B82F6]/15 text-[#3B82F6]';
+
+  // Status display
+  const statusLabel =
+    draft.approvalStatus === 'AUTO_APPROVED' ? 'Auto-Approved'
+      : draft.approvalStatus === 'APPROVED' ? 'Approved'
+        : draft.approvalStatus === 'REJECTED' ? 'Rejected'
+          : 'Pending';
+  const statusColorClass =
+    isPending
+      ? 'bg-yellow-500/15 text-yellow-400'
+      : isApproved
+        ? 'bg-zbooni-green/15 text-zbooni-green'
+        : 'bg-red-500/15 text-red-400';
+
+  // Build display name
+  const displayName = leadName || 'Unknown Lead';
+  const companyDisplay = companyName ? `, ${companyName}` : '';
+
+  // Extract a preview from the first variant — longer for full-width display
   const previewVariant = draft.variants[0];
   const previewText = previewVariant
-    ? previewVariant.bodyText.length > 120
-      ? `${previewVariant.bodyText.slice(0, 120)}...`
+    ? previewVariant.bodyText.length > 240
+      ? `${previewVariant.bodyText.slice(0, 240)}...`
       : previewVariant.bodyText
     : 'No variants';
 
@@ -240,29 +239,23 @@ export function MessageDraftCard({ draft, leadName, leadEmail, onAction }: Messa
         className="flex w-full items-center justify-between p-5 text-left transition-colors hover:bg-muted/5"
       >
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-3">
-            <p className="text-sm font-medium">
-              {previewVariant?.subject ?? 'WhatsApp message'}
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-sm font-semibold truncate">
+              {displayName}{companyDisplay}
             </p>
             <span
-              className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
-                isPending
-                  ? 'bg-yellow-500/15 text-yellow-400'
-                  : isApproved
-                    ? 'bg-zbooni-green/15 text-zbooni-green'
-                    : 'bg-red-500/15 text-red-400'
-              }`}
+              className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${statusColorClass}`}
             >
-              {draft.approvalStatus}
+              {statusLabel}
+            </span>
+            <span
+              className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${channelColorClass}`}
+            >
+              {channelLabel}
             </span>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground/60">
-            {leadName || leadEmail ? `${leadName ?? ''} ${leadEmail ? `(${leadEmail})` : ''}`.trim() + ' · ' : ''}
-            {draft.variants.length} variant{draft.variants.length !== 1 ? 's' : ''}
-            {' · '}{draft.generatedByModel}
-          </p>
           {!expanded ? (
-            <p className="mt-2 line-clamp-2 text-sm text-muted-foreground/80">{previewText}</p>
+            <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground/80">{previewText}</p>
           ) : null}
         </div>
         <div className="ml-4 shrink-0 text-muted-foreground/40">
@@ -273,7 +266,7 @@ export function MessageDraftCard({ draft, leadName, leadEmail, onAction }: Messa
       {/* Expanded content */}
       {expanded ? (
         <div className="border-t border-border/30 p-5 pt-4">
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-4">
             {draft.variants.map((variant) => (
               <VariantEditor
                 key={variant.id}
@@ -286,42 +279,6 @@ export function MessageDraftCard({ draft, leadName, leadEmail, onAction }: Messa
               />
             ))}
           </div>
-
-          {/* Reject controls */}
-          {isPending ? (
-            <div className="mt-4">
-              {showReject ? (
-                <div className="flex gap-2">
-                  <label htmlFor={`reject-reason-${draft.id}`} className="sr-only">
-                    Rejection reason
-                  </label>
-                  <input
-                    id={`reject-reason-${draft.id}`}
-                    value={rejectReason}
-                    onChange={(e) => setRejectReason(e.target.value)}
-                    placeholder="Rejection reason..."
-                    className="flex-1 rounded-lg border border-border/50 bg-zbooni-dark/40 px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  />
-                  <button
-                    type="button"
-                    disabled={!rejectReason.trim() || !!actionInProgress}
-                    onClick={handleReject}
-                    className="rounded-lg bg-destructive px-3 py-1.5 text-xs font-semibold text-destructive-foreground transition-colors hover:bg-destructive/80 disabled:opacity-50"
-                  >
-                    Confirm Reject
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setShowReject(true)}
-                  className="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-destructive"
-                >
-                  <X className="h-3 w-3" /> Reject draft
-                </button>
-              )}
-            </div>
-          ) : null}
 
           {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
         </div>

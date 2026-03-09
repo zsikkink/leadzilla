@@ -72,7 +72,7 @@
   color: hsl(var(--muted-foreground));
 }
 
-.discovery-content button {
+.discovery-content button.btn-primary {
   background: linear-gradient(135deg, #7bff6b 0%, #3cc8e0 100%);
   border-color: transparent;
   color: #0f172a;
@@ -81,11 +81,11 @@
   transition: filter 0.2s ease, transform 0.2s ease;
 }
 
-.discovery-content button:hover {
+.discovery-content button.btn-primary:hover {
   filter: brightness(1.04);
 }
 
-.discovery-content button:active {
+.discovery-content button.btn-primary:active {
   transform: translateY(1px);
 }
 

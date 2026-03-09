@@ -24,6 +24,8 @@ export const FunnelResponseSchema = z
     repliesCount: z.number().int().min(0),
     meetingsCount: z.number().int().min(0),
     dealsWonCount: z.number().int().min(0),
+    totalCostCents: z.number().int().min(0),
+    costPerLead: z.number().min(0),
   })
   .strict();
 

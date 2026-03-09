@@ -6,9 +6,10 @@ import type { DiscoveryRuntimeConfig } from '../config.js';
 import { normalizeQuery } from '../dedupe/normalize.js';
 import { incrementMetric } from '../metrics.js';
 import { normalizePhoneE164 } from '../normalization/phone.js';
-import { deriveRootDomainFromUrl } from '../providers/serpapi.client.js';
+import { deriveRootDomainFromUrl } from '../utils/url.js';
 import type {
   DiscoveryCountryCode,
+  DiscoveryProviderName,
   DiscoveryProvider,
   NormalizedLocalBusiness,
   NormalizedProviderResponse,
@@ -41,13 +42,16 @@ interface SearchTaskRow {
   attempts: number;
   run_after: Date;
   last_result_hash: string | null;
+  discovery_run_id: string | null;
 }
 
 interface TaskProcessStats {
   newBusinesses: number;
+  newBusinessIds: string[];
   newSources: number;
   localBusinessCount: number;
   organicResultCount: number;
+  businessBudgetReached: boolean;
 }
 
 export interface RunSearchTaskResult {
@@ -55,10 +59,12 @@ export interface RunSearchTaskResult {
   status: 'EMPTY' | 'DONE' | 'FAILED' | 'SKIPPED';
   queryHash?: string;
   taskType?: SearchTaskType;
+  providerUsed?: DiscoveryProviderName;
   countryCode?: DiscoveryCountryCode;
   language?: 'en' | 'ar';
   durationMs: number;
   newBusinesses: number;
+  newBusinessIds: string[];
   newSources: number;
   localBusinessCount: number;
   organicResultCount: number;
@@ -68,6 +74,15 @@ export interface RunSearchTaskResult {
 
 export interface RunSearchTaskOptions {
   timeBucket?: string;
+  discoveryRunId?: string | undefined;
+  maxNewBusinesses?: number | undefined;
+}
+
+export function shouldStopPersistingBusinesses(
+  newBusinesses: number,
+  maxNewBusinesses: number | undefined,
+): boolean {
+  return maxNewBusinesses !== undefined && newBusinesses >= maxNewBusinesses;
 }
 
 const SOCIAL_DOMAINS = new Set([
@@ -125,6 +140,13 @@ function normalizeAddress(value: string | null): string | null {
   }
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : null;
+}
+
+function toRecord(value: Prisma.JsonValue): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
 }
 
 function normalizeNullableString(value: string | null): string | null {
@@ -370,6 +392,9 @@ async function lockNextRunnableTask(
     const timeBucketFilter = options.timeBucket
       ? Prisma.sql`AND "time_bucket" = ${options.timeBucket}`
       : Prisma.empty;
+    const discoveryRunFilter = options.discoveryRunId
+      ? Prisma.sql`AND "discovery_run_id" = ${options.discoveryRunId}`
+      : Prisma.sql`AND "discovery_run_id" IS NULL`;
     const rows = await tx.$queryRaw<SearchTaskRow[]>`
       SELECT
         id,
@@ -386,11 +411,16 @@ async function lockNextRunnableTask(
         status,
         attempts,
         run_after,
-        last_result_hash
+        last_result_hash,
+        discovery_run_id
       FROM "search_tasks"
-      WHERE "status" IN ('PENDING', 'FAILED')
+      WHERE (
+        "status" = 'PENDING'
+        OR ("status" = 'FAILED' AND "attempts" < ${config.maxTaskAttempts})
+      )
         AND "run_after" <= NOW()
         ${timeBucketFilter}
+        ${discoveryRunFilter}
       ORDER BY "run_after" ASC
       LIMIT 1
       FOR UPDATE SKIP LOCKED
@@ -465,6 +495,7 @@ async function upsertSource(
 async function upsertBusinessFromLocalResult(
   task: SearchTaskRow,
   local: NormalizedLocalBusiness,
+  discoveryRunId?: string | undefined,
 ): Promise<{ businessId: string; created: boolean }> {
   const websiteDomain = deriveRootDomainFromUrl(local.websiteUrl ?? local.url);
   const phoneE164 = normalizePhoneE164(local.phone, task.country_code);
@@ -535,7 +566,14 @@ async function upsertBusinessFromLocalResult(
     };
 
     if (phoneE164 !== null) {
-      updateData.phoneE164 = phoneE164;
+      // Check if another business already has this phone to avoid unique constraint crash (P2002)
+      const phoneOwner = await discoveryPrisma.business.findFirst({
+        where: { phoneE164, NOT: { id: existing.id } },
+        select: { id: true },
+      });
+      if (!phoneOwner) {
+        updateData.phoneE164 = phoneE164;
+      }
     }
     if (
       websiteDomain !== null &&
@@ -593,6 +631,7 @@ async function upsertBusinessFromLocalResult(
       recentActivity: signals.recentActivity,
       deterministicScore: signals.deterministicScore,
       scoreBand: signals.scoreBand,
+      ...(discoveryRunId ? { discoveryRunId } : {}),
     },
     select: {
       id: true,
@@ -628,9 +667,13 @@ async function insertEvidence(
 async function persistProviderResults(
   task: SearchTaskRow,
   providerResponse: NormalizedProviderResponse,
+  discoveryRunId?: string | undefined,
+  maxNewBusinesses?: number | undefined,
 ): Promise<TaskProcessStats> {
   let newSources = 0;
   let newBusinesses = 0;
+  const newBusinessIds: string[] = [];
+  let businessBudgetReached = false;
 
   for (const result of providerResponse.organicResults) {
     const created = await upsertSource(
@@ -646,6 +689,11 @@ async function persistProviderResults(
   }
 
   for (const local of providerResponse.localBusinesses) {
+    if (shouldStopPersistingBusinesses(newBusinesses, maxNewBusinesses)) {
+      businessBudgetReached = true;
+      break;
+    }
+
     if (local.websiteUrl) {
       const created = await upsertSource(local.websiteUrl, task.country_code, task.id, 0.8);
       if (created) {
@@ -660,9 +708,10 @@ async function persistProviderResults(
       }
     }
 
-    const businessUpsert = await upsertBusinessFromLocalResult(task, local);
+    const businessUpsert = await upsertBusinessFromLocalResult(task, local, discoveryRunId);
     if (businessUpsert.created) {
       newBusinesses += 1;
+      newBusinessIds.push(businessUpsert.businessId);
       incrementMetric('new_businesses');
     }
 
@@ -682,7 +731,9 @@ async function persistProviderResults(
   }
 
   return {
+    businessBudgetReached,
     newBusinesses,
+    newBusinessIds,
     newSources,
     localBusinessCount: providerResponse.localBusinesses.length,
     organicResultCount: providerResponse.organicResults.length,
@@ -699,6 +750,7 @@ async function executeTaskWithProvider(
     language: task.language,
     city: task.city,
     page: task.page,
+    fallbackScopeKey: task.discovery_run_id,
   } as const;
 
   if (task.task_type === 'SERP_GOOGLE') {
@@ -729,7 +781,9 @@ async function markTaskDone(
   status: 'DONE' | 'SKIPPED',
   resultHash: string | null,
   nextRunAfter: Date,
+  providerUsed: DiscoveryProviderName,
 ): Promise<void> {
+  const paramsJson = toRecord(task.params_json);
   await discoveryPrisma.searchTask.update({
     where: { id: task.id },
     data: {
@@ -737,6 +791,10 @@ async function markTaskDone(
       lastResultHash: resultHash,
       runAfter: nextRunAfter,
       error: null,
+      paramsJson: {
+        ...paramsJson,
+        providerUsed,
+      },
     },
   });
 }
@@ -775,6 +833,7 @@ export async function runSearchTask(
       status: 'EMPTY',
       durationMs: Date.now() - startedAt,
       newBusinesses: 0,
+      newBusinessIds: [],
       newSources: 0,
       localBusinessCount: 0,
       organicResultCount: 0,
@@ -786,7 +845,12 @@ export async function runSearchTask(
     const resultHash = hashResultSet(providerResponse);
     const unchanged = task.last_result_hash !== null && task.last_result_hash === resultHash;
 
-    const stats = await persistProviderResults(task, providerResponse);
+    const stats = await persistProviderResults(
+      task,
+      providerResponse,
+      options.discoveryRunId,
+      options.maxNewBusinesses,
+    );
     const isEmpty = stats.localBusinessCount === 0 && stats.organicResultCount === 0;
 
     const status: 'DONE' | 'SKIPPED' = isEmpty ? 'SKIPPED' : 'DONE';
@@ -794,7 +858,7 @@ export async function runSearchTask(
       ? addRefreshInterval(new Date(), config.refreshBucket)
       : new Date();
 
-    await markTaskDone(task, status, resultHash, nextRunAfter);
+    await markTaskDone(task, status, resultHash, nextRunAfter, providerResponse.provider);
     incrementMetric('tasks_run');
     if (status === 'SKIPPED') {
       incrementMetric('tasks_skipped');
@@ -805,11 +869,13 @@ export async function runSearchTask(
       status,
       queryHash: task.query_hash,
       taskType: task.task_type,
+      providerUsed: providerResponse.provider,
       countryCode: task.country_code,
       language: task.language,
       attempts: task.attempts,
       durationMs: Date.now() - startedAt,
       newBusinesses: stats.newBusinesses,
+      newBusinessIds: stats.newBusinessIds,
       newSources: stats.newSources,
       localBusinessCount: stats.localBusinessCount,
       organicResultCount: stats.organicResultCount,
@@ -830,6 +896,7 @@ export async function runSearchTask(
       attempts: task.attempts,
       durationMs: Date.now() - startedAt,
       newBusinesses: 0,
+      newBusinessIds: [],
       newSources: 0,
       localBusinessCount: 0,
       organicResultCount: 0,

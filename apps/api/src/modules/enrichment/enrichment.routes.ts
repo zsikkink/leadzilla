@@ -1,7 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
-  CreateEnrichmentRunRequestSchema,
-  CreateEnrichmentRunResponseSchema,
   EnrichmentRunIdParamsSchema,
   EnrichmentRunStatusResponseSchema,
   ErrorResponseSchema,
@@ -11,14 +9,7 @@ import {
 
 import { EnrichmentNotImplementedError } from './enrichment.errors.js';
 import { PrismaEnrichmentRepository } from './enrichment.repository.js';
-import {
-  buildEnrichmentService,
-  type EnrichmentRunJobPayload,
-} from './enrichment.service.js';
-
-export interface EnrichmentRouteDependencies {
-  enqueueEnrichmentRun?: ((payload: EnrichmentRunJobPayload) => Promise<void>) | undefined;
-}
+import { buildEnrichmentService } from './enrichment.service.js';
 
 function sendValidationError(reply: FastifyReply, requestId: string, message: string) {
   reply.status(400);
@@ -42,35 +33,9 @@ function handleModuleError(error: unknown, request: FastifyRequest, reply: Fasti
   return false;
 }
 
-export function registerEnrichmentRoutes(
-  app: FastifyInstance,
-  dependencies?: EnrichmentRouteDependencies,
-): void {
+export function registerEnrichmentRoutes(app: FastifyInstance): void {
   const repository = new PrismaEnrichmentRepository();
-  const service = buildEnrichmentService(repository, {
-    enqueueEnrichmentRun: dependencies?.enqueueEnrichmentRun
-      ? dependencies.enqueueEnrichmentRun
-      : async () => {
-          throw new EnrichmentNotImplementedError('Enrichment queue publisher is not configured');
-        },
-  });
-
-  app.post('/v1/enrichment/runs', async (request, reply) => {
-    const parsed = CreateEnrichmentRunRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return sendValidationError(reply, request.id, 'Invalid enrichment run payload');
-    }
-
-    try {
-      const result = await service.createEnrichmentRun(parsed.data);
-      return CreateEnrichmentRunResponseSchema.parse(result);
-    } catch (error: unknown) {
-      if (handleModuleError(error, request, reply)) {
-        return;
-      }
-      throw error;
-    }
-  });
+  const service = buildEnrichmentService(repository);
 
   app.get('/v1/enrichment/runs/:runId', async (request, reply) => {
     const parsedParams = EnrichmentRunIdParamsSchema.safeParse(request.params);

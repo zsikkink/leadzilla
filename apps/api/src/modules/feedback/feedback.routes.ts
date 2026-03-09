@@ -11,7 +11,7 @@ import {
 
 import { FeedbackNotImplementedError } from './feedback.errors.js';
 import { PrismaFeedbackRepository } from './feedback.repository.js';
-import { buildFeedbackService } from './feedback.service.js';
+import { buildFeedbackService, FeedbackLeadNotFoundError } from './feedback.service.js';
 
 function sendValidationError(reply: FastifyReply, requestId: string, message: string) {
   reply.status(400);
@@ -22,6 +22,16 @@ function sendValidationError(reply: FastifyReply, requestId: string, message: st
 }
 
 function handleModuleError(error: unknown, request: FastifyRequest, reply: FastifyReply): boolean {
+  if (error instanceof FeedbackLeadNotFoundError) {
+    reply.status(404).send(
+      ErrorResponseSchema.parse({
+        error: error.message,
+        requestId: request.id,
+      }),
+    );
+    return true;
+  }
+
   if (error instanceof FeedbackNotImplementedError) {
     reply.status(501).send(
       ErrorResponseSchema.parse({

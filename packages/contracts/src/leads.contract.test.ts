@@ -59,6 +59,62 @@ describe('GetLeadResponseSchema', () => {
 
     expect(parsed.status).toBe('new');
   });
+
+  it('accepts contact discovery metadata on lead detail payloads', () => {
+    const parsed = GetLeadResponseSchema.parse({
+      id: 'lead_1',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@example.com',
+      source: 'manual',
+      status: 'qualified',
+      enrichmentData: null,
+      error: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      contactDiscovery: {
+        cseVerifyAttempted: true,
+        cseVerifySucceeded: true,
+        cseDiscoverAttempted: true,
+        cseDiscoverSucceeded: false,
+        cseRawResults: 7,
+        cseValidProfiles: 3,
+        cseCandidatesAdded: 2,
+        cseCandidatesValidated: 2,
+        cseEmailsInferred: 1,
+        verificationVerdict: 'verified',
+        supportingUrls: ['https://linkedin.com/in/ada-lovelace'],
+        diagnostics: [
+          {
+            stage: 'DISCOVER',
+            sourceFamily: 'linkedin',
+            queryFamily: 'DISCOVER_ROLES',
+            rawResultCount: 3,
+            promotedCount: 1,
+            verdict: 'verified',
+          },
+        ],
+        topQueryFamily: 'DISCOVER_ROLES',
+        topSourceFamily: 'linkedin',
+        finalOutcome: 'lead_created',
+        topCandidates: [
+          {
+            name: 'Ada Lovelace',
+            title: 'Founder',
+            sourceStage: 'V2',
+            linkedinUrl: 'https://linkedin.com/in/ada-lovelace',
+            email: 'ada@example.com',
+            confidence: 0.94,
+            matchedSignals: ['linkedin_profile', 'name_match'],
+            verificationVerdict: 'verified',
+            supportingUrls: ['https://linkedin.com/in/ada-lovelace'],
+          },
+        ],
+      },
+    });
+
+    expect(parsed.contactDiscovery?.topCandidates).toHaveLength(1);
+  });
 });
 
 describe('GetJobStatusResponseSchema', () => {

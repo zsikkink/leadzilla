@@ -1,6 +1,15 @@
 'use client';
 
-import type { ConversationEntry, ConversationResponse, MessageSendResponse } from '@lead-flood/contracts';
+/**
+ * INBOX DATA: All data is REAL from the API.
+ * - Conversation list: fetched via apiClient.listSends() — actual MessageSend records
+ * - Lead names: resolved via apiClient.getLead() for each unique leadId
+ * - Conversation threads: fetched via apiClient.getConversation(leadId)
+ * - No fake/seed data is hardcoded here. If the inbox appears empty, there are no sends in the DB.
+ */
+
+import type { ConversationEntry, ConversationResponse, GetLeadResponse, MessageSendResponse } from '@lead-flood/contracts';
+import DOMPurify from 'dompurify';
 import {
   Inbox as InboxIcon,
   Mail,
@@ -8,7 +17,7 @@ import {
   Phone,
   Search,
 } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
@@ -62,6 +71,58 @@ export default function InboxPage() {
     [selectedLeadId],
   );
 
+  // Batch-fetch lead details for display names
+  const [leadNameMap, setLeadNameMap] = useState<Record<string, string>>({});
+
+  const leadIds = useMemo(() => {
+    if (!sends.data?.items) return [];
+    const ids = new Set<string>();
+    for (const send of sends.data.items) {
+      ids.add(send.leadId);
+    }
+    return Array.from(ids);
+  }, [sends.data]);
+
+  useEffect(() => {
+    if (leadIds.length === 0) return;
+
+    let cancelled = false;
+
+    void Promise.allSettled(
+      leadIds.map((id) => apiClient.getLead(id)),
+    ).then((results) => {
+      if (cancelled) return;
+
+      const nameMap: Record<string, string> = {};
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        const leadId = leadIds[i];
+        if (!result || !leadId) continue;
+
+        if (result.status === 'fulfilled') {
+          const lead: GetLeadResponse = result.value;
+          const fullName = `${lead.firstName} ${lead.lastName}`.trim();
+          if (fullName) {
+            nameMap[leadId] = fullName;
+          } else {
+            // Fall back to company name from enrichmentData
+            const enrichment = lead.enrichmentData as Record<string, unknown> | null | undefined;
+            const companyName = enrichment?.companyName as string | undefined;
+            if (companyName) {
+              nameMap[leadId] = companyName;
+            }
+          }
+        }
+      }
+
+      setLeadNameMap(nameMap);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [leadIds, apiClient]);
+
   // Build conversation summaries grouped by lead
   const summaries = useMemo((): LeadConversationSummary[] => {
     if (!sends.data?.items) return [];
@@ -85,7 +146,7 @@ export default function InboxPage() {
 
       result.push({
         leadId,
-        leadName: leadId.slice(0, 8), // Will be replaced with real lead name when we enrich the data
+        leadName: leadNameMap[leadId] ?? leadId.slice(0, 8),
         leadEmail: '',
         lastMessage: `${latest.channel} — ${latest.status}`,
         lastTimestamp: latest.sentAt ?? latest.createdAt,
@@ -97,7 +158,7 @@ export default function InboxPage() {
     return result.sort((a, b) =>
       new Date(b.lastTimestamp).getTime() - new Date(a.lastTimestamp).getTime(),
     );
-  }, [sends.data]);
+  }, [sends.data, leadNameMap]);
 
   // Filter summaries
   const filtered = useMemo(() => {
@@ -117,7 +178,7 @@ export default function InboxPage() {
   return (
     <div className="flex h-[calc(100vh-4rem)] gap-0 overflow-hidden rounded-2xl border border-border/50 bg-card shadow-sm">
       {/* Left panel: conversation list */}
-      <div className="flex w-[360px] shrink-0 flex-col border-r border-border/50">
+      <div className="flex w-[360px] min-h-0 shrink-0 flex-col border-r border-border/50">
         {/* Search + filter */}
         <div className="space-y-2 border-b border-border/50 p-4">
           <div className="relative">
@@ -209,7 +270,7 @@ export default function InboxPage() {
           <>
             {/* Thread header */}
             <div className="border-b border-border/50 px-6 py-4">
-              <h2 className="text-sm font-semibold">Conversation with {selectedLeadId.slice(0, 8)}</h2>
+              <h2 className="text-sm font-semibold">Conversation with {leadNameMap[selectedLeadId] ?? selectedLeadId.slice(0, 8)}</h2>
             </div>
 
             {/* Messages */}
@@ -219,8 +280,23 @@ export default function InboxPage() {
               ) : null}
 
               {conversation.data?.entries.map((entry: ConversationEntry, i: number) => (
+                <div key={i}>
+                  {/* Visual separator between messages */}
+                  {i > 0 ? (
+                    <div className="my-4 flex items-center gap-3">
+                      <div className="h-px flex-1 bg-border/30" />
+                      <span className="text-[10px] text-muted-foreground/40">
+                        {new Date(entry.timestamp).toLocaleDateString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                      <div className="h-px flex-1 bg-border/30" />
+                    </div>
+                  ) : null}
                 <div
-                  key={i}
                   className={`flex ${entry.type === 'sent' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div
@@ -235,7 +311,26 @@ export default function InboxPage() {
                         Subject: {entry.subject}
                       </p>
                     ) : null}
-                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{entry.bodyText}</p>
+                    <div className="text-sm leading-relaxed">
+                      {entry.bodyHtml ? (
+                        <div
+                          dangerouslySetInnerHTML={{
+                            __html: DOMPurify.sanitize(entry.bodyHtml),
+                          }}
+                        />
+                      ) : (
+                        entry.bodyText.split('\n\n').map((paragraph, pIdx) => (
+                          <p key={pIdx} className={pIdx > 0 ? 'mt-3' : ''}>
+                            {paragraph.split('\n').map((line, lIdx, arr) => (
+                              <span key={lIdx}>
+                                {line}
+                                {lIdx < arr.length - 1 ? <br /> : null}
+                              </span>
+                            ))}
+                          </p>
+                        ))
+                      )}
+                    </div>
                     <div className="mt-2 flex items-center gap-2">
                       <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${channelBadge(entry.channel)}`}>
                         {entry.channel}
@@ -253,6 +348,7 @@ export default function InboxPage() {
                       </span>
                     </div>
                   </div>
+                </div>
                 </div>
               ))}
             </div>

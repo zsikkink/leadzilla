@@ -1,12 +1,17 @@
 import PgBoss from 'pg-boss';
 
-import { Prisma, prisma } from '@lead-flood/db';
+import { Prisma, checkPipelineSchemaHealth, prisma, toInputJson } from '@lead-flood/db';
 import { createLogger } from '@lead-flood/observability';
 import type {
+  ContactRecoveryDetailResponse,
+  ContactRecoverySnapshot,
+  ListContactRecoveryItemsQuery,
+  ListContactRecoveryItemsResponse,
   RunDiscoverySeedRequest,
   RunDiscoveryTasksRequest,
   TriggerJobRunResponse,
 } from '@lead-flood/contracts';
+import { ContactRecoverySnapshotSchema } from '@lead-flood/contracts';
 
 import { buildSupabaseAccessTokenVerifier } from './auth/supabase.js';
 import { loadApiEnv } from './env.js';
@@ -14,7 +19,6 @@ import type { ReplyClassifyJobPayload } from '@lead-flood/contracts';
 
 import type { AnalyticsRollupJobPayload } from './modules/analytics/analytics.service.js';
 import type { DiscoveryRunJobPayload } from './modules/discovery/discovery.service.js';
-import type { EnrichmentRunJobPayload } from './modules/enrichment/enrichment.service.js';
 import type { MessageGenerateJobPayload, MessagingSendJobPayload } from './modules/messaging/messaging.service.js';
 import type { ScoringRunJobPayload } from './modules/scoring/scoring.service.js';
 import { buildServer, LeadAlreadyExistsError } from './server.js';
@@ -24,8 +28,70 @@ function toDayStart(value: string): Date {
   return new Date(Date.UTC(source.getUTCFullYear(), source.getUTCMonth(), source.getUTCDate()));
 }
 
-function toInputJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
+function mapContactRecoveryItem(record: {
+  id: string;
+  businessId: string;
+  icpProfileId: string;
+  discoveryRunId: string;
+  status: 'OPEN' | 'REJECTED';
+  reason: 'NO_CONTACTS_FOUND' | 'NO_EMAIL';
+  evidenceScore: number;
+  candidateCount: number;
+  recoverySnapshot: Prisma.JsonValue;
+  rejectedBy: string | null;
+  rejectedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  business: {
+    id: string;
+    name: string;
+    city: string | null;
+    country: string | null;
+    countryCode: string;
+    websiteDomain: string | null;
+    instagramHandle: string | null;
+    category: string | null;
+    deterministicScore: number;
+    scoreBand: 'LOW' | 'MEDIUM' | 'HIGH' | null;
+    preQualified: boolean | null;
+    disqualificationReason: string | null;
+  };
+  icpProfile: {
+    name: string;
+  };
+}): ContactRecoveryDetailResponse {
+  const snapshot = ContactRecoverySnapshotSchema.parse(record.recoverySnapshot) as ContactRecoverySnapshot;
+
+  return {
+    id: record.id,
+    businessId: record.businessId,
+    icpProfileId: record.icpProfileId,
+    icpProfileName: record.icpProfile.name,
+    discoveryRunId: record.discoveryRunId,
+    status: record.status,
+    reason: record.reason,
+    evidenceScore: Number(record.evidenceScore.toFixed(3)),
+    candidateCount: record.candidateCount,
+    rejectedBy: record.rejectedBy,
+    rejectedAt: record.rejectedAt?.toISOString() ?? null,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+    business: {
+      id: record.business.id,
+      name: record.business.name,
+      city: record.business.city,
+      country: record.business.country,
+      countryCode: record.business.countryCode,
+      websiteDomain: record.business.websiteDomain,
+      instagramHandle: record.business.instagramHandle,
+      category: record.business.category,
+      deterministicScore: record.business.deterministicScore,
+      scoreBand: record.business.scoreBand,
+      preQualified: record.business.preQualified,
+      disqualificationReason: record.business.disqualificationReason,
+    },
+    snapshot,
+  };
 }
 
 async function main(): Promise<void> {
@@ -54,8 +120,7 @@ async function main(): Promise<void> {
   });
 
   await boss.start();
-  await boss.createQueue('discovery.run');
-  await boss.createQueue('enrichment.run');
+  await boss.createQueue('features.compute');
   await boss.createQueue('scoring.compute');
   await boss.createQueue('message.send');
   await boss.createQueue('message.generate');
@@ -218,6 +283,14 @@ async function main(): Promise<void> {
     env,
     logger,
     verifyAccessToken,
+    checkUserActive: async (userId: string) => {
+      const rows = await prisma.$queryRaw<Array<{ banned_until: Date | null }>>`
+        SELECT banned_until FROM auth.users WHERE id = ${userId}::uuid LIMIT 1
+      `;
+      if (rows.length === 0) return false;
+      const bannedUntil = rows[0]!.banned_until;
+      return bannedUntil === null || bannedUntil < new Date();
+    },
     checkDatabaseHealth: async () => {
       try {
         await prisma.$queryRaw`SELECT 1`;
@@ -227,8 +300,28 @@ async function main(): Promise<void> {
         return false;
       }
     },
+    checkSchemaHealth: async () => {
+      try {
+        return await checkPipelineSchemaHealth(prisma);
+      } catch (error: unknown) {
+        logger.error({ error }, 'Schema readiness check failed');
+        return {
+          status: 'fail',
+          missingTables: [],
+          missingEnumValues: [],
+        };
+      }
+    },
     createLeadAndEnqueue: async (input) => {
       try {
+        // B5 fix: resolve icpProfileId for manual leads — use first active ICP
+        const activeIcp = await prisma.icpProfile.findFirst({
+          where: { isActive: true },
+          select: { id: true },
+          orderBy: { createdAt: 'asc' },
+        });
+        const icpProfileId = input.icpProfileId ?? activeIcp?.id ?? undefined;
+
         const { lead, jobExecution, outboxEvent } = await prisma.$transaction(async (tx) => {
           const lead = await tx.lead.create({
             data: {
@@ -242,11 +335,12 @@ async function main(): Promise<void> {
 
           const jobExecution = await tx.jobExecution.create({
             data: {
-              type: 'enrichment.run',
+              type: 'features.compute',
               status: 'queued',
               payload: {
                 leadId: lead.id,
-                source: input.source,
+                icpProfileId,
+                snapshotVersion: 1,
               },
               leadId: lead.id,
             },
@@ -254,11 +348,12 @@ async function main(): Promise<void> {
 
           const outboxEvent = await tx.outboxEvent.create({
             data: {
-              type: 'enrichment.run',
+              type: 'features.compute',
               payload: {
                 leadId: lead.id,
-                jobExecutionId: jobExecution.id,
-                source: input.source,
+                icpProfileId,
+                snapshotVersion: 1,
+                runId: jobExecution.id,
               },
               status: 'pending',
             },
@@ -273,14 +368,15 @@ async function main(): Promise<void> {
 
         try {
           await boss.send(
-            'enrichment.run',
+            'features.compute',
             {
               leadId: lead.id,
-              jobExecutionId: jobExecution.id,
-              source: input.source,
+              icpProfileId,
+              snapshotVersion: 1,
+              runId: jobExecution.id,
             },
             {
-              singletonKey: `outbox:${outboxEvent.id}`,
+              singletonKey: `features.compute:${lead.id}`,
               retryLimit: 3,
               retryDelay: 5,
               retryBackoff: true,
@@ -301,7 +397,7 @@ async function main(): Promise<void> {
           });
         } catch (error: unknown) {
           const errorMessage =
-            error instanceof Error ? error.message : 'Failed to enqueue enrichment job';
+            error instanceof Error ? error.message : 'Failed to enqueue features.compute job';
           logger.error(
             { error, leadId: lead.id, outboxEventId: outboxEvent.id },
             'Immediate queue publish failed; outbox retry will handle dispatch',
@@ -333,20 +429,29 @@ async function main(): Promise<void> {
       }
     },
     enqueueDiscoveryRun: async (payload: DiscoveryRunJobPayload) => {
-      await boss.send('discovery.run', payload, {
-        singletonKey: `discovery.run:${payload.runId}`,
-        retryLimit: 3,
-        retryDelay: 30,
-        retryBackoff: true,
-      });
-    },
-    enqueueEnrichmentRun: async (payload: EnrichmentRunJobPayload) => {
-      await boss.send('enrichment.run', payload, {
-        singletonKey: `enrichment.run:${payload.runId}`,
-        retryLimit: 5,
-        retryDelay: 60,
-        retryBackoff: true,
-      });
+      await boss.send(
+        'discovery.seed',
+        {
+          reason: 'api',
+          correlationId: payload.runId,
+          countries: payload.countries,
+          ...(payload.cities !== undefined ? { cities: payload.cities } : {}),
+          discoveryRunId: payload.runId,
+          icpProfileId: payload.icpProfileId,
+          includeWebsiteAnalysis: payload.includeWebsiteAnalysis,
+          includeSocialMediaAnalysis: payload.includeSocialMediaAnalysis,
+          ...(payload.limit !== undefined ? { maxTasks: payload.limit } : {}),
+          ...(payload.validationMode !== undefined ? { validationMode: payload.validationMode } : {}),
+          ...(payload.minReviewCount !== undefined ? { minReviewCount: payload.minReviewCount } : {}),
+          enqueueRunTasks: true,
+        },
+        {
+          singletonKey: `discovery.seed:${payload.runId}:${payload.icpProfileId}`,
+          retryLimit: 3,
+          retryDelay: 60,
+          retryBackoff: true,
+        },
+      );
     },
     enqueueScoringRun: async (payload: ScoringRunJobPayload) => {
       await boss.send('scoring.compute', payload, {
@@ -366,7 +471,7 @@ async function main(): Promise<void> {
     },
     enqueueMessageGenerate: async (payload: MessageGenerateJobPayload) => {
       await boss.send('message.generate', payload, {
-        singletonKey: `message.generate:${payload.runId}`,
+        singletonKey: `message.generate:${payload.leadId}:${payload.icpProfileId}`,
         retryLimit: 3,
         retryDelay: 30,
         retryBackoff: true,
@@ -382,32 +487,257 @@ async function main(): Promise<void> {
     },
     enqueueReplyClassify,
     trengoWebhookSecret: env.TRENGO_WEBHOOK_SECRET,
+    resendWebhookSecret: env.RESEND_WEBHOOK_SECRET,
     triggerDiscoverySeedJob,
     triggerDiscoveryTaskRun,
     ...(env.ADMIN_API_KEY ? { adminApiKey: env.ADMIN_API_KEY } : {}),
     getLeadById: async (leadId) => {
-      return prisma.lead.findUnique({
-        where: { id: leadId },
+      const lead = await prisma.lead.findUnique({
+        where: { id: leadId, deletedAt: null },
+        include: {
+          enrichmentRecords: {
+            orderBy: [{ enrichedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+            take: 1,
+            select: { normalizedPayload: true },
+          },
+          businessConversions: {
+            take: 1,
+            orderBy: { createdAt: 'desc' },
+            include: {
+              business: {
+                select: { countryCode: true, country: true, city: true, category: true },
+              },
+            },
+          },
+        },
       });
+      if (!lead) return null;
+      const biz = lead.businessConversions[0]?.business;
+      const conversionMetadata =
+        lead.businessConversions[0]?.metadata && typeof lead.businessConversions[0].metadata === 'object' && !Array.isArray(lead.businessConversions[0].metadata)
+          ? lead.businessConversions[0].metadata as Record<string, unknown>
+          : null;
+      const contactRecovery =
+        conversionMetadata?.contactRecovery && typeof conversionMetadata.contactRecovery === 'object' && !Array.isArray(conversionMetadata.contactRecovery)
+          ? conversionMetadata.contactRecovery as Record<string, unknown>
+          : null;
+      const telemetry =
+        contactRecovery?.telemetry && typeof contactRecovery.telemetry === 'object' && !Array.isArray(contactRecovery.telemetry)
+          ? contactRecovery.telemetry as Record<string, unknown>
+          : null;
+      const confidence =
+        conversionMetadata?.confidence && typeof conversionMetadata.confidence === 'object' && !Array.isArray(conversionMetadata.confidence)
+          ? conversionMetadata.confidence as Record<string, unknown>
+          : null;
+      const decisionProvenance =
+        conversionMetadata?.decisionProvenance && typeof conversionMetadata.decisionProvenance === 'object' && !Array.isArray(conversionMetadata.decisionProvenance)
+          ? conversionMetadata.decisionProvenance as Record<string, unknown>
+          : null;
+      const topCandidates = Array.isArray(contactRecovery?.topCandidates)
+        ? contactRecovery.topCandidates
+        : [];
+      const latestEnrichmentPayload =
+        (lead.enrichmentRecords[0]?.normalizedPayload as Prisma.JsonValue | null | undefined) ?? null;
+      return {
+        ...lead,
+        enrichmentData: latestEnrichmentPayload ?? lead.enrichmentData,
+        businessCountryCode: biz?.countryCode ?? null,
+        businessCountry: biz?.country ?? null,
+        businessCity: biz?.city ?? null,
+        businessCategory: biz?.category ?? null,
+        contactDiscovery: telemetry
+          ? {
+              cseVerifyAttempted: telemetry.cseVerifyAttempted === true,
+              cseVerifySucceeded: telemetry.cseVerifySucceeded === true,
+              cseDiscoverAttempted: telemetry.cseDiscoverAttempted === true,
+              cseDiscoverSucceeded: telemetry.cseDiscoverSucceeded === true,
+              cseRawResults: typeof telemetry.cseRawResults === 'number' ? telemetry.cseRawResults : 0,
+              cseValidProfiles: typeof telemetry.cseValidProfiles === 'number' ? telemetry.cseValidProfiles : 0,
+              cseCandidatesAdded: typeof telemetry.cseCandidatesAdded === 'number' ? telemetry.cseCandidatesAdded : 0,
+              cseCandidatesValidated: typeof telemetry.cseCandidatesValidated === 'number' ? telemetry.cseCandidatesValidated : 0,
+              cseEmailsInferred: typeof telemetry.cseEmailsInferred === 'number' ? telemetry.cseEmailsInferred : 0,
+              verificationVerdict:
+                telemetry.verificationVerdict === 'verified'
+                || telemetry.verificationVerdict === 'not_verified'
+                || telemetry.verificationVerdict === 'inconclusive'
+                || telemetry.verificationVerdict === 'skipped'
+                  ? telemetry.verificationVerdict
+                  : 'skipped',
+              supportingUrls: Array.isArray(telemetry.supportingUrls)
+                ? telemetry.supportingUrls.filter((url): url is string => typeof url === 'string')
+                : Array.isArray(contactRecovery?.supportingUrls)
+                  ? contactRecovery.supportingUrls.filter((url): url is string => typeof url === 'string')
+                  : [],
+              diagnostics: Array.isArray(telemetry.diagnostics)
+                ? telemetry.diagnostics
+                  .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+                  .map((item) => ({
+                    stage: typeof item.stage === 'string' ? item.stage : 'unknown',
+                    sourceFamily:
+                      item.sourceFamily === 'linkedin'
+                      || item.sourceFamily === 'company_page'
+                      || item.sourceFamily === 'public_web'
+                      || item.sourceFamily === 'mixed'
+                      || item.sourceFamily === 'unknown'
+                        ? item.sourceFamily
+                        : 'unknown',
+                    queryFamily: item.queryFamily === 'DISCOVER_ROLES'
+                      ? item.queryFamily
+                      : 'DISCOVER_ROLES',
+                    rawResultCount: typeof item.rawResultCount === 'number' ? item.rawResultCount : 0,
+                    promotedCount: typeof item.promotedCount === 'number' ? item.promotedCount : 0,
+                    verdict:
+                      item.verdict === 'verified'
+                      || item.verdict === 'not_verified'
+                      || item.verdict === 'inconclusive'
+                      || item.verdict === 'skipped'
+                        ? item.verdict
+                        : 'skipped',
+                  }))
+                : [],
+              topQueryFamily:
+                telemetry.topQueryFamily === 'DISCOVER_ROLES'
+                  ? telemetry.topQueryFamily
+                  : contactRecovery?.topQueryFamily === 'DISCOVER_ROLES'
+                    ? contactRecovery.topQueryFamily
+                    : null,
+              topSourceFamily:
+                telemetry.topSourceFamily === 'linkedin'
+                || telemetry.topSourceFamily === 'company_page'
+                || telemetry.topSourceFamily === 'public_web'
+                || telemetry.topSourceFamily === 'mixed'
+                || telemetry.topSourceFamily === 'unknown'
+                  ? telemetry.topSourceFamily
+                  : contactRecovery?.topSourceFamily === 'linkedin'
+                    || contactRecovery?.topSourceFamily === 'company_page'
+                    || contactRecovery?.topSourceFamily === 'public_web'
+                    || contactRecovery?.topSourceFamily === 'mixed'
+                    || contactRecovery?.topSourceFamily === 'unknown'
+                      ? contactRecovery.topSourceFamily
+                  : 'unknown',
+              finalOutcome:
+                telemetry.finalOutcome === 'lead_created'
+                || telemetry.finalOutcome === 'recovery_opened'
+                || telemetry.finalOutcome === 'no_contact_terminal'
+                  ? telemetry.finalOutcome
+                  : 'lead_created',
+              topCandidates: topCandidates
+                .filter((candidate): candidate is Record<string, unknown> => Boolean(candidate) && typeof candidate === 'object' && !Array.isArray(candidate))
+                .slice(0, 3)
+                .map((candidate) => ({
+                  name: typeof candidate.name === 'string' ? candidate.name : 'Unknown',
+                  title: typeof candidate.title === 'string' ? candidate.title : null,
+                  sourceStage: typeof candidate.sourceStage === 'string' ? candidate.sourceStage : null,
+                  linkedinUrl: typeof candidate.linkedinUrl === 'string' ? candidate.linkedinUrl : null,
+                  email: typeof candidate.email === 'string' ? candidate.email : null,
+                  confidence: typeof candidate.confidence === 'number' ? candidate.confidence : null,
+                  verificationVerdict:
+                    candidate.verificationVerdict === 'verified'
+                    || candidate.verificationVerdict === 'not_verified'
+                    || candidate.verificationVerdict === 'inconclusive'
+                    || candidate.verificationVerdict === 'skipped'
+                      ? candidate.verificationVerdict
+                      : 'skipped',
+                  supportingUrls: Array.isArray(candidate.supportingUrls)
+                    ? candidate.supportingUrls.filter((url): url is string => typeof url === 'string')
+                    : [],
+                  matchedSignals: Array.isArray(candidate.matchedSignals)
+                    ? candidate.matchedSignals.filter((signal): signal is string => typeof signal === 'string')
+                    : [],
+                })),
+              identityConfidence: typeof contactRecovery?.identityConfidence === 'number'
+                ? contactRecovery.identityConfidence
+                : typeof confidence?.identityConfidence === 'number'
+                  ? confidence.identityConfidence
+                  : null,
+              contactConfidence: typeof contactRecovery?.contactConfidence === 'number'
+                ? contactRecovery.contactConfidence
+                : typeof confidence?.contactConfidence === 'number'
+                  ? confidence.contactConfidence
+                  : null,
+              terminalReason:
+                contactRecovery?.terminalReason === 'no_named_candidate_found'
+                || contactRecovery?.terminalReason === 'named_candidate_no_email'
+                || contactRecovery?.terminalReason === 'email_inferred_failed_verification'
+                || contactRecovery?.terminalReason === 'ambiguous_winner'
+                  ? contactRecovery.terminalReason
+                  : null,
+              resolutionState:
+                contactRecovery?.resolutionState === 'lead_created'
+                || contactRecovery?.resolutionState === 'inconclusive_but_promising'
+                || contactRecovery?.resolutionState === 'no_contact_terminal'
+                  ? contactRecovery.resolutionState
+                  : null,
+              winnerSelectionMethod:
+                contactRecovery?.winnerSelectionMethod === 'llm'
+                || contactRecovery?.winnerSelectionMethod === 'deterministic'
+                  ? contactRecovery.winnerSelectionMethod
+                  : decisionProvenance?.winnerSelectionMethod === 'llm'
+                    || decisionProvenance?.winnerSelectionMethod === 'deterministic'
+                      ? decisionProvenance.winnerSelectionMethod
+                      : null,
+              adjudication:
+                contactRecovery?.adjudication && typeof contactRecovery.adjudication === 'object' && !Array.isArray(contactRecovery.adjudication)
+                  ? {
+                      verdict:
+                        (contactRecovery.adjudication as Record<string, unknown>).verdict === 'select_candidate'
+                        || (contactRecovery.adjudication as Record<string, unknown>).verdict === 'inconclusive'
+                        || (contactRecovery.adjudication as Record<string, unknown>).verdict === 'reject_all'
+                          ? (contactRecovery.adjudication as Record<string, unknown>).verdict
+                          : 'inconclusive',
+                      selectedCandidateId: typeof (contactRecovery.adjudication as Record<string, unknown>).selectedCandidateId === 'string'
+                        ? (contactRecovery.adjudication as Record<string, unknown>).selectedCandidateId
+                        : null,
+                      confidenceBucket:
+                        (contactRecovery.adjudication as Record<string, unknown>).confidenceBucket === 'high'
+                        || (contactRecovery.adjudication as Record<string, unknown>).confidenceBucket === 'medium'
+                        || (contactRecovery.adjudication as Record<string, unknown>).confidenceBucket === 'low'
+                          ? (contactRecovery.adjudication as Record<string, unknown>).confidenceBucket
+                          : null,
+                      rationale: typeof (contactRecovery.adjudication as Record<string, unknown>).rationale === 'string'
+                        ? (contactRecovery.adjudication as Record<string, unknown>).rationale
+                        : 'No rationale available',
+                    }
+                  : null,
+            }
+          : null,
+      };
+    },
+    softDeleteLead: async (leadId) => {
+      const lead = await prisma.lead.findUnique({
+        where: { id: leadId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!lead) return false;
+      await prisma.lead.update({
+        where: { id: leadId },
+        data: { deletedAt: new Date() },
+      });
+      return true;
     },
     listLeads: async (query) => {
-      const where = {
+      const where: Prisma.LeadWhereInput = {
+        deletedAt: null,
+        // Exclude rejected leads by default unless includeRejected is true
+        ...(!query.includeRejected ? { status: { not: 'rejected' } } : {}),
         ...(query.icpProfileId
           ? {
-              discoveryRecords: {
-                some: {
-                  icpProfileId: query.icpProfileId,
-                },
-              },
+              OR: [
+                { discoveryRecords: { some: { icpProfileId: query.icpProfileId } } },
+                { scorePredictions: { some: { icpProfileId: query.icpProfileId } } },
+                { businessConversions: { some: { icpProfileId: query.icpProfileId } } },
+              ],
             }
           : {}),
+        // Status filter (overrides the rejected exclusion if explicitly set)
         ...(query.status ? { status: query.status } : {}),
-        ...(query.scoreBand
+        ...(query.scoreBand || query.minBlendedScore !== undefined
           ? {
               scorePredictions: {
                 some: {
                   ...(query.icpProfileId ? { icpProfileId: query.icpProfileId } : {}),
-                  scoreBand: query.scoreBand,
+                  ...(query.scoreBand ? { scoreBand: query.scoreBand } : {}),
+                  ...(query.minBlendedScore !== undefined ? { blendedScore: { gte: query.minBlendedScore } } : {}),
                 },
               },
             }
@@ -435,6 +765,11 @@ async function main(): Promise<void> {
               orderBy: [{ discoveredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
               take: 1,
             },
+            businessConversions: {
+              orderBy: [{ convertedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+              take: 1,
+              select: { id: true, convertedAt: true, icpProfileId: true },
+            },
             enrichmentRecords: {
               orderBy: [{ enrichedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
               take: 1,
@@ -443,6 +778,9 @@ async function main(): Promise<void> {
               ...(query.icpProfileId ? { where: { icpProfileId: query.icpProfileId } } : {}),
               orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
               take: 1,
+            },
+            business: {
+              select: { countryCode: true, country: true, city: true, category: true },
             },
           },
         }),
@@ -499,28 +837,185 @@ async function main(): Promise<void> {
         : undefined;
 
       return {
-        items: rows.map((lead) => ({
-          id: lead.id,
-          firstName: lead.firstName,
-          lastName: lead.lastName,
-          email: lead.email,
-          source: lead.source,
-          status: lead.status,
-          error: lead.error,
-          createdAt: lead.createdAt.toISOString(),
-          updatedAt: lead.updatedAt.toISOString(),
-          latestIcpProfileId: lead.discoveryRecords[0]?.icpProfileId ?? null,
-          latestScoreBand: lead.scorePredictions[0]?.scoreBand ?? null,
-          latestBlendedScore: lead.scorePredictions[0]?.blendedScore ?? null,
-          latestDiscoveryRawPayload: lead.discoveryRecords[0]?.rawPayload ?? null,
-          latestEnrichmentNormalizedPayload: lead.enrichmentRecords[0]?.normalizedPayload ?? null,
-          latestEnrichmentRawPayload: lead.enrichmentRecords[0]?.rawPayload ?? null,
-        })),
+        items: rows.map((lead) => {
+          // Fall back to lead.enrichmentData when relation tables are empty (e.g. seed data)
+          const enrichmentFallback = lead.enrichmentData as Record<string, unknown> | null;
+          const scoreInfoFallback = enrichmentFallback?._scoreInfo as Record<string, unknown> | undefined;
+
+          return {
+            id: lead.id,
+            firstName: lead.firstName,
+            lastName: lead.lastName,
+            email: lead.email,
+            source: lead.source,
+            status: lead.status,
+            error: lead.error,
+            createdAt: lead.createdAt.toISOString(),
+            updatedAt: lead.updatedAt.toISOString(),
+            latestIcpProfileId: lead.discoveryRecords[0]?.icpProfileId ?? lead.scorePredictions[0]?.icpProfileId ?? lead.businessConversions[0]?.icpProfileId ?? null,
+            latestScoreBand: lead.scorePredictions[0]?.scoreBand
+              ?? (scoreInfoFallback?.scoreBand === 'HIGH' || scoreInfoFallback?.scoreBand === 'MEDIUM' || scoreInfoFallback?.scoreBand === 'LOW'
+                ? scoreInfoFallback.scoreBand : null),
+            latestBlendedScore: lead.scorePredictions[0]?.blendedScore
+              ?? (typeof scoreInfoFallback?.blendedScore === 'number' ? scoreInfoFallback.blendedScore : null),
+            latestScorePredictionId: lead.scorePredictions[0]?.id ?? null,
+            latestDiscoveryRawPayload: lead.discoveryRecords[0]?.rawPayload ?? null,
+            latestEnrichmentNormalizedPayload: lead.enrichmentRecords[0]?.normalizedPayload ?? enrichmentFallback ?? null,
+            latestEnrichmentRawPayload: lead.enrichmentRecords[0]?.rawPayload ?? null,
+            businessCountryCode: lead.business?.countryCode ?? null,
+            businessCountry: lead.business?.country ?? null,
+            businessCity: lead.business?.city ?? null,
+            businessCategory: lead.business?.category ?? null,
+          };
+        }),
         qualityMetrics,
         page: query.page,
         pageSize: query.pageSize,
         total,
       };
+    },
+    listContactRecoveryItems: async (query: ListContactRecoveryItemsQuery): Promise<ListContactRecoveryItemsResponse> => {
+      const where: Prisma.ContactRecoveryItemWhereInput = {
+        ...(query.status ? { status: query.status } : {}),
+        ...(query.icpProfileId ? { icpProfileId: query.icpProfileId } : {}),
+        ...(query.from || query.to
+          ? {
+              createdAt: {
+                ...(query.from ? { gte: new Date(query.from) } : {}),
+                ...(query.to ? { lte: new Date(query.to) } : {}),
+              },
+            }
+          : {}),
+        ...(query.q
+          ? {
+              OR: [
+                { business: { name: { contains: query.q, mode: 'insensitive' } } },
+                { business: { websiteDomain: { contains: query.q, mode: 'insensitive' } } },
+                { business: { city: { contains: query.q, mode: 'insensitive' } } },
+                { business: { category: { contains: query.q, mode: 'insensitive' } } },
+              ],
+            }
+          : {}),
+      };
+
+      const [total, rows] = await Promise.all([
+        prisma.contactRecoveryItem.count({ where }),
+        prisma.contactRecoveryItem.findMany({
+          where,
+          orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          skip: (query.page - 1) * query.pageSize,
+          take: query.pageSize,
+          include: {
+            business: {
+              select: {
+                id: true,
+                name: true,
+                city: true,
+                country: true,
+                countryCode: true,
+                websiteDomain: true,
+                instagramHandle: true,
+                category: true,
+                deterministicScore: true,
+                scoreBand: true,
+                preQualified: true,
+                disqualificationReason: true,
+              },
+            },
+            icpProfile: {
+              select: { name: true },
+            },
+          },
+        }),
+      ]);
+
+      return {
+        items: rows.map(mapContactRecoveryItem),
+        page: query.page,
+        pageSize: query.pageSize,
+        total,
+      };
+    },
+    getContactRecoveryItem: async (id: string): Promise<ContactRecoveryDetailResponse | null> => {
+      const row = await prisma.contactRecoveryItem.findUnique({
+        where: { id },
+        include: {
+          business: {
+            select: {
+              id: true,
+              name: true,
+              city: true,
+              country: true,
+              countryCode: true,
+              websiteDomain: true,
+              instagramHandle: true,
+              category: true,
+              deterministicScore: true,
+              scoreBand: true,
+              preQualified: true,
+              disqualificationReason: true,
+            },
+          },
+          icpProfile: {
+            select: { name: true },
+          },
+        },
+      });
+
+      return row ? mapContactRecoveryItem(row) : null;
+    },
+    rejectContactRecoveryItem: async ({ id, rejectedBy, reason }): Promise<ContactRecoveryDetailResponse | null> => {
+      const existing = await prisma.contactRecoveryItem.findUnique({
+        where: { id },
+        select: { id: true, recoverySnapshot: true },
+      });
+
+      if (!existing) {
+        return null;
+      }
+
+      const snapshotObject =
+        existing.recoverySnapshot && typeof existing.recoverySnapshot === 'object' && !Array.isArray(existing.recoverySnapshot)
+          ? existing.recoverySnapshot as Record<string, unknown>
+          : {};
+
+      const nextSnapshot = {
+        ...snapshotObject,
+        rejectedReason: reason ?? null,
+      } satisfies Record<string, unknown>;
+
+      const updated = await prisma.contactRecoveryItem.update({
+        where: { id },
+        data: {
+          status: 'REJECTED',
+          rejectedBy,
+          rejectedAt: new Date(),
+          recoverySnapshot: toInputJson(nextSnapshot),
+        },
+        include: {
+          business: {
+            select: {
+              id: true,
+              name: true,
+              city: true,
+              country: true,
+              countryCode: true,
+              websiteDomain: true,
+              instagramHandle: true,
+              category: true,
+              deterministicScore: true,
+              scoreBand: true,
+              preQualified: true,
+              disqualificationReason: true,
+            },
+          },
+          icpProfile: {
+            select: { name: true },
+          },
+        },
+      });
+
+      return mapContactRecoveryItem(updated);
     },
     getJobById: async (jobId) => {
       return prisma.jobExecution.findUnique({

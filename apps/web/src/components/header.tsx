@@ -13,30 +13,33 @@ const MOBILE_NAV = [
   { href: '/dashboard/discover', label: 'Discover' },
   { href: '/dashboard/leads', label: 'Leads' },
   { href: '/dashboard/messages', label: 'Messages' },
+  { href: '/dashboard/inbox', label: 'Inbox' },
   { href: '/dashboard/icps', label: 'ICP Profiles' },
   { href: '/dashboard/analytics', label: 'Analytics' },
-  { href: '/discovery', label: 'Discovery Leads' },
-  { href: '/discovery/search-tasks', label: 'Search Tasks' },
-  { href: '/discovery/jobs', label: 'Jobs' },
+  { href: '/discovery', label: 'Controls & Settings' },
+  { href: '/discovery/lifecycle', label: 'Lead Lifecycle' },
+  { href: '/discovery/model', label: 'Model Inspector' },
+  { href: '/discovery/rules', label: 'ICP & Rules' },
 ] as const;
 
 function getPageTitle(pathname: string): string {
   if (pathname === '/dashboard') return 'Pipeline Overview';
   if (pathname === '/dashboard/discover') return 'Discover Leads';
+  if (pathname === '/dashboard/leads/businesses') return 'Business Intelligence';
+  if (pathname === '/dashboard/leads/recovery') return 'Contact Recovery';
   if (pathname.startsWith('/dashboard/leads/')) return 'Lead Detail';
   if (pathname === '/dashboard/leads') return 'Leads';
   if (pathname === '/dashboard/messages') return 'Message Queue';
+  if (pathname === '/dashboard/inbox') return 'Inbox';
   if (pathname.startsWith('/dashboard/icps/')) return 'ICP Profile';
   if (pathname === '/dashboard/icps') return 'ICP Profiles';
   if (pathname === '/dashboard/analytics') return 'Analytics';
 
-  if (pathname === '/discovery') return 'Discovery Leads';
-  if (pathname.startsWith('/discovery/leads/')) return 'Discovery Lead';
-  if (pathname === '/discovery/jobs') return 'Discovery Jobs';
-  if (pathname.startsWith('/discovery/jobs/')) return 'Job Run Detail';
-  if (pathname === '/discovery/search-tasks') return 'Search Tasks';
-  if (pathname.startsWith('/discovery/search-tasks/')) return 'Search Task Detail';
-  if (pathname === '/discovery/lead-form') return 'Lead Intake';
+  if (pathname === '/discovery') return 'Controls & Settings';
+  if (pathname === '/discovery/lifecycle') return 'Lead Lifecycle Inspector';
+  if (pathname.startsWith('/discovery/lifecycle/')) return 'Lead Lifecycle Inspector';
+  if (pathname === '/discovery/model') return 'Model Inspector';
+  if (pathname === '/discovery/rules') return 'ICP & Rules Viewer';
 
   return 'Dashboard';
 }

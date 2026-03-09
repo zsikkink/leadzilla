@@ -4,8 +4,11 @@ import type { ResendAdapter, TrengoAdapter } from '@lead-flood/providers';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { RetryableError, classifyError } from '../errors.js';
+import type { EmailRateLimiter } from '../messaging/email-rate-limiter.js';
 import type { WhatsAppRateLimiter } from '../messaging/rate-limiter.js';
 import { computeNextFollowUpAfter } from '../utils/jitter.js';
+import { getEmailDailyLimit, getWhatsappDailyLimit } from '../utils/pipeline-settings.js';
 
 export const MESSAGE_SEND_JOB_NAME = 'message.send';
 export const MESSAGE_SEND_IDEMPOTENCY_KEY_PATTERN = 'message.send:${messageVariantId}';
@@ -38,6 +41,7 @@ export interface MessageSendJobDependencies {
   resendAdapter: ResendAdapter;
   trengoAdapter: TrengoAdapter;
   rateLimiter?: WhatsAppRateLimiter | undefined;
+  emailRateLimiter?: EmailRateLimiter | undefined;
   boss?: Pick<PgBoss, 'send'> | undefined;
 }
 
@@ -68,7 +72,7 @@ export async function handleMessageSendJob(
       where: { id: sendId },
       include: {
         messageVariant: true,
-        lead: { select: { id: true, email: true, phone: true, firstName: true, lastName: true } },
+        lead: { select: { id: true, email: true, phone: true, firstName: true, lastName: true, deletedAt: true } },
       },
     });
 
@@ -77,17 +81,101 @@ export async function handleMessageSendJob(
       return;
     }
 
+    if (send.lead.deletedAt) {
+      await markFailed(sendId, 'LEAD_DELETED', 'Lead has been soft-deleted');
+      logger.warn({ jobId: job.id, sendId, leadId: send.lead.id }, 'Skipping soft-deleted lead');
+      return;
+    }
+
     if (send.status !== 'QUEUED') {
       logger.warn({ jobId: job.id, sendId, status: send.status }, 'MessageSend already processed');
       return;
     }
 
+    // --- Global suppression check: skip leads that have bounced or unsubscribed ---
+    const suppressionEvent = await prisma.feedbackEvent.findFirst({
+      where: {
+        leadId: send.lead.id,
+        eventType: { in: ['BOUNCED', 'UNSUBSCRIBED'] },
+      },
+      select: { id: true, eventType: true, occurredAt: true },
+      orderBy: { occurredAt: 'desc' },
+    });
+
+    if (suppressionEvent) {
+      const reason = `Lead suppressed: ${suppressionEvent.eventType} event on ${suppressionEvent.occurredAt.toISOString()}`;
+      await markFailed(sendId, 'SUPPRESSED', reason);
+      logger.info(
+        {
+          jobId: job.id,
+          sendId,
+          leadId: send.lead.id,
+          suppressionEventId: suppressionEvent.id,
+          suppressionType: suppressionEvent.eventType,
+        },
+        `Skipping message send — lead is on suppression list (${suppressionEvent.eventType})`,
+      );
+      return;
+    }
+
+    const variantKey = send.messageVariant.variantKey ?? 'variant_a';
+
+    logger.info(
+      {
+        jobId: job.id,
+        sendId,
+        leadId: send.lead.id,
+        variantKey,
+      },
+      `Sending message variant: ${variantKey}`,
+    );
+
     const effectiveChannel = channel ?? send.channel;
 
     if (effectiveChannel === 'EMAIL') {
-      if (!deps?.resendAdapter) {
-        await markFailed(sendId, 'PROVIDER_NOT_CONFIGURED', 'Resend adapter not available');
+      if (!deps?.resendAdapter || !deps.resendAdapter.isConfigured) {
+        await markFailed(sendId, 'PROVIDER_NOT_CONFIGURED', 'Resend adapter not available or not configured');
         logger.error({ jobId: job.id, sendId }, 'Resend adapter not configured');
+        return;
+      }
+
+      // Email rate limit check (read dynamic ceiling from pipeline settings)
+      if (deps.emailRateLimiter) {
+        const emailLimit = await getEmailDailyLimit();
+        const rateCheck = await deps.emailRateLimiter.canSend(emailLimit);
+        if (!rateCheck.allowed) {
+          // Re-enqueue for next send window instead of failing
+          if (deps.boss && rateCheck.nextWindowAt) {
+            await deps.boss.send(MESSAGE_SEND_JOB_NAME, job.data, {
+              singletonKey: `message.send:${sendId}:deferred`,
+              startAfter: rateCheck.nextWindowAt,
+              ...MESSAGE_SEND_RETRY_OPTIONS,
+            });
+            logger.info(
+              {
+                jobId: job.id,
+                sendId,
+                reason: rateCheck.reason,
+                nextWindowAt: rateCheck.nextWindowAt.toISOString(),
+              },
+              'Email send rate-limited, re-enqueued for next window',
+            );
+          } else {
+            logger.warn(
+              { jobId: job.id, sendId, reason: rateCheck.reason },
+              'Email send rate-limited but no boss to re-enqueue',
+            );
+          }
+          return;
+        }
+      }
+
+      // Dedup check: if this send is already SENT or DELIVERED (e.g. pg-boss retry after transient post-send failure), skip
+      const alreadySent = await prisma.messageSend.findFirst({
+        where: { id: sendId, status: { in: ['SENT', 'DELIVERED'] } },
+      });
+      if (alreadySent) {
+        logger.info({ jobId: job.id, sendId }, 'Email already sent, skipping');
         return;
       }
 
@@ -101,7 +189,7 @@ export async function handleMessageSendJob(
 
       if (result.status === 'success') {
         const followUpNumber = job.data.followUpNumber ?? 0;
-        const nextFollowUpAfter = followUpNumber < 3 ? computeNextFollowUpAfter() : null;
+        const nextFollowUpAfter = computeNextFollowUpAfter(followUpNumber);
 
         await prisma.$transaction([
           prisma.messageSend.update({
@@ -120,18 +208,18 @@ export async function handleMessageSendJob(
         ]);
 
         logger.info(
-          { jobId: job.id, sendId, providerMessageId: result.providerMessageId },
-          'Email sent successfully via Resend',
+          { jobId: job.id, sendId, providerMessageId: result.providerMessageId, variantKey },
+          `Email sent successfully via Resend (variant=${variantKey})`,
         );
       } else if (result.status === 'retryable_error') {
-        throw new Error(`Resend retryable error: ${result.failure.message}`);
+        throw new RetryableError(`Resend retryable error: ${result.failure.message}`);
       } else {
         await markFailed(sendId, result.failure.statusCode?.toString() ?? 'TERMINAL', result.failure.message);
         logger.error({ jobId: job.id, sendId, failure: result.failure }, 'Email send failed permanently');
       }
     } else if (effectiveChannel === 'WHATSAPP') {
-      if (!deps?.trengoAdapter) {
-        await markFailed(sendId, 'PROVIDER_NOT_CONFIGURED', 'Trengo adapter not available');
+      if (!deps?.trengoAdapter || !deps.trengoAdapter.isConfigured) {
+        await markFailed(sendId, 'PROVIDER_NOT_CONFIGURED', 'Trengo adapter not available or not configured');
         logger.error({ jobId: job.id, sendId }, 'Trengo adapter not configured');
         return;
       }
@@ -143,9 +231,10 @@ export async function handleMessageSendJob(
         return;
       }
 
-      // Rate limit check
+      // WhatsApp rate limit check (read dynamic ceiling from pipeline settings)
       if (deps.rateLimiter) {
-        const rateCheck = await deps.rateLimiter.canSend();
+        const waLimit = await getWhatsappDailyLimit();
+        const rateCheck = await deps.rateLimiter.canSend(waLimit);
         if (!rateCheck.allowed) {
           // Re-enqueue for next send window instead of failing
           if (deps.boss && rateCheck.nextWindowAt) {
@@ -173,9 +262,9 @@ export async function handleMessageSendJob(
         }
       }
 
-      // Dedup check: if a MessageSend with this idempotencyKey is already SENT, skip
+      // Dedup check: if a MessageSend with this idempotencyKey is already SENT or DELIVERED, skip
       const existingSend = await prisma.messageSend.findFirst({
-        where: { idempotencyKey: send.idempotencyKey, status: 'SENT' },
+        where: { idempotencyKey: send.idempotencyKey, status: { in: ['SENT', 'DELIVERED'] } },
         select: { id: true, providerMessageId: true },
       });
       if (existingSend) {
@@ -186,14 +275,29 @@ export async function handleMessageSendJob(
         return;
       }
 
-      const result = await deps.trengoAdapter.sendMessage({
-        to: send.lead.phone,
-        bodyText: send.messageVariant.bodyText,
+      // Determine if this is a first-contact or follow-up by checking for existing ticketId
+      const previousSend = await prisma.messageSend.findFirst({
+        where: { leadId: send.leadId, channel: 'WHATSAPP', status: 'SENT', providerConversationId: { not: null } },
+        select: { providerConversationId: true },
+        orderBy: { sentAt: 'desc' },
       });
+
+      const existingTicketId = previousSend?.providerConversationId ?? null;
+
+      const result = existingTicketId
+        ? await deps.trengoAdapter.sendMessage({
+            ticketId: existingTicketId,
+            bodyText: send.messageVariant.bodyText,
+          })
+        : await deps.trengoAdapter.sendTemplateMessage({
+            recipientPhoneNumber: send.lead.phone,
+            params: [send.lead.firstName ?? '', send.messageVariant.bodyText],
+          });
 
       if (result.status === 'success') {
         const followUpNumber = job.data.followUpNumber ?? 0;
-        const nextFollowUpAfter = followUpNumber < 3 ? computeNextFollowUpAfter() : null;
+        const nextFollowUpAfter = computeNextFollowUpAfter(followUpNumber);
+        const ticketId = result.ticketId ?? existingTicketId;
 
         await prisma.$transaction([
           prisma.messageSend.update({
@@ -201,7 +305,7 @@ export async function handleMessageSendJob(
             data: {
               status: 'SENT',
               providerMessageId: result.providerMessageId,
-              providerConversationId: result.providerMessageId,
+              providerConversationId: ticketId,
               sentAt: new Date(),
               followUpNumber,
               nextFollowUpAfter,
@@ -213,11 +317,11 @@ export async function handleMessageSendJob(
         ]);
 
         logger.info(
-          { jobId: job.id, sendId, providerMessageId: result.providerMessageId },
-          'WhatsApp message sent via Trengo',
+          { jobId: job.id, sendId, providerMessageId: result.providerMessageId, variantKey },
+          `WhatsApp message sent via Trengo (variant=${variantKey})`,
         );
       } else if (result.status === 'retryable_error') {
-        throw new Error(`Trengo retryable error: ${result.failure.message}`);
+        throw new RetryableError(`Trengo retryable error: ${result.failure.message}`);
       } else {
         await markFailed(sendId, result.failure.statusCode?.toString() ?? 'TERMINAL', result.failure.message);
         logger.error({ jobId: job.id, sendId, failure: result.failure }, 'WhatsApp send failed permanently');
@@ -254,7 +358,7 @@ export async function handleMessageSendJob(
       'Failed message.send job',
     );
 
-    throw error;
+    throw classifyError(error);
   }
 }
 

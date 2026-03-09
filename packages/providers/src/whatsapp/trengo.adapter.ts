@@ -2,18 +2,18 @@ export interface TrengoAdapterConfig {
   apiKey: string | undefined;
   baseUrl?: string | undefined;
   channelId?: string | undefined;
+  templateId?: string | undefined;
   timeoutMs?: number | undefined;
   fetchImpl?: typeof fetch | undefined;
 }
 
 export interface TrengoTemplateMessageRequest {
-  to: string;
-  templateName: string;
-  params: Record<string, string>;
+  recipientPhoneNumber: string;
+  params: string[];
 }
 
 export interface TrengoDirectMessageRequest {
-  to: string;
+  ticketId: string;
   bodyText: string;
 }
 
@@ -25,7 +25,7 @@ export interface TrengoFailure {
 }
 
 export type TrengoSendResult =
-  | { status: 'success'; providerMessageId: string }
+  | { status: 'success'; providerMessageId: string; ticketId?: string | undefined }
   | { status: 'retryable_error'; failure: TrengoFailure }
   | { status: 'terminal_error'; failure: TrengoFailure };
 
@@ -43,6 +43,7 @@ export class TrengoAdapter {
   private readonly apiKey: string | undefined;
   private readonly baseUrl: string;
   private readonly channelId: string | undefined;
+  private readonly templateId: string | undefined;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
 
@@ -50,6 +51,7 @@ export class TrengoAdapter {
     this.apiKey = config.apiKey;
     this.baseUrl = config.baseUrl ?? DEFAULT_BASE_URL;
     this.channelId = config.channelId;
+    this.templateId = config.templateId;
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.fetchImpl = config.fetchImpl ?? fetch;
   }
@@ -85,10 +87,22 @@ export class TrengoAdapter {
       };
     }
 
+    if (!this.templateId) {
+      return {
+        status: 'terminal_error',
+        failure: {
+          classification: 'terminal',
+          statusCode: null,
+          message: 'TRENGO_TEMPLATE_ID is not configured',
+          raw: null,
+        },
+      };
+    }
+
     return this.post('/wa_sessions', {
       channel_id: this.channelId,
-      to: request.to,
-      template_name: request.templateName,
+      recipient_phone_number: request.recipientPhoneNumber,
+      hsm_id: this.templateId,
       params: request.params,
     });
   }
@@ -108,21 +122,19 @@ export class TrengoAdapter {
       };
     }
 
-    if (!this.channelId) {
+    if (!/^\d+$/.test(request.ticketId)) {
       return {
         status: 'terminal_error',
         failure: {
           classification: 'terminal',
           statusCode: null,
-          message: 'TRENGO_CHANNEL_ID is not configured',
+          message: `Invalid ticketId: expected numeric string, got "${request.ticketId}"`,
           raw: null,
         },
       };
     }
 
-    return this.post('/wa_sessions', {
-      channel_id: this.channelId,
-      to: request.to,
+    return this.post(`/tickets/${request.ticketId}/messages`, {
       body: request.bodyText,
     });
   }
@@ -175,10 +187,11 @@ export class TrengoAdapter {
     }
 
     try {
-      const parsed = JSON.parse(rawText) as { id?: number };
+      const parsed = JSON.parse(rawText) as { id?: number; ticket_id?: number };
       return {
         status: 'success',
         providerMessageId: String(parsed.id ?? 'unknown'),
+        ticketId: parsed.ticket_id != null ? String(parsed.ticket_id) : (parsed.id != null ? String(parsed.id) : undefined),
       };
     } catch {
       return {

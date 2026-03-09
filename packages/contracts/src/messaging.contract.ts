@@ -188,6 +188,7 @@ export const ConversationEntrySchema = z.object({
   timestamp: z.string().datetime(),
   channel: MessageChannelSchema,
   bodyText: z.string(),
+  bodyHtml: z.string().nullable(),
   subject: z.string().nullable(),
   replyClassification: z.string().nullable(),
   status: MessageSendStatusSchema.nullable(),

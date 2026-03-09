@@ -4,8 +4,10 @@ import { type Prisma, prisma } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { formatErrorMessage } from '../errors.js';
 import { adjustDeterministicWeights, computeFactorLift } from '../scoring/lift-analysis.js';
 import { splitDataset, trainLogisticRegression } from '../scoring/logistic.js';
+import { TRAINED_MODEL_FEATURE_KEYS } from '../scoring/shared.js';
 import {
   MODEL_EVALUATE_JOB_NAME,
   MODEL_EVALUATE_RETRY_OPTIONS,
@@ -46,47 +48,14 @@ export interface ModelTrainJobDependencies {
   boss: Pick<PgBoss, 'send'>;
 }
 
-/** Feature keys extracted from featuresJson — must match scoring.compute BASELINE_FEATURE_KEYS. */
-const NUMERIC_FEATURE_KEYS = [
-  'has_email',
-  'has_domain',
-  'has_company_name',
-  'industry_supported',
-  'has_whatsapp',
-  'has_instagram',
-  'accepts_online_payments',
-  'review_count',
-  'follower_count',
-  'physical_address_present',
-  'physical_store_present',
-  'recent_activity',
-  'custom_order_signals',
-  'pure_self_serve_ecom',
-  'shopify_detected',
-  'abandonment_signal_detected',
-  'multi_staff_detected',
-  'follower_growth_signal',
-  'high_engagement_signal',
-  'has_booking_or_contact_form',
-  'variable_pricing_detected',
-  'industry_match',
-  'geo_match',
-  'enrichment_success_rate',
-  'discovery_attempt_count',
-  'enrichment_attempt_count',
-  'days_since_discovery',
-  'rule_match_count',
-  'hard_filter_passed',
-] as const;
-
-export const FEATURE_KEYS_FOR_TRAINING = NUMERIC_FEATURE_KEYS;
+export const FEATURE_KEYS_FOR_TRAINING = TRAINED_MODEL_FEATURE_KEYS;
 
 function extractFeatureVector(featuresJson: unknown): number[] | null {
   if (!featuresJson || typeof featuresJson !== 'object') return null;
   const features = featuresJson as Record<string, unknown>;
 
   const vector: number[] = [];
-  for (const key of NUMERIC_FEATURE_KEYS) {
+  for (const key of TRAINED_MODEL_FEATURE_KEYS) {
     const raw = features[key];
     if (typeof raw === 'number' && Number.isFinite(raw)) {
       vector.push(raw);
@@ -135,8 +104,15 @@ export async function handleModelTrainJob(
       data: { status: 'RUNNING', startedAt: new Date() },
     });
 
-    // 2. Fetch all TrainingLabel rows with their lead's latest FeatureSnapshot
+    // 2. Fetch TrainingLabel rows within the requested recency window.
+    const effectiveWindowDays = Math.max(1, windowDays ?? 90);
+    const labelWindowStart = new Date(Date.now() - effectiveWindowDays * 86_400_000);
+
+    // 3. Fetch labels with each lead's latest FeatureSnapshot
     const labels = await prisma.trainingLabel.findMany({
+      where: {
+        createdAt: { gte: labelWindowStart },
+      },
       select: {
         id: true,
         leadId: true,
@@ -153,7 +129,7 @@ export async function handleModelTrainJob(
       },
     });
 
-    // 3. Build dataset: filter to labels with valid features
+    // 4. Build dataset: filter to labels with valid features
     const dataset: { features: number[]; label: number }[] = [];
     for (const entry of labels) {
       const snapshot = entry.lead.featureSnapshots[0];
@@ -192,19 +168,29 @@ export async function handleModelTrainJob(
       return;
     }
 
-    // 4. Split dataset deterministically by trainingRunId
+    // 5. Split dataset deterministically by trainingRunId
     const splits = splitDataset(dataset, trainingRunId);
 
-    // 5. Train logistic regression on train split
+    // 6. Train logistic regression on train split with class weights for imbalance
+    const trainPositive = splits.train.filter((d) => d.label === 1).length;
+    const trainNegative = splits.train.length - trainPositive;
+    const classWeights = trainPositive > 0 && trainNegative > 0
+      ? {
+          positive: splits.train.length / (2 * trainPositive),
+          negative: splits.train.length / (2 * trainNegative),
+        }
+      : undefined;
+
     const trainResult = trainLogisticRegression(splits.train, {
       learningRate: 0.01,
       lambda: 0.01,
       maxIterations: 1000,
+      classWeights,
     });
 
-    // 6. Create ModelVersion
+    // 7. Create ModelVersion
     const coefficientsPayload = JSON.parse(JSON.stringify({
-      keys: [...NUMERIC_FEATURE_KEYS],
+      keys: [...TRAINED_MODEL_FEATURE_KEYS],
       values: trainResult.coefficients,
       intercept: trainResult.intercept,
       featureStats: trainResult.featureStats,
@@ -225,7 +211,7 @@ export async function handleModelTrainJob(
         stage: 'SHADOW',
         featureSchemaJson: {
           sourceVersion: 'features_v1',
-          keys: [...NUMERIC_FEATURE_KEYS],
+          keys: [...TRAINED_MODEL_FEATURE_KEYS],
         },
         coefficientsJson: coefficientsPayload,
         intercept: trainResult.intercept,
@@ -235,7 +221,7 @@ export async function handleModelTrainJob(
       },
     });
 
-    // 6b. Run lift analysis and store adjusted deterministic weights
+    // 7b. Run lift analysis and store adjusted deterministic weights
     const convertedSnapshots: Record<string, unknown>[] = [];
     const nonConvertedSnapshots: Record<string, unknown>[] = [];
 
@@ -301,7 +287,7 @@ export async function handleModelTrainJob(
       );
     }
 
-    // 7. Update TrainingRun as SUCCEEDED
+    // 8. Update TrainingRun as SUCCEEDED
     await prisma.trainingRun.update({
       where: { id: trainingRunId },
       data: {
@@ -313,7 +299,7 @@ export async function handleModelTrainJob(
       },
     });
 
-    // 8. Enqueue model.evaluate for VALIDATION split
+    // 9. Enqueue model.evaluate for VALIDATION split
     if (deps?.boss) {
       const evaluatePayload: ModelEvaluateJobPayload = {
         runId: `eval-${modelVersion.id.slice(0, 8)}-${Date.now()}`,
@@ -359,7 +345,7 @@ export async function handleModelTrainJob(
         data: {
           status: 'FAILED',
           endedAt: new Date(),
-          errorMessage: error instanceof Error ? error.message : String(error),
+          errorMessage: formatErrorMessage(error),
         },
       });
     } catch {

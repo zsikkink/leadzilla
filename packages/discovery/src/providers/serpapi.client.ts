@@ -9,6 +9,28 @@ import type {
   SerpApiCommonRequest,
 } from './types.js';
 
+/** Full country-code → name map for SerpAPI location parameter. */
+const COUNTRY_NAMES: Record<string, string> = {
+  AE: 'United Arab Emirates',
+  SA: 'Saudi Arabia',
+  JO: 'Jordan',
+  EG: 'Egypt',
+  QA: 'Qatar',
+  BH: 'Bahrain',
+  KW: 'Kuwait',
+  OM: 'Oman',
+  LB: 'Lebanon',
+  IQ: 'Iraq',
+  MA: 'Morocco',
+  TN: 'Tunisia',
+  DZ: 'Algeria',
+  LY: 'Libya',
+  YE: 'Yemen',
+  SY: 'Syria',
+  PS: 'Palestine',
+  SD: 'Sudan',
+};
+
 interface SerpApiResponseRoot {
   error?: unknown;
   organic_results?: unknown[];
@@ -48,8 +70,8 @@ interface RequestExecutionConfig {
 }
 
 const DEFAULT_BASE_URL = 'https://serpapi.com/search.json';
-const DEFAULT_MAX_ATTEMPTS = 5;
-const DEFAULT_BACKOFF_BASE_SECONDS = 30;
+const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_BACKOFF_BASE_SECONDS = 5;
 const DEFAULT_TIMEOUT_MS = 30000;
 const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 
@@ -114,18 +136,7 @@ function normalizeNumber(value: unknown): number | null {
 }
 
 function toCountryName(countryCode: DiscoveryCountryCode): string {
-  switch (countryCode) {
-    case 'JO':
-      return 'Jordan';
-    case 'SA':
-      return 'Saudi Arabia';
-    case 'AE':
-      return 'United Arab Emirates';
-    case 'EG':
-      return 'Egypt';
-    default:
-      return countryCode;
-  }
+  return COUNTRY_NAMES[countryCode] ?? countryCode;
 }
 
 function buildLocation(city: string | null | undefined, countryCode: DiscoveryCountryCode): string {
@@ -203,17 +214,6 @@ function parseSerpApiError(body: string | null): string | null {
       return null;
     }
     return normalizeString((json as Record<string, unknown>).error);
-  } catch {
-    return null;
-  }
-}
-
-function normalizeDomainFromUrl(url: string | null): string | null {
-  if (!url) {
-    return null;
-  }
-  try {
-    return new URL(url).hostname.toLowerCase().replace(/^www\./, '');
   } catch {
     return null;
   }
@@ -525,6 +525,12 @@ function isTransientStatus(statusCode: number): boolean {
   return TRANSIENT_STATUSES.has(statusCode);
 }
 
+function isTerminalError(error: SerpApiRequestError): boolean {
+  if (error.statusCode === 402 || error.statusCode === 403) return true;
+  if (error.statusCode === 429 && error.serpApiError?.includes('run out of searches')) return true;
+  return false;
+}
+
 async function readResponseText(response: Response): Promise<string | null> {
   try {
     const text = await response.text();
@@ -611,6 +617,7 @@ export class SerpApiDiscoveryProvider implements DiscoveryProvider {
     const payload = await this.requestWithRetry(requestUrl, requestContext);
     return {
       engine,
+      provider: 'SERPAPI',
       organicResults: normalizeOrganicResults(payload),
       localBusinesses: normalizeLocalBusinesses(payload, input.countryCode),
       raw: payload,
@@ -652,6 +659,27 @@ export class SerpApiDiscoveryProvider implements DiscoveryProvider {
               serpApiError,
             },
           );
+
+          if (response.status === 402) {
+            console.error(
+              '[serpapi] QUOTA EXHAUSTED — SerpAPI credits depleted. ' +
+                `status=402 ${formatRequestContext(requestContext)}` +
+                (serpApiError ? ` error=${serpApiError}` : '') +
+                '. Consider switching to GOOGLE_PLACES provider.',
+            );
+            throw error;
+          }
+
+          // SerpAPI returns 429 for both rate limiting AND "out of searches".
+          // "Out of searches" is terminal — retrying won't help.
+          if (response.status === 429 && serpApiError?.includes('run out of searches')) {
+            console.error(
+              '[serpapi] QUOTA EXHAUSTED — SerpAPI account has run out of searches. ' +
+                `status=429 ${formatRequestContext(requestContext)}` +
+                `. error=${serpApiError}`,
+            );
+            throw error;
+          }
 
           if (isTransientStatus(response.status) && attempt < this.executionConfig.maxAttempts) {
             await this.waitBackoff(attempt);
@@ -705,6 +733,11 @@ export class SerpApiDiscoveryProvider implements DiscoveryProvider {
                 },
               );
 
+        // Terminal errors should NOT be retried — bubble up immediately
+        if (isTerminalError(wrapped)) {
+          throw wrapped;
+        }
+
         if (attempt < this.executionConfig.maxAttempts) {
           await this.waitBackoff(attempt);
           lastError = wrapped;
@@ -755,8 +788,4 @@ export async function searchMapsLocal(
 ): Promise<NormalizedProviderResponse> {
   const provider = new SerpApiDiscoveryProvider(config);
   return provider.searchMapsLocal(params);
-}
-
-export function deriveRootDomainFromUrl(url: string | null): string | null {
-  return normalizeDomainFromUrl(url);
 }

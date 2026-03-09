@@ -29,8 +29,6 @@ const ApiEnvSchema = z.object({
   API_PORT: z.coerce.number().int().positive().default(5050),
   CORS_ORIGIN: z.string().url().default('http://localhost:3000'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
-  JWT_ACCESS_SECRET: z.string().min(32).optional(),
-  JWT_REFRESH_SECRET: z.string().min(32).optional(),
   PG_BOSS_SCHEMA: z.string().min(1).default('pgboss'),
   DATABASE_URL: z.string().min(1),
   DIRECT_URL: z.string().min(1),
@@ -49,13 +47,16 @@ const ApiEnvSchema = z.object({
   HUNTER_API_KEY: z.string().min(1).optional(),
   CLEARBIT_ENABLED: z.coerce.boolean().optional(),
   CLEARBIT_API_KEY: z.string().min(1).optional(),
-  OTHER_FREE_ENRICHMENT_ENABLED: z.coerce.boolean().optional(),
   DISCOVERY_ENABLED: z.coerce.boolean().optional(),
   ENRICHMENT_ENABLED: z.coerce.boolean().optional(),
   OPENAI_API_KEY: z.string().min(1).optional(),
   OPENAI_GENERATION_MODEL: z.string().min(1).optional(),
   TRENGO_WEBHOOK_SECRET: z.string().min(1).optional(),
+  RESEND_WEBHOOK_SECRET: z.string().min(1).optional(),
   ADMIN_API_KEY: z.string().min(1).optional(),
+  DISCOVERY_MAX_RUNS_PER_DAY: z.coerce.number().int().min(1).optional(),
+  DISCOVERY_MAX_CONCURRENT_RUNS: z.coerce.number().int().min(1).optional(),
+  DISCOVERY_MAX_LEADS_PER_RUN: z.coerce.number().int().min(1).optional(),
 });
 
 export type ApiEnv = z.infer<typeof ApiEnvSchema>;
@@ -83,6 +84,19 @@ export function loadApiEnv(source: NodeJS.ProcessEnv): ApiEnv {
     throw new Error(
       'Invalid API environment configuration:\nSUPABASE_JWT_ISSUER or SUPABASE_PROJECT_REF is required for Supabase JWT verification',
     );
+  }
+
+  if (parsed.data.APP_ENV !== 'local') {
+    const jwtAccessSecret = source.JWT_ACCESS_SECRET;
+    const jwtRefreshSecret = source.JWT_REFRESH_SECRET;
+    if (
+      (typeof jwtAccessSecret === 'string' && jwtAccessSecret.includes('please-change')) ||
+      (typeof jwtRefreshSecret === 'string' && jwtRefreshSecret.includes('please-change'))
+    ) {
+      throw new Error(
+        'JWT_ACCESS_SECRET / JWT_REFRESH_SECRET must be changed from placeholder values in non-local environments',
+      );
+    }
   }
 
   return parsed.data;

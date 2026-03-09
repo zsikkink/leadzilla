@@ -1,5 +1,6 @@
 import type { NotifySalesJobPayload } from '@lead-flood/contracts';
 import { prisma } from '@lead-flood/db';
+import type { ResendAdapter } from '@lead-flood/providers';
 import type { Job, SendOptions } from 'pg-boss';
 
 export const NOTIFY_SALES_JOB_NAME = 'notify.sales';
@@ -27,6 +28,8 @@ export interface NotifySalesJobDependencies {
   trengoApiKey?: string | undefined;
   trengoBaseUrl?: string | undefined;
   trengoInternalConversationId?: string | undefined;
+  resendAdapter?: ResendAdapter | undefined;
+  salesNotificationEmail?: string | undefined;
   fetchImpl?: typeof fetch | undefined;
 }
 
@@ -130,6 +133,69 @@ export async function handleNotifySalesJob(
         }
       } catch (trengoError: unknown) {
         logger.warn({ jobId: job.id, error: trengoError }, 'Trengo internal notification error');
+      }
+    }
+
+    // Send via Resend email
+    if (deps?.resendAdapter?.isConfigured && deps.salesNotificationEmail) {
+      anyChannelConfigured = true;
+      try {
+        // Load additional context for rich email notification
+        const latestScore = await prisma.leadScorePrediction.findFirst({
+          where: { leadId },
+          orderBy: [{ predictedAt: 'desc' }],
+          select: { scoreBand: true, blendedScore: true },
+        });
+        const feedbackEvent = await prisma.feedbackEvent.findUnique({
+          where: { id: feedbackEventId },
+          select: { replyText: true },
+        });
+        const latestSend = await prisma.messageSend.findFirst({
+          where: { leadId, status: { in: ['SENT', 'DELIVERED'] } },
+          orderBy: { sentAt: 'desc' },
+          select: { messageVariant: { select: { bodyText: true } } },
+        });
+
+        const classificationLabel = classification?.replace(/_/g, ' ') ?? 'UNCLASSIFIED';
+        const scoreBand = latestScore?.scoreBand ?? 'N/A';
+        const blendedScore = latestScore?.blendedScore?.toFixed(2) ?? 'N/A';
+        const replyExcerpt = feedbackEvent?.replyText
+          ? feedbackEvent.replyText.slice(0, 300) + (feedbackEvent.replyText.length > 300 ? '...' : '')
+          : '(no text — media or voice note)';
+        const originalExcerpt = latestSend?.messageVariant?.bodyText?.slice(0, 200) ?? '(not available)';
+
+        const emailBody = [
+          `Lead Reply Notification`,
+          ``,
+          `Lead: ${lead.firstName} ${lead.lastName} (${lead.email})`,
+          `Classification: ${classificationLabel}`,
+          `Score: ${scoreBand} (${blendedScore})`,
+          ``,
+          `--- Reply ---`,
+          replyExcerpt,
+          ``,
+          `--- Original Message (excerpt) ---`,
+          originalExcerpt,
+        ].join('\n');
+
+        const emailResult = await deps.resendAdapter.sendEmail({
+          to: deps.salesNotificationEmail,
+          subject: `[Lead Flood] ${classificationLabel} reply from ${lead.firstName} ${lead.lastName}`,
+          bodyText: emailBody,
+          bodyHtml: null,
+          idempotencyKey: `notify-sales:${feedbackEventId}`,
+        });
+
+        if (emailResult.status === 'success') {
+          anyChannelSucceeded = true;
+        } else {
+          logger.warn(
+            { jobId: job.id, status: emailResult.status, failure: emailResult.failure },
+            'Resend sales notification failed',
+          );
+        }
+      } catch (emailError: unknown) {
+        logger.warn({ jobId: job.id, error: emailError }, 'Resend sales notification error');
       }
     }
 

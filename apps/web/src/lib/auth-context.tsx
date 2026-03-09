@@ -84,7 +84,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let isMounted = true;
-    const supabase = getSupabaseBrowserClient();
+    let supabase: ReturnType<typeof getSupabaseBrowserClient> | null = null;
+
+    try {
+      supabase = getSupabaseBrowserClient();
+    } catch {
+      if (process.env.NODE_ENV === 'production') {
+        setIsLoading(false);
+        return;
+      }
+      // Dev-only fallback when Supabase is not configured
+      const devUser: AuthUser = { id: 'dev-user', email: 'dev@localhost', firstName: 'Dev', lastName: 'User' };
+      setToken('dev-token');
+      setUser(devUser);
+      setIsLoading(false);
+      return;
+    }
 
     void supabase.auth
       .getSession()
@@ -94,6 +109,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         if (error || !data.session || !data.session.user) {
+          // Clear stale Supabase-internal tokens (e.g. after Supabase restart)
+          void supabase!.auth.signOut().catch(() => {});
           clearAuthState();
           setToken(null);
           setUser(null);
@@ -142,7 +159,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (email: string, password: string) => {
-      const supabase = getSupabaseBrowserClient();
+      let supabase: ReturnType<typeof getSupabaseBrowserClient>;
+      try {
+        supabase = getSupabaseBrowserClient();
+      } catch {
+        throw new Error('Supabase auth is not configured');
+      }
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error || !data.session || !data.user) {
         throw new Error(error?.message ?? 'Login failed');
@@ -157,7 +179,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(() => {
-    void getSupabaseBrowserClient().auth.signOut();
+    try {
+      void getSupabaseBrowserClient().auth.signOut();
+    } catch {
+      // Supabase not configured — just clear local state
+    }
     clearAuthState();
     setToken(null);
     setUser(null);

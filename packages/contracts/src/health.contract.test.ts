@@ -10,9 +10,18 @@ describe('health contracts', () => {
   });
 
   it('accepts valid ready payload', () => {
-    const parsed = ReadyResponseSchema.parse({ status: 'ready', db: 'ok' });
+    const parsed = ReadyResponseSchema.parse({
+      status: 'ready',
+      db: 'ok',
+      schema: {
+        status: 'ok',
+        missingTables: [],
+        missingEnumValues: [],
+      },
+    });
 
     expect(parsed.status).toBe('ready');
     expect(parsed.db).toBe('ok');
+    expect(parsed.schema.status).toBe('ok');
   });
 });

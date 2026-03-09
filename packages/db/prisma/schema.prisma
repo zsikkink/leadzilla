@@ -12,10 +12,25 @@ enum LeadStatus {
   new
   processing
   enriched
+  scored
+  qualified
+  drafted
+  rejected
+  stuck
   failed
   messaged
   replied
   cold
+}
+
+enum ContactRecoveryStatus {
+  OPEN
+  REJECTED
+}
+
+enum ContactRecoveryReason {
+  NO_CONTACTS_FOUND
+  NO_EMAIL
 }
 
 enum JobStatus {
@@ -23,6 +38,7 @@ enum JobStatus {
   running
   completed
   failed
+  cancelled
 }
 
 enum OutboxStatus {
@@ -61,6 +77,17 @@ enum DiscoveryProvider {
   LINKEDIN_SCRAPE
   COMPANY_SEARCH_FREE
   APOLLO
+  SERPAPI
+}
+
+enum CostEventProvider {
+  SERPAPI
+  APOLLO
+  APIFY_WEBSITE
+  APIFY_INSTAGRAM
+  HUNTER
+  GOOGLE_PLACES
+  GOOGLE_CUSTOM_SEARCH
 }
 
 enum DiscoveryRecordStatus {
@@ -73,7 +100,6 @@ enum DiscoveryRecordStatus {
 enum EnrichmentProvider {
   HUNTER
   CLEARBIT
-  OTHER_FREE
   PEOPLE_DATA_LABS
 }
 
@@ -201,59 +227,44 @@ enum JobRunStatus {
   CANCELED
 }
 
-model User {
-  id          String    @id @default(cuid())
-  email       String    @unique
-  firstName   String
-  lastName    String
-  passwordHash String?
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  sessions    Session[]
-  createdIcpProfiles IcpProfile[] @relation("IcpCreatedBy")
-  triggeredTrainingRuns TrainingRun[] @relation("TrainingRunTriggeredBy")
-
-  @@index([email])
-}
-
-model Session {
-  id           String   @id @default(cuid())
-  userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  refreshToken String   @unique
-  expiresAt    DateTime
-  createdAt    DateTime @default(now())
-
-  @@index([userId])
-  @@index([expiresAt])
-}
-
 model Lead {
-  id             String        @id @default(cuid())
-  firstName      String
-  lastName       String
-  email          String        @unique
-  phone          String?
-  source         String
-  status         LeadStatus    @default(new)
-  enrichmentData Json?
-  error          String?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
-  jobs           JobExecution[]
-  discoveryRecords LeadDiscoveryRecord[]
-  enrichmentRecords LeadEnrichmentRecord[]
-  featureSnapshots LeadFeatureSnapshot[]
-  scorePredictions LeadScorePrediction[]
-  messageDrafts    MessageDraft[]
-  messageSends     MessageSend[]
-  feedbackEvents   FeedbackEvent[]
-  trainingLabels   TrainingLabel[]
+  id                  String        @id @default(cuid())
+  firstName           String
+  lastName            String
+  email               String        @unique
+  phone               String?
+  phoneSource         String?
+  businessEmail       String?
+  source              String
+  status              LeadStatus    @default(new)
+  enrichmentData      Json?
+  error               String?
+  costCents           Int           @default(0)
+  deletedAt           DateTime?
+  businessId          String?
+  business            Business?     @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  decisionMakerTitle  String?
+  decisionMakerPhone  String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  jobs                JobExecution[]
+  discoveryRecords    LeadDiscoveryRecord[]
+  enrichmentRecords   LeadEnrichmentRecord[]
+  featureSnapshots    LeadFeatureSnapshot[]
+  scorePredictions    LeadScorePrediction[]
+  messageDrafts       MessageDraft[]
+  messageSends        MessageSend[]
+  feedbackEvents      FeedbackEvent[]
+  trainingLabels      TrainingLabel[]
+  businessConversions BusinessConversion[]
+  pipelineEvents      LeadPipelineEvent[]
+  rejection           LeadRejection?
 
   @@index([status])
   @@index([source])
   @@index([phone])
+  @@index([deletedAt])
+  @@index([businessId])
 }
 
 model JobExecution {
@@ -307,18 +318,18 @@ model IcpProfile {
   featureList          Json?
   isActive             Boolean              @default(true)
   createdByUserId      String?
-  createdByUser        User?                @relation("IcpCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   qualificationRules   QualificationRule[]
   discoveryRecords     LeadDiscoveryRecord[]
   featureSnapshots     LeadFeatureSnapshot[]
   scorePredictions     LeadScorePrediction[]
   analyticsDailyRollups AnalyticsDailyRollup[]
   messageDrafts        MessageDraft[]
+  contactRecoveryItems ContactRecoveryItem[]
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
 
+  @@unique([name])
   @@index([isActive])
-  @@index([name])
 }
 
 model QualificationRule {
@@ -425,7 +436,6 @@ model TrainingRun {
   status             TrainingRunStatus @default(QUEUED)
   trigger            TrainingTrigger
   triggeredByUserId  String?
-  triggeredByUser    User?             @relation("TrainingRunTriggeredBy", fields: [triggeredByUserId], references: [id], onDelete: SetNull)
   configJson         Json
   trainingWindowStart DateTime
   trainingWindowEnd  DateTime
@@ -502,7 +512,7 @@ model LeadScorePrediction {
   featureSnapshotId String
   featureSnapshot   LeadFeatureSnapshot @relation(fields: [featureSnapshotId], references: [id], onDelete: Cascade)
   modelVersionId    String
-  modelVersion      ModelVersion       @relation(fields: [modelVersionId], references: [id], onDelete: Cascade)
+  modelVersion      ModelVersion       @relation(fields: [modelVersionId], references: [id], onDelete: Restrict)
   deterministicScore Float
   logisticScore     Float
   blendedScore      Float
@@ -532,6 +542,10 @@ model AnalyticsDailyRollup {
   validDomainCount  Int         @default(0)
   industryMatchRate Float       @default(0)
   geoMatchRate      Float       @default(0)
+  sentCount         Int         @default(0)
+  failedCount       Int         @default(0)
+  repliedCount      Int         @default(0)
+  bouncedCount      Int         @default(0)
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
 
@@ -559,6 +573,7 @@ model MessageDraft {
   followUpNumber       Int                   @default(0)
   pitchedFeature       String?
   parentMessageSendId  String?
+  parentMessageSend    MessageSend?          @relation("followUpChain", fields: [parentMessageSendId], references: [id], onDelete: SetNull)
   variants             MessageVariant[]
   messageSends         MessageSend[]
   createdAt            DateTime              @default(now())
@@ -567,6 +582,7 @@ model MessageDraft {
   @@index([leadId, createdAt])
   @@index([icpProfileId, createdAt])
   @@index([approvalStatus])
+  @@index([leadId, approvalStatus])
 }
 
 model MessageVariant {
@@ -595,7 +611,7 @@ model MessageSend {
   messageDraftId          String
   messageDraft            MessageDraft      @relation(fields: [messageDraftId], references: [id], onDelete: Cascade)
   messageVariantId        String
-  messageVariant          MessageVariant    @relation(fields: [messageVariantId], references: [id], onDelete: Cascade)
+  messageVariant          MessageVariant    @relation(fields: [messageVariantId], references: [id], onDelete: Restrict)
   channel                 MessageChannel    @default(EMAIL)
   provider                SendProvider      @default(RESEND)
   providerMessageId       String?
@@ -611,6 +627,7 @@ model MessageSend {
   failureCode             String?
   failureReason           String?
   feedbackEvents          FeedbackEvent[]
+  followUpDrafts          MessageDraft[]    @relation("followUpChain")
   createdAt               DateTime          @default(now())
   updatedAt               DateTime          @updatedAt
 
@@ -619,6 +636,8 @@ model MessageSend {
   @@index([messageDraftId])
   @@index([providerConversationId])
   @@index([status, followUpNumber, nextFollowUpAfter])
+  @@index([sentAt, status])
+  @@index([leadId, status])
 }
 
 model FeedbackEvent {
@@ -643,14 +662,17 @@ model FeedbackEvent {
   @@index([messageSendId])
   @@index([eventType])
   @@index([leadId, eventType])
+  @@index([createdAt])
+  @@index([eventType, occurredAt])
+  @@index([messageSendId, eventType, occurredAt])
 }
 
 model TrainingLabel {
   id              String         @id @default(cuid())
   leadId          String
-  lead            Lead           @relation(fields: [leadId], references: [id])
+  lead            Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
   feedbackEventId String?
-  feedbackEvent   FeedbackEvent? @relation(fields: [feedbackEventId], references: [id])
+  feedbackEvent   FeedbackEvent? @relation(fields: [feedbackEventId], references: [id], onDelete: SetNull)
   label           Int
   source          LabelSource
   createdAt       DateTime       @default(now())
@@ -658,6 +680,7 @@ model TrainingLabel {
   @@unique([leadId, feedbackEventId])
   @@index([createdAt])
   @@index([label])
+  @@index([leadId])
 }
 
 model SearchTask {
@@ -679,13 +702,15 @@ model SearchTask {
   error              String?
   createdAt          DateTime         @default(now()) @map("created_at")
   updatedAt          DateTime         @updatedAt @map("updated_at")
+  discoveryRunId     String?          @map("discovery_run_id")
 
   discoveredSources  Source[]
   businessEvidence   BusinessEvidence[]
 
-  @@unique([taskType, queryHash])
+  @@unique([taskType, queryHash, discoveryRunId])
   @@index([status, runAfter])
   @@index([countryCode, language, timeBucket])
+  @@index([discoveryRunId])
   @@map("search_tasks")
 }
 
@@ -707,37 +732,77 @@ model Source {
 }
 
 model Business {
-  id              String              @id @default(uuid())
-  name            String
-  countryCode     String              @map("country_code")
-  city            String?
-  address         String?
-  phoneE164       String?             @map("phone_e164")
-  websiteDomain   String?             @map("website_domain")
-  instagramHandle String?             @map("instagram_handle")
-  category        String?
-  rating          Float?
-  reviewCount     Int?                @map("review_count")
-  deterministicScore Float            @default(0) @map("deterministic_score")
-  scoreBand       ScoreBand?          @map("score_band")
-  hasWhatsapp     Boolean             @default(false) @map("has_whatsapp")
-  hasInstagram    Boolean             @default(false) @map("has_instagram")
-  acceptsOnlinePayments Boolean       @default(false) @map("accepts_online_payments")
-  followerCount   Int?                @map("follower_count")
-  physicalAddressPresent Boolean      @default(false) @map("physical_address_present")
-  recentActivity  Boolean             @default(false) @map("recent_activity")
-  lat             Float?
-  lng             Float?
-  confidence      Float               @default(0.5)
-  createdAt       DateTime            @default(now()) @map("created_at")
-  updatedAt       DateTime            @updatedAt @map("updated_at")
+  id                       String              @id @default(uuid())
+  name                     String
+  countryCode              String              @map("country_code")
+  country                  String?
+  city                     String?
+  address                  String?
+  phoneE164                String?             @map("phone_e164")
+  websiteDomain            String?             @map("website_domain")
+  instagramHandle          String?             @map("instagram_handle")
+  category                 String?
+  rating                   Float?
+  reviewCount              Int?                @map("review_count")
+  deterministicScore       Float               @default(0) @map("deterministic_score")
+  scoreBand                ScoreBand?          @map("score_band")
+  hasWhatsapp              Boolean             @default(false) @map("has_whatsapp")
+  hasInstagram             Boolean             @default(false) @map("has_instagram")
+  acceptsOnlinePayments    Boolean             @default(false) @map("accepts_online_payments")
+  followerCount            Int?                @map("follower_count")
+  physicalAddressPresent   Boolean             @default(false) @map("physical_address_present")
+  recentActivity           Boolean             @default(false) @map("recent_activity")
+  lat                      Float?
+  lng                      Float?
+  confidence               Float               @default(0.5)
+  apifyWebsiteScrapeJson   Json?               @map("apify_website_scrape_json")
+  apifyInstagramScrapeJson Json?               @map("apify_instagram_scrape_json")
+  websiteScrapedAt         DateTime?           @map("website_scraped_at")
+  instagramScrapedAt       DateTime?           @map("instagram_scraped_at")
+  discoveryRunId           String?             @map("discovery_run_id")
+  preQualified             Boolean?            @map("pre_qualified")
+  disqualificationReason   String?             @map("disqualification_reason")
+  createdAt                DateTime            @default(now()) @map("created_at")
+  updatedAt                DateTime            @updatedAt @map("updated_at")
 
-  evidence        BusinessEvidence[]
+  evidence                 BusinessEvidence[]
+  leads                    Lead[]
+  businessConversions      BusinessConversion[]
+  costEvents               DiscoveryCostEvent[]
+  contacts                 BusinessContact[]    @relation("businessContacts")
+  contactRecoveryItems     ContactRecoveryItem[]
 
   @@index([countryCode, city])
   @@index([websiteDomain])
   @@index([phoneE164])
+  @@index([discoveryRunId])
+  @@index([preQualified])
   @@map("businesses")
+}
+
+model ContactRecoveryItem {
+  id               String                @id @default(cuid())
+  businessId       String                @map("business_id")
+  business         Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  icpProfileId     String                @map("icp_profile_id")
+  icpProfile       IcpProfile            @relation(fields: [icpProfileId], references: [id], onDelete: Cascade)
+  discoveryRunId   String                @map("discovery_run_id")
+  status           ContactRecoveryStatus @default(OPEN)
+  reason           ContactRecoveryReason
+  evidenceScore    Float                 @default(0) @map("evidence_score")
+  candidateCount   Int                   @default(0) @map("candidate_count")
+  recoverySnapshot Json                  @map("recovery_snapshot")
+  rejectedBy       String?               @map("rejected_by")
+  rejectedAt       DateTime?             @map("rejected_at")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
+
+  @@unique([businessId, icpProfileId])
+  @@index([status, updatedAt])
+  @@index([reason])
+  @@index([discoveryRunId])
+  @@index([icpProfileId, status])
+  @@map("contact_recovery_items")
 }
 
 model BusinessEvidence {
@@ -757,6 +822,31 @@ model BusinessEvidence {
   @@map("business_evidence")
 }
 
+model ManagerAnalysis {
+  id                     String   @id @default(cuid())
+  runId                  String   @unique
+  weekStart              DateTime
+  weekEnd                DateTime
+  totalSends             Int      @default(0)
+  totalReplies           Int      @default(0)
+  totalPositive          Int      @default(0)
+  totalBounced           Int      @default(0)
+  overallReplyRate       Float    @default(0)
+  overallPositiveRate    Float    @default(0)
+  overallBounceRate      Float    @default(0)
+  icpBreakdownJson       Json
+  variantBreakdownJson   Json
+  scoreBandBreakdownJson Json
+  trendJson              Json
+  recommendationsJson    Json
+  abInsightsPerIcpJson   Json?
+  recommendationCount    Int      @default(0)
+  createdAt              DateTime @default(now())
+
+  @@index([weekStart])
+  @@index([createdAt])
+}
+
 model JobRun {
   id          String       @id @default(uuid())
   jobName     String       @map("job_name")
@@ -774,4 +864,110 @@ model JobRun {
   @@index([jobName, startedAt])
   @@index([status, startedAt])
   @@map("job_runs")
+}
+
+model DiscoveryCostEvent {
+  id             String            @id @default(cuid())
+  discoveryRunId String
+  provider       CostEventProvider
+  costCents      Int
+  apiCallType    String
+  businessId     String?
+  business       Business?         @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  leadId         String?
+  recordedAt     DateTime          @default(now())
+  createdAt      DateTime          @default(now())
+
+  @@index([discoveryRunId])
+  @@index([provider])
+  @@index([businessId])
+  @@map("discovery_cost_events")
+}
+
+model BusinessConversion {
+  id                String   @id @default(cuid())
+  businessId        String
+  business          Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  leadId            String
+  lead              Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  icpProfileId       String?
+  apolloContactJson  Json?
+  hunterContactJson  Json?
+  metadata              Json?
+  businessInsights      String?
+  apolloHasEmail        Boolean?   @map("apollo_has_email")
+  apolloHasDirectPhone  Boolean?   @map("apollo_has_direct_phone")
+  convertedAt           DateTime @default(now())
+  createdAt             DateTime @default(now())
+
+  @@unique([businessId, leadId])
+  @@index([businessId])
+  @@index([leadId])
+  @@map("business_conversions")
+}
+
+model PipelineSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  valueJson Json
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@map("pipeline_settings")
+}
+
+model LeadPipelineEvent {
+  id         String   @id @default(cuid())
+  leadId     String   @map("lead_id")
+  lead       Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  stage      String
+  status     String
+  jobId      String?  @map("job_id")
+  durationMs Int?     @map("duration_ms")
+  metadata   Json?
+  occurredAt DateTime @default(now()) @map("occurred_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([leadId, occurredAt])
+  @@index([stage, status])
+  @@index([jobId])
+  @@map("lead_pipeline_events")
+}
+
+model BusinessContact {
+  id           String   @id @default(uuid())
+  businessId   String
+  business     Business @relation("businessContacts", fields: [businessId], references: [id])
+  name         String
+  title        String?
+  email        String?
+  phone        String?
+  linkedinUrl  String?
+  seniority    String   @default("other")
+  positionRank Int      @default(99)
+  source       String   @default("website_scrape")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([businessId])
+  @@map("business_contacts")
+}
+
+model LeadRejection {
+  id           String   @id @default(cuid())
+  leadId       String   @unique
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  businessId   String?
+  domain       String?
+  icpProfileId String?
+  score        Float?
+  reason       String
+  rejectedBy   String
+  rejectedAt   DateTime @default(now())
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@index([icpProfileId])
+  @@index([reason])
+  @@map("lead_rejections")
 }

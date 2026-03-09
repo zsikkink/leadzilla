@@ -7,6 +7,7 @@ import {
   MESSAGE_GENERATE_RETRY_OPTIONS,
   type MessageGenerateJobPayload,
 } from './message.generate.job.js';
+import { getFollowUpMaxCount, loadAutoApproveConfig, shouldAutoApprove } from '../utils/pipeline-settings.js';
 
 export const FOLLOWUP_CHECK_JOB_NAME = 'followup.check';
 
@@ -49,14 +50,17 @@ export async function handleFollowupCheckJob(
 
   try {
     const now = new Date();
+    const autoApproveConfig = await loadAutoApproveConfig();
+    const maxFollowUps = await getFollowUpMaxCount();
 
     // Find all MessageSends eligible for follow-up
     const eligibleSends = await prisma.messageSend.findMany({
       where: {
         status: { in: ['SENT', 'REPLIED'] },
-        followUpNumber: { lt: 3 },
+        followUpNumber: { lt: maxFollowUps },
         nextFollowUpAfter: { not: null, lte: now },
         lead: {
+          deletedAt: null,
           status: { in: ['messaged', 'replied'] },
         },
       },
@@ -64,12 +68,20 @@ export async function handleFollowupCheckJob(
         id: true,
         leadId: true,
         followUpNumber: true,
+        channel: true,
         lead: {
           select: {
             id: true,
             feedbackEvents: {
-              where: { eventType: { in: ['REPLIED', 'UNSUBSCRIBED'] } },
+              // REPLIED is intentionally excluded so OUT_OF_OFFICE responses can
+              // reschedule follow-ups via reply.classify without being canceled.
+              where: { eventType: { in: ['UNSUBSCRIBED', 'MEETING_BOOKED', 'DEAL_WON', 'BOUNCED'] } },
               select: { id: true },
+              take: 1,
+            },
+            scorePredictions: {
+              select: { id: true, blendedScore: true },
+              orderBy: { predictedAt: 'desc' },
               take: 1,
             },
           },
@@ -84,27 +96,29 @@ export async function handleFollowupCheckJob(
       orderBy: { nextFollowUpAfter: 'asc' },
     });
 
-    // Batch-fetch previously pitched features for all eligible leads
+    // Batch-fetch previously pitched features for all eligible leads, scoped by ICP
     const leadIds = [...new Set(eligibleSends.map((s) => s.leadId))];
     const allPreviousDrafts = leadIds.length > 0
       ? await prisma.messageDraft.findMany({
           where: { leadId: { in: leadIds }, pitchedFeature: { not: null } },
-          select: { leadId: true, pitchedFeature: true },
+          select: { leadId: true, icpProfileId: true, pitchedFeature: true },
         })
       : [];
-    const pitchedByLead = new Map<string, string[]>();
+    // Key: `${leadId}:${icpProfileId}` → pitched features for that lead+ICP pair
+    const pitchedByLeadIcp = new Map<string, string[]>();
     for (const d of allPreviousDrafts) {
       if (d.pitchedFeature) {
-        const list = pitchedByLead.get(d.leadId) ?? [];
+        const key = `${d.leadId}:${d.icpProfileId}`;
+        const list = pitchedByLeadIcp.get(key) ?? [];
         list.push(d.pitchedFeature);
-        pitchedByLead.set(d.leadId, list);
+        pitchedByLeadIcp.set(key, list);
       }
     }
 
     let enqueuedCount = 0;
 
     for (const send of eligibleSends) {
-      // Double-check: no reply events
+      // Double-check: no terminal feedback events
       if (send.lead.feedbackEvents.length > 0) {
         // Stale data — cancel this follow-up
         await prisma.messageSend.update({
@@ -114,14 +128,19 @@ export async function handleFollowupCheckJob(
         continue;
       }
 
-      const previouslyPitchedFeatures = pitchedByLead.get(send.leadId) ?? [];
       const icpProfileId = send.messageDraft.icpProfileId;
+      const previouslyPitchedFeatures = pitchedByLeadIcp.get(`${send.leadId}:${icpProfileId}`) ?? [];
 
       // Clear first (idempotent guard) — prevents double-enqueue on crash
       await prisma.messageSend.update({
         where: { id: send.id },
         data: { nextFollowUpAfter: null },
       });
+
+      // Compute auto-approve based on PipelineSetting + lead's blended score
+      const latestScore = send.lead.scorePredictions[0];
+      const blendedScore = latestScore?.blendedScore ?? 0;
+      const autoApprove = shouldAutoApprove(autoApproveConfig, blendedScore);
 
       // Enqueue message.generate in follow-up mode
       await deps.boss.send(
@@ -133,10 +152,11 @@ export async function handleFollowupCheckJob(
           followUpNumber: send.followUpNumber + 1,
           parentMessageSendId: send.id,
           previouslyPitchedFeatures,
-          autoApprove: true,
-          channel: 'WHATSAPP',
+          autoApprove,
+          channel: send.channel,
           knowledgeEntryIds: [],
           promptVersion: 'v1-followup',
+          scorePredictionId: latestScore?.id,
           correlationId: correlationId ?? job.id,
         } satisfies MessageGenerateJobPayload,
         {

@@ -68,7 +68,7 @@ export function CustomSelect({
       {/* Dropdown menu */}
       <div
         className={cn(
-          'absolute left-0 top-full z-50 mt-1.5 min-w-[180px] overflow-hidden rounded-xl border border-border/50 bg-card shadow-xl shadow-black/20',
+          'absolute left-0 top-full z-50 mt-1.5 min-w-[180px] max-w-[min(320px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-border/50 bg-card shadow-xl shadow-black/20',
           'origin-top transition-all duration-200 ease-out',
           open
             ? 'scale-100 opacity-100'

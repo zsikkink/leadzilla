@@ -19,6 +19,15 @@ import { Prisma, prisma } from '@lead-flood/db';
 
 import { MessagingNotFoundError, MessagingNotImplementedError } from './messaging.errors.js';
 
+export interface CreateMessageSendForApprovalInput {
+  leadId: string;
+  messageDraftId: string;
+  messageVariantId: string;
+  channel: string;
+  idempotencyKey: string;
+  followUpNumber: number;
+}
+
 export interface MessagingRepository {
   generateMessageDraft(input: GenerateMessageDraftRequest): Promise<GenerateMessageDraftResponse>;
   listMessageDrafts(query: ListMessageDraftsQuery): Promise<ListMessageDraftsResponse>;
@@ -29,6 +38,7 @@ export interface MessagingRepository {
   listMessageSends(query: ListMessageSendsQuery): Promise<ListMessageSendsResponse>;
   getMessageSend(sendId: string): Promise<MessageSendResponse>;
   getConversation(leadId: string): Promise<ConversationResponse>;
+  createMessageSendForApproval(input: CreateMessageSendForApprovalInput): Promise<MessageSendResponse>;
 }
 
 export class StubMessagingRepository implements MessagingRepository {
@@ -72,6 +82,10 @@ export class StubMessagingRepository implements MessagingRepository {
 
   async getConversation(_leadId: string): Promise<ConversationResponse> {
     throw new MessagingNotImplementedError('TODO: get conversation persistence');
+  }
+
+  async createMessageSendForApproval(_input: CreateMessageSendForApprovalInput): Promise<MessageSendResponse> {
+    throw new MessagingNotImplementedError('TODO: create message send for approval persistence');
   }
 }
 
@@ -226,12 +240,6 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
               bodyText: 'TODO: LLM generation',
               isSelected: false,
             },
-            {
-              variantKey: 'variant_b',
-              channel: input.channel,
-              bodyText: 'TODO: LLM generation',
-              isSelected: false,
-            },
           ],
         },
       },
@@ -360,7 +368,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
         messageDraftId: input.messageDraftId,
         messageVariantId: input.messageVariantId,
         channel: variant.channel,
-        provider: 'RESEND',
+        provider: variant.channel === 'EMAIL' ? 'RESEND' : 'TRENGO',
         status: 'QUEUED',
         idempotencyKey: input.idempotencyKey,
         scheduledAt: input.scheduledAt !== undefined ? new Date(input.scheduledAt) : null,
@@ -420,7 +428,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
       where: { leadId },
       include: {
         messageVariant: {
-          select: { bodyText: true, subject: true },
+          select: { bodyText: true, bodyHtml: true, subject: true },
         },
       },
       orderBy: { createdAt: 'asc' },
@@ -440,6 +448,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
         timestamp: (send.sentAt ?? send.createdAt).toISOString(),
         channel: send.channel as 'EMAIL' | 'WHATSAPP',
         bodyText: send.messageVariant.bodyText,
+        bodyHtml: send.messageVariant.bodyHtml ?? null,
         subject: send.messageVariant.subject ?? null,
         replyClassification: null,
         status: send.status as MessageSendStatus,
@@ -453,6 +462,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
         timestamp: reply.occurredAt.toISOString(),
         channel: 'WHATSAPP', // Default — can refine later by looking at the linked MessageSend
         bodyText: reply.replyText ?? '(no text)',
+        bodyHtml: null,
         subject: null,
         replyClassification: reply.replyClassification,
         status: null,
@@ -464,5 +474,45 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
     entries.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
     return { leadId, entries };
+  }
+
+  override async createMessageSendForApproval(
+    input: CreateMessageSendForApprovalInput,
+  ): Promise<MessageSendResponse> {
+    const send = await prisma.messageSend.create({
+      data: {
+        leadId: input.leadId,
+        messageDraftId: input.messageDraftId,
+        messageVariantId: input.messageVariantId,
+        channel: input.channel === 'WHATSAPP' ? 'WHATSAPP' : 'EMAIL',
+        provider: input.channel === 'WHATSAPP' ? 'TRENGO' : 'RESEND',
+        status: 'QUEUED',
+        idempotencyKey: input.idempotencyKey,
+        followUpNumber: input.followUpNumber,
+      },
+    });
+
+    return {
+      id: send.id,
+      leadId: send.leadId,
+      messageDraftId: send.messageDraftId,
+      messageVariantId: send.messageVariantId,
+      channel: send.channel as 'EMAIL' | 'WHATSAPP',
+      provider: send.provider as 'RESEND' | 'TRENGO',
+      providerMessageId: send.providerMessageId,
+      providerConversationId: send.providerConversationId,
+      status: send.status as MessageSendStatus,
+      idempotencyKey: send.idempotencyKey,
+      scheduledAt: send.scheduledAt?.toISOString() ?? null,
+      sentAt: send.sentAt?.toISOString() ?? null,
+      deliveredAt: send.deliveredAt?.toISOString() ?? null,
+      repliedAt: send.repliedAt?.toISOString() ?? null,
+      followUpNumber: send.followUpNumber,
+      nextFollowUpAfter: send.nextFollowUpAfter?.toISOString() ?? null,
+      failureCode: send.failureCode,
+      failureReason: send.failureReason,
+      createdAt: send.createdAt.toISOString(),
+      updatedAt: send.updatedAt.toISOString(),
+    };
   }
 }

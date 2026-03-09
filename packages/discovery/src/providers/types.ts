@@ -1,7 +1,12 @@
-export type DiscoveryCountryCode = 'JO' | 'SA' | 'AE' | 'EG';
+export type DiscoveryCountryCode =
+  | 'JO' | 'SA' | 'AE' | 'EG'
+  | 'QA' | 'BH' | 'KW' | 'OM' | 'LB'
+  | 'IQ' | 'MA' | 'TN' | 'DZ' | 'LY'
+  | 'YE' | 'SY' | 'PS' | 'SD';
 export type DiscoveryLanguageCode = 'en' | 'ar';
 export type SearchTaskType = 'SERP_GOOGLE' | 'SERP_GOOGLE_LOCAL' | 'SERP_MAPS_LOCAL';
 export type SearchRefreshBucket = 'daily' | 'weekly';
+export type DiscoveryProviderName = 'SERPAPI' | 'GOOGLE_PLACES';
 
 export interface SerpApiCommonRequest {
   query: string;
@@ -9,6 +14,11 @@ export interface SerpApiCommonRequest {
   language: DiscoveryLanguageCode;
   city?: string | null;
   page: number;
+  /**
+   * Optional scope key used by fallback providers to keep fallback state isolated.
+   * For discovery runs, pass discoveryRunId to avoid cross-run bleed-through.
+   */
+  fallbackScopeKey?: string | null;
 }
 
 export interface NormalizedSearchResult {
@@ -41,6 +51,7 @@ export interface NormalizedLocalBusiness {
 
 export interface NormalizedProviderResponse {
   engine: 'google' | 'google_local' | 'google_maps';
+  provider: DiscoveryProviderName;
   organicResults: NormalizedSearchResult[];
   localBusinesses: NormalizedLocalBusiness[];
   raw: unknown;

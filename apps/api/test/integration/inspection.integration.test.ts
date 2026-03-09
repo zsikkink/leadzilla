@@ -3,7 +3,6 @@ import { createLogger } from '@lead-flood/observability';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { ApiEnv } from '../../src/env.js';
-import { signJwt } from '../../src/auth/jwt.js';
 import { buildServer } from '../../src/server.js';
 
 const databaseUrl = process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5434/lead_flood';
@@ -17,8 +16,6 @@ const env: ApiEnv = {
   API_PORT: 5050,
   CORS_ORIGIN: 'http://localhost:3000',
   LOG_LEVEL: 'error',
-  JWT_ACCESS_SECRET: 'test-access-secret-test-access-secret',
-  JWT_REFRESH_SECRET: 'test-refresh-secret-test-refresh-secret',
   PG_BOSS_SCHEMA: 'pgboss',
   DATABASE_URL: databaseUrl,
   DIRECT_URL: directUrl,
@@ -34,11 +31,7 @@ function toDayStart(value: string): Date {
 }
 
 function authHeaders(): Record<string, string> {
-  const token = signJwt(
-    { sub: 'user_1', sid: 'sess_1', type: 'access', iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600 },
-    env.JWT_ACCESS_SECRET!,
-  );
-  return { authorization: `Bearer ${token}` };
+  return { authorization: 'Bearer test-token' };
 }
 
 describe('inspection endpoints integration', () => {
@@ -223,8 +216,9 @@ describe('inspection endpoints integration', () => {
     const server = buildServer({
       env,
       logger: createLogger({ service: 'api-test', env: 'test', level: 'error' }),
-      accessTokenSecret: env.JWT_ACCESS_SECRET!,
+      verifyAccessToken: async () => ({ sub: 'user_1', email: null, firstName: null, lastName: null }),
       checkDatabaseHealth: async () => true,
+      checkSchemaHealth: async () => ({ status: 'ok', missingTables: [], missingEnumValues: [] }),
       authenticateUser: async () => null,
       createLeadAndEnqueue: async () => ({ leadId: 'lead_1', jobId: 'job_1' }),
       getLeadById: async () => null,
@@ -287,9 +281,14 @@ describe('inspection endpoints integration', () => {
             latestIcpProfileId: row.discoveryRecords[0]?.icpProfileId ?? null,
             latestScoreBand: row.scorePredictions[0]?.scoreBand ?? null,
             latestBlendedScore: row.scorePredictions[0]?.blendedScore ?? null,
+            latestScorePredictionId: row.scorePredictions[0]?.id ?? null,
             latestDiscoveryRawPayload: row.discoveryRecords[0]?.rawPayload ?? null,
             latestEnrichmentNormalizedPayload: row.enrichmentRecords[0]?.normalizedPayload ?? null,
             latestEnrichmentRawPayload: row.enrichmentRecords[0]?.rawPayload ?? null,
+            businessCountryCode: null,
+            businessCountry: null,
+            businessCity: null,
+            businessCategory: null,
           })),
           qualityMetrics: {
             validEmailCount: 1,
@@ -302,6 +301,9 @@ describe('inspection endpoints integration', () => {
           total,
         };
       },
+      listContactRecoveryItems: async () => ({ items: [], page: 1, pageSize: 20, total: 0 }),
+      getContactRecoveryItem: async () => null,
+      rejectContactRecoveryItem: async () => null,
       getJobById: async () => null,
     });
 

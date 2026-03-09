@@ -84,12 +84,17 @@ export class ResendAdapter {
         body.html = request.bodyHtml;
       }
 
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`,
+      };
+      if (request.idempotencyKey) {
+        headers['Idempotency-Key'] = request.idempotencyKey;
+      }
+
       response = await this.fetchImpl(`${this.baseUrl}/emails`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`,
-        },
+        headers,
         body: JSON.stringify(body),
         signal: controller.signal,
       });

@@ -12,7 +12,17 @@ import type {
 } from '@lead-flood/contracts';
 import { prisma, type Prisma } from '@lead-flood/db';
 
-import { DiscoveryAdminNotFoundError } from './discovery-admin.errors.js';
+import { DiscoveryAdminBadRequestError, DiscoveryAdminNotFoundError } from './discovery-admin.errors.js';
+
+const DEFAULT_PG_BOSS_SCHEMA = 'pgboss';
+
+function readPgBossSchema(): string {
+  const schema = process.env.PG_BOSS_SCHEMA ?? DEFAULT_PG_BOSS_SCHEMA;
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
+    throw new DiscoveryAdminBadRequestError('Invalid pg-boss schema configuration');
+  }
+  return schema;
+}
 
 const SCORE_WEIGHTS = {
   hasWhatsapp: 0.2,
@@ -249,10 +259,14 @@ function buildLeadOrderBy(
   if (sortBy === 'recent') {
     return [{ updatedAt: 'desc' }, { id: 'desc' }];
   }
+  if (sortBy === 'score_desc') {
+    return [{ deterministicScore: 'desc' }, { updatedAt: 'desc' }, { id: 'desc' }];
+  }
   if (sortBy === 'review_count') {
     return [{ reviewCount: 'desc' }, { deterministicScore: 'desc' }, { id: 'desc' }];
   }
-  return [{ deterministicScore: 'desc' }, { updatedAt: 'desc' }, { id: 'desc' }];
+  // 'newest' or fallthrough: newest first
+  return [{ createdAt: 'desc' }, { id: 'desc' }];
 }
 
 function buildTaskOrderBy(
@@ -308,6 +322,20 @@ function readDerivedTaskParams(paramsJson: unknown): {
   };
 }
 
+export interface DiscoveryRunLeadItem {
+  id: string;
+  firstName: string;
+  lastName: string;
+  companyName: string | null;
+}
+
+export interface CancelDiscoveryRunResult {
+  success: boolean;
+  outcome: 'cancelled' | 'already_cancelled' | 'already_terminal';
+  terminalStatus: 'completed' | 'failed' | 'cancelled' | null;
+  cancelledPendingJobsCount: number;
+}
+
 export interface DiscoveryAdminRepository {
   listLeads(query: AdminListLeadsQuery): Promise<AdminListLeadsResponse>;
   getLeadById(id: string): Promise<AdminLeadDetailResponse>;
@@ -315,6 +343,23 @@ export interface DiscoveryAdminRepository {
   getSearchTaskById(id: string): Promise<AdminSearchTaskDetailResponse>;
   listJobRuns(query: JobRunListQuery): Promise<ListJobRunsResponse>;
   getJobRunById(id: string): Promise<JobRunDetailResponse>;
+  cancelDiscoveryRun(id: string): Promise<CancelDiscoveryRunResult>;
+  getDiscoveryRunDetail(id: string): Promise<{
+    run: {
+      id: string;
+      type: string;
+      status: string;
+      attempts: number;
+      payload: unknown;
+      result: unknown;
+      error: string | null;
+      createdAt: string;
+      startedAt: string | null;
+      finishedAt: string | null;
+      updatedAt: string;
+    };
+    leads: DiscoveryRunLeadItem[];
+  }>;
 }
 
 export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository {
@@ -551,6 +596,207 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
       },
+    };
+  }
+
+  async cancelDiscoveryRun(id: string): Promise<CancelDiscoveryRunResult> {
+    const run = await prisma.jobExecution.findUnique({
+      where: { id },
+      select: { status: true, result: true },
+    });
+
+    if (!run) {
+      throw new DiscoveryAdminNotFoundError('Discovery run not found');
+    }
+
+    if (run.status === 'cancelled') {
+      return {
+        success: true,
+        outcome: 'already_cancelled',
+        terminalStatus: 'cancelled',
+        cancelledPendingJobsCount: 0,
+      };
+    }
+
+    const terminalStatuses = ['completed', 'failed'] as const;
+    if (terminalStatuses.includes(run.status as (typeof terminalStatuses)[number])) {
+      return {
+        success: false,
+        outcome: 'already_terminal',
+        terminalStatus: run.status as 'completed' | 'failed',
+        cancelledPendingJobsCount: 0,
+      };
+    }
+
+    const now = new Date();
+    const schema = readPgBossSchema();
+    let cancelledPendingJobsCount = 0;
+    let queueCleanupError: string | null = null;
+
+    try {
+      const cleanupRows = await prisma.$queryRawUnsafe<Array<{ deleted_count: number }>>(
+        `
+          with deleted as (
+            delete from ${schema}.job
+            where state in ('created', 'retry')
+              and name in (
+                'discovery.seed',
+                'discovery.run_search_task',
+                'business.prequalify',
+                'business.convert',
+                'features.compute',
+                'scoring.compute',
+                'apollo.enrich',
+                'message.generate',
+                'message.send'
+              )
+              and (
+                data ->> 'discoveryRunId' = $1
+                or data ->> 'runId' = $2
+                or singleton_key like $3
+              )
+            returning 1
+          )
+          select count(*)::int as deleted_count from deleted
+        `,
+        id,
+        id,
+        `%${id}%`,
+      );
+      cancelledPendingJobsCount = cleanupRows[0]?.deleted_count ?? 0;
+    } catch (error: unknown) {
+      queueCleanupError = error instanceof Error ? error.message : 'queue cleanup failed';
+    }
+
+    const existingResult =
+      run.result && typeof run.result === 'object' && !Array.isArray(run.result)
+        ? run.result as Record<string, unknown>
+        : {};
+
+    try {
+      await prisma.jobExecution.update({
+        where: { id },
+        data: {
+          status: 'cancelled',
+          finishedAt: now,
+          result: {
+            ...existingResult,
+            cancellation: {
+              outcome: 'cancelled',
+              cancelledAt: now.toISOString(),
+              cancelledPendingJobsCount,
+              ...(queueCleanupError ? { queueCleanupError } : {}),
+            },
+          } as Prisma.InputJsonValue,
+        },
+      });
+    } catch {
+      // Race-safe fallback: if another worker finalized the run concurrently,
+      // return a deterministic non-500 cancel outcome.
+      const latest = await prisma.jobExecution.findUnique({
+        where: { id },
+        select: { status: true },
+      });
+      if (latest?.status === 'cancelled') {
+        return {
+          success: true,
+          outcome: 'already_cancelled',
+          terminalStatus: 'cancelled',
+          cancelledPendingJobsCount,
+        };
+      }
+      if (latest && terminalStatuses.includes(latest.status as (typeof terminalStatuses)[number])) {
+        return {
+          success: false,
+          outcome: 'already_terminal',
+          terminalStatus: latest.status as 'completed' | 'failed',
+          cancelledPendingJobsCount,
+        };
+      }
+      throw new DiscoveryAdminBadRequestError('Unable to cancel run due to concurrent state update');
+    }
+
+    return {
+      success: true,
+      outcome: 'cancelled',
+      terminalStatus: 'cancelled',
+      cancelledPendingJobsCount,
+    };
+  }
+
+  async getDiscoveryRunDetail(id: string) {
+    const run = await prisma.jobExecution.findUnique({
+      where: { id },
+    });
+
+    if (!run) {
+      throw new DiscoveryAdminNotFoundError('Discovery run not found');
+    }
+
+    // Join: DiscoveryCostEvent (discoveryRunId, apiCallType='prequalify_check')
+    //   → Business (via businessId) → BusinessConversion (via businessId) → Lead (via leadId)
+    const costEvents = await prisma.discoveryCostEvent.findMany({
+      where: {
+        discoveryRunId: id,
+        apiCallType: 'prequalify_check',
+        businessId: { not: null },
+      },
+      select: {
+        business: {
+          select: {
+            id: true,
+            name: true,
+            businessConversions: {
+              select: {
+                lead: {
+                  select: {
+                    id: true,
+                    firstName: true,
+                    lastName: true,
+                    business: {
+                      select: { name: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const seen = new Set<string>();
+    const leads: DiscoveryRunLeadItem[] = [];
+
+    for (const event of costEvents) {
+      if (!event.business) continue;
+      for (const conversion of event.business.businessConversions) {
+        if (seen.has(conversion.lead.id)) continue;
+        seen.add(conversion.lead.id);
+        leads.push({
+          id: conversion.lead.id,
+          firstName: conversion.lead.firstName,
+          lastName: conversion.lead.lastName,
+          companyName: conversion.lead.business?.name ?? event.business.name,
+        });
+      }
+    }
+
+    return {
+      run: {
+        id: run.id,
+        type: run.type,
+        status: run.status,
+        attempts: run.attempts,
+        payload: run.payload,
+        result: run.result,
+        error: run.error,
+        createdAt: run.createdAt.toISOString(),
+        startedAt: run.startedAt?.toISOString() ?? null,
+        finishedAt: run.finishedAt?.toISOString() ?? null,
+        updatedAt: run.updatedAt.toISOString(),
+      },
+      leads,
     };
   }
 }

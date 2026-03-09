@@ -4,8 +4,13 @@ import { cn } from '../lib/utils.js';
 
 const STATUS_STYLES: Record<LeadStatus, string> = {
   new: 'bg-blue-500/15 text-blue-400',
-  processing: 'bg-yellow-500/15 text-yellow-400',
+  processing: 'bg-sky-500/15 text-sky-400 animate-pulse',
   enriched: 'bg-purple-500/15 text-purple-400',
+  scored: 'bg-indigo-500/15 text-indigo-400',
+  qualified: 'bg-teal-500/15 text-teal-400',
+  drafted: 'bg-cyan-500/15 text-cyan-400',
+  rejected: 'bg-orange-500/15 text-orange-400',
+  stuck: 'bg-yellow-500/15 text-yellow-400',
   failed: 'bg-red-500/15 text-red-400',
   messaged: 'bg-zbooni-green/15 text-zbooni-green',
   replied: 'bg-emerald-500/15 text-emerald-400',

@@ -29,6 +29,21 @@ export type HunterEnrichmentResult =
       failure: HunterFailure;
     };
 
+export interface HunterDomainContact {
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  position: string | null;
+  type: 'personal' | 'generic' | null;
+  confidence: number | null;
+  verification: string | null;
+}
+
+export type HunterDomainSearchResult =
+  | { status: 'success'; contacts: HunterDomainContact[] }
+  | { status: 'retryable_error'; failure: HunterFailure }
+  | { status: 'terminal_error'; failure: HunterFailure };
+
 export interface HunterAdapterConfig {
   apiKey: string | undefined;
   baseUrl?: string;
@@ -66,6 +81,19 @@ function domainFromEmail(email?: string): string | null {
 
   const [, domain] = email.split('@');
   return domain?.toLowerCase() ?? null;
+}
+
+const EXECUTIVE_KEYWORDS = ['owner', 'ceo', 'chief', 'founder', 'director', 'vp', 'vice president', 'president', 'head', 'manager'] as const;
+
+function hunterPositionRank(position: string | null): number {
+  if (!position) return 99;
+  const lower = position.toLowerCase();
+  for (let i = 0; i < EXECUTIVE_KEYWORDS.length; i++) {
+    if (lower.includes(EXECUTIVE_KEYWORDS[i]!)) {
+      return i;
+    }
+  }
+  return 99;
 }
 
 export class HunterAdapter {
@@ -176,6 +204,131 @@ export class HunterAdapter {
       status: 'success',
       normalized: this.normalize(raw, request, lookupMode, derivedDomain),
       raw,
+    };
+  }
+
+  get isConfigured(): boolean {
+    return Boolean(this.apiKey);
+  }
+
+  async searchDomainContacts(domain: string): Promise<HunterDomainSearchResult> {
+    if (!this.apiKey) {
+      return {
+        status: 'terminal_error',
+        failure: {
+          classification: 'terminal',
+          statusCode: null,
+          message: 'HUNTER_API_KEY is not configured',
+          raw: null,
+        },
+      };
+    }
+
+    if (!domain) {
+      return {
+        status: 'terminal_error',
+        failure: {
+          classification: 'terminal',
+          statusCode: null,
+          message: 'domain is required for Hunter domain search',
+          raw: null,
+        },
+      };
+    }
+
+    await this.waitForRateLimit();
+
+    const params = new URLSearchParams({
+      api_key: this.apiKey,
+      domain,
+      limit: '5',
+    });
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}/domain-search?${params.toString()}`, {
+        method: 'GET',
+        signal: controller.signal,
+      });
+    } catch (error: unknown) {
+      return {
+        status: 'retryable_error',
+        failure: {
+          classification: 'retryable',
+          statusCode: null,
+          message: error instanceof Error ? error.message : 'Hunter domain search request failed',
+          raw: error,
+        },
+      };
+    } finally {
+      clearTimeout(timeout);
+      this.nextAllowedRequestAt = Date.now() + this.minRequestIntervalMs;
+    }
+
+    const rawText = await response.text();
+    const raw = this.parseRaw(rawText);
+
+    if (!response.ok) {
+      const classification = classifyStatus(response.status);
+      const failure: HunterFailure = {
+        classification,
+        statusCode: response.status,
+        message: `Hunter domain search failed with status ${response.status}`,
+        raw,
+      };
+      return classification === 'retryable'
+        ? { status: 'retryable_error', failure }
+        : { status: 'terminal_error', failure };
+    }
+
+    const payload = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+    const data = payload.data && typeof payload.data === 'object' ? (payload.data as Record<string, unknown>) : {};
+    const emails = Array.isArray(data.emails) ? data.emails : [];
+
+    const contacts: HunterDomainContact[] = emails
+      .map((entry: unknown) => {
+        if (!entry || typeof entry !== 'object') return null;
+        const e = entry as Record<string, unknown>;
+        const email = normalizeString(e.value);
+        if (!email) return null;
+
+        const emailType = e.type === 'personal' ? 'personal' as const
+          : e.type === 'generic' ? 'generic' as const
+          : null;
+
+        const verification = e.verification && typeof e.verification === 'object'
+          ? normalizeString((e.verification as Record<string, unknown>).status)
+          : normalizeString(e.verification);
+
+        return {
+          email,
+          firstName: normalizeString(e.first_name),
+          lastName: normalizeString(e.last_name),
+          position: normalizeString(e.position),
+          type: emailType,
+          confidence: typeof e.confidence === 'number' ? e.confidence : null,
+          verification: verification ?? null,
+        };
+      })
+      .filter((c): c is HunterDomainContact => c !== null);
+
+    // Rank: personal before generic, executive positions first
+    contacts.sort((a, b) => {
+      // Personal emails first
+      const typeA = a.type === 'personal' ? 0 : a.type === 'generic' ? 2 : 1;
+      const typeB = b.type === 'personal' ? 0 : b.type === 'generic' ? 2 : 1;
+      if (typeA !== typeB) return typeA - typeB;
+
+      // Executive positions first
+      return hunterPositionRank(a.position) - hunterPositionRank(b.position);
+    });
+
+    return {
+      status: 'success',
+      contacts,
     };
   }
 
