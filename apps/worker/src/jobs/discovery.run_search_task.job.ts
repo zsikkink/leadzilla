@@ -86,6 +86,25 @@ export function shouldFinalizeAfterEmptyPoll(state: Pick<RunState, 'activeSlots'
   return state.activeSlots <= 1;
 }
 
+/**
+ * Returns true if the discovery run status is terminal (completed, failed, or cancelled).
+ * Used to short-circuit the search task loop when the run has been finalized externally.
+ */
+export function shouldStopForTerminalRunStatus(status: string | null | undefined): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+/**
+ * Returns true when this search task slot has no linked discovery run and the
+ * poll returned no tasks — an orphan loop that should be terminated.
+ */
+export function shouldStopOrphanLoop(
+  payload: Pick<DiscoveryRunSearchTaskJobPayload, 'discoveryRunId'>,
+  pollResult: 'EMPTY' | 'HAS_TASKS',
+): boolean {
+  return !payload.discoveryRunId && pollResult === 'EMPTY';
+}
+
 function getRunKey(job: Job<DiscoveryRunSearchTaskJobPayload>): string {
   if (job.data.jobRunId) {
     return `jobRun:${job.data.jobRunId}`;

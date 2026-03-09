@@ -97,7 +97,10 @@ async function computeAdaptiveSearchTaskBudget(
     if (storedEfficiency !== null) searchEfficiency = storedEfficiency;
   }
 
-  const targetBusinesses = Math.ceil(desiredLeads / conversionRate) * 1.5;
+  // 5x buffer: auto-cancel (checkLeadTargetReached) stops early when enough
+  // leads exist, so over-provisioning tasks is safe and prevents runs from
+  // exhausting tasks before reaching the lead target.
+  const targetBusinesses = Math.ceil(desiredLeads / conversionRate) * 5;
   const maxTasks = Math.ceil(targetBusinesses / searchEfficiency);
   const targetUniqueBusinesses = Math.ceil(targetBusinesses);
 

@@ -88,8 +88,8 @@ export interface AutoApproveConfig {
 
 const AUTO_APPROVE_DEFAULTS: AutoApproveConfig = {
   enabled: false,
-  scoreMin: 0,
-  scoreMax: 1,
+  scoreMin: 100,
+  scoreMax: 100,
 };
 
 const AUTO_APPROVE_KEYS = [

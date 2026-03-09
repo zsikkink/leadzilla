@@ -33,14 +33,14 @@ const TASK_TYPE_SET = new Set<SearchTaskType>([
  * Key = desired lead count, Value = max search tasks allowed.
  */
 export const LEAD_TIER_TASK_CAPS: Record<number, number> = {
-  5: 15,
-  10: 25,
-  25: 50,
-  50: 80,
-  100: 150,
-  250: 350,
-  500: 600,
-  1000: 1000,
+  5: 75,
+  10: 125,
+  25: 250,
+  50: 400,
+  100: 750,
+  250: 1000,
+  500: 1250,
+  1000: 1500,
 };
 
 /** Fallback: 2x desired leads, capped at 1500. */
@@ -56,8 +56,8 @@ export function getTaskCapForLeadTarget(desiredLeads: number): number {
     if (tier >= desiredLeads) return LEAD_TIER_TASK_CAPS[tier]!;
   }
 
-  // Above all tiers — linear cap
-  return Math.min(desiredLeads * 2, 1500);
+  // Above all tiers — 1.5x cap (auto-cancel stops processing before exhaustion)
+  return Math.min(Math.ceil(desiredLeads * 1.5), 2000);
 }
 
 function parseCsv(source: string | undefined): string[] {

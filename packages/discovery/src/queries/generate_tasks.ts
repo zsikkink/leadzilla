@@ -199,7 +199,10 @@ export interface GenerateTasksV2Input {
 /**
  * Resolve the list of cities for a single country.
  *
- * - If explicit `cities` are provided and do NOT include "All", use them.
+ * - If explicit `cities` are provided and do NOT include "All", filter them
+ *   to only cities that belong to this country (case-insensitive match against
+ *   defaultCitiesByCountry). This prevents cross-country pollution, e.g.
+ *   selecting ["Dubai", "Cairo"] won't create "Cairo in UAE" tasks.
  * - If `cities` includes the literal string "All" (case-insensitive), expand
  *   to all default cities for every country.
  * - If `cities` is omitted, look up `defaultCitiesByCountry` and fall back to
@@ -214,6 +217,23 @@ function resolveCitiesForCountry(
     if (hasAll) {
       return defaultCitiesByCountry[countryCode] ?? [countryCode];
     }
+
+    // Filter explicit cities to only those belonging to this country.
+    // Build a lowercase set of this country's known cities for O(1) lookup.
+    const countryCities = defaultCitiesByCountry[countryCode];
+    if (countryCities && countryCities.length > 0) {
+      const knownCitiesLower = new Set(countryCities.map((c) => c.toLowerCase()));
+      const filtered = explicitCities.filter((c) => knownCitiesLower.has(c.toLowerCase()));
+      if (filtered.length > 0) {
+        return filtered;
+      }
+      // None of the explicit cities belong to this country — skip it entirely
+      // by returning an empty array (the caller's loop will produce no tasks).
+      return [];
+    }
+
+    // No known cities for this country — pass explicit cities through as-is
+    // (custom/unknown country, user knows best).
     return explicitCities;
   }
 

@@ -107,6 +107,7 @@ export function buildDiscoveryService(
             runId,
             icpProfileId: icpId,
             countries: input.countries,
+            cities: input.cities,
             includeWebsiteAnalysis: input.includeWebsiteAnalysis,
             includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
             limit: icpLimit,
