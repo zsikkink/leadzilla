@@ -113,6 +113,16 @@ interface CostEventData {
   createdAt: string;
 }
 
+const KNOWN_COST_PROVIDERS = [
+  'GOOGLE_PLACES',
+  'SERPAPI',
+  'GOOGLE_CUSTOM_SEARCH',
+  'APIFY_WEBSITE',
+  'APIFY_INSTAGRAM',
+  'HUNTER',
+  'APOLLO',
+] as const;
+
 interface OutcomeData {
   businessesFound: number;
   businessesDisqualified: number;
@@ -299,6 +309,9 @@ function formatDuration(startIso: string | null, endIso: string | null): string 
 // ── Aggregate cost events by provider ────────────────────────────────────
 function aggregateCosts(events: CostEventData[]) {
   const map = new Map<string, { calls: number; costCents: number }>();
+  for (const provider of KNOWN_COST_PROVIDERS) {
+    map.set(provider, { calls: 0, costCents: 0 });
+  }
   for (const e of events) {
     const existing = map.get(e.provider) ?? { calls: 0, costCents: 0 };
     existing.calls += 1;
@@ -808,8 +821,7 @@ export default function DiscoveryRunDetailPage() {
       )}
 
       {/* Cost breakdown */}
-      {aggregatedCosts.length > 0 && (
-        <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
+      <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
           <div className="mb-4 flex items-center gap-2">
             <DollarSign className="h-4 w-4 text-yellow-400" />
             <h2 className="text-base font-bold tracking-tight">
@@ -861,7 +873,6 @@ export default function DiscoveryRunDetailPage() {
             </table>
           </div>
         </div>
-      )}
 
       {/* Error message for the run itself */}
       {run.data.errorMessage && (

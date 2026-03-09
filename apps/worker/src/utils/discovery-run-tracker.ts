@@ -1,4 +1,5 @@
 import { type Prisma, prisma, toInputJson } from '@lead-flood/db';
+import type { SendOptions } from 'pg-boss';
 
 import { getQualificationThreshold } from '../scoring/shared.js';
 
@@ -45,10 +46,271 @@ interface SearchTaskCounters {
   yieldRate: number;
 }
 
+interface PgBossPendingJobRow {
+  name: string;
+  state: string;
+  count: number;
+}
+
+interface StaleDiscoveryPipelineJobRow {
+  id: string;
+  name: string;
+  data: Prisma.JsonValue | null;
+}
+
+interface QueueRepairBoss {
+  cancel: (name: string, id: string) => Promise<void>;
+  send: (name: string, data: Record<string, unknown>, options?: SendOptions | undefined) => Promise<string | null>;
+}
+
+const STALE_DISCOVERY_PIPELINE_QUEUES = [
+  'discovery.seed',
+  'discovery.run_search_task',
+  'business.prequalify',
+  'business.convert',
+] as const;
+
+type StaleDiscoveryPipelineQueueName = (typeof STALE_DISCOVERY_PIPELINE_QUEUES)[number];
+
+interface SweepStaleDiscoveryPipelineJobsInput {
+  boss: QueueRepairBoss;
+  logger: TrackerLogger;
+  staleMinutes?: number | undefined;
+  discoveryRunId?: string | undefined;
+  retryOptionsByQueue?: Partial<Record<StaleDiscoveryPipelineQueueName, Pick<SendOptions, 'retryLimit' | 'retryDelay' | 'retryBackoff' | 'deadLetter'> | undefined>> | undefined;
+}
+
 function toNonNegativeCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
     : 0;
+}
+
+async function countPendingPipelineJobs(discoveryRunId: string): Promise<number> {
+  const rows = await prisma.$queryRawUnsafe<PgBossPendingJobRow[]>(
+    `
+      select name, state, count(*)::int as count
+      from pgboss.job
+      where state in ('created', 'retry')
+        and name in ('business.prequalify', 'business.convert')
+        and data ->> 'discoveryRunId' = $1
+      group by name, state
+    `,
+    discoveryRunId,
+  );
+
+  return rows.reduce((sum, row) => sum + toNonNegativeCount(row.count), 0);
+}
+
+function toPayloadObject(value: Prisma.JsonValue | null): Record<string, unknown> | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return null;
+}
+
+function readStringField(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function buildQueueSingletonKey(
+  queueName: StaleDiscoveryPipelineQueueName,
+  payload: Record<string, unknown>,
+): string | null {
+  if (queueName === 'business.prequalify') {
+    const businessId = readStringField(payload, 'businessId');
+    return businessId ? `business.prequalify:${businessId}` : null;
+  }
+  if (queueName === 'business.convert') {
+    const businessId = readStringField(payload, 'businessId');
+    return businessId ? `business.convert:${businessId}` : null;
+  }
+  if (queueName === 'discovery.run_search_task') {
+    const discoveryRunId = readStringField(payload, 'discoveryRunId');
+    const correlationId = readStringField(payload, 'correlationId');
+    const slot = typeof payload.slot === 'number' ? payload.slot : 0;
+    const runId = discoveryRunId ?? correlationId;
+    return runId ? `discovery.run_search_task:${runId}:slot-${slot}` : null;
+  }
+  if (queueName === 'discovery.seed') {
+    const discoveryRunId = readStringField(payload, 'discoveryRunId');
+    const icpProfileId = readStringField(payload, 'icpProfileId');
+    if (!discoveryRunId || !icpProfileId) {
+      return null;
+    }
+    return `discovery.seed:${discoveryRunId}:${icpProfileId}`;
+  }
+  return null;
+}
+
+function isValidPayloadForQueue(
+  queueName: StaleDiscoveryPipelineQueueName,
+  payload: Record<string, unknown>,
+): boolean {
+  const discoveryRunId = readStringField(payload, 'discoveryRunId');
+  if (!discoveryRunId) {
+    return false;
+  }
+  if (queueName === 'business.prequalify' || queueName === 'business.convert') {
+    return Boolean(readStringField(payload, 'businessId') && readStringField(payload, 'icpProfileId'));
+  }
+  if (queueName === 'discovery.seed') {
+    return Boolean(readStringField(payload, 'icpProfileId'));
+  }
+  return true;
+}
+
+async function fetchStaleDiscoveryPipelineJobs(
+  staleMinutes: number,
+  discoveryRunId?: string | undefined,
+): Promise<StaleDiscoveryPipelineJobRow[]> {
+  const queueNamesSql = STALE_DISCOVERY_PIPELINE_QUEUES.map((name) => `'${name}'`).join(', ');
+
+  if (discoveryRunId) {
+    return prisma.$queryRawUnsafe<StaleDiscoveryPipelineJobRow[]>(
+      `
+        select id::text, name, data
+        from pgboss.job
+        where state in ('created', 'retry')
+          and name in (${queueNamesSql})
+          and created_on < now() - ($1 * interval '1 minute')
+          and (
+            data ->> 'discoveryRunId' = $2
+            or data ->> 'runId' = $2
+            or singleton_key like $3
+          )
+        order by created_on asc
+        limit 500
+      `,
+      staleMinutes,
+      discoveryRunId,
+      `%${discoveryRunId}%`,
+    );
+  }
+
+  return prisma.$queryRawUnsafe<StaleDiscoveryPipelineJobRow[]>(
+    `
+      select id::text, name, data
+      from pgboss.job
+      where state in ('created', 'retry')
+        and name in (${queueNamesSql})
+        and created_on < now() - ($1 * interval '1 minute')
+      order by created_on asc
+      limit 500
+    `,
+    staleMinutes,
+  );
+}
+
+export async function sweepStaleDiscoveryPipelineJobs(
+  input: SweepStaleDiscoveryPipelineJobsInput,
+): Promise<{ scanned: number; requeued: number; cancelled: number }> {
+  const staleMinutes = Math.max(10, input.staleMinutes ?? 10);
+  const rows = await fetchStaleDiscoveryPipelineJobs(staleMinutes, input.discoveryRunId);
+
+  let requeued = 0;
+  let cancelled = 0;
+
+  for (const row of rows) {
+    const queueName = row.name as StaleDiscoveryPipelineQueueName;
+    const payload = toPayloadObject(row.data);
+
+    // Always cancel stale queue rows first.
+    await input.boss.cancel(queueName, row.id);
+    cancelled += 1;
+
+    if (!payload || !isValidPayloadForQueue(queueName, payload)) {
+      continue;
+    }
+
+    const discoveryRunId = readStringField(payload, 'discoveryRunId');
+    if (!discoveryRunId) {
+      continue;
+    }
+
+    const run = await prisma.jobExecution.findUnique({
+      where: { id: discoveryRunId },
+      select: { id: true, status: true, type: true },
+    });
+
+    const isRunnableRun =
+      run?.id === discoveryRunId &&
+      run.status === 'running' &&
+      (run.type === 'discovery.run' || run.type === 'discovery.seed');
+
+    if (!isRunnableRun) {
+      continue;
+    }
+
+    if (queueName === 'business.prequalify' || queueName === 'business.convert') {
+      const businessId = readStringField(payload, 'businessId');
+      if (!businessId) {
+        continue;
+      }
+      const business = await prisma.business.findUnique({
+        where: { id: businessId },
+        select: { id: true, preQualified: true },
+      });
+      if (!business || business.preQualified === false) {
+        continue;
+      }
+    }
+
+    const singletonKey = buildQueueSingletonKey(queueName, payload);
+    if (!singletonKey) {
+      continue;
+    }
+
+    const sendResult = await input.boss.send(
+      queueName,
+      payload,
+      {
+        singletonKey,
+        ...(input.retryOptionsByQueue?.[queueName] ?? {}),
+      },
+    );
+    if (sendResult !== null) {
+      requeued += 1;
+    }
+  }
+
+  if (rows.length > 0) {
+    input.logger.info(
+      {
+        discoveryRunId: input.discoveryRunId ?? null,
+        staleMinutes,
+        scanned: rows.length,
+        requeued,
+        cancelled,
+      },
+      'Swept stale discovery pipeline created/retry jobs',
+    );
+  }
+
+  return {
+    scanned: rows.length,
+    requeued,
+    cancelled,
+  };
+}
+
+export async function sweepStaleBusinessConvertJobs(
+  input: {
+    boss: QueueRepairBoss;
+    logger: TrackerLogger;
+    staleMinutes?: number | undefined;
+    retryOptions?: Pick<SendOptions, 'retryLimit' | 'retryDelay' | 'retryBackoff' | 'deadLetter'> | undefined;
+  },
+): Promise<{ scanned: number; requeued: number; cancelled: number }> {
+  return sweepStaleDiscoveryPipelineJobs({
+    boss: input.boss,
+    logger: input.logger,
+    staleMinutes: input.staleMinutes,
+    retryOptionsByQueue: {
+      'business.convert': input.retryOptions,
+    },
+  });
 }
 
 /**
@@ -96,7 +358,7 @@ export async function markSearchTasksComplete(
  * message.generate completion, etc.).
  *
  * Safe to call with non-discovery-run IDs — silently returns if the ID
- * doesn't match a running discovery.run JobExecution.
+ * doesn't match a running discovery JobExecution.
  *
  * The function is idempotent: multiple concurrent calls will not produce
  * duplicate finalizations because the first one transitions the status
@@ -106,12 +368,14 @@ export async function tryFinalizeDiscoveryRun(
   possibleRunId: string,
   logger: TrackerLogger,
 ): Promise<void> {
-  // 1. Load the JobExecution — bail if not a running discovery.run
+  // 1. Load the JobExecution — bail if not a running discovery run
   const execution = await prisma.jobExecution.findUnique({
     where: { id: possibleRunId },
   });
 
-  if (!execution || execution.type !== 'discovery.run' || execution.status !== 'running') {
+  const isDiscoveryRunType =
+    execution?.type === 'discovery.run' || execution?.type === 'discovery.seed';
+  if (!execution || !isDiscoveryRunType || execution.status !== 'running') {
     return;
   }
 
@@ -131,34 +395,17 @@ export async function tryFinalizeDiscoveryRun(
   const isTimedOut = searchCompletedAt !== null &&
     Date.now() - searchCompletedAt.getTime() > SAFETY_TIMEOUT_MS;
 
-  // 2a. Get all businesses discovered by this run (for funnel metrics)
-  const discoveredEvidence = await prisma.businessEvidence.findMany({
-    where: {
-      searchTask: { discoveryRunId: possibleRunId },
-    },
-    select: { businessId: true },
-    distinct: ['businessId'],
+  const businesses = await prisma.business.findMany({
+    where: { discoveryRunId: possibleRunId },
+    select: { id: true, preQualified: true, disqualificationReason: true },
   });
-  const discoveredBusinessIds = discoveredEvidence.map((e) => e.businessId);
+  const pipelineBusinessIds = businesses.map((business) => business.id);
+  const totalBusinesses = Math.max(
+    pipelineBusinessIds.length,
+    toNonNegativeCount(result.totalFound),
+  );
+  const pendingQueueItems = await countPendingPipelineJobs(possibleRunId);
 
-  // 2b. Get businesses actively processed in this run pipeline (new businesses)
-  const costEvents = await prisma.discoveryCostEvent.findMany({
-    where: {
-      discoveryRunId: possibleRunId,
-      apiCallType: 'prequalify_check',
-    },
-    select: { businessId: true },
-    distinct: ['businessId'],
-  });
-
-  const pipelineBusinessIds = costEvents
-    .map((e) => e.businessId)
-    .filter((id): id is string => id !== null);
-  const allBusinessIds = [...new Set([...discoveredBusinessIds, ...pipelineBusinessIds])];
-  const totalBusinesses = allBusinessIds.length;
-
-  // Zero DiscoveryCostEvents — but check whether prequalify has even run yet.
-  // If newBusinesses > 0 but no cost events exist, prequalify jobs haven't fired.
   if (pipelineBusinessIds.length === 0) {
     const newBusinesses = typeof result.newBusinesses === 'number' ? result.newBusinesses : 0;
     if (newBusinesses === 0 && totalBusinesses > 0) {
@@ -183,15 +430,9 @@ export async function tryFinalizeDiscoveryRun(
       );
       return;
     }
-    // Prequalify events don't exist yet — return without finalizing
+    // Businesses haven't been materialized yet — return without finalizing.
     return;
   }
-
-  // 3. Load businesses to check qualification status
-  const businesses = await prisma.business.findMany({
-    where: { id: { in: pipelineBusinessIds } },
-    select: { id: true, preQualified: true, disqualificationReason: true },
-  });
 
   const disqualifiedIds = new Set(
     businesses.filter((b) => b.preQualified === false).map((b) => b.id),
@@ -213,6 +454,7 @@ export async function tryFinalizeDiscoveryRun(
   let lowScoredLeads = 0;
   let failedLeads = 0;
   let inFlightItems = 0;
+  let recoveryTerminalCount = 0;
 
   if (qualifiedOrPendingIds.length > 0) {
     // Get BusinessConversions to find associated leads
@@ -224,12 +466,27 @@ export async function tryFinalizeDiscoveryRun(
       (c) => extractDiscoveryRunIdFromMetadata(c.metadata as Prisma.JsonValue | null) === possibleRunId,
     );
 
+    // Businesses with explicit recovery records for this run are terminal,
+    // even if no lead conversion exists.
+    const recoveryRows = await prisma.contactRecoveryItem.findMany({
+      where: {
+        discoveryRunId: possibleRunId,
+        businessId: { in: qualifiedOrPendingIds },
+      },
+      select: { businessId: true, reason: true },
+    });
+    const businessesWithRecovery = new Set(recoveryRows.map((row) => row.businessId));
+    recoveryTerminalCount = businessesWithRecovery.size;
+    for (const row of recoveryRows) {
+      disqualReasons[row.reason] = (disqualReasons[row.reason] ?? 0) + 1;
+    }
+
     const businessesWithConversion = new Set(runConversions.map((c) => c.businessId));
     const leadIds = [...new Set(runConversions.map((c) => c.leadId))];
 
     // Businesses still waiting for conversion
     const noConversionCount = qualifiedOrPendingIds.filter(
-      (id) => !businessesWithConversion.has(id),
+      (id) => !businessesWithConversion.has(id) && !businessesWithRecovery.has(id),
     ).length;
     inFlightItems += noConversionCount;
 
@@ -272,20 +529,25 @@ export async function tryFinalizeDiscoveryRun(
     }
   }
 
+  if (!isTimedOut && pendingQueueItems > 0) {
+    inFlightItems += pendingQueueItems;
+  }
+
   // 5. Compute terminal count for progress tracking
   const completedLeads = messageDraftedLeads + lowScoredLeads;
-  const terminalCount = completedLeads + failedLeads + disqualifiedIds.size;
+  const terminalCount = completedLeads + failedLeads + disqualifiedIds.size + recoveryTerminalCount;
 
   // 6. Finalize if all items are terminal OR safety timeout
   if (inFlightItems === 0 || isTimedOut) {
-    const status = completedLeads > 0 ? 'completed' : 'failed';
+    const status = isTimedOut && inFlightItems > 0 ? 'failed' : 'completed';
 
     const timeoutNote = isTimedOut && inFlightItems > 0
       ? `Safety timeout: ${inFlightItems} items still in flight after ${SAFETY_TIMEOUT_MS / 60000}min`
       : null;
 
-    const disqualNote = completedLeads === 0 && disqualifiedIds.size > 0
-      ? `0 leads produced — all ${disqualifiedIds.size} of ${pipelineBusinessIds.length} businesses were disqualified`
+    const disqualOrRecoveryCount = disqualifiedIds.size + recoveryTerminalCount;
+    const disqualNote = completedLeads === 0 && disqualOrRecoveryCount > 0
+      ? `0 leads produced — all ${disqualOrRecoveryCount} of ${pipelineBusinessIds.length} businesses reached terminal disqualification/recovery outcomes`
       : null;
 
     const failedLeadsNote = completedLeads === 0 && failedLeads > 0 && disqualifiedIds.size === 0
@@ -299,7 +561,7 @@ export async function tryFinalizeDiscoveryRun(
       completedLeads,
       messageDraftedLeads,
       failedLeads,
-      disqualifiedIds.size,
+      disqualifiedIds.size + recoveryTerminalCount,
       logger,
       disqualNote ?? failedLeadsNote ?? timeoutNote,
       totalBusinesses,
@@ -331,11 +593,11 @@ export async function tryFinalizeDiscoveryRun(
           totalFound: totalBusinesses,
           alreadyKnown: alreadyKnownBiz,
           newFound: newBiz,
-          disqualified: disqualifiedIds.size,
+          disqualified: disqualifiedIds.size + recoveryTerminalCount,
           converted: convertedLeads,
           outcome: {
             businessesFound: totalBusinesses,
-            businessesDisqualified: disqualifiedIds.size,
+            businessesDisqualified: disqualifiedIds.size + recoveryTerminalCount,
             leadsCreated: convertedLeads,
             messagesDrafted: messageDraftedLeads,
             disqualificationReasons: disqualReasons,
@@ -353,7 +615,7 @@ export async function tryFinalizeDiscoveryRun(
 export async function checkStaleDiscoveryRuns(logger: TrackerLogger): Promise<void> {
   const staleRuns = await prisma.jobExecution.findMany({
     where: {
-      type: 'discovery.run',
+      type: { in: ['discovery.run', 'discovery.seed'] },
       status: 'running',
     },
     select: { id: true, startedAt: true, result: true },

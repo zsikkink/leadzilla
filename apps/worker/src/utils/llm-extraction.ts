@@ -17,6 +17,23 @@ export interface ValidatedContact {
   reason: string | null;
 }
 
+export interface CandidateForAdjudication {
+  id: string;
+  name: string;
+  title: string | null;
+  source: string;
+  confidence: number;
+  matchedSignals: string[];
+  supportingUrls: string[];
+}
+
+export interface CandidateAdjudicationResult {
+  verdict: 'select_candidate' | 'inconclusive' | 'reject_all';
+  selectedCandidateId: string | null;
+  confidenceBucket: 'high' | 'medium' | 'low' | null;
+  rationale: string;
+}
+
 /** Config for direct OpenAI API calls when adapter doesn't expose chatCompletion. */
 export interface LlmExtractionConfig {
   openAiApiKey: string | undefined;
@@ -188,5 +205,98 @@ export async function validateExtractedContacts(
       isRealPerson: true,
       reason: null,
     }));
+  }
+}
+
+export async function adjudicateDecisionMakerCandidates(
+  input: {
+    businessName: string;
+    locality: string | null;
+    category: string | null;
+    candidates: CandidateForAdjudication[];
+  },
+  config: LlmExtractionConfig,
+): Promise<CandidateAdjudicationResult | null> {
+  if (!config.openAiApiKey || input.candidates.length === 0) {
+    return null;
+  }
+
+  const compactCandidates = input.candidates.slice(0, 5);
+  const payload = compactCandidates.map((candidate, index) => ({
+    rank: index + 1,
+    id: candidate.id,
+    name: candidate.name,
+    title: candidate.title,
+    source: candidate.source,
+    confidence: candidate.confidence,
+    matchedSignals: candidate.matchedSignals.slice(0, 8),
+    supportingUrls: candidate.supportingUrls.slice(0, 3),
+  }));
+
+  const result = await callOpenAiChat(config, [
+    {
+      role: 'system',
+      content: [
+        'You adjudicate decision-maker candidates for outbound sales.',
+        'Rules:',
+        '- You MUST only choose among provided candidate ids.',
+        '- Never invent a new person.',
+        '- Prefer strongest external evidence, especially Google/SerpAPI corroboration.',
+        '- If evidence is conflicting or weak, return inconclusive.',
+        '- If all candidates are clearly invalid, return reject_all.',
+        'Return JSON with:',
+        '{ "verdict": "select_candidate|inconclusive|reject_all", "selectedCandidateId": "id-or-null", "confidenceBucket": "high|medium|low|null", "rationale": "short reason" }',
+      ].join('\n'),
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        businessName: input.businessName,
+        locality: input.locality,
+        category: input.category,
+        candidates: payload,
+      }),
+    },
+  ]);
+
+  if (!result) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(result) as Partial<CandidateAdjudicationResult>;
+    const verdict = parsed.verdict;
+    if (verdict !== 'select_candidate' && verdict !== 'inconclusive' && verdict !== 'reject_all') {
+      return null;
+    }
+
+    const selectedCandidateId = typeof parsed.selectedCandidateId === 'string'
+      ? parsed.selectedCandidateId
+      : null;
+
+    if (verdict === 'select_candidate' && !compactCandidates.some((candidate) => candidate.id === selectedCandidateId)) {
+      return {
+        verdict: 'inconclusive',
+        selectedCandidateId: null,
+        confidenceBucket: null,
+        rationale: 'Model returned a candidate id outside the provided shortlist',
+      };
+    }
+
+    return {
+      verdict,
+      selectedCandidateId: verdict === 'select_candidate' ? selectedCandidateId : null,
+      confidenceBucket:
+        parsed.confidenceBucket === 'high'
+        || parsed.confidenceBucket === 'medium'
+        || parsed.confidenceBucket === 'low'
+          ? parsed.confidenceBucket
+          : null,
+      rationale: typeof parsed.rationale === 'string' && parsed.rationale.trim().length > 0
+        ? parsed.rationale.trim().slice(0, 280)
+        : 'No rationale returned by model',
+    };
+  } catch {
+    return null;
   }
 }

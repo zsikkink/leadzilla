@@ -58,6 +58,9 @@ interface BusinessRow {
   instagram_scraped_at: string | null;
   created_at: string;
   updated_at: string;
+  manualReviewStatus?: 'OPEN' | 'REJECTED' | null | undefined;
+  manualReviewReason?: string | null | undefined;
+  manualReviewUpdatedAt?: string | null | undefined;
   // Joined from business_conversions → leads
   leadBlendedScore?: number | null | undefined;
 }
@@ -276,6 +279,11 @@ function BusinessCard({ biz, isSelected, onSelect }: { biz: BusinessRow; isSelec
         {biz.has_whatsapp && <span className="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-400">WA</span>}
         {biz.has_instagram && <span className="rounded-full bg-pink-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-pink-400">IG</span>}
         {biz.website_domain && <span className="rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-blue-400">Web</span>}
+        {biz.manualReviewStatus === 'OPEN' && (
+          <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
+            Manual Review
+          </span>
+        )}
         {techCount > 0 && <span className="rounded-full bg-purple-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-purple-400">{techCount} tech</span>}
         {decisionMakers > 0 && <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-400">{decisionMakers} DM</span>}
         {socialCount > 0 && <span className="rounded-full bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-400">{socialCount} social</span>}
@@ -402,11 +410,21 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
           <p className={cn('mt-0.5 text-sm font-bold', biz.pre_qualified ? 'text-zbooni-green' : biz.pre_qualified === false ? 'text-red-400' : 'text-muted-foreground/60')}>
             {biz.pre_qualified ? 'Qualified' : biz.pre_qualified === false ? 'Disqualified' : 'Pending'}
           </p>
+          {biz.manualReviewStatus === 'OPEN' ? (
+            <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+              Manual Review Queue
+            </p>
+          ) : null}
         </div>
       </div>
 
       {biz.disqualification_reason ? (
         <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-400">{biz.disqualification_reason}</div>
+      ) : null}
+      {biz.manualReviewStatus === 'OPEN' ? (
+        <div className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          Sales manual review required: {biz.manualReviewReason === 'NO_EMAIL' ? 'decision maker found but no sendable email' : 'no confident decision maker with sendable contact'}
+        </div>
       ) : null}
 
       {/* Contact info */}
@@ -446,7 +464,7 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
         <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
           <div className="flex items-center gap-2 text-xs text-amber-400">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            <span>Instagram data may be incomplete. Authentication may need refreshing.</span>
+            <span>Instagram insights are partial right now. Session credentials likely need refresh.</span>
           </div>
         </div>
       ) : null}
@@ -716,6 +734,30 @@ export default function BusinessIntelligencePage() {
       if (fetchError) throw new Error(fetchError.message);
 
       const rows = (data ?? []) as BusinessRow[];
+
+      if (rows.length > 0) {
+        const bizIds = rows.map((row) => row.id);
+        const { data: recoveryRows } = await supabase
+          .from('contact_recovery_items')
+          .select('business_id,status,reason,updated_at')
+          .in('business_id', bizIds)
+          .order('updated_at', { ascending: false });
+
+        if (recoveryRows && recoveryRows.length > 0) {
+          const latestByBusiness = new Map<string, { status: 'OPEN' | 'REJECTED'; reason: string; updated_at: string }>();
+          for (const row of recoveryRows as Array<{ business_id: string; status: 'OPEN' | 'REJECTED'; reason: string; updated_at: string }>) {
+            if (!latestByBusiness.has(row.business_id)) {
+              latestByBusiness.set(row.business_id, row);
+            }
+          }
+          for (const businessRow of rows) {
+            const recovery = latestByBusiness.get(businessRow.id);
+            businessRow.manualReviewStatus = recovery?.status ?? null;
+            businessRow.manualReviewReason = recovery?.reason ?? null;
+            businessRow.manualReviewUpdatedAt = recovery?.updated_at ?? null;
+          }
+        }
+      }
 
       // Fetch lead blended scores via business_conversions → leads
       if (rows.length > 0) {

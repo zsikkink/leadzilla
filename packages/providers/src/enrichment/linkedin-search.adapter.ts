@@ -1,11 +1,17 @@
-// ── Contact Discovery Search Adapter (Google Custom Search) ──────────
-// Uses Google Custom Search JSON API across LinkedIn, company pages, press,
-// and broader public web to verify and discover decision-makers.
+// ── Contact Discovery Search Adapter (SerpAPI Web Search) ────────────
+// Uses a single Google web search query to discover likely decision-makers
+// across LinkedIn, company pages, press, and broader public web.
 
-import type { GoogleCustomSearchAdapter, GoogleCustomSearchResponse, GoogleSearchResult } from './google-custom-search.adapter.js';
+import type { GoogleCustomSearchResponse, GoogleSearchResult } from './google-custom-search.adapter.js';
+
+/** Structural interface — any adapter with isConfigured + search() works here. */
+export interface WebSearchAdapter {
+  readonly isConfigured: boolean;
+  search(query: string, numResults?: number): Promise<GoogleCustomSearchResponse>;
+}
 
 export interface LinkedInSearchConfig {
-  searchAdapter: GoogleCustomSearchAdapter;
+  searchAdapter: WebSearchAdapter;
 }
 
 export type ContactDiscoverySourceType =
@@ -23,34 +29,28 @@ export type ContactDiscoverySourceFamily =
   | 'unknown';
 
 export type ContactDiscoveryQueryFamily =
-  | 'V1_linkedin_exact'
-  | 'V2_company_domain_exact'
-  | 'V3_public_web_exact'
-  | 'V4_exact_without_title'
-  | 'D1_linkedin_roles'
-  | 'D2_company_team_pages'
-  | 'D3_company_about_pages'
-  | 'D4_press_news_mentions'
-  | 'D5_public_web_role_queries'
-  | 'D6_locality_first_queries';
+  | 'DISCOVER_ROLES';
+
+export type ContactDiscoveryRoleKeyword =
+  | 'founder'
+  | 'ceo'
+  | 'owner';
 
 export interface LinkedInProfileResult {
   name: string;
   title: string | null;
   linkedinUrl: string | null;
+  matchedRoleKeyword: ContactDiscoveryRoleKeyword | null;
   sourceType: ContactDiscoverySourceType;
   sourceUrl: string;
   sourceDomain: string | null;
   companyHint: string | null;
   matchSignals: string[];
   relevanceScore: number;
+  repeatCount: number;
 }
 
-export type DecisionMakerSearchStage =
-  | 'VERIFY_V1_PEOPLE_WEB'
-  | 'DISCOVER_D1_PEOPLE_WEB'
-  | 'DISCOVER_D2_COMPANY_PAGES'
-  | 'DISCOVER_D3_PUBLIC_WEB';
+export type DecisionMakerSearchStage = 'DISCOVER';
 
 export interface LinkedInSearchFailure {
   classification: 'retryable' | 'terminal';
@@ -123,6 +123,18 @@ function normalizeWhitespace(value: string): string {
 
 function normalizeName(value: string): string {
   return normalizeWhitespace(value).toLowerCase();
+}
+
+function normalizePersonClusterKey(value: string): string {
+  const lowered = normalizeWhitespace(value)
+    .replace(/\b(dr|mr|mrs|ms|prof)\.?\s+/gi, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .toLowerCase();
+  const parts = lowered.split(/\s+/).filter((part) => part.length > 0);
+  if (parts.length < 2) return lowered;
+  const first = parts[0] ?? '';
+  const last = parts[parts.length - 1] ?? '';
+  return `${first} ${last}`.trim();
 }
 
 function normalizeCompanyKey(value: string): string {
@@ -253,6 +265,45 @@ function extractRoleFromText(text: string): string | null {
   return titleCaseName(matches[0] ?? '');
 }
 
+function detectMatchedRoleKeyword(text: string): ContactDiscoveryRoleKeyword | null {
+  const normalized = text.toLowerCase();
+  if (normalized.includes('founder')) return 'founder';
+  if (normalized.includes('ceo') || normalized.includes('chief executive officer')) return 'ceo';
+  if (normalized.includes('owner')) return 'owner';
+  return null;
+}
+
+function latestMentionedYear(text: string): number | null {
+  const matches = [...text.matchAll(/\b(19|20)\d{2}\b/g)];
+  if (matches.length === 0) return null;
+
+  const currentYear = new Date().getFullYear();
+  let latest: number | null = null;
+  for (const match of matches) {
+    const raw = match[0];
+    if (!raw) continue;
+    const year = Number.parseInt(raw, 10);
+    if (!Number.isFinite(year) || year < 1990 || year > currentYear + 1) continue;
+    if (latest === null || year > latest) latest = year;
+  }
+  return latest;
+}
+
+function sourceTypePriority(sourceType: ContactDiscoverySourceType): number {
+  switch (sourceType) {
+    case 'company_team_page':
+      return 0;
+    case 'company_about_page':
+      return 1;
+    case 'linkedin_profile':
+      return 2;
+    case 'press_page':
+      return 3;
+    case 'public_profile':
+      return 4;
+  }
+}
+
 function extractCandidateFromResult(
   result: GoogleSearchResult,
   input: {
@@ -276,6 +327,7 @@ function extractCandidateFromResult(
   }
 
   const title = parsedLinkedIn?.title ?? extractRoleFromText(combinedText);
+  const matchedRoleKeyword = detectMatchedRoleKeyword(combinedText);
   const normalizedCompanyName = normalizeCompanyKey(input.companyName);
   const normalizedText = normalizeCompanyKey(combinedText);
   const normalizedExpectedName = input.expectedName ? normalizeName(input.expectedName) : null;
@@ -283,6 +335,7 @@ function extractCandidateFromResult(
 
   const matchSignals: string[] = [];
   let relevanceScore = 0.2;
+  const latestYear = latestMentionedYear(combinedText);
 
   switch (sourceType) {
     case 'linkedin_profile':
@@ -330,6 +383,11 @@ function extractCandidateFromResult(
     matchSignals.push('senior_title');
   }
 
+  if (matchedRoleKeyword) {
+    relevanceScore += 0.1;
+    matchSignals.push(`role_keyword:${matchedRoleKeyword}`);
+  }
+
   const companyHint = normalizedText.includes(normalizedCompanyName)
     ? titleCaseName(input.companyName)
     : (input.companyDomain && sourceDomain?.includes(input.companyDomain.toLowerCase()) ? titleCaseName(input.companyName) : null);
@@ -338,20 +396,56 @@ function extractCandidateFromResult(
     return null;
   }
 
-  if (!title && sourceType === 'public_profile' && !matchSignals.includes('name_match')) {
+  if (
+    !title
+    && sourceType === 'public_profile'
+    && !matchSignals.includes('name_match')
+    && !matchSignals.includes('company_match')
+  ) {
     return null;
+  }
+
+  if (
+    sourceType === 'company_team_page'
+    && (matchSignals.includes('company_match') || matchSignals.includes('company_domain_match'))
+  ) {
+    relevanceScore += 0.16;
+    matchSignals.push('first_party_leadership');
+  }
+
+  if (
+    sourceType === 'company_about_page'
+    && (matchSignals.includes('company_match') || matchSignals.includes('company_domain_match'))
+  ) {
+    relevanceScore += 0.08;
+    matchSignals.push('first_party_about');
+  }
+
+  if (latestYear !== null) {
+    const currentYear = new Date().getFullYear();
+    const age = Math.max(0, currentYear - latestYear);
+    if (age <= 1) {
+      relevanceScore += 0.04;
+      matchSignals.push('fresh_content');
+    } else if (age >= 5) {
+      const penalty = Math.min(0.14, 0.02 * (age - 4));
+      relevanceScore -= penalty;
+      matchSignals.push('stale_content');
+    }
   }
 
   return {
     name,
     title,
     linkedinUrl: sourceType === 'linkedin_profile' ? result.link : null,
+    matchedRoleKeyword,
     sourceType,
     sourceUrl: result.link,
     sourceDomain,
     companyHint,
     matchSignals,
     relevanceScore: Math.min(1, Number(relevanceScore.toFixed(3))),
+    repeatCount: 1,
   };
 }
 
@@ -359,18 +453,57 @@ function mergeCandidates(
   existing: LinkedInProfileResult[],
   incoming: LinkedInProfileResult[],
 ): LinkedInProfileResult[] {
-  const bestByName = new Map<string, LinkedInProfileResult>();
+  const clustered = new Map<string, LinkedInProfileResult>();
 
   for (const candidate of [...existing, ...incoming]) {
-    const key = normalizeName(candidate.name);
-    const current = bestByName.get(key);
-    if (!current || candidate.relevanceScore > current.relevanceScore) {
-      bestByName.set(key, candidate);
+    const key = normalizePersonClusterKey(candidate.name);
+    const current = clustered.get(key);
+    if (!current) {
+      clustered.set(key, { ...candidate, repeatCount: Math.max(1, candidate.repeatCount) });
+      continue;
     }
+
+    const currentPriority = sourceTypePriority(current.sourceType);
+    const nextPriority = sourceTypePriority(candidate.sourceType);
+    const preferNext = candidate.relevanceScore > current.relevanceScore
+      || (candidate.relevanceScore === current.relevanceScore && nextPriority < currentPriority)
+      || (
+        candidate.relevanceScore === current.relevanceScore
+        && nextPriority === currentPriority
+        && candidate.name.length > current.name.length
+      );
+
+    const mergedSignals = [...new Set([...current.matchSignals, ...candidate.matchSignals])];
+    const merged: LinkedInProfileResult = {
+      ...(preferNext ? candidate : current),
+      repeatCount: current.repeatCount + 1,
+      matchSignals: mergedSignals,
+      relevanceScore: Math.max(current.relevanceScore, candidate.relevanceScore),
+      linkedinUrl: (preferNext ? candidate.linkedinUrl : current.linkedinUrl) ?? current.linkedinUrl ?? candidate.linkedinUrl,
+      sourceUrl: preferNext ? candidate.sourceUrl : current.sourceUrl,
+    };
+
+    clustered.set(key, merged);
   }
 
-  return [...bestByName.values()]
-    .sort((left, right) => right.relevanceScore - left.relevanceScore)
+  return [...clustered.values()]
+    .map((candidate) => {
+      const repeatedBoost = candidate.repeatCount > 1
+        ? Math.min(0.2, (candidate.repeatCount - 1) * 0.06)
+        : 0;
+      return {
+        ...candidate,
+        relevanceScore: Math.min(1, Number((candidate.relevanceScore + repeatedBoost).toFixed(3))),
+      };
+    })
+    .sort((left, right) => {
+      const scoreDiff = right.relevanceScore - left.relevanceScore;
+      if (Math.abs(scoreDiff) > 0.0001) return scoreDiff;
+      if (right.repeatCount !== left.repeatCount) return right.repeatCount - left.repeatCount;
+      const sourceDiff = sourceTypePriority(left.sourceType) - sourceTypePriority(right.sourceType);
+      if (sourceDiff !== 0) return sourceDiff;
+      return normalizeName(left.name).localeCompare(normalizeName(right.name));
+    })
     .slice(0, 10);
 }
 
@@ -400,123 +533,28 @@ interface QueryStep {
   query: string;
 }
 
-function buildVerifyQueries(input: {
-  name: string;
+function buildDiscoverQuery(input: {
   companyName: string;
-  companyDomain?: string | null | undefined;
-  cityOrCountry?: string | null | undefined;
-  titleOrFunction?: string | null | undefined;
-}): QueryStep[] {
-  const locality = input.cityOrCountry?.trim() ? `"${input.cityOrCountry.trim()}"` : '';
-  const exactRoleClause = input.titleOrFunction?.trim()
-    ? `"${input.titleOrFunction.trim()}"`
-    : '(founder OR owner OR ceo OR director OR head)';
-  const queries: QueryStep[] = [
-    {
-      stage: 'VERIFY_V1_PEOPLE_WEB',
-      sourceFamily: 'linkedin',
-      queryFamily: 'V1_linkedin_exact',
-      query: `"${input.name}" "${input.companyName}" ${locality} site:linkedin.com/in ${exactRoleClause}`.trim(),
-    },
-  ];
-
-  if (input.companyDomain) {
-    queries.push({
-      stage: 'VERIFY_V1_PEOPLE_WEB',
-      sourceFamily: 'company_page',
-      queryFamily: 'V2_company_domain_exact',
-      query: `"${input.name}" "${input.companyName}" site:${input.companyDomain} (${exactRoleClause} OR team OR leadership OR about)`.trim(),
-    });
-  }
-
-  queries.push({
-    stage: 'VERIFY_V1_PEOPLE_WEB',
-    sourceFamily: 'public_web',
-    queryFamily: 'V3_public_web_exact',
-    query: `"${input.name}" "${input.companyName}" ${locality} (${exactRoleClause} OR bio OR profile OR interview)`.trim(),
-  });
-
-  queries.push({
-    stage: 'VERIFY_V1_PEOPLE_WEB',
-    sourceFamily: 'public_web',
-    queryFamily: 'V4_exact_without_title',
-    query: `"${input.name}" "${input.companyName}" ${locality} (profile OR biography OR leadership OR team)`.trim(),
-  });
-
-  return queries;
-}
-
-function buildDiscoverQueries(input: {
-  companyName: string;
-  companyDomain?: string | null | undefined;
   cityOrCountry?: string | null | undefined;
 }): QueryStep[] {
-  const locality = input.cityOrCountry?.trim() ? `"${input.cityOrCountry.trim()}"` : '';
-  const companyQuoted = `"${input.companyName}"`;
-  const queries: QueryStep[] = [
+  const locality = input.cityOrCountry?.trim() ?? '';
+
+  return [
     {
-      stage: 'DISCOVER_D1_PEOPLE_WEB',
-      sourceFamily: 'linkedin',
-      queryFamily: 'D1_linkedin_roles',
-      query: `${companyQuoted} ${locality} site:linkedin.com/in (founder OR owner OR ceo OR director OR head OR leadership OR managing director OR medical director OR clinic manager OR salon owner)`.trim(),
+      stage: 'DISCOVER',
+      sourceFamily: 'public_web',
+      queryFamily: 'DISCOVER_ROLES',
+      query: `"${input.companyName}" ${locality} founder OR CEO OR owner`.replace(/\s+/g, ' ').trim(),
     },
   ];
-
-  if (input.companyDomain) {
-    queries.push({
-      stage: 'DISCOVER_D2_COMPANY_PAGES',
-      sourceFamily: 'company_page',
-      queryFamily: 'D2_company_team_pages',
-      query: `site:${input.companyDomain} (${companyQuoted} OR "/team" OR "/our-team" OR "/leadership" OR "/staff" OR founder OR owner OR ceo OR director OR management)`.trim(),
-    });
-    queries.push({
-      stage: 'DISCOVER_D2_COMPANY_PAGES',
-      sourceFamily: 'company_page',
-      queryFamily: 'D3_company_about_pages',
-      query: `site:${input.companyDomain} (${companyQuoted} OR "/about" OR "/about-us" OR founder OR owner OR ceo OR director OR medical director)`.trim(),
-    });
-  }
-
-  queries.push({
-    stage: 'DISCOVER_D3_PUBLIC_WEB',
-    sourceFamily: 'public_web',
-    queryFamily: 'D4_press_news_mentions',
-    query: `${companyQuoted} ${locality} (press OR news OR interview OR announced OR leadership OR founder OR owner OR ceo OR director)`.trim(),
-  });
-
-  queries.push({
-    stage: 'DISCOVER_D3_PUBLIC_WEB',
-    sourceFamily: 'public_web',
-    queryFamily: 'D5_public_web_role_queries',
-    query: `${companyQuoted} ${locality} (founder OR owner OR ceo OR director OR managing director OR medical director OR clinic manager OR salon owner)`.trim(),
-  });
-
-  queries.push({
-    stage: 'DISCOVER_D3_PUBLIC_WEB',
-    sourceFamily: 'public_web',
-    queryFamily: 'D6_locality_first_queries',
-    query: `${locality} ${companyQuoted} (founder OR owner OR ceo OR director OR management OR leadership)`.trim(),
-  });
-
-  return queries;
 }
 
 function determineDiagnosticVerdict(
   promoted: LinkedInProfileResult[],
   context: { expectedName?: string | null | undefined },
 ): 'verified' | 'not_verified' | 'inconclusive' | 'skipped' {
-  if (promoted.length === 0) {
-    return context.expectedName ? 'not_verified' : 'inconclusive';
-  }
-
-  if (!context.expectedName) {
-    return 'verified';
-  }
-
-  const expected = normalizeName(context.expectedName);
-  return promoted.some((candidate) => normalizeName(candidate.name) === expected)
-    ? 'verified'
-    : 'not_verified';
+  void context;
+  return promoted.length > 0 ? 'verified' : 'not_verified';
 }
 
 function buildTopQueryFamily(diagnostics: ContactDiscoveryDiagnostic[]): ContactDiscoveryQueryFamily | null {
@@ -543,7 +581,7 @@ function buildTopQueryFamily(diagnostics: ContactDiscoveryDiagnostic[]): Contact
 }
 
 export class LinkedInSearchAdapter {
-  private readonly search: GoogleCustomSearchAdapter;
+  private readonly search: WebSearchAdapter;
 
   constructor(config: LinkedInSearchConfig) {
     this.search = config.searchAdapter;
@@ -553,27 +591,7 @@ export class LinkedInSearchAdapter {
     return this.search.isConfigured;
   }
 
-  async searchPersonVerification(input: {
-    name: string;
-    companyName: string;
-    companyDomain?: string | null | undefined;
-    cityOrCountry?: string | null | undefined;
-    titleOrFunction?: string | null | undefined;
-    maxResults?: number | undefined;
-  }): Promise<LinkedInSearchResponse> {
-    return this.runQueryPipeline(
-      buildVerifyQueries(input),
-      {
-        companyName: input.companyName,
-        companyDomain: input.companyDomain,
-        expectedName: input.name,
-        locality: input.cityOrCountry,
-      },
-      input.maxResults ?? 5,
-    );
-  }
-
-  async searchCompanyPeople(
+  async discoverDecisionMaker(
     input: {
       companyName: string;
       companyDomain?: string | null | undefined;
@@ -582,7 +600,7 @@ export class LinkedInSearchAdapter {
     },
   ): Promise<LinkedInSearchResponse> {
     return this.runQueryPipeline(
-      buildDiscoverQueries(input),
+      buildDiscoverQuery(input),
       {
         companyName: input.companyName,
         companyDomain: input.companyDomain,
@@ -620,7 +638,7 @@ export class LinkedInSearchAdapter {
       const promoted = result.data
         .map((item) => extractCandidateFromResult(item, context))
         .filter((candidate): candidate is LinkedInProfileResult => candidate !== null)
-        .filter((candidate) => candidate.relevanceScore >= 0.55);
+        .filter((candidate) => candidate.relevanceScore >= 0.48);
 
       diagnostics.push({
         stage: step.stage,

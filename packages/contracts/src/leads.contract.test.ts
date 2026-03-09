@@ -86,15 +86,15 @@ describe('GetLeadResponseSchema', () => {
         supportingUrls: ['https://linkedin.com/in/ada-lovelace'],
         diagnostics: [
           {
-            stage: 'VERIFY_V1_PEOPLE_WEB',
+            stage: 'DISCOVER',
             sourceFamily: 'linkedin',
-            queryFamily: 'V1_linkedin_exact',
+            queryFamily: 'DISCOVER_ROLES',
             rawResultCount: 3,
             promotedCount: 1,
             verdict: 'verified',
           },
         ],
-        topQueryFamily: 'V1_linkedin_exact',
+        topQueryFamily: 'DISCOVER_ROLES',
         topSourceFamily: 'linkedin',
         finalOutcome: 'lead_created',
         topCandidates: [

@@ -6,17 +6,12 @@ export const LeadScoreBandSchema = z.enum(['LOW', 'MEDIUM', 'HIGH']);
 export const LeadContactDiscoverySourceFamilySchema = z.enum(['linkedin', 'company_page', 'public_web', 'mixed', 'unknown']);
 export const LeadContactDiscoveryOutcomeSchema = z.enum(['lead_created', 'recovery_opened', 'no_contact_terminal']);
 export const LeadContactVerificationVerdictSchema = z.enum(['verified', 'not_verified', 'inconclusive', 'skipped']);
-export const LeadContactDiscoveryQueryFamilySchema = z.enum([
-  'V1_linkedin_exact',
-  'V2_company_domain_exact',
-  'V3_public_web_exact',
-  'V4_exact_without_title',
-  'D1_linkedin_roles',
-  'D2_company_team_pages',
-  'D3_company_about_pages',
-  'D4_press_news_mentions',
-  'D5_public_web_role_queries',
-  'D6_locality_first_queries',
+export const LeadContactDiscoveryQueryFamilySchema = z.enum(['DISCOVER_ROLES']);
+export const LeadContactTerminalReasonSchema = z.enum([
+  'no_named_candidate_found',
+  'named_candidate_no_email',
+  'email_inferred_failed_verification',
+  'ambiguous_winner',
 ]);
 
 export const LeadContactDiscoveryDiagnosticSchema = z
@@ -62,6 +57,20 @@ export const LeadContactDiscoverySchema = z
     diagnostics: z.array(LeadContactDiscoveryDiagnosticSchema),
     topQueryFamily: LeadContactDiscoveryQueryFamilySchema.nullable(),
     topCandidates: z.array(LeadContactDiscoveryCandidateSchema),
+    identityConfidence: z.number().min(0).max(1).nullable().optional(),
+    contactConfidence: z.number().min(0).max(1).nullable().optional(),
+    terminalReason: LeadContactTerminalReasonSchema.nullable().optional(),
+    resolutionState: z.enum(['lead_created', 'inconclusive_but_promising', 'no_contact_terminal']).nullable().optional(),
+    winnerSelectionMethod: z.enum(['deterministic', 'llm']).nullable().optional(),
+    adjudication: z
+      .object({
+        verdict: z.enum(['select_candidate', 'inconclusive', 'reject_all']),
+        selectedCandidateId: z.string().nullable(),
+        confidenceBucket: z.enum(['high', 'medium', 'low']).nullable(),
+        rationale: z.string(),
+      })
+      .nullable()
+      .optional(),
   })
   .strict();
 
@@ -175,6 +184,7 @@ export type LeadContactDiscoverySourceFamily = z.infer<typeof LeadContactDiscove
 export type LeadContactDiscoveryOutcome = z.infer<typeof LeadContactDiscoveryOutcomeSchema>;
 export type LeadContactVerificationVerdict = z.infer<typeof LeadContactVerificationVerdictSchema>;
 export type LeadContactDiscoveryQueryFamily = z.infer<typeof LeadContactDiscoveryQueryFamilySchema>;
+export type LeadContactTerminalReason = z.infer<typeof LeadContactTerminalReasonSchema>;
 export type LeadContactDiscoveryDiagnostic = z.infer<typeof LeadContactDiscoveryDiagnosticSchema>;
 export type LeadContactDiscoveryCandidate = z.infer<typeof LeadContactDiscoveryCandidateSchema>;
 export type LeadContactDiscovery = z.infer<typeof LeadContactDiscoverySchema>;

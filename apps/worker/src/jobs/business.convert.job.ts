@@ -12,8 +12,9 @@ import { RetryableError } from '../errors.js';
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
 import { isProviderWithinBudget } from '../utils/pipeline-settings.js';
 import {
+  adjudicateDecisionMakerCandidates,
   extractDecisionMakers,
-  validateExtractedContacts,
+  type CandidateAdjudicationResult,
   type LlmExtractionConfig,
 } from '../utils/llm-extraction.js';
 
@@ -81,17 +82,13 @@ interface HunterContact {
 
 type ContactResolutionStatus = 'verified' | 'discovered' | 'unresolved';
 type ContactVerificationVerdict = 'verified' | 'not_verified' | 'inconclusive' | 'skipped';
-type ContactDiscoveryQueryFamily =
-  | 'V1_linkedin_exact'
-  | 'V2_company_domain_exact'
-  | 'V3_public_web_exact'
-  | 'V4_exact_without_title'
-  | 'D1_linkedin_roles'
-  | 'D2_company_team_pages'
-  | 'D3_company_about_pages'
-  | 'D4_press_news_mentions'
-  | 'D5_public_web_role_queries'
-  | 'D6_locality_first_queries';
+type ContactDiscoveryQueryFamily = 'DISCOVER_ROLES';
+type ContactDiscoveryRoleKeyword = 'founder' | 'ceo' | 'owner';
+type ContactTerminalReason =
+  | 'no_named_candidate_found'
+  | 'named_candidate_no_email'
+  | 'email_inferred_failed_verification'
+  | 'ambiguous_winner';
 
 export interface RecoveryEvidenceStrength {
   evidenceScore: number;
@@ -124,6 +121,14 @@ interface ContactRecoveryTelemetryState {
     verdict: ContactVerificationVerdict;
   }>;
   topQueryFamily: ContactDiscoveryQueryFamily | null;
+}
+
+async function isDiscoveryRunTerminal(discoveryRunId: string): Promise<boolean> {
+  const run = await prisma.jobExecution.findUnique({
+    where: { id: discoveryRunId },
+    select: { status: true },
+  });
+  return run?.status === 'cancelled' || run?.status === 'completed' || run?.status === 'failed';
 }
 
 type HunterDomainSearchResult =
@@ -261,7 +266,7 @@ export interface BusinessConvertJobDependencies {
   } | undefined;
   openAiAdapter?: OpenAiInsightGenerator | undefined;
   linkedInSearchAdapter?: {
-    searchCompanyPeople(input: {
+    discoverDecisionMaker(input: {
       companyName: string;
       companyDomain?: string | null | undefined;
       cityOrCountry?: string | null | undefined;
@@ -273,42 +278,7 @@ export interface BusinessConvertJobDependencies {
             name: string;
             title: string | null;
             linkedinUrl: string | null;
-            sourceType: string;
-            sourceUrl: string;
-            sourceDomain: string | null;
-            companyHint: string | null;
-            matchSignals: string[];
-            relevanceScore: number;
-          }>;
-          diagnostics: Array<{
-            stage: string;
-            query: string;
-            sourceFamily: 'linkedin' | 'company_page' | 'public_web' | 'mixed' | 'unknown';
-            queryFamily: ContactDiscoveryQueryFamily;
-            rawResultCount: number;
-            promotedCount: number;
-            verdict: ContactVerificationVerdict;
-          }>;
-          topSourceFamily: 'linkedin' | 'company_page' | 'public_web' | 'mixed' | 'unknown';
-          topQueryFamily: ContactDiscoveryQueryFamily | null;
-        }
-      | { status: 'retryable_error'; failure: { message: string } }
-      | { status: 'terminal_error'; failure: { message: string } }
-    >;
-    searchPersonVerification(input: {
-      name: string;
-      companyName: string;
-      companyDomain?: string | null | undefined;
-      cityOrCountry?: string | null | undefined;
-      titleOrFunction?: string | null | undefined;
-      maxResults?: number | undefined;
-    }): Promise<
-      | {
-          status: 'success';
-          data: Array<{
-            name: string;
-            title: string | null;
-            linkedinUrl: string | null;
+            matchedRoleKeyword: ContactDiscoveryRoleKeyword | null;
             sourceType: string;
             sourceUrl: string;
             sourceDomain: string | null;
@@ -356,7 +326,7 @@ function isCacheValid(scrapedAt: Date | null): boolean {
 }
 
 function scoreCandidateConfidence(input: {
-  source: 'website_scrape' | 'instagram' | 'hunter' | 'apollo' | 'google_custom_search';
+  source: 'website_scrape' | 'instagram' | 'hunter' | 'apollo' | 'serpapi_web_search';
   hasEmail: boolean;
   hasLinkedin: boolean;
   seniority: 'executive' | 'director' | 'manager' | 'other';
@@ -366,10 +336,125 @@ function scoreCandidateConfidence(input: {
   if (input.hasLinkedin) score += 0.2;
   if (input.source === 'website_scrape') score += 0.1;
   if (input.source === 'apollo') score += 0.05;
-  if (input.source === 'google_custom_search') score += 0.08;
+  if (input.source === 'serpapi_web_search') score += 0.08;
   if (input.seniority === 'executive') score += 0.1;
   if (input.seniority === 'director') score += 0.05;
   return Math.max(0, Math.min(1, Number(score.toFixed(3))));
+}
+
+function scoreIdentityConfidence(input: {
+  candidates: Array<{
+    name: string;
+    source: 'website_scrape' | 'instagram' | 'hunter' | 'apollo' | 'serpapi_web_search';
+    seniority: 'executive' | 'director' | 'manager' | 'other';
+    linkedinUrl: string | null;
+    serpApiConfirmed?: boolean | undefined;
+    confidence?: number | undefined;
+  }>;
+  businessName: string;
+}): number {
+  const valid = input.candidates.filter((candidate) => isValidPersonName(candidate.name, input.businessName));
+  if (valid.length === 0) return 0;
+
+  const top = valid
+    .slice()
+    .sort((left, right) => (right.confidence ?? 0) - (left.confidence ?? 0))
+    .slice(0, 3);
+
+  let score = 0.2;
+  for (const candidate of top) {
+    if (candidate.source === 'website_scrape') score += 0.12;
+    if (candidate.source === 'serpapi_web_search') score += 0.15;
+    if (candidate.linkedinUrl) score += 0.08;
+    if (candidate.serpApiConfirmed) score += 0.1;
+    if (candidate.seniority === 'executive') score += 0.14;
+    else if (candidate.seniority === 'director') score += 0.1;
+    else if (candidate.seniority === 'manager') score += 0.05;
+  }
+
+  return Math.max(0, Math.min(1, Number((score / Math.max(1, top.length)).toFixed(3))));
+}
+
+function scoreContactConfidence(input: {
+  hasValidatedPersonalEmail: boolean;
+  hasGenericEmailFallback: boolean;
+  selectedCandidate: {
+    confidence?: number | undefined;
+    seniority: 'executive' | 'director' | 'manager' | 'other';
+    source: 'website_scrape' | 'instagram' | 'hunter' | 'apollo' | 'serpapi_web_search';
+  } | null;
+}): number {
+  if (input.hasValidatedPersonalEmail && input.selectedCandidate) {
+    let score = 0.55 + (input.selectedCandidate.confidence ?? 0) * 0.35;
+    if (input.selectedCandidate.source === 'hunter' || input.selectedCandidate.source === 'apollo') {
+      score += 0.05;
+    }
+    if (input.selectedCandidate.seniority === 'executive' || input.selectedCandidate.seniority === 'director') {
+      score += 0.05;
+    }
+    return Math.max(0, Math.min(1, Number(score.toFixed(3))));
+  }
+
+  if (input.hasGenericEmailFallback) {
+    return 0.28;
+  }
+
+  return 0.05;
+}
+
+function isCredibleNamedCandidate(
+  candidate: {
+    name: string;
+    seniority: 'executive' | 'director' | 'manager' | 'other';
+    confidence?: number | undefined;
+  },
+  businessName: string,
+): boolean {
+  if (!isValidPersonName(candidate.name, businessName)) {
+    return false;
+  }
+  if (candidate.seniority === 'executive' || candidate.seniority === 'director') {
+    return true;
+  }
+  return (candidate.confidence ?? 0) >= 0.55;
+}
+
+function isAmbiguousTopCandidates(
+  candidates: Array<{
+    confidence?: number | undefined;
+    seniority: 'executive' | 'director' | 'manager' | 'other';
+    name: string;
+  }>,
+): boolean {
+  if (candidates.length < 2) return false;
+  const first = candidates[0];
+  const second = candidates[1];
+  if (!first || !second) return false;
+
+  const confidenceDiff = Math.abs((first.confidence ?? 0) - (second.confidence ?? 0));
+  const seniorityDiff = Math.abs(seniorityRank(first.seniority) - seniorityRank(second.seniority));
+  return confidenceDiff <= 0.08 && seniorityDiff <= 1 && first.name.toLowerCase() !== second.name.toLowerCase();
+}
+
+async function canSpendOnProviderForBusiness(input: {
+  provider: 'SERPAPI' | 'HUNTER' | 'APOLLO';
+  apiCallType: string;
+  businessId: string;
+  isHighValueBusiness: boolean;
+}): Promise<boolean> {
+  if (input.isHighValueBusiness) {
+    return true;
+  }
+
+  const priorCalls = await prisma.discoveryCostEvent.count({
+    where: {
+      businessId: input.businessId,
+      provider: input.provider,
+      apiCallType: input.apiCallType,
+    },
+  });
+
+  return priorCalls < 1;
 }
 
 export function calculateRecoveryEvidenceStrength(input: {
@@ -536,8 +621,15 @@ async function inferEmailPattern(
   domain: string,
   decisionMakers: Array<{ name: string; title: string | null; seniority: string }>,
   smtpVerifier: { verify(email: string): Promise<SmtpVerificationResult> } | undefined,
-): Promise<Array<{ email: string; dm: { name: string; title: string | null; seniority: string }; pattern: string }>> {
-  if (!smtpVerifier || knownEmails.length === 0 || decisionMakers.length === 0) return [];
+): Promise<{
+  matches: Array<{ email: string; dm: { name: string; title: string | null; seniority: string }; pattern: string }>;
+  attempted: number;
+  failedVerification: number;
+  pattern: string | null;
+}> {
+  if (!smtpVerifier || knownEmails.length === 0 || decisionMakers.length === 0) {
+    return { matches: [], attempted: 0, failedVerification: 0, pattern: null };
+  }
 
   // Detect pattern from known emails
   const patternCounts: Record<string, number> = {};
@@ -558,10 +650,14 @@ async function inferEmailPattern(
 
   const dominantPattern = Object.entries(patternCounts)
     .sort(([, a], [, b]) => b - a)[0]?.[0];
-  if (!dominantPattern) return [];
+  if (!dominantPattern) {
+    return { matches: [], attempted: 0, failedVerification: 0, pattern: null };
+  }
 
   // Generate candidates for DMs using the dominant pattern
   const results: Array<{ email: string; dm: { name: string; title: string | null; seniority: string }; pattern: string }> = [];
+  let attempted = 0;
+  let failedVerification = 0;
 
   for (const dm of decisionMakers) {
     const { firstName, lastName } = parseName(dm.name);
@@ -580,14 +676,22 @@ async function inferEmailPattern(
     }
 
     if (!candidate) continue;
+    attempted += 1;
 
     const verification = await smtpVerifier.verify(candidate);
     if (verification.status === 'valid' || verification.status === 'catch_all') {
       results.push({ email: candidate, dm, pattern: dominantPattern });
+    } else {
+      failedVerification += 1;
     }
   }
 
-  return results;
+  return {
+    matches: results,
+    attempted,
+    failedVerification,
+    pattern: dominantPattern,
+  };
 }
 
 /** Seniority rank for sorting decision makers (lower = more senior). */
@@ -779,6 +883,11 @@ function buildContactRecoverySnapshot(input: {
   topCandidates: ContactRecoveryCandidate[];
   websiteIntelligence: unknown;
   instagramIntelligence: unknown;
+  identityConfidence: number;
+  contactConfidence: number;
+  terminalReason: ContactTerminalReason;
+  resolutionState: 'inconclusive_but_promising' | 'no_contact_terminal';
+  adjudication: CandidateAdjudicationResult | null;
 }): ContactRecoverySnapshot {
   return {
     businessId: input.businessId,
@@ -792,6 +901,11 @@ function buildContactRecoverySnapshot(input: {
     topCandidates: input.topCandidates,
     websiteIntelligence: input.websiteIntelligence,
     instagramIntelligence: input.instagramIntelligence,
+    identityConfidence: Number(input.identityConfidence.toFixed(3)),
+    contactConfidence: Number(input.contactConfidence.toFixed(3)),
+    terminalReason: input.terminalReason,
+    resolutionState: input.resolutionState,
+    adjudication: input.adjudication,
   };
 }
 
@@ -889,6 +1003,11 @@ export async function handleBusinessConvertJob(
 
   logger.info(logCtx, 'Started business.convert job');
 
+  if (await isDiscoveryRunTerminal(discoveryRunId)) {
+    logger.warn(logCtx, 'Discovery run already terminal — skipping conversion');
+    return;
+  }
+
   // ── 1. Load business ──────────────────────────────────────────────────
   const business = await prisma.business.findUnique({
     where: { id: businessId },
@@ -907,6 +1026,9 @@ export async function handleBusinessConvertJob(
       apifyInstagramScrapeJson: true,
       websiteScrapedAt: true,
       instagramScrapedAt: true,
+      deterministicScore: true,
+      scoreBand: true,
+      preQualified: true,
     },
   });
 
@@ -1163,8 +1285,10 @@ export async function handleBusinessConvertJob(
     linkedinUrl: string | null;
     seniority: 'executive' | 'director' | 'manager' | 'other';
     positionRank: number;
-    source: 'website_scrape' | 'instagram' | 'hunter' | 'apollo' | 'google_custom_search';
-    sourceStage?: 'V1' | 'V2' | 'D1' | 'D2' | undefined;
+    source: 'website_scrape' | 'instagram' | 'hunter' | 'apollo' | 'serpapi_web_search';
+    sourceStage?: 'DISCOVER' | undefined;
+    serpApiConfirmed?: boolean | undefined;
+    matchedRoleKeyword?: ContactDiscoveryRoleKeyword | null | undefined;
     matchedSignals?: string[] | undefined;
     confidence?: number | undefined;
     verificationVerdict?: ContactVerificationVerdict | undefined;
@@ -1195,6 +1319,13 @@ export async function handleBusinessConvertJob(
     nameValChecked: 0,
     nameValRejected: 0,
     cseCandidatesAdded: 0,
+    serpApiRoleMatched: null as ContactDiscoveryRoleKeyword | null,
+    serpApiOverrodeWebscraper: false,
+    serpApiGatedToManualReview: false,
+    paidGateBlocked: false,
+    paidGateReason: null as string | null,
+    identityConfidence: 0,
+    contactConfidence: 0,
     totalCandidates: 0,
     withEmail: 0,
     outcome: 'pending' as string,
@@ -1330,8 +1461,182 @@ export async function handleBusinessConvertJob(
     }
   }
 
+  let hunterRetryable = false;
+  let apolloRetryable = false;
+  let isDraftedLead = false;
+  let skipLlmNameValidation = false;
+  let serpApiDiscoveredCandidates = 0;
+  let serpApiSearchCompleted = false;
+  let emailInferenceAttempted = 0;
+  let emailInferenceFailedVerification = 0;
+  let adjudication: CandidateAdjudicationResult | null = null;
+  let winnerSelectionMethod: 'deterministic' | 'llm' = 'deterministic';
+  const locality = [business.city, business.countryCode].filter(Boolean).join(', ') || null;
+  const isHighValueBusiness = business.scoreBand === 'HIGH' || business.deterministicScore >= 0.75;
+
+  if (deps.linkedInSearchAdapter?.isConfigured) {
+    const serpApiBudgetAllowed = await canSpendOnProviderForBusiness({
+      provider: 'SERPAPI',
+      apiCallType: 'web_search_decision_maker',
+      businessId,
+      isHighValueBusiness,
+    });
+
+    if (!serpApiBudgetAllowed) {
+      recoveryAttempts.push({
+        stage: 'contact_recovery',
+        provider: 'SERPAPI',
+        mode: 'discover',
+        status: 'skipped',
+        resultCount: 0,
+        notes: ['Per-business SerpAPI budget exhausted for this business'],
+      });
+    } else {
+      recoveryTelemetry.cseDiscoverAttempted = true;
+      const discoverResult = await deps.linkedInSearchAdapter.discoverDecisionMaker({
+        companyName: business.name,
+        companyDomain: domain,
+        cityOrCountry: locality,
+        maxResults: 5,
+      });
+
+      costEvents.push({ provider: 'SERPAPI', costCents: 1, apiCallType: 'web_search_decision_maker' });
+
+      if (discoverResult.status === 'success') {
+      serpApiSearchCompleted = true;
+      recoveryTelemetry.cseRawResults += discoverResult.diagnostics.reduce(
+        (sum, diagnostic) => sum + diagnostic.rawResultCount,
+        0,
+      );
+      recoveryTelemetry.diagnostics.push(
+        ...discoverResult.diagnostics.map((diagnostic) => ({
+          stage: diagnostic.stage,
+          sourceFamily: diagnostic.sourceFamily,
+          queryFamily: diagnostic.queryFamily,
+          rawResultCount: diagnostic.rawResultCount,
+          promotedCount: diagnostic.promotedCount,
+          verdict: diagnostic.verdict,
+        })),
+      );
+      recoveryTelemetry.topSourceFamily = discoverResult.topSourceFamily;
+      recoveryTelemetry.topQueryFamily = discoverResult.topQueryFamily;
+
+      const websiteNamedCandidates = allCandidates.filter(
+        (candidate) => candidate.source === 'website_scrape' && isValidPersonName(candidate.name, business.name),
+      );
+      recoveryTelemetry.cseVerifyAttempted = websiteNamedCandidates.length > 0;
+
+      for (const profile of discoverResult.data.slice(0, 3)) {
+        if (!isValidPersonName(profile.name, business.name)) {
+          continue;
+        }
+
+        recoveryTelemetry.cseValidProfiles += 1;
+        gateStats.serpApiRoleMatched = gateStats.serpApiRoleMatched ?? profile.matchedRoleKeyword;
+
+        const normalizedName = profile.name.toLowerCase().trim();
+        const existingCandidate = allCandidates.find(
+          (candidate) => candidate.name.toLowerCase().trim() === normalizedName,
+        );
+
+        if (existingCandidate) {
+          existingCandidate.serpApiConfirmed = true;
+          existingCandidate.verificationVerdict = 'verified';
+          existingCandidate.supportingUrls = dedupeUrls([...(existingCandidate.supportingUrls ?? []), profile.sourceUrl]);
+          existingCandidate.confidence = Math.max(existingCandidate.confidence ?? 0, Math.min(1, profile.relevanceScore + 0.08));
+          existingCandidate.matchedSignals = [...new Set([...(existingCandidate.matchedSignals ?? []), ...profile.matchSignals, 'serpapi_confirmed'])];
+          recoveryTelemetry.cseCandidatesValidated += 1;
+          recoveryTelemetry.supportingUrls = dedupeUrls([...recoveryTelemetry.supportingUrls, profile.sourceUrl]);
+          skipLlmNameValidation = true;
+          recoveryTelemetry.cseVerifySucceeded = true;
+          continue;
+        }
+
+        serpApiDiscoveredCandidates += 1;
+        recoveryTelemetry.cseCandidatesAdded += 1;
+        recoveryTelemetry.cseCandidatesValidated += 1;
+        gateStats.cseCandidatesAdded += 1;
+        gateStats.serpApiOverrodeWebscraper = gateStats.serpApiOverrodeWebscraper || websiteNamedCandidates.length > 0;
+
+        allCandidates.push({
+          name: profile.name,
+          title: profile.title,
+          email: null,
+          phone: null,
+          linkedinUrl: profile.linkedinUrl,
+          seniority: profile.title ? classifySeniorityLocal(profile.title) : 'other',
+          positionRank: 5 + serpApiDiscoveredCandidates - 1,
+          source: 'serpapi_web_search',
+          sourceStage: 'DISCOVER',
+          serpApiConfirmed: true,
+          matchedRoleKeyword: profile.matchedRoleKeyword,
+          matchedSignals: profile.matchSignals,
+          confidence: profile.relevanceScore,
+          verificationVerdict: 'verified',
+          supportingUrls: [profile.sourceUrl],
+          rawJson: {
+            matchType: 'serpapi_web_search',
+            sourceType: profile.sourceType,
+            sourceUrl: profile.sourceUrl,
+            sourceDomain: profile.sourceDomain,
+            matchedRoleKeyword: profile.matchedRoleKeyword,
+          },
+        });
+      }
+
+      recoveryTelemetry.cseDiscoverSucceeded = serpApiDiscoveredCandidates > 0 || skipLlmNameValidation;
+      recoveryTelemetry.verificationVerdict = recoveryTelemetry.cseDiscoverSucceeded ? 'verified' : 'not_verified';
+      } else {
+        const quotaExhausted = discoverResult.failure.message.toLowerCase().includes('quotaexhausted=true');
+        if (quotaExhausted) {
+          await prisma.jobExecution.update({
+            where: { id: job.id },
+            data: { error: discoverResult.failure.message },
+          }).catch(() => undefined);
+          logger.warn(
+            { ...logCtx, serpApiFailure: discoverResult.failure.message },
+            'SerpAPI web-search quota exhausted — continuing without decision-maker web search',
+          );
+        }
+      }
+
+      recoveryAttempts.push({
+        stage: 'contact_recovery',
+        provider: 'SERPAPI',
+        mode: 'discover',
+        status: discoverResult.status === 'success'
+          ? (recoveryTelemetry.cseDiscoverSucceeded ? 'success' : 'empty')
+          : discoverResult.status,
+        resultCount: discoverResult.status === 'success' ? discoverResult.data.length : 0,
+        notes: discoverResult.status === 'success'
+          ? [
+              `Single-query SerpAPI search returned ${discoverResult.data.length} candidate${discoverResult.data.length === 1 ? '' : 's'}`,
+            ]
+          : [discoverResult.failure.message],
+      });
+    }
+  }
+
+  const hasNamedWebsiteDecisionMaker = allCandidates.some(
+    (candidate) => candidate.source === 'website_scrape' && isValidPersonName(candidate.name, business.name),
+  );
+  if (
+    deps.linkedInSearchAdapter?.isConfigured
+    && serpApiSearchCompleted
+    && serpApiDiscoveredCandidates === 0
+    && !skipLlmNameValidation
+    && !hasNamedWebsiteDecisionMaker
+  ) {
+    gateStats.serpApiGatedToManualReview = true;
+    isDraftedLead = true;
+    logger.info(
+      { ...logCtx, instagramEmailFound: gateStats.instagramEmailFound },
+      'SerpAPI and website scrape found no decision-maker — gating to drafted/manual review path',
+    );
+  }
+
   // 5d. Email pattern inference from known emails (free, eliminates ~20-30% of Hunter calls)
-  if (websiteScrapeData?.decisionMakers && websiteScrapeData.decisionMakers.length > 0) {
+  if (!gateStats.serpApiGatedToManualReview && websiteScrapeData?.decisionMakers && websiteScrapeData.decisionMakers.length > 0) {
     const hasValidEmailFromScrape = allCandidates.some((c) => c.email !== null);
     if (!hasValidEmailFromScrape) {
       // Gather known email/name pairs for pattern detection
@@ -1365,14 +1670,16 @@ export async function handleBusinessConvertJob(
         seniority: dm.seniority,
       }));
 
-      const inferred = await inferEmailPattern(
+      const inferenceResult = await inferEmailPattern(
         knownEmails,
         domain,
         dmsForInference,
         deps.smtpVerifier?.isConfigured ? deps.smtpVerifier : undefined,
       );
+      emailInferenceAttempted += inferenceResult.attempted;
+      emailInferenceFailedVerification += inferenceResult.failedVerification;
 
-      for (const { email: inferredEmail, dm, pattern } of inferred) {
+      for (const { email: inferredEmail, dm, pattern } of inferenceResult.matches) {
         allCandidates.push({
           name: dm.name,
           title: dm.title,
@@ -1393,19 +1700,44 @@ export async function handleBusinessConvertJob(
   }
 
   // 5e. Fallback to paid providers if no candidate has a valid email yet
-  const hasValidEmail = allCandidates.some((c) => c.email !== null);
-  let hunterRetryable = false;
-  let apolloRetryable = false;
+  const hasValidEmail = allCandidates.some((candidate) =>
+    candidate.email !== null && !isGenericEmail(candidate.email) && !isJunkPersonalEmail(candidate.email),
+  );
+  let identityConfidence = scoreIdentityConfidence({
+    candidates: allCandidates,
+    businessName: business.name,
+  });
+  const hasCredibleNamedCandidate = allCandidates.some((candidate) =>
+    isCredibleNamedCandidate(candidate, business.name),
+  );
+  const identityThreshold = isHighValueBusiness ? 0.48 : 0.58;
+  const shouldStopPaidEnrichment = gateStats.serpApiGatedToManualReview
+    || business.preQualified === false
+    || !hasCredibleNamedCandidate
+    || identityConfidence < identityThreshold
+    || hasValidEmail;
 
-  if (!hasValidEmail) {
-    logger.info(logCtx, 'No valid email from scrape data — falling back to paid providers');
+  if (!shouldStopPaidEnrichment && !hasValidEmail) {
+    logger.info(
+      { ...logCtx, identityConfidence, identityThreshold },
+      'No valid email from free sources — paid enrichment gate passed',
+    );
 
     // Hunter (cheaper) — check budget ceiling first
     const hunterWithinBudget = await isProviderWithinBudget('HUNTER');
+    const hunterBusinessBudget = await canSpendOnProviderForBusiness({
+      provider: 'HUNTER',
+      apiCallType: 'domain_search',
+      businessId,
+      isHighValueBusiness,
+    });
     if (!hunterWithinBudget) {
       logger.warn(logCtx, 'Hunter daily budget ceiling exceeded — skipping paid lookup');
     }
-    if (deps.hunterAdapter.isConfigured && hunterWithinBudget) {
+    if (!hunterBusinessBudget) {
+      logger.info(logCtx, 'Per-business Hunter budget reached — skipping paid lookup');
+    }
+    if (deps.hunterAdapter.isConfigured && hunterWithinBudget && hunterBusinessBudget) {
       const hunterResult = await deps.hunterAdapter.searchDomainContacts(domain);
       if (hunterResult.status === 'success' && hunterResult.contacts.length > 0) {
         hunterContactJson = hunterResult.contacts;
@@ -1485,10 +1817,19 @@ export async function handleBusinessConvertJob(
     // Apollo (more expensive — only if pre-screen says email exists + within budget)
     const hasEmailAfterHunter = allCandidates.some((c) => c.email !== null);
     const apolloWithinBudget = await isProviderWithinBudget('APOLLO');
+    const apolloBusinessBudget = await canSpendOnProviderForBusiness({
+      provider: 'APOLLO',
+      apiCallType: 'contact_search',
+      businessId,
+      isHighValueBusiness,
+    });
     if (!hasEmailAfterHunter && !apolloWithinBudget) {
       logger.warn(logCtx, 'Apollo daily budget ceiling exceeded — skipping paid lookup');
     }
-    if (!hasEmailAfterHunter && deps.apolloAdapter.isConfigured && apolloHasEmail && apolloWithinBudget) {
+    if (!hasEmailAfterHunter && !apolloBusinessBudget) {
+      logger.info(logCtx, 'Per-business Apollo budget reached — skipping paid lookup');
+    }
+    if (!hasEmailAfterHunter && deps.apolloAdapter.isConfigured && apolloHasEmail && apolloWithinBudget && apolloBusinessBudget) {
       const apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
       if (apolloResult.status === 'success' && apolloResult.contacts.length > 0) {
         for (const ac of apolloResult.contacts) {
@@ -1544,6 +1885,27 @@ export async function handleBusinessConvertJob(
         notes: [],
       });
     }
+  } else if (!hasValidEmail) {
+    gateStats.paidGateBlocked = true;
+    gateStats.paidGateReason = gateStats.serpApiGatedToManualReview
+      ? 'serpapi_no_candidate_gate'
+      : business.preQualified === false
+        ? 'business_not_prequalified'
+        : !hasCredibleNamedCandidate
+          ? 'no_credible_named_candidate'
+          : identityConfidence < identityThreshold
+            ? 'identity_confidence_below_threshold'
+            : 'validated_personal_email_already_present';
+    logger.info(
+      {
+        ...logCtx,
+        identityConfidence,
+        identityThreshold,
+        paidGateReason: gateStats.paidGateReason,
+        hasCredibleNamedCandidate,
+      },
+      'Skipping paid enrichment due to hard stop-spending gate',
+    );
   } else {
     logger.info(
       { ...logCtx, candidateCount: allCandidates.length },
@@ -1552,7 +1914,7 @@ export async function handleBusinessConvertJob(
   }
 
   // ── 5f. LLM extraction fallback — when rule-based extraction found zero valid team members (B9)
-  if (deps.llmExtractionConfig?.openAiApiKey && websiteScrapeData) {
+  if (!gateStats.serpApiGatedToManualReview && deps.llmExtractionConfig?.openAiApiKey && websiteScrapeData) {
     const validScrapeCandidates = allCandidates.filter(
       (c) => c.source === 'website_scrape' && isValidPersonName(c.name, business.name),
     );
@@ -1597,42 +1959,7 @@ export async function handleBusinessConvertJob(
     }
   }
 
-  // ── 5g. LLM validation — filter garbage from ALL contacts (B9)
-  if (deps.llmExtractionConfig?.openAiApiKey && allCandidates.length > 0) {
-    const candidatesForValidation = allCandidates
-      .filter((c) => c.name !== 'Unknown Contact')
-      .map((c) => ({ name: c.name, title: c.title }));
-
-    if (candidatesForValidation.length > 0) {
-      const validated = await validateExtractedContacts(
-        candidatesForValidation,
-        business.name,
-        deps.llmExtractionConfig,
-      );
-
-      const fakenames = new Set(
-        validated
-          .filter((v) => !v.isRealPerson)
-          .map((v) => v.name.toLowerCase()),
-      );
-
-      gateStats.llmFakeNames = fakenames.size;
-      if (fakenames.size > 0) {
-        // Remove fake-name candidates from allCandidates
-        for (let i = allCandidates.length - 1; i >= 0; i--) {
-          if (fakenames.has(allCandidates[i]!.name.toLowerCase())) {
-            logger.info(
-              { ...logCtx, fakeName: allCandidates[i]!.name },
-              'LLM validation rejected contact as not a real person',
-            );
-            allCandidates.splice(i, 1);
-          }
-        }
-      }
-    }
-  }
-
-  // ── 5h. Rule-based name validation — apply to ALL remaining candidates (B2)
+  // ── 5g. Rule-based name validation — apply to ALL remaining candidates (B2)
   // Exempt Instagram-sourced contacts with emails — they're worth keeping
   // even with "Unknown Contact" name, routed to Business Intel as drafted leads
   gateStats.nameValChecked = allCandidates.length;
@@ -1649,197 +1976,6 @@ export async function handleBusinessConvertJob(
     }
   }
 
-  // ── 5i. Google Custom Search 4-stage contact intelligence ─────────────
-  // Path A (found contacts): V1 people verify + V2 LinkedIn verify
-  // Path B (no contacts): D1 people discover + D2 LinkedIn discover
-  const locality = [business.city, business.countryCode].filter(Boolean).join(', ') || null;
-  if (deps.linkedInSearchAdapter?.isConfigured) {
-    const candidatesWithNames = allCandidates
-      .filter((c) => c.name !== 'Unknown Contact' && isValidPersonName(c.name, business.name))
-      .slice(0, 3);
-
-    if (candidatesWithNames.length > 0) {
-      recoveryTelemetry.cseVerifyAttempted = true;
-      let verifyMatches = 0;
-      for (const candidate of candidatesWithNames) {
-        const verifyResult = await deps.linkedInSearchAdapter.searchPersonVerification({
-          name: candidate.name,
-          companyName: business.name,
-          companyDomain: domain,
-          cityOrCountry: locality,
-          titleOrFunction: candidate.title,
-          maxResults: 3,
-        });
-        costEvents.push({ provider: 'GOOGLE_CUSTOM_SEARCH', costCents: 0, apiCallType: 'linkedin_verify' });
-        if (verifyResult.status === 'success') {
-          recoveryTelemetry.cseRawResults += verifyResult.diagnostics.reduce(
-            (sum, diagnostic) => sum + diagnostic.rawResultCount,
-            0,
-          );
-          recoveryTelemetry.diagnostics.push(
-            ...verifyResult.diagnostics.map((diagnostic) => ({
-              stage: diagnostic.stage,
-              sourceFamily: diagnostic.sourceFamily,
-              queryFamily: diagnostic.queryFamily,
-              rawResultCount: diagnostic.rawResultCount,
-              promotedCount: diagnostic.promotedCount,
-              verdict: diagnostic.verdict,
-            })),
-          );
-          const validProfiles = verifyResult.data.filter((profile) => isValidPersonName(profile.name, business.name));
-          recoveryTelemetry.cseValidProfiles += validProfiles.length;
-          recoveryTelemetry.topSourceFamily =
-            recoveryTelemetry.topSourceFamily === 'unknown'
-              ? verifyResult.topSourceFamily
-              : recoveryTelemetry.topSourceFamily;
-          recoveryTelemetry.topQueryFamily = recoveryTelemetry.topQueryFamily ?? verifyResult.topQueryFamily;
-          const exactMatch = verifyResult.data.find((p) =>
-            p.name.toLowerCase() === candidate.name.toLowerCase(),
-          );
-          if (exactMatch) {
-            candidate.verificationVerdict = 'verified';
-            candidate.supportingUrls = dedupeUrls([...(candidate.supportingUrls ?? []), exactMatch.sourceUrl]);
-            recoveryTelemetry.supportingUrls = dedupeUrls([...recoveryTelemetry.supportingUrls, exactMatch.sourceUrl]);
-            verifyMatches += 1;
-            recoveryTelemetry.cseCandidatesValidated += 1;
-          } else if (verifyResult.data[0]) {
-            candidate.verificationVerdict = 'inconclusive';
-            candidate.supportingUrls = dedupeUrls([...(candidate.supportingUrls ?? []), verifyResult.data[0].sourceUrl]);
-          }
-        }
-      }
-      recoveryTelemetry.cseVerifySucceeded = verifyMatches > 0;
-      recoveryTelemetry.verificationVerdict = verifyMatches > 0 ? 'verified' : 'inconclusive';
-      recoveryAttempts.push({
-        stage: 'contact_recovery',
-        provider: 'GOOGLE_CUSTOM_SEARCH',
-        mode: 'verify',
-        status: verifyMatches > 0 ? 'success' : 'empty',
-        resultCount: verifyMatches,
-        notes: verifyMatches > 0
-          ? [`Verification resolved via ${recoveryTelemetry.topSourceFamily.replace('_', ' ')}`]
-          : [],
-      });
-    } else {
-      recoveryTelemetry.verificationVerdict = 'skipped';
-      recoveryAttempts.push({
-        stage: 'contact_recovery',
-        provider: 'GOOGLE_CUSTOM_SEARCH',
-        mode: 'verify',
-        status: 'skipped',
-        resultCount: 0,
-        notes: ['No validated named candidates were available to verify'],
-      });
-    }
-
-    const hasStrongVerifiedCandidate = allCandidates.some(
-      (candidate) => candidate.linkedinUrl !== null || candidate.email !== null,
-    );
-    if (!hasStrongVerifiedCandidate) {
-      recoveryTelemetry.cseDiscoverAttempted = true;
-      const seenNames = new Set(allCandidates.map((candidate) => candidate.name.toLowerCase()));
-      let addedCandidates = 0;
-      const discoverResult = await deps.linkedInSearchAdapter.searchCompanyPeople({
-        companyName: business.name,
-        companyDomain: domain,
-        cityOrCountry: locality,
-        maxResults: 5,
-      });
-      costEvents.push({ provider: 'GOOGLE_CUSTOM_SEARCH', costCents: 0, apiCallType: 'linkedin_discover' });
-      if (discoverResult.status === 'success') {
-        recoveryTelemetry.cseRawResults += discoverResult.diagnostics.reduce(
-          (sum, diagnostic) => sum + diagnostic.rawResultCount,
-          0,
-        );
-        recoveryTelemetry.diagnostics.push(
-          ...discoverResult.diagnostics.map((diagnostic) => ({
-            stage: diagnostic.stage,
-            sourceFamily: diagnostic.sourceFamily,
-            queryFamily: diagnostic.queryFamily,
-            rawResultCount: diagnostic.rawResultCount,
-            promotedCount: diagnostic.promotedCount,
-            verdict: diagnostic.verdict,
-          })),
-        );
-        recoveryTelemetry.topSourceFamily = discoverResult.topSourceFamily;
-        recoveryTelemetry.topQueryFamily = recoveryTelemetry.topQueryFamily ?? discoverResult.topQueryFamily;
-
-        for (const profile of discoverResult.data) {
-          if (!isValidPersonName(profile.name, business.name)) {
-            continue;
-          }
-
-          recoveryTelemetry.cseValidProfiles += 1;
-
-          const normalizedName = profile.name.toLowerCase();
-          if (seenNames.has(normalizedName)) {
-            continue;
-          }
-
-          seenNames.add(normalizedName);
-          addedCandidates += 1;
-          recoveryTelemetry.cseCandidatesAdded += 1;
-          recoveryTelemetry.cseCandidatesValidated += 1;
-          gateStats.cseCandidatesAdded++;
-          allCandidates.push({
-            name: profile.name,
-            title: profile.title,
-            email: null,
-            phone: null,
-            linkedinUrl: profile.linkedinUrl,
-            seniority: profile.title ? classifySeniorityLocal(profile.title) : 'other',
-            positionRank:
-              profile.sourceType === 'linkedin_profile' ? 45
-                : profile.sourceType === 'company_team_page' ? 46
-                  : profile.sourceType === 'company_about_page' ? 47
-                    : 49,
-            source: 'google_custom_search',
-            sourceStage:
-              profile.sourceType === 'linkedin_profile' ? 'D2'
-                : profile.sourceType === 'company_team_page' || profile.sourceType === 'company_about_page'
-                  ? 'D1'
-                  : 'D2',
-            matchedSignals: profile.matchSignals,
-            confidence: profile.relevanceScore,
-            verificationVerdict: 'skipped',
-            supportingUrls: [profile.sourceUrl],
-            rawJson: {
-              matchType: 'google_cse_discovery',
-              sourceType: profile.sourceType,
-              sourceUrl: profile.sourceUrl,
-              sourceDomain: profile.sourceDomain,
-            },
-          });
-        }
-        recoveryTelemetry.cseDiscoverSucceeded = addedCandidates > 0;
-      }
-
-      recoveryAttempts.push({
-        stage: 'contact_recovery',
-        provider: 'GOOGLE_CUSTOM_SEARCH',
-        mode: 'discover',
-        status: addedCandidates > 0 ? 'success' : 'empty',
-        resultCount: discoverResult.status === 'success'
-          ? discoverResult.diagnostics.reduce((sum, diagnostic) => sum + diagnostic.rawResultCount, 0)
-          : 0,
-        notes: addedCandidates > 0
-          ? [
-              `Added ${addedCandidates} validated candidate${addedCandidates === 1 ? '' : 's'} from ${discoverResult.status === 'success' ? discoverResult.topSourceFamily.replace('_', ' ') : 'google search'}`,
-            ]
-          : ['No new validated decision-makers were discovered'],
-      });
-    } else {
-      recoveryAttempts.push({
-        stage: 'contact_recovery',
-        provider: 'GOOGLE_CUSTOM_SEARCH',
-        mode: 'discover',
-        status: 'skipped',
-        resultCount: 0,
-        notes: ['Skipped broader discovery because a strong candidate already existed'],
-      });
-    }
-  }
-
   // Calculate confidence for all candidates before ranking.
   for (const candidate of allCandidates) {
     if (candidate.confidence === undefined) {
@@ -1852,16 +1988,67 @@ export async function handleBusinessConvertJob(
     }
   }
 
-  // ── 6. Select highest-authority contact as Lead (B3 — improved priority) ──
-  // Sort: seniority (executive=0, director=1, manager=2, other=3), then positionRank (lower=better)
-  // High-authority contacts (CEO, Director, Founder) are preferred even without email
-  const sortedCandidates = [...allCandidates].sort((a, b) => {
+  identityConfidence = scoreIdentityConfidence({
+    candidates: allCandidates,
+    businessName: business.name,
+  });
+  gateStats.identityConfidence = identityConfidence;
+
+  const rankCandidates = (candidates: ContactCandidate[]): ContactCandidate[] => candidates.slice().sort((a, b) => {
     const senDiff = seniorityRank(a.seniority) - seniorityRank(b.seniority);
     if (senDiff !== 0) return senDiff;
     const confDiff = (b.confidence ?? 0) - (a.confidence ?? 0);
     if (confDiff !== 0) return confDiff;
     return a.positionRank - b.positionRank;
   });
+  // ── 6. Select highest-authority contact as Lead (B3 — improved priority) ──
+  // Sort: seniority (executive=0, director=1, manager=2, other=3), then confidence, then positionRank.
+  let sortedCandidates = rankCandidates(allCandidates);
+
+  if (
+    !gateStats.serpApiGatedToManualReview
+    && deps.llmExtractionConfig?.openAiApiKey
+    && !skipLlmNameValidation
+    && sortedCandidates.length >= 2
+  ) {
+    const adjudicationCandidates = sortedCandidates
+      .filter((candidate) => isValidPersonName(candidate.name, business.name))
+      .slice(0, 5);
+
+    if (isAmbiguousTopCandidates(adjudicationCandidates)) {
+      const inputCandidates = adjudicationCandidates.map((candidate, index) => ({
+        id: `candidate-${index + 1}`,
+        name: candidate.name,
+        title: candidate.title,
+        source: candidate.source,
+        confidence: candidate.confidence ?? 0,
+        matchedSignals: candidate.matchedSignals ?? [],
+        supportingUrls: dedupeUrls(candidate.supportingUrls ?? []),
+      }));
+      adjudication = await adjudicateDecisionMakerCandidates(
+        {
+          businessName: business.name,
+          locality,
+          category: business.category,
+          candidates: inputCandidates,
+        },
+        deps.llmExtractionConfig,
+      );
+
+      if (adjudication?.verdict === 'select_candidate' && adjudication.selectedCandidateId) {
+        const selected = inputCandidates.find((candidate) => candidate.id === adjudication?.selectedCandidateId);
+        if (selected) {
+          const winner = allCandidates.find((candidate) => candidate.name === selected.name && candidate.title === selected.title);
+          if (winner) {
+            winner.confidence = Math.min(1, (winner.confidence ?? 0.5) + 0.12);
+            winner.positionRank = Math.max(1, winner.positionRank - 5);
+            winnerSelectionMethod = 'llm';
+            sortedCandidates = rankCandidates(allCandidates);
+          }
+        }
+      }
+    }
+  }
 
   // 6a. Try to infer email for high-authority candidates who lack one (B3)
   let inferredEmailCount = 0;
@@ -1878,24 +2065,26 @@ export async function handleBusinessConvertJob(
       });
 
     if (knownEmails.length > 0) {
-      const inferred = await inferEmailPattern(
+      const inferenceResult = await inferEmailPattern(
         knownEmails,
         domain,
         [{ name: candidate.name, title: candidate.title, seniority: candidate.seniority }],
         deps.smtpVerifier?.isConfigured ? deps.smtpVerifier : undefined,
       );
+      emailInferenceAttempted += inferenceResult.attempted;
+      emailInferenceFailedVerification += inferenceResult.failedVerification;
 
-      if (inferred.length > 0) {
-        if (isJunkPersonalEmail(inferred[0]!.email)) {
+      if (inferenceResult.matches.length > 0) {
+        if (isJunkPersonalEmail(inferenceResult.matches[0]!.email)) {
           continue;
         }
-        candidate.email = inferred[0]!.email;
+        candidate.email = inferenceResult.matches[0]!.email;
         inferredEmailCount += 1;
-        if (candidate.source === 'google_custom_search') {
+        if (candidate.source === 'serpapi_web_search') {
           recoveryTelemetry.cseEmailsInferred += 1;
         }
         logger.info(
-          { ...logCtx, email: candidate.email, candidate: candidate.name, pattern: inferred[0]!.pattern },
+          { ...logCtx, email: candidate.email, candidate: candidate.name, pattern: inferenceResult.matches[0]!.pattern },
           'Inferred email for high-authority candidate via pattern detection',
         );
       }
@@ -1917,7 +2106,7 @@ export async function handleBusinessConvertJob(
   const leadCandidates = sortedCandidates.filter((c) => c.email !== null);
   let resolvedContact = leadCandidates[0] ?? null;
   const cseTopCandidates = sortedCandidates
-    .filter((candidate) => candidate.source === 'google_custom_search')
+    .filter((candidate) => candidate.source === 'serpapi_web_search')
     .slice(0, 3)
     .map((candidate) => ({
       name: candidate.name,
@@ -1991,18 +2180,27 @@ export async function handleBusinessConvertJob(
     }
   }
 
-  // ── 6f. Fallback: use generic/Instagram email for drafted leads ────────
-  // Instead of fully disqualifying, create a 'drafted' lead routed to Business Intel
-  let isDraftedLead = false;
+  // ── 6f. Generic email handling: keep for manual review, never primary ────────
   if (!contactEmail && businessEmailField) {
-    contactEmail = businessEmailField;
-    businessEmailField = null; // Promoted to primary — no longer secondary
-    isDraftedLead = true;
     logger.info(
-      { ...logCtx, fallbackEmail: contactEmail },
-      'No personal email — using generic email for drafted lead (Business Intel)',
+      { ...logCtx, genericEmail: businessEmailField },
+      'Generic-only email found — preserving for manual review, not as primary lead contact',
     );
   }
+
+  let terminalReason: ContactTerminalReason | null = null;
+  const contactConfidence = scoreContactConfidence({
+    hasValidatedPersonalEmail: contactEmail !== null && !isGenericEmail(contactEmail),
+    hasGenericEmailFallback: businessEmailField !== null,
+    selectedCandidate: resolvedContact
+      ? {
+          confidence: resolvedContact.confidence,
+          seniority: resolvedContact.seniority,
+          source: resolvedContact.source,
+        }
+      : null,
+  });
+  gateStats.contactConfidence = contactConfidence;
 
   // Populate gate stats before outcome decision
   gateStats.totalCandidates = allCandidates.length;
@@ -2010,7 +2208,18 @@ export async function handleBusinessConvertJob(
 
   // ── 6g. No email at all → open recovery queue item ────────────────────
   if (!contactEmail) {
+    const inconclusiveButPromising = hasCredibleNamedCandidate && identityConfidence >= identityThreshold;
     const recoveryReason = resolvedContact ? 'NO_EMAIL' : 'NO_CONTACTS_FOUND';
+    terminalReason = !resolvedContact
+      ? 'no_named_candidate_found'
+      : adjudication?.verdict === 'inconclusive'
+        ? 'ambiguous_winner'
+        : emailInferenceFailedVerification > 0 && emailInferenceAttempted > 0
+          ? 'email_inferred_failed_verification'
+          : 'named_candidate_no_email';
+    if (inconclusiveButPromising) {
+      isDraftedLead = true;
+    }
     recoveryTelemetry.finalOutcome = 'recovery_opened';
 
     const recoverySnapshot = buildContactRecoverySnapshot({
@@ -2035,9 +2244,14 @@ export async function handleBusinessConvertJob(
           matchedSignals: candidate.matchedSignals,
           verificationVerdict: candidate.verificationVerdict,
           supportingUrls: candidate.supportingUrls,
-        })),
+      })),
       websiteIntelligence: websiteScrapeData ?? null,
       instagramIntelligence: instagramData ?? null,
+      identityConfidence,
+      contactConfidence,
+      terminalReason: terminalReason ?? 'named_candidate_no_email',
+      resolutionState: inconclusiveButPromising ? 'inconclusive_but_promising' : 'no_contact_terminal',
+      adjudication,
     });
 
     await upsertContactRecoveryItem({
@@ -2050,12 +2264,22 @@ export async function handleBusinessConvertJob(
 
     gateStats.outcome = 'recovery';
     logger.warn(
-      { ...logCtx, reason: recoveryReason, candidateCount: allCandidates.length, gateStats },
+      {
+        ...logCtx,
+        reason: recoveryReason,
+        terminalReason,
+        candidateCount: allCandidates.length,
+        identityConfidence,
+        contactConfidence,
+        gateStats,
+      },
       'No email found at all — opened contact recovery item',
     );
     await prisma.business.update({
       where: { id: businessId },
-      data: { preQualified: false, disqualificationReason: recoveryReason },
+      data: inconclusiveButPromising
+        ? { preQualified: true, disqualificationReason: null }
+        : { preQualified: false, disqualificationReason: recoveryReason },
     });
     await persistCostEvents(prisma, discoveryRunId, businessId, costEvents);
     await tryFinalizeDiscoveryRun(discoveryRunId, logger);
@@ -2141,6 +2365,12 @@ export async function handleBusinessConvertJob(
                   verificationVerdict: recoveryTelemetry.verificationVerdict,
                   supportingUrls: recoveryTelemetry.supportingUrls,
                   topCandidates: cseTopCandidates,
+                  identityConfidence: Number(identityConfidence.toFixed(3)),
+                  contactConfidence: Number(contactConfidence.toFixed(3)),
+                  terminalReason: null,
+                  resolutionState: 'lead_created',
+                  adjudication,
+                  winnerSelectionMethod,
                 },
                 contactProvenance: allCandidates.slice(0, 5).map((c) => ({
                   name: c.name,
@@ -2153,6 +2383,16 @@ export async function handleBusinessConvertJob(
                   hasEmail: c.email !== null,
                   hasLinkedin: c.linkedinUrl !== null,
                 })),
+                confidence: {
+                  identityConfidence: Number(identityConfidence.toFixed(3)),
+                  contactConfidence: Number(contactConfidence.toFixed(3)),
+                },
+                decisionProvenance: {
+                  winnerSelectionMethod,
+                  adjudicationVerdict: adjudication?.verdict ?? null,
+                  adjudicationConfidenceBucket: adjudication?.confidenceBucket ?? null,
+                  adjudicationRationale: adjudication?.rationale ?? null,
+                },
               }),
               ...(businessInsights !== null ? { businessInsights } : {}),
             },
@@ -2268,6 +2508,12 @@ export async function handleBusinessConvertJob(
             verificationVerdict: recoveryTelemetry.verificationVerdict,
             supportingUrls: recoveryTelemetry.supportingUrls,
             topCandidates: cseTopCandidates,
+            identityConfidence: Number(identityConfidence.toFixed(3)),
+            contactConfidence: Number(contactConfidence.toFixed(3)),
+            terminalReason: null,
+            resolutionState: 'lead_created',
+            adjudication,
+            winnerSelectionMethod,
           },
           contactProvenance: allCandidates.slice(0, 5).map((c) => ({
             name: c.name,
@@ -2280,6 +2526,16 @@ export async function handleBusinessConvertJob(
             hasEmail: c.email !== null,
             hasLinkedin: c.linkedinUrl !== null,
           })),
+          confidence: {
+            identityConfidence: Number(identityConfidence.toFixed(3)),
+            contactConfidence: Number(contactConfidence.toFixed(3)),
+          },
+          decisionProvenance: {
+            winnerSelectionMethod,
+            adjudicationVerdict: adjudication?.verdict ?? null,
+            adjudicationConfidenceBucket: adjudication?.confidenceBucket ?? null,
+            adjudicationRationale: adjudication?.rationale ?? null,
+          },
           discoveryRunId,
         }),
         ...(businessInsights !== null ? { businessInsights } : {}),

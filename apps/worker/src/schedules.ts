@@ -76,7 +76,17 @@ import {
 } from './jobs/search-task.recovery.job.js';
 import { HEARTBEAT_QUEUE_NAME, HEARTBEAT_RETRY_OPTIONS } from './queues.js';
 
-export async function registerWorkerSchedules(boss: Pick<PgBoss, 'schedule'>): Promise<void> {
+interface RegisterWorkerSchedulesOptions {
+  discoveryScheduleEnabled?: boolean | undefined;
+  logger?: {
+    info: (object: Record<string, unknown>, message: string) => void;
+  } | undefined;
+}
+
+export async function registerWorkerSchedules(
+  boss: Pick<PgBoss, 'schedule'>,
+  options: RegisterWorkerSchedulesOptions = {},
+): Promise<void> {
 
   await boss.schedule(
     HEARTBEAT_QUEUE_NAME,
@@ -88,18 +98,26 @@ export async function registerWorkerSchedules(boss: Pick<PgBoss, 'schedule'>): P
     },
   );
 
-  await boss.schedule(
-    DISCOVERY_SEED_JOB_NAME,
-    '0 4 * * 1',
-    {
-      reason: 'scheduled',
-      correlationId: 'scheduler:discovery.seed',
-    } satisfies DiscoverySeedJobPayload,
-    {
-      singletonKey: 'schedule:discovery.seed',
-      ...DISCOVERY_SEED_RETRY_OPTIONS,
-    },
-  );
+  const discoveryScheduleEnabled = options.discoveryScheduleEnabled ?? true;
+  if (discoveryScheduleEnabled) {
+    await boss.schedule(
+      DISCOVERY_SEED_JOB_NAME,
+      '0 4 * * 1',
+      {
+        reason: 'scheduled',
+        correlationId: 'scheduler:discovery.seed',
+      } satisfies DiscoverySeedJobPayload,
+      {
+        singletonKey: 'schedule:discovery.seed',
+        ...DISCOVERY_SEED_RETRY_OPTIONS,
+      },
+    );
+  } else {
+    options.logger?.info(
+      { discoveryScheduleEnabled },
+      'Discovery schedule disabled by configuration',
+    );
+  }
 
   // TODO(staleness): from/to are baked at schedule-registration time.
   // labels.generate handler should compute the window at runtime

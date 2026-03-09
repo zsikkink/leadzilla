@@ -135,6 +135,7 @@ describe('lead pipeline e2e', () => {
         }
       },
       checkSchemaHealth: async () => ({ status: 'ok', missingTables: [], missingEnumValues: [] }),
+      checkEmailDeliverability: async () => ({ ok: true }),
       authenticateUser: async () => null,
       createLeadAndEnqueue: async (input) => {
         try {

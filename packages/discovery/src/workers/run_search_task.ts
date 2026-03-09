@@ -51,6 +51,7 @@ interface TaskProcessStats {
   newSources: number;
   localBusinessCount: number;
   organicResultCount: number;
+  businessBudgetReached: boolean;
 }
 
 export interface RunSearchTaskResult {
@@ -74,6 +75,14 @@ export interface RunSearchTaskResult {
 export interface RunSearchTaskOptions {
   timeBucket?: string;
   discoveryRunId?: string | undefined;
+  maxNewBusinesses?: number | undefined;
+}
+
+export function shouldStopPersistingBusinesses(
+  newBusinesses: number,
+  maxNewBusinesses: number | undefined,
+): boolean {
+  return maxNewBusinesses !== undefined && newBusinesses >= maxNewBusinesses;
 }
 
 const SOCIAL_DOMAINS = new Set([
@@ -659,10 +668,12 @@ async function persistProviderResults(
   task: SearchTaskRow,
   providerResponse: NormalizedProviderResponse,
   discoveryRunId?: string | undefined,
+  maxNewBusinesses?: number | undefined,
 ): Promise<TaskProcessStats> {
   let newSources = 0;
   let newBusinesses = 0;
   const newBusinessIds: string[] = [];
+  let businessBudgetReached = false;
 
   for (const result of providerResponse.organicResults) {
     const created = await upsertSource(
@@ -678,6 +689,11 @@ async function persistProviderResults(
   }
 
   for (const local of providerResponse.localBusinesses) {
+    if (shouldStopPersistingBusinesses(newBusinesses, maxNewBusinesses)) {
+      businessBudgetReached = true;
+      break;
+    }
+
     if (local.websiteUrl) {
       const created = await upsertSource(local.websiteUrl, task.country_code, task.id, 0.8);
       if (created) {
@@ -715,6 +731,7 @@ async function persistProviderResults(
   }
 
   return {
+    businessBudgetReached,
     newBusinesses,
     newBusinessIds,
     newSources,
@@ -828,7 +845,12 @@ export async function runSearchTask(
     const resultHash = hashResultSet(providerResponse);
     const unchanged = task.last_result_hash !== null && task.last_result_hash === resultHash;
 
-    const stats = await persistProviderResults(task, providerResponse, options.discoveryRunId);
+    const stats = await persistProviderResults(
+      task,
+      providerResponse,
+      options.discoveryRunId,
+      options.maxNewBusinesses,
+    );
     const isEmpty = stats.localBusinessCount === 0 && stats.organicResultCount === 0;
 
     const status: 'DONE' | 'SKIPPED' = isEmpty ? 'SKIPPED' : 'DONE';

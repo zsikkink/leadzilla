@@ -25,6 +25,9 @@ describe('loadWorkerEnv', () => {
     expect(env.APOLLO_ENABLED).toBe(false);
     expect(env.DISCOVERY_ENABLED).toBe(false);
     expect(env.SERPAPI_DISCOVERY_ENABLED).toBe(true);
+    expect(env.SERPAPI_WEB_SEARCH_ENABLED).toBe(true);
+    expect(env.DISCOVERY_SCHEDULE_ENABLED).toBe(false);
+    expect(env.DISCOVERY_STALE_JOB_MINUTES).toBe(10);
     expect(env.ENRICHMENT_ENABLED).toBe(true);
     expect(env.ENRICHMENT_DEFAULT_PROVIDER).toBe('HUNTER');
   });

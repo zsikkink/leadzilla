@@ -71,6 +71,14 @@ export interface BusinessPrequalifyLogger {
   error: (object: Record<string, unknown>, message: string) => void;
 }
 
+async function isDiscoveryRunTerminal(discoveryRunId: string): Promise<boolean> {
+  const run = await prisma.jobExecution.findUnique({
+    where: { id: discoveryRunId },
+    select: { status: true },
+  });
+  return run?.status === 'cancelled' || run?.status === 'completed' || run?.status === 'failed';
+}
+
 // ── DNS resolution check ──────────────────────────────────────────────
 
 async function domainResolves(domain: string): Promise<boolean> {
@@ -176,80 +184,85 @@ export async function handleBusinessPrequalifyJob(
   );
 
   try {
-  // ── Load business ──────────────────────────────────────────────────
-  const business = await prisma.business.findUnique({
-    where: { id: businessId },
-  });
+    if (await isDiscoveryRunTerminal(discoveryRunId)) {
+      logger.warn(logCtx, 'Discovery run already terminal — skipping pre-qualification');
+      return;
+    }
 
-  if (!business) {
-    logger.warn(logCtx, 'Business not found — skipping pre-qualification');
-    return;
-  }
-
-  // ── Check: website domain ──────────────────────────────────────────
-  if (!business.websiteDomain) {
-    await disqualify(businessId, discoveryRunId, 'NO_WEBSITE_DOMAIN', logCtx, logger, undefined, providerUsed);
-    return;
-  }
-
-  // ── Check: minimum review count ────────────────────────────────────
-  // If reviewCount is null/undefined (Google Places didn't return it), skip the check.
-  // Only reject when the count is explicitly below the threshold.
-  if (business.reviewCount != null && business.reviewCount < effectiveMinReviewCount) {
-    await disqualify(businessId, discoveryRunId, 'INSUFFICIENT_REVIEWS', logCtx, logger, {
-      reviewCount: business.reviewCount,
-      minReviewCount: effectiveMinReviewCount,
-    }, providerUsed);
-    return;
-  }
-
-  // ── Check: DNS resolution ──────────────────────────────────────────
-  const resolves = await domainResolves(business.websiteDomain);
-  if (!resolves) {
-    await disqualify(businessId, discoveryRunId, 'DOMAIN_NOT_RESOLVING', logCtx, logger, {
-      domain: business.websiteDomain,
-    }, providerUsed);
-    return;
-  }
-
-  // ── Check: parked domain ───────────────────────────────────────────
-  const parked = await isParkedDomain(business.websiteDomain);
-  if (parked) {
-    await disqualify(businessId, discoveryRunId, 'PARKED_DOMAIN', logCtx, logger, {
-      domain: business.websiteDomain,
-    }, providerUsed);
-    return;
-  }
-
-  // ── Pre-qualification passed ───────────────────────────────────────
-  await prisma.business.update({
-    where: { id: businessId },
-    data: {
-      preQualified: true,
-      disqualificationReason: null,
-    },
-  });
-
-  await recordCostEvent(discoveryRunId, businessId, providerUsed ?? 'SERPAPI');
-
-  // ── Enqueue business.convert if dependency provided ────────────────
-  if (deps?.enqueueBusinessConvert) {
-    await deps.enqueueBusinessConvert({
-      businessId,
-      discoveryRunId,
-      icpProfileId,
-      includeWebsiteAnalysis,
-      includeSocialMediaAnalysis,
-      correlationId: effectiveCorrelationId,
+    // ── Load business ──────────────────────────────────────────────────
+    const business = await prisma.business.findUnique({
+      where: { id: businessId },
     });
 
-    logger.info(logCtx, 'Enqueued business.convert for pre-qualified business');
-  }
+    if (!business) {
+      logger.warn(logCtx, 'Business not found — skipping pre-qualification');
+      return;
+    }
 
-  logger.info(
-    { ...logCtx, reviewCount: business.reviewCount },
-    'Completed business.prequalify job — business qualified',
-  );
+    // ── Check: website domain ──────────────────────────────────────────
+    if (!business.websiteDomain) {
+      await disqualify(businessId, discoveryRunId, 'NO_WEBSITE_DOMAIN', logCtx, logger, undefined, providerUsed);
+      return;
+    }
+
+    // ── Check: minimum review count ────────────────────────────────────
+    // If reviewCount is null/undefined (Google Places didn't return it), skip the check.
+    // Only reject when the count is explicitly below the threshold.
+    if (business.reviewCount != null && business.reviewCount < effectiveMinReviewCount) {
+      await disqualify(businessId, discoveryRunId, 'INSUFFICIENT_REVIEWS', logCtx, logger, {
+        reviewCount: business.reviewCount,
+        minReviewCount: effectiveMinReviewCount,
+      }, providerUsed);
+      return;
+    }
+
+    // ── Check: DNS resolution ──────────────────────────────────────────
+    const resolves = await domainResolves(business.websiteDomain);
+    if (!resolves) {
+      await disqualify(businessId, discoveryRunId, 'DOMAIN_NOT_RESOLVING', logCtx, logger, {
+        domain: business.websiteDomain,
+      }, providerUsed);
+      return;
+    }
+
+    // ── Check: parked domain ───────────────────────────────────────────
+    const parked = await isParkedDomain(business.websiteDomain);
+    if (parked) {
+      await disqualify(businessId, discoveryRunId, 'PARKED_DOMAIN', logCtx, logger, {
+        domain: business.websiteDomain,
+      }, providerUsed);
+      return;
+    }
+
+    // ── Pre-qualification passed ───────────────────────────────────────
+    await prisma.business.update({
+      where: { id: businessId },
+      data: {
+        preQualified: true,
+        disqualificationReason: null,
+      },
+    });
+
+    await recordCostEvent(discoveryRunId, businessId, providerUsed ?? 'SERPAPI');
+
+    // ── Enqueue business.convert if dependency provided ────────────────
+    if (deps?.enqueueBusinessConvert) {
+      await deps.enqueueBusinessConvert({
+        businessId,
+        discoveryRunId,
+        icpProfileId,
+        includeWebsiteAnalysis,
+        includeSocialMediaAnalysis,
+        correlationId: effectiveCorrelationId,
+      });
+
+      logger.info(logCtx, 'Enqueued business.convert for pre-qualified business');
+    }
+
+    logger.info(
+      { ...logCtx, reviewCount: business.reviewCount },
+      'Completed business.prequalify job — business qualified',
+    );
   } catch (error: unknown) {
     logger.error({ ...logCtx, error }, 'Failed business.prequalify job');
     throw classifyError(error);

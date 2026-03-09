@@ -14,7 +14,10 @@ import type {
 } from '@lead-flood/contracts';
 
 import { DiscoveryAdminNotImplementedError } from './discovery-admin.errors.js';
-import type { DiscoveryAdminRepository } from './discovery-admin.repository.js';
+import type {
+  CancelDiscoveryRunResult,
+  DiscoveryAdminRepository,
+} from './discovery-admin.repository.js';
 
 export interface DiscoveryAdminServiceDependencies {
   triggerDiscoverySeedJob?: (input: RunDiscoverySeedRequest) => Promise<TriggerJobRunResponse>;
@@ -30,7 +33,7 @@ export interface DiscoveryAdminService {
   triggerDiscoveryTaskRun(input: RunDiscoveryTasksRequest): Promise<TriggerJobRunResponse>;
   listJobRuns(query: JobRunListQuery): Promise<ListJobRunsResponse>;
   getJobRunById(id: string): Promise<JobRunDetailResponse>;
-  cancelDiscoveryRun(id: string): Promise<{ success: true }>;
+  cancelDiscoveryRun(id: string): Promise<CancelDiscoveryRunResult>;
   getDiscoveryRunDetail(id: string): Promise<Awaited<ReturnType<DiscoveryAdminRepository['getDiscoveryRunDetail']>>>;
 }
 

@@ -2,17 +2,15 @@ import PgBoss, { type Job } from 'pg-boss';
 
 import { checkPipelineSchemaHealth, prisma } from '@lead-flood/db';
 import {
-  FallbackDiscoveryProvider,
   GooglePlacesDiscoveryProvider,
   loadDiscoveryRuntimeConfig,
-  SerpApiDiscoveryProvider,
   type DiscoveryRuntimeConfig,
   type DiscoveryProvider as V2DiscoveryProvider,
 } from '@lead-flood/discovery';
 import { createLogger } from '@lead-flood/observability';
 import {
   ApolloDiscoveryAdapter,
-  GoogleCustomSearchAdapter,
+  SerpApiWebSearchAdapter,
   HunterEnrichmentAdapter,
   InstagramScraperAdapter,
   LinkedInSearchAdapter,
@@ -163,7 +161,10 @@ import { buildDefaultWorkerId, startJobRequestDispatcher } from './job-requests/
 import { EmailRateLimiter } from './messaging/email-rate-limiter.js';
 import { WhatsAppRateLimiter } from './messaging/rate-limiter.js';
 import { dispatchPendingOutboxEvents } from './outbox-dispatcher.js';
-import { checkStaleDiscoveryRuns } from './utils/discovery-run-tracker.js';
+import {
+  checkStaleDiscoveryRuns,
+  sweepStaleDiscoveryPipelineJobs,
+} from './utils/discovery-run-tracker.js';
 import { ensureWorkerQueues, HEARTBEAT_QUEUE_NAME } from './queues.js';
 import { registerWorkerSchedules } from './schedules.js';
 
@@ -248,7 +249,10 @@ async function main(): Promise<void> {
 
   await ensureWorkerQueues(boss);
   if (workerSchedulesEnabled) {
-    await registerWorkerSchedules(boss);
+    await registerWorkerSchedules(boss, {
+      discoveryScheduleEnabled: env.DISCOVERY_SCHEDULE_ENABLED,
+      logger,
+    });
   } else {
     logger.info(
       {
@@ -294,7 +298,6 @@ async function main(): Promise<void> {
       );
     }
 
-    const hasSerpApi = Boolean(discoveryRuntimeConfig.serpApiKey);
     const hasGooglePlaces = Boolean(discoveryRuntimeConfig.googlePlacesApiKey);
 
     const providerLogContext = {
@@ -311,18 +314,6 @@ async function main(): Promise<void> {
       jobRequestWorkerId: env.JOB_REQUEST_WORKER_ID ?? buildDefaultWorkerId(),
     };
 
-    // Build individual providers
-    const serpApiProvider = hasSerpApi
-      ? new SerpApiDiscoveryProvider({
-          apiKey: discoveryRuntimeConfig.serpApiKey!,
-          rps: discoveryRuntimeConfig.rps,
-          enableCache: discoveryRuntimeConfig.enableCache,
-          maxAttempts: discoveryRuntimeConfig.maxTaskAttempts,
-          backoffBaseSeconds: discoveryRuntimeConfig.backoffBaseSeconds,
-          mapsZoom: discoveryRuntimeConfig.mapsZoom,
-        })
-      : null;
-
     const googlePlacesProvider = hasGooglePlaces
       ? new GooglePlacesDiscoveryProvider({
           apiKey: discoveryRuntimeConfig.googlePlacesApiKey!,
@@ -332,53 +323,30 @@ async function main(): Promise<void> {
         })
       : null;
 
-    // Wire with runtime fallback when both providers are available
-    if (discoveryRuntimeConfig.searchProvider === 'SERPAPI' && serpApiProvider) {
-      v2SearchProvider = googlePlacesProvider
-        ? new FallbackDiscoveryProvider({
-            primary: serpApiProvider,
-            fallback: googlePlacesProvider,
-            primaryName: 'SerpAPI',
-            fallbackName: 'Google Places',
-          })
-        : serpApiProvider;
+    if (discoveryRuntimeConfig.searchProvider === 'GOOGLE_PLACES' && googlePlacesProvider) {
+      v2SearchProvider = googlePlacesProvider;
       logger.info(
-        { ...providerLogContext, provider: 'SERPAPI', fallback: hasGooglePlaces ? 'GOOGLE_PLACES' : null },
-        hasGooglePlaces
-          ? 'Discovery pipeline configured (SerpAPI primary, Google Places fallback)'
-          : 'Discovery pipeline configured (SerpAPI only)',
-      );
-    } else if (discoveryRuntimeConfig.searchProvider === 'GOOGLE_PLACES' && googlePlacesProvider) {
-      v2SearchProvider = serpApiProvider
-        ? new FallbackDiscoveryProvider({
-            primary: googlePlacesProvider,
-            fallback: serpApiProvider,
-            primaryName: 'Google Places',
-            fallbackName: 'SerpAPI',
-          })
-        : googlePlacesProvider;
-      logger.info(
-        { ...providerLogContext, provider: 'GOOGLE_PLACES', fallback: hasSerpApi ? 'SERPAPI' : null },
-        hasSerpApi
-          ? 'Discovery pipeline configured (Google Places primary, SerpAPI fallback)'
-          : 'Discovery pipeline configured (Google Places only)',
+        { ...providerLogContext, provider: 'GOOGLE_PLACES', mode: 'strict_initial_discovery' },
+        'Discovery pipeline configured (Google Places only, strict initial discovery mode)',
       );
     } else {
       logger.warn(
         {
           searchProvider: discoveryRuntimeConfig.searchProvider,
           hasGooglePlacesKey: hasGooglePlaces,
-          hasSerpApiKey: hasSerpApi,
         },
-        'No discovery search provider configured — set GOOGLE_PLACES_API_KEY or SERPAPI_API_KEY',
+        'No discovery search provider configured — set GOOGLE_PLACES_API_KEY',
       );
     }
   } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : 'invalid discovery runtime config';
+    if (discoveryQueueWorkersEnabled) {
+      logger.error({ error: reason }, 'Discovery runtime config invalid; refusing worker startup');
+      throw new Error(`Discovery runtime config invalid: ${reason}`);
+    }
     logger.warn(
-      {
-        error: error instanceof Error ? error.message : 'invalid discovery runtime config',
-      },
-      'Discovery runtime disabled; check DISCOVERY_SEARCH_PROVIDER and API key env vars',
+      { error: reason },
+      'Discovery queue workers disabled; skipping discovery runtime initialization',
     );
   }
 
@@ -389,14 +357,17 @@ async function main(): Promise<void> {
     baseUrl: env.OPENAI_BASE_URL,
   });
 
-  const googleCustomSearchAdapter = new GoogleCustomSearchAdapter({
-    apiKey: env.GOOGLE_CUSTOM_SEARCH_API_KEY,
-    engineId: env.GOOGLE_CUSTOM_SEARCH_ENGINE_ID,
-  });
+  const serpApiWebSearchAdapter = env.SERPAPI_WEB_SEARCH_ENABLED
+    ? new SerpApiWebSearchAdapter({
+        apiKey: env.SERPAPI_API_KEY,
+      })
+    : null;
 
-  const linkedInSearchAdapter = new LinkedInSearchAdapter({
-    searchAdapter: googleCustomSearchAdapter,
-  });
+  const linkedInSearchAdapter = serpApiWebSearchAdapter
+    ? new LinkedInSearchAdapter({
+        searchAdapter: serpApiWebSearchAdapter,
+      })
+    : null;
 
   const resendAdapter = new ResendAdapter({
     apiKey: env.RESEND_API_KEY,
@@ -439,6 +410,26 @@ async function main(): Promise<void> {
   };
 
   await runOutboxDispatch();
+  await sweepStaleDiscoveryPipelineJobs({
+    boss: {
+      cancel: (name, id) => boss.cancel(name, id),
+      send: (name, data, options) => (
+        options
+          ? boss.send(name, data, options)
+          : boss.send(name, data)
+      ),
+    },
+    logger,
+    staleMinutes: env.DISCOVERY_STALE_JOB_MINUTES,
+    retryOptionsByQueue: {
+      [BUSINESS_PREQUALIFY_JOB_NAME]: BUSINESS_PREQUALIFY_RETRY_OPTIONS,
+      [BUSINESS_CONVERT_JOB_NAME]: BUSINESS_CONVERT_RETRY_OPTIONS,
+      [DISCOVERY_SEED_JOB_NAME]: DISCOVERY_SEED_RETRY_OPTIONS,
+      [DISCOVERY_RUN_SEARCH_TASK_JOB_NAME]: DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,
+    },
+  }).catch((error: unknown) => {
+    logger.warn({ error }, 'Failed stale discovery pipeline sweep on worker startup');
+  });
   const outboxInterval = setInterval(() => {
     void runOutboxDispatch();
   }, 5000);
@@ -446,7 +437,27 @@ async function main(): Promise<void> {
   // Periodic check for stale discovery runs (safety timeout enforcement)
   const staleRunCheckInterval = setInterval(() => {
     void checkStaleDiscoveryRuns(logger);
-  }, 15 * 60 * 1000); // every 15 minutes
+    void sweepStaleDiscoveryPipelineJobs({
+      boss: {
+        cancel: (name, id) => boss.cancel(name, id),
+        send: (name, data, options) => (
+          options
+            ? boss.send(name, data, options)
+            : boss.send(name, data)
+        ),
+      },
+      logger,
+      staleMinutes: env.DISCOVERY_STALE_JOB_MINUTES,
+      retryOptionsByQueue: {
+        [BUSINESS_PREQUALIFY_JOB_NAME]: BUSINESS_PREQUALIFY_RETRY_OPTIONS,
+        [BUSINESS_CONVERT_JOB_NAME]: BUSINESS_CONVERT_RETRY_OPTIONS,
+        [DISCOVERY_SEED_JOB_NAME]: DISCOVERY_SEED_RETRY_OPTIONS,
+        [DISCOVERY_RUN_SEARCH_TASK_JOB_NAME]: DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,
+      },
+    }).catch((error: unknown) => {
+      logger.warn({ error }, 'Failed stale discovery pipeline sweep in periodic check');
+    });
+  }, 5 * 60 * 1000); // every 5 minutes
 
   await registerWorker<HeartbeatJobPayload>(boss, logger, HEARTBEAT_QUEUE_NAME, handleHeartbeatJob);
 
@@ -589,11 +600,12 @@ async function main(): Promise<void> {
         instagramScraperAdapter,
         smtpVerifier: new SmtpVerifier(),
         openAiAdapter: openAiAdapter.isConfigured ? openAiAdapter : undefined,
-        linkedInSearchAdapter: {
-          searchCompanyPeople: (input) => linkedInSearchAdapter.searchCompanyPeople(input),
-          searchPersonVerification: (input) => linkedInSearchAdapter.searchPersonVerification(input),
-          isConfigured: linkedInSearchAdapter.isConfigured,
-        },
+        linkedInSearchAdapter: linkedInSearchAdapter
+          ? {
+              discoverDecisionMaker: (input) => linkedInSearchAdapter.discoverDecisionMaker(input),
+              isConfigured: linkedInSearchAdapter.isConfigured,
+            }
+          : undefined,
         llmExtractionConfig: openAiAdapter.isConfigured
           ? {
               openAiApiKey: env.OPENAI_API_KEY,

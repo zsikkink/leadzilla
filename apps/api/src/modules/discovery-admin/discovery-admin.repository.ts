@@ -329,6 +329,13 @@ export interface DiscoveryRunLeadItem {
   companyName: string | null;
 }
 
+export interface CancelDiscoveryRunResult {
+  success: boolean;
+  outcome: 'cancelled' | 'already_cancelled' | 'already_terminal';
+  terminalStatus: 'completed' | 'failed' | 'cancelled' | null;
+  cancelledPendingJobsCount: number;
+}
+
 export interface DiscoveryAdminRepository {
   listLeads(query: AdminListLeadsQuery): Promise<AdminListLeadsResponse>;
   getLeadById(id: string): Promise<AdminLeadDetailResponse>;
@@ -336,7 +343,7 @@ export interface DiscoveryAdminRepository {
   getSearchTaskById(id: string): Promise<AdminSearchTaskDetailResponse>;
   listJobRuns(query: JobRunListQuery): Promise<ListJobRunsResponse>;
   getJobRunById(id: string): Promise<JobRunDetailResponse>;
-  cancelDiscoveryRun(id: string): Promise<{ success: true }>;
+  cancelDiscoveryRun(id: string): Promise<CancelDiscoveryRunResult>;
   getDiscoveryRunDetail(id: string): Promise<{
     run: {
       id: string;
@@ -592,10 +599,10 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
     };
   }
 
-  async cancelDiscoveryRun(id: string): Promise<{ success: true }> {
+  async cancelDiscoveryRun(id: string): Promise<CancelDiscoveryRunResult> {
     const run = await prisma.jobExecution.findUnique({
       where: { id },
-      select: { status: true },
+      select: { status: true, result: true },
     });
 
     if (!run) {
@@ -603,41 +610,118 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
     }
 
     if (run.status === 'cancelled') {
-      return { success: true };
+      return {
+        success: true,
+        outcome: 'already_cancelled',
+        terminalStatus: 'cancelled',
+        cancelledPendingJobsCount: 0,
+      };
     }
 
     const terminalStatuses = ['completed', 'failed'] as const;
     if (terminalStatuses.includes(run.status as (typeof terminalStatuses)[number])) {
-      throw new DiscoveryAdminBadRequestError('Run already in terminal state');
+      return {
+        success: false,
+        outcome: 'already_terminal',
+        terminalStatus: run.status as 'completed' | 'failed',
+        cancelledPendingJobsCount: 0,
+      };
     }
 
+    const now = new Date();
     const schema = readPgBossSchema();
+    let cancelledPendingJobsCount = 0;
+    let queueCleanupError: string | null = null;
 
-    await prisma.$transaction(async (tx) => {
-      await tx.jobExecution.update({
-        where: { id },
-        data: {
-          status: 'cancelled',
-          finishedAt: new Date(),
-        },
-      });
-
-      await tx.$executeRawUnsafe(
+    try {
+      const cleanupRows = await prisma.$queryRawUnsafe<Array<{ deleted_count: number }>>(
         `
-          delete from ${schema}.job
-          where state = 'created'
-            and name in ('discovery.seed', 'discovery.run_search_task')
-            and (
-              data ->> 'discoveryRunId' = $1
-              or singleton_key like $2
-            )
+          with deleted as (
+            delete from ${schema}.job
+            where state in ('created', 'retry')
+              and name in (
+                'discovery.seed',
+                'discovery.run_search_task',
+                'business.prequalify',
+                'business.convert',
+                'features.compute',
+                'scoring.compute',
+                'apollo.enrich',
+                'message.generate',
+                'message.send'
+              )
+              and (
+                data ->> 'discoveryRunId' = $1
+                or data ->> 'runId' = $2
+                or singleton_key like $3
+              )
+            returning 1
+          )
+          select count(*)::int as deleted_count from deleted
         `,
+        id,
         id,
         `%${id}%`,
       );
-    });
+      cancelledPendingJobsCount = cleanupRows[0]?.deleted_count ?? 0;
+    } catch (error: unknown) {
+      queueCleanupError = error instanceof Error ? error.message : 'queue cleanup failed';
+    }
 
-    return { success: true };
+    const existingResult =
+      run.result && typeof run.result === 'object' && !Array.isArray(run.result)
+        ? run.result as Record<string, unknown>
+        : {};
+
+    try {
+      await prisma.jobExecution.update({
+        where: { id },
+        data: {
+          status: 'cancelled',
+          finishedAt: now,
+          result: {
+            ...existingResult,
+            cancellation: {
+              outcome: 'cancelled',
+              cancelledAt: now.toISOString(),
+              cancelledPendingJobsCount,
+              ...(queueCleanupError ? { queueCleanupError } : {}),
+            },
+          } as Prisma.InputJsonValue,
+        },
+      });
+    } catch {
+      // Race-safe fallback: if another worker finalized the run concurrently,
+      // return a deterministic non-500 cancel outcome.
+      const latest = await prisma.jobExecution.findUnique({
+        where: { id },
+        select: { status: true },
+      });
+      if (latest?.status === 'cancelled') {
+        return {
+          success: true,
+          outcome: 'already_cancelled',
+          terminalStatus: 'cancelled',
+          cancelledPendingJobsCount,
+        };
+      }
+      if (latest && terminalStatuses.includes(latest.status as (typeof terminalStatuses)[number])) {
+        return {
+          success: false,
+          outcome: 'already_terminal',
+          terminalStatus: latest.status as 'completed' | 'failed',
+          cancelledPendingJobsCount,
+        };
+      }
+      throw new DiscoveryAdminBadRequestError('Unable to cancel run due to concurrent state update');
+    }
+
+    return {
+      success: true,
+      outcome: 'cancelled',
+      terminalStatus: 'cancelled',
+      cancelledPendingJobsCount,
+    };
   }
 
   async getDiscoveryRunDetail(id: string) {

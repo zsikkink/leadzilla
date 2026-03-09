@@ -4,6 +4,7 @@ import {
   LeadContactDiscoveryDiagnosticSchema,
   LeadContactDiscoveryQueryFamilySchema,
   LeadContactDiscoverySourceFamilySchema,
+  LeadContactTerminalReasonSchema,
   LeadContactVerificationVerdictSchema,
   LeadScoreBandSchema,
 } from './leads.contract.js';
@@ -75,6 +76,19 @@ export const ContactRecoverySnapshotSchema = z
     topCandidates: z.array(ContactRecoveryCandidateSchema),
     websiteIntelligence: z.unknown().nullable(),
     instagramIntelligence: z.unknown().nullable(),
+    identityConfidence: z.number().min(0).max(1).nullable().optional(),
+    contactConfidence: z.number().min(0).max(1).nullable().optional(),
+    terminalReason: LeadContactTerminalReasonSchema.nullable().optional(),
+    resolutionState: z.enum(['inconclusive_but_promising', 'no_contact_terminal', 'lead_created']).nullable().optional(),
+    adjudication: z
+      .object({
+        verdict: z.enum(['select_candidate', 'inconclusive', 'reject_all']),
+        selectedCandidateId: z.string().nullable(),
+        confidenceBucket: z.enum(['high', 'medium', 'low']).nullable(),
+        rationale: z.string(),
+      })
+      .nullable()
+      .optional(),
   })
   .strict();
 

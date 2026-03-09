@@ -170,6 +170,7 @@ export interface BuildServerOptions {
   verifyAccessToken?: VerifyAccessToken | undefined;
   checkDatabaseHealth: () => Promise<boolean>;
   checkSchemaHealth: () => Promise<ReadySchemaHealth>;
+  checkEmailDeliverability?: ((email: string) => Promise<{ ok: boolean; reason?: string | undefined }>) | undefined;
   authenticateUser?: ((input: LoginRequest) => Promise<LoginResponse | null>) | undefined;
   createLeadAndEnqueue: (input: CreateLeadRequest) => Promise<{ leadId: string; jobId: string }>;
   enqueueDiscoveryRun?: (payload: DiscoveryRunJobPayload) => Promise<void>;
@@ -223,6 +224,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
   });
 
   app.decorateRequest('user', null);
+  const checkEmailDeliverability = options.checkEmailDeliverability ?? isEmailDeliverable;
 
   // Public routes - no auth required
   app.get('/health', async () => {
@@ -303,7 +305,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       }
 
       // Check email deliverability (MX records + disposable domain)
-      const deliverability = await isEmailDeliverable(parsedRequest.data.email);
+      const deliverability = await checkEmailDeliverability(parsedRequest.data.email);
       if (!deliverability.ok) {
         reply.status(422);
         return ErrorResponseSchema.parse({

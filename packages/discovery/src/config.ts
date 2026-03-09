@@ -141,7 +141,7 @@ export interface DiscoverySeedConfig {
   seedBucket: string | null;
 }
 
-export type DiscoverySearchProvider = 'SERPAPI' | 'GOOGLE_PLACES';
+export type DiscoverySearchProvider = 'GOOGLE_PLACES';
 
 export interface DiscoveryRuntimeConfig extends DiscoverySeedConfig {
   searchProvider: DiscoverySearchProvider;
@@ -190,7 +190,7 @@ function loadBaseSeedConfig(source: NodeJS.ProcessEnv): DiscoverySeedConfig {
     .map((value) => normalizeTaskType(value))
     .filter((value): value is SearchTaskType => value !== null);
   const normalizedSeedTaskTypes: SearchTaskType[] =
-    seedTaskTypes.length > 0 ? seedTaskTypes : ['SERP_MAPS_LOCAL'];
+    seedTaskTypes.length > 0 ? seedTaskTypes : ['SERP_GOOGLE_LOCAL'];
 
   const maxPagesPerQuery =
     seedProfile === 'small'
@@ -200,7 +200,7 @@ function loadBaseSeedConfig(source: NodeJS.ProcessEnv): DiscoverySeedConfig {
   const taskTypes: SearchTaskType[] =
     seedProfile === 'small'
       ? normalizedSeedTaskTypes
-      : (['SERP_MAPS_LOCAL'] satisfies SearchTaskType[]);
+      : (['SERP_GOOGLE_LOCAL'] satisfies SearchTaskType[]);
 
   const seedBucket = source.DISCOVERY_SEED_BUCKET?.trim() || null;
 
@@ -225,40 +225,23 @@ export function loadDiscoverySeedConfig(source: NodeJS.ProcessEnv): DiscoverySee
 }
 
 export function loadDiscoveryRuntimeConfig(source: NodeJS.ProcessEnv): DiscoveryRuntimeConfig {
-  const serpApiKey = source.SERPAPI_API_KEY?.trim() || null;
   const googlePlacesApiKey = source.GOOGLE_PLACES_API_KEY?.trim() || null;
 
   const providerRaw = source.DISCOVERY_SEARCH_PROVIDER?.trim().toUpperCase();
-  let preferredProvider: DiscoverySearchProvider;
-
   if (providerRaw === 'SERPAPI') {
-    preferredProvider = 'SERPAPI';
-  } else if (providerRaw === 'GOOGLE_PLACES') {
-    preferredProvider = 'GOOGLE_PLACES';
-  } else {
-    // Default priority: SERPAPI > GOOGLE_PLACES
-    preferredProvider = serpApiKey ? 'SERPAPI' : 'GOOGLE_PLACES';
-  }
-
-  // Resolve with fallback: if preferred provider's key is missing, try the other
-  let searchProvider: DiscoverySearchProvider;
-
-  if (preferredProvider === 'SERPAPI' && serpApiKey) {
-    searchProvider = 'SERPAPI';
-  } else if (preferredProvider === 'SERPAPI' && !serpApiKey && googlePlacesApiKey) {
-    // SERPAPI preferred but no key — fall back to Google Places
-    searchProvider = 'GOOGLE_PLACES';
-  } else if (preferredProvider === 'GOOGLE_PLACES' && googlePlacesApiKey) {
-    searchProvider = 'GOOGLE_PLACES';
-  } else if (preferredProvider === 'GOOGLE_PLACES' && !googlePlacesApiKey && serpApiKey) {
-    // Google Places preferred but no key — fall back to SERPAPI
-    searchProvider = 'SERPAPI';
-  } else {
     throw new Error(
-      'No discovery search provider API key configured. ' +
-        'Set SERPAPI_API_KEY (preferred) or GOOGLE_PLACES_API_KEY.',
+      'Initial discovery provider SERPAPI is disabled. ' +
+      'Set DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES.',
     );
   }
+
+  if (!googlePlacesApiKey) {
+    throw new Error(
+      'No discovery search provider API key configured. ' +
+      'Set GOOGLE_PLACES_API_KEY.',
+    );
+  }
+  const searchProvider: DiscoverySearchProvider = 'GOOGLE_PLACES';
 
   const baseConfig = loadBaseSeedConfig(source);
   const mapsZoomRaw = source.DISCOVERY_MAPS_ZOOM?.trim();
@@ -277,7 +260,7 @@ export function loadDiscoveryRuntimeConfig(source: NodeJS.ProcessEnv): Discovery
   return {
     ...baseConfig,
     searchProvider,
-    serpApiKey,
+    serpApiKey: source.SERPAPI_API_KEY?.trim() || null,
     googlePlacesApiKey,
     rps: parsePositiveInt(source.DISCOVERY_RPS, 1),
     concurrency: parsePositiveInt(source.DISCOVERY_CONCURRENCY, 3),

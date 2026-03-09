@@ -525,6 +525,14 @@ async function main(): Promise<void> {
         contactRecovery?.telemetry && typeof contactRecovery.telemetry === 'object' && !Array.isArray(contactRecovery.telemetry)
           ? contactRecovery.telemetry as Record<string, unknown>
           : null;
+      const confidence =
+        conversionMetadata?.confidence && typeof conversionMetadata.confidence === 'object' && !Array.isArray(conversionMetadata.confidence)
+          ? conversionMetadata.confidence as Record<string, unknown>
+          : null;
+      const decisionProvenance =
+        conversionMetadata?.decisionProvenance && typeof conversionMetadata.decisionProvenance === 'object' && !Array.isArray(conversionMetadata.decisionProvenance)
+          ? conversionMetadata.decisionProvenance as Record<string, unknown>
+          : null;
       const topCandidates = Array.isArray(contactRecovery?.topCandidates)
         ? contactRecovery.topCandidates
         : [];
@@ -573,19 +581,9 @@ async function main(): Promise<void> {
                       || item.sourceFamily === 'unknown'
                         ? item.sourceFamily
                         : 'unknown',
-                    queryFamily:
-                      item.queryFamily === 'V1_linkedin_exact'
-                      || item.queryFamily === 'V2_company_domain_exact'
-                      || item.queryFamily === 'V3_public_web_exact'
-                      || item.queryFamily === 'V4_exact_without_title'
-                      || item.queryFamily === 'D1_linkedin_roles'
-                      || item.queryFamily === 'D2_company_team_pages'
-                      || item.queryFamily === 'D3_company_about_pages'
-                      || item.queryFamily === 'D4_press_news_mentions'
-                      || item.queryFamily === 'D5_public_web_role_queries'
-                      || item.queryFamily === 'D6_locality_first_queries'
-                        ? item.queryFamily
-                        : 'D5_public_web_role_queries',
+                    queryFamily: item.queryFamily === 'DISCOVER_ROLES'
+                      ? item.queryFamily
+                      : 'DISCOVER_ROLES',
                     rawResultCount: typeof item.rawResultCount === 'number' ? item.rawResultCount : 0,
                     promotedCount: typeof item.promotedCount === 'number' ? item.promotedCount : 0,
                     verdict:
@@ -598,29 +596,11 @@ async function main(): Promise<void> {
                   }))
                 : [],
               topQueryFamily:
-                telemetry.topQueryFamily === 'V1_linkedin_exact'
-                || telemetry.topQueryFamily === 'V2_company_domain_exact'
-                || telemetry.topQueryFamily === 'V3_public_web_exact'
-                || telemetry.topQueryFamily === 'V4_exact_without_title'
-                || telemetry.topQueryFamily === 'D1_linkedin_roles'
-                || telemetry.topQueryFamily === 'D2_company_team_pages'
-                || telemetry.topQueryFamily === 'D3_company_about_pages'
-                || telemetry.topQueryFamily === 'D4_press_news_mentions'
-                || telemetry.topQueryFamily === 'D5_public_web_role_queries'
-                || telemetry.topQueryFamily === 'D6_locality_first_queries'
+                telemetry.topQueryFamily === 'DISCOVER_ROLES'
                   ? telemetry.topQueryFamily
-                  : contactRecovery?.topQueryFamily === 'V1_linkedin_exact'
-                    || contactRecovery?.topQueryFamily === 'V2_company_domain_exact'
-                    || contactRecovery?.topQueryFamily === 'V3_public_web_exact'
-                    || contactRecovery?.topQueryFamily === 'V4_exact_without_title'
-                    || contactRecovery?.topQueryFamily === 'D1_linkedin_roles'
-                    || contactRecovery?.topQueryFamily === 'D2_company_team_pages'
-                    || contactRecovery?.topQueryFamily === 'D3_company_about_pages'
-                    || contactRecovery?.topQueryFamily === 'D4_press_news_mentions'
-                    || contactRecovery?.topQueryFamily === 'D5_public_web_role_queries'
-                    || contactRecovery?.topQueryFamily === 'D6_locality_first_queries'
-                      ? contactRecovery.topQueryFamily
-                      : null,
+                  : contactRecovery?.topQueryFamily === 'DISCOVER_ROLES'
+                    ? contactRecovery.topQueryFamily
+                    : null,
               topSourceFamily:
                 telemetry.topSourceFamily === 'linkedin'
                 || telemetry.topSourceFamily === 'company_page'
@@ -665,6 +645,60 @@ async function main(): Promise<void> {
                     ? candidate.matchedSignals.filter((signal): signal is string => typeof signal === 'string')
                     : [],
                 })),
+              identityConfidence: typeof contactRecovery?.identityConfidence === 'number'
+                ? contactRecovery.identityConfidence
+                : typeof confidence?.identityConfidence === 'number'
+                  ? confidence.identityConfidence
+                  : null,
+              contactConfidence: typeof contactRecovery?.contactConfidence === 'number'
+                ? contactRecovery.contactConfidence
+                : typeof confidence?.contactConfidence === 'number'
+                  ? confidence.contactConfidence
+                  : null,
+              terminalReason:
+                contactRecovery?.terminalReason === 'no_named_candidate_found'
+                || contactRecovery?.terminalReason === 'named_candidate_no_email'
+                || contactRecovery?.terminalReason === 'email_inferred_failed_verification'
+                || contactRecovery?.terminalReason === 'ambiguous_winner'
+                  ? contactRecovery.terminalReason
+                  : null,
+              resolutionState:
+                contactRecovery?.resolutionState === 'lead_created'
+                || contactRecovery?.resolutionState === 'inconclusive_but_promising'
+                || contactRecovery?.resolutionState === 'no_contact_terminal'
+                  ? contactRecovery.resolutionState
+                  : null,
+              winnerSelectionMethod:
+                contactRecovery?.winnerSelectionMethod === 'llm'
+                || contactRecovery?.winnerSelectionMethod === 'deterministic'
+                  ? contactRecovery.winnerSelectionMethod
+                  : decisionProvenance?.winnerSelectionMethod === 'llm'
+                    || decisionProvenance?.winnerSelectionMethod === 'deterministic'
+                      ? decisionProvenance.winnerSelectionMethod
+                      : null,
+              adjudication:
+                contactRecovery?.adjudication && typeof contactRecovery.adjudication === 'object' && !Array.isArray(contactRecovery.adjudication)
+                  ? {
+                      verdict:
+                        (contactRecovery.adjudication as Record<string, unknown>).verdict === 'select_candidate'
+                        || (contactRecovery.adjudication as Record<string, unknown>).verdict === 'inconclusive'
+                        || (contactRecovery.adjudication as Record<string, unknown>).verdict === 'reject_all'
+                          ? (contactRecovery.adjudication as Record<string, unknown>).verdict
+                          : 'inconclusive',
+                      selectedCandidateId: typeof (contactRecovery.adjudication as Record<string, unknown>).selectedCandidateId === 'string'
+                        ? (contactRecovery.adjudication as Record<string, unknown>).selectedCandidateId
+                        : null,
+                      confidenceBucket:
+                        (contactRecovery.adjudication as Record<string, unknown>).confidenceBucket === 'high'
+                        || (contactRecovery.adjudication as Record<string, unknown>).confidenceBucket === 'medium'
+                        || (contactRecovery.adjudication as Record<string, unknown>).confidenceBucket === 'low'
+                          ? (contactRecovery.adjudication as Record<string, unknown>).confidenceBucket
+                          : null,
+                      rationale: typeof (contactRecovery.adjudication as Record<string, unknown>).rationale === 'string'
+                        ? (contactRecovery.adjudication as Record<string, unknown>).rationale
+                        : 'No rationale available',
+                    }
+                  : null,
             }
           : null,
       };

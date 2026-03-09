@@ -312,7 +312,7 @@ describe('buildServer', () => {
             verificationVerdict: 'verified',
             supportingUrls: ['https://linkedin.com/in/atlas-founder'],
             diagnostics: [],
-            topQueryFamily: 'V1_linkedin_exact',
+            topQueryFamily: 'DISCOVER_ROLES',
           },
           attempts: [],
           topCandidates: [],
@@ -442,15 +442,15 @@ describe('buildServer', () => {
           supportingUrls: ['https://linkedin.com/in/ada-lovelace'],
           diagnostics: [
             {
-              stage: 'VERIFY_V1_PEOPLE_WEB',
+              stage: 'DISCOVER',
               sourceFamily: 'linkedin',
-              queryFamily: 'V1_linkedin_exact',
+              queryFamily: 'DISCOVER_ROLES',
               rawResultCount: 5,
               promotedCount: 1,
               verdict: 'verified',
             },
           ],
-          topQueryFamily: 'V1_linkedin_exact',
+          topQueryFamily: 'DISCOVER_ROLES',
           topSourceFamily: 'linkedin',
           finalOutcome: 'lead_created',
           topCandidates: [

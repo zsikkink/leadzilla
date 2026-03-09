@@ -136,6 +136,26 @@ export function shouldAutoApprove(config: AutoApproveConfig, blendedScore: numbe
   return config.enabled && blendedScore >= config.scoreMin && blendedScore <= config.scoreMax;
 }
 
+/**
+ * Global manual-approval gate for message drafts.
+ * When enabled, worker never auto-approves drafts and all sends require explicit user approval.
+ * Default: false (opt-in until explicitly enabled).
+ */
+export async function isManualApprovalOnlyEnabled(): Promise<boolean> {
+  try {
+    const row = await prisma.pipelineSetting.findUnique({
+      where: { key: 'messaging_manual_approval_only' },
+      select: { valueJson: true },
+    });
+    if (typeof row?.valueJson === 'boolean') {
+      return row.valueJson;
+    }
+  } catch {
+    // Fall through to default
+  }
+  return false;
+}
+
 // ── Discovery rate helpers ────────────────────────────────────────────
 
 /**

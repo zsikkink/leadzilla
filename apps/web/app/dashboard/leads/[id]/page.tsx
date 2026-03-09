@@ -132,6 +132,21 @@ function formatQueryFamily(queryFamily: string | null): string {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function formatTerminalReason(reason: string | null | undefined): string {
+  switch (reason) {
+    case 'no_named_candidate_found':
+      return 'No named candidate found';
+    case 'named_candidate_no_email':
+      return 'Named candidate, no email';
+    case 'email_inferred_failed_verification':
+      return 'Inferred email failed verification';
+    case 'ambiguous_winner':
+      return 'Ambiguous winner';
+    default:
+      return 'Not set';
+  }
+}
+
 
 // ── Company Intelligence (from Business scraper data) ─────────
 
@@ -879,6 +894,24 @@ export default function LeadDetailPage() {
                 <p>Valid profiles: <span className="font-medium text-foreground">{l.contactDiscovery.cseValidProfiles}</span></p>
                 <p>Promoted candidates: <span className="font-medium text-foreground">{l.contactDiscovery.cseCandidatesAdded}</span></p>
                 <p>Top query family: <span className="font-medium text-foreground">{formatQueryFamily(l.contactDiscovery.topQueryFamily)}</span></p>
+                <p>
+                  Identity confidence:
+                  <span className="font-medium text-foreground">
+                    {' '}
+                    {l.contactDiscovery.identityConfidence == null ? 'N/A' : `${Math.round(l.contactDiscovery.identityConfidence * 100)}%`}
+                  </span>
+                </p>
+                <p>
+                  Contact confidence:
+                  <span className="font-medium text-foreground">
+                    {' '}
+                    {l.contactDiscovery.contactConfidence == null ? 'N/A' : `${Math.round(l.contactDiscovery.contactConfidence * 100)}%`}
+                  </span>
+                </p>
+                <p>
+                  Terminal reason:
+                  <span className="font-medium text-foreground"> {formatTerminalReason(l.contactDiscovery.terminalReason)}</span>
+                </p>
               </div>
               {l.contactDiscovery.supportingUrls.length > 0 ? (
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -1235,7 +1268,7 @@ export default function LeadDetailPage() {
         <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3">
           <div className="flex items-center gap-2 text-xs text-amber-400">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            <span>Instagram data may be incomplete. Authentication may need refreshing.</span>
+            <span>Instagram insights are partial right now. Session credentials likely need refresh.</span>
           </div>
         </div>
       ) : null}

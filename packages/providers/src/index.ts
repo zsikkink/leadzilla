@@ -10,6 +10,7 @@ export * from './enrichment/pdl.adapter.js';
 export * from './enrichment/smtp-verifier.js';
 export * from './enrichment/company-profile.js';
 export * from './enrichment/google-custom-search.adapter.js';
+export * from './enrichment/serpapi-web-search.adapter.js';
 export * from './enrichment/linkedin-search.adapter.js';
 export * from './ai/openai.adapter.js';
 export * from './email/resend.adapter.js';

@@ -61,6 +61,21 @@ function formatQueryFamily(queryFamily: string | null): string {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function formatTerminalReason(reason: string | null | undefined): string {
+  switch (reason) {
+    case 'no_named_candidate_found':
+      return 'No named candidate found';
+    case 'named_candidate_no_email':
+      return 'Named candidate, no email';
+    case 'email_inferred_failed_verification':
+      return 'Inferred email failed verification';
+    case 'ambiguous_winner':
+      return 'Ambiguous winner';
+    default:
+      return 'Not set';
+  }
+}
+
 function scorePercent(score: number | null): string {
   if (score === null) {
     return 'N/A';
@@ -176,6 +191,26 @@ function RecoveryDetailPanel({
         <div className="rounded-xl border border-border/40 bg-background/30 p-3">
           <p className="text-[11px] uppercase tracking-[0.24em] text-muted-foreground/60">Emails Inferred</p>
           <p className="mt-2 text-2xl font-bold text-foreground">{item.snapshot.telemetry.cseEmailsInferred}</p>
+        </div>
+      </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        <div className="rounded-xl border border-border/40 bg-background/30 p-3">
+          <p className="text-[11px] uppercase tracking-[0.24em] text-muted-foreground/60">Identity Confidence</p>
+          <p className="mt-2 text-xl font-bold text-foreground">
+            {scorePercent(item.snapshot.identityConfidence ?? null)}
+          </p>
+        </div>
+        <div className="rounded-xl border border-border/40 bg-background/30 p-3">
+          <p className="text-[11px] uppercase tracking-[0.24em] text-muted-foreground/60">Contact Confidence</p>
+          <p className="mt-2 text-xl font-bold text-foreground">
+            {scorePercent(item.snapshot.contactConfidence ?? null)}
+          </p>
+        </div>
+        <div className="rounded-xl border border-border/40 bg-background/30 p-3">
+          <p className="text-[11px] uppercase tracking-[0.24em] text-muted-foreground/60">Terminal Reason</p>
+          <p className="mt-2 text-sm font-semibold text-foreground">
+            {formatTerminalReason(item.snapshot.terminalReason)}
+          </p>
         </div>
       </div>
 

@@ -6,7 +6,11 @@ import type { Job, SendOptions } from 'pg-boss';
 
 import { classifyError } from '../errors.js';
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
-import { loadAutoApproveConfig, shouldAutoApprove } from '../utils/pipeline-settings.js';
+import {
+  isManualApprovalOnlyEnabled,
+  loadAutoApproveConfig,
+  shouldAutoApprove,
+} from '../utils/pipeline-settings.js';
 
 import {
   validateMessageVariant,
@@ -449,6 +453,10 @@ export async function handleMessageGenerateJob(
       const autoApproveConfig = await loadAutoApproveConfig();
       const blendedScore = latestScore?.blendedScore ?? 0;
       autoApprove = shouldAutoApprove(autoApproveConfig, blendedScore);
+    }
+    const manualApprovalOnly = await isManualApprovalOnlyEnabled();
+    if (manualApprovalOnly) {
+      autoApprove = false;
     }
 
     // Select feature to pitch for follow-ups
