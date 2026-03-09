@@ -3,6 +3,8 @@ import {
   ErrorResponseSchema,
   FunnelQuerySchema,
   FunnelResponseSchema,
+  ManagerRecommendationsQuerySchema,
+  ManagerRecommendationsResponseSchema,
   ModelMetricsQuerySchema,
   ModelMetricsResponseSchema,
   RecomputeRollupRequestSchema,
@@ -10,6 +12,10 @@ import {
   RetrainStatusResponseSchema,
   ScoreDistributionQuerySchema,
   ScoreDistributionResponseSchema,
+  StoredRecommendationsQuerySchema,
+  StoredRecommendationsResponseSchema,
+  UpdateRecommendationStatusSchema,
+  StoredRecommendationSchema,
 } from '@lead-flood/contracts';
 
 import { AnalyticsNotImplementedError } from './analytics.errors.js';
@@ -111,6 +117,60 @@ export function registerAnalyticsRoutes(
     try {
       const result = await service.getRetrainStatus(parsedQuery.data);
       return RetrainStatusResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  // ── Manager analysis history ────────────────────────────────
+  app.get('/v1/analytics/manager-recommendations', async (request, reply) => {
+    const parsedQuery = ManagerRecommendationsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid manager recommendations query');
+    }
+
+    try {
+      const result = await service.getManagerRecommendations(parsedQuery.data);
+      return ManagerRecommendationsResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  // ── Stored recommendations (individual, with status) ────────
+  app.get('/v1/analytics/recommendations', async (request, reply) => {
+    const parsedQuery = StoredRecommendationsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid recommendations query');
+    }
+
+    try {
+      const result = await service.getStoredRecommendations(parsedQuery.data);
+      return StoredRecommendationsResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.patch('/v1/analytics/recommendations/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsedBody = UpdateRecommendationStatusSchema.safeParse(request.body);
+    if (!parsedBody.success) {
+      return sendValidationError(reply, request.id, 'Invalid recommendation update payload');
+    }
+
+    try {
+      const result = await service.updateRecommendationStatus(id, parsedBody.data);
+      return StoredRecommendationSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;

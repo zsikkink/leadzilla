@@ -1,13 +1,25 @@
 import type {
   FunnelQuery,
   FunnelResponse,
+  IcpBreakdownItem,
+  ManagerAnalysisResponse,
+  ManagerRecommendation,
+  ManagerRecommendationsQuery,
+  ManagerRecommendationsResponse,
   ModelMetricsQuery,
   ModelMetricsResponse,
   RecomputeRollupRequest,
   RetrainStatusQuery,
   RetrainStatusResponse,
+  ScoreBandBreakdownItem,
   ScoreDistributionQuery,
   ScoreDistributionResponse,
+  StoredRecommendation,
+  StoredRecommendationsQuery,
+  StoredRecommendationsResponse,
+  TrendComparison,
+  UpdateRecommendationStatusRequest,
+  VariantBreakdownItem,
 } from '@lead-flood/contracts';
 import { prisma } from '@lead-flood/db';
 
@@ -19,6 +31,9 @@ export interface AnalyticsRepository {
   getModelMetrics(query: ModelMetricsQuery): Promise<ModelMetricsResponse>;
   getRetrainStatus(query: RetrainStatusQuery): Promise<RetrainStatusResponse>;
   recomputeRollup(input: RecomputeRollupRequest): Promise<void>;
+  getManagerRecommendations(query: ManagerRecommendationsQuery): Promise<ManagerRecommendationsResponse>;
+  getStoredRecommendations(query: StoredRecommendationsQuery): Promise<StoredRecommendationsResponse>;
+  updateRecommendationStatus(id: string, input: UpdateRecommendationStatusRequest): Promise<StoredRecommendation>;
 }
 
 export class StubAnalyticsRepository implements AnalyticsRepository {
@@ -40,6 +55,18 @@ export class StubAnalyticsRepository implements AnalyticsRepository {
 
   async recomputeRollup(_input: RecomputeRollupRequest): Promise<void> {
     throw new AnalyticsNotImplementedError('TODO: recompute rollup trigger persistence');
+  }
+
+  async getManagerRecommendations(_query: ManagerRecommendationsQuery): Promise<ManagerRecommendationsResponse> {
+    throw new AnalyticsNotImplementedError('TODO: manager recommendations persistence');
+  }
+
+  async getStoredRecommendations(_query: StoredRecommendationsQuery): Promise<StoredRecommendationsResponse> {
+    throw new AnalyticsNotImplementedError('TODO: stored recommendations persistence');
+  }
+
+  async updateRecommendationStatus(_id: string, _input: UpdateRecommendationStatusRequest): Promise<StoredRecommendation> {
+    throw new AnalyticsNotImplementedError('TODO: update recommendation status persistence');
   }
 }
 
@@ -430,5 +457,99 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
         },
       });
     }
+  }
+
+  override async getManagerRecommendations(query: ManagerRecommendationsQuery): Promise<ManagerRecommendationsResponse> {
+    const limit = query.limit ?? 10;
+
+    const analyses = await prisma.managerAnalysis.findMany({
+      orderBy: [{ createdAt: 'desc' }],
+      take: limit,
+    });
+
+    const items: ManagerAnalysisResponse[] = analyses.map((analysis) => ({
+      id: analysis.id,
+      runId: analysis.runId,
+      weekStart: analysis.weekStart.toISOString(),
+      weekEnd: analysis.weekEnd.toISOString(),
+      totalSends: analysis.totalSends,
+      totalReplies: analysis.totalReplies,
+      totalPositive: analysis.totalPositive,
+      totalBounced: analysis.totalBounced,
+      overallReplyRate: analysis.overallReplyRate,
+      overallPositiveRate: analysis.overallPositiveRate,
+      overallBounceRate: analysis.overallBounceRate,
+      icpBreakdown: (analysis.icpBreakdownJson as unknown as IcpBreakdownItem[]) ?? [],
+      variantBreakdown: (analysis.variantBreakdownJson as unknown as VariantBreakdownItem[]) ?? [],
+      scoreBandBreakdown: (analysis.scoreBandBreakdownJson as unknown as ScoreBandBreakdownItem[]) ?? [],
+      trend: analysis.trendJson as unknown as TrendComparison,
+      recommendations: (analysis.recommendationsJson as unknown as ManagerRecommendation[]) ?? [],
+      createdAt: analysis.createdAt.toISOString(),
+    }));
+
+    return { items };
+  }
+
+  override async getStoredRecommendations(query: StoredRecommendationsQuery): Promise<StoredRecommendationsResponse> {
+    const limit = query.limit ?? 50;
+
+    const where: Record<string, unknown> = {};
+    if (query.status) {
+      where['status'] = query.status;
+    }
+    if (query.icpProfileId) {
+      where['icpProfileId'] = query.icpProfileId;
+    }
+
+    const records = await prisma.managerRecommendationRecord.findMany({
+      where,
+      orderBy: [{ priority: 'asc' }, { createdAt: 'desc' }],
+      take: limit,
+    });
+
+    const items: StoredRecommendation[] = records.map((rec) => ({
+      id: rec.id,
+      type: rec.type as StoredRecommendation['type'],
+      title: rec.title,
+      description: rec.description,
+      icpProfileId: rec.icpProfileId,
+      icpName: rec.icpName,
+      field: rec.field,
+      currentValue: rec.currentValue,
+      recommendedValue: rec.recommendedValue,
+      confidence: rec.confidence,
+      priority: rec.priority,
+      status: rec.status as StoredRecommendation['status'],
+      analysisRunId: rec.analysisRunId,
+      createdAt: rec.createdAt.toISOString(),
+      updatedAt: rec.updatedAt.toISOString(),
+    }));
+
+    return { items };
+  }
+
+  override async updateRecommendationStatus(id: string, input: UpdateRecommendationStatusRequest): Promise<StoredRecommendation> {
+    const rec = await prisma.managerRecommendationRecord.update({
+      where: { id },
+      data: { status: input.status },
+    });
+
+    return {
+      id: rec.id,
+      type: rec.type as StoredRecommendation['type'],
+      title: rec.title,
+      description: rec.description,
+      icpProfileId: rec.icpProfileId,
+      icpName: rec.icpName,
+      field: rec.field,
+      currentValue: rec.currentValue,
+      recommendedValue: rec.recommendedValue,
+      confidence: rec.confidence,
+      priority: rec.priority,
+      status: rec.status as StoredRecommendation['status'],
+      analysisRunId: rec.analysisRunId,
+      createdAt: rec.createdAt.toISOString(),
+      updatedAt: rec.updatedAt.toISOString(),
+    };
   }
 }

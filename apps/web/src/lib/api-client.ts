@@ -25,6 +25,9 @@ import type {
   QualificationRuleResponse,
   RetrainStatusResponse,
   ScoreDistributionResponse,
+  StoredRecommendation,
+  StoredRecommendationsQuery,
+  StoredRecommendationsResponse,
   UpdateIcpProfileRequest,
 } from '@lead-flood/contracts';
 
@@ -197,6 +200,18 @@ export class ApiClient {
 
   getRetrainStatus(): Promise<RetrainStatusResponse> {
     return this.request('/v1/analytics/retrain-status');
+  }
+
+  getStoredRecommendations(query?: StoredRecommendationsQuery): Promise<StoredRecommendationsResponse> {
+    const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
+    return this.request(`/v1/analytics/recommendations${qs}`);
+  }
+
+  updateRecommendationStatus(id: string, status: StoredRecommendation['status']): Promise<StoredRecommendation> {
+    return this.request(`/v1/analytics/recommendations/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
   }
 
   // ── Feedback ──────────────────────────────────────
