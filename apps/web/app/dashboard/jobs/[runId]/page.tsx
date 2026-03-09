@@ -14,6 +14,7 @@ import {
   DollarSign,
   Globe,
   Layers,
+  RefreshCw,
   Search,
   Target,
   Users,
@@ -26,6 +27,7 @@ import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
 import { countryName } from '../../../../src/lib/countries.js';
 import { getWebEnv } from '../../../../src/lib/env.js';
+import { getSupabaseBrowserClient } from '../../../../src/lib/supabase-client.js';
 
 // ── Status badge (reused from list page) ─────────────────────────────────
 const STATUS_CONFIG: Record<
@@ -416,6 +418,43 @@ export default function DiscoveryRunDetailPage() {
   const aggregatedCosts = useMemo(() => aggregateCosts(costEvents).filter((c) => c.calls > 0), [costEvents]);
   const totalCostCents = aggregatedCosts.reduce((sum, c) => sum + c.costCents, 0);
 
+  // Fetch contact recovery items for businesses in this run
+  const [recoveryItems, setRecoveryItems] = useState<Array<{ business_id: string; business_name: string; reason: string; status: string }>>([]);
+  useEffect(() => {
+    if (businesses.length === 0) return;
+    let cancelled = false;
+    async function fetchRecoveryItems() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const bizIds = businesses.map((b) => b.id);
+        const { data } = await supabase
+          .from('contact_recovery_items')
+          .select('business_id, reason, status')
+          .in('business_id', bizIds);
+        if (cancelled || !data) return;
+        const seen = new Set<string>();
+        const items: Array<{ business_id: string; business_name: string; reason: string; status: string }> = [];
+        for (const row of data as Array<{ business_id: string; reason: string; status: string }>) {
+          if (!seen.has(row.business_id)) {
+            seen.add(row.business_id);
+            const biz = businesses.find((b) => b.id === row.business_id);
+            items.push({
+              business_id: row.business_id,
+              business_name: biz?.name ?? 'Unknown',
+              reason: row.reason,
+              status: row.status,
+            });
+          }
+        }
+        setRecoveryItems(items);
+      } catch {
+        // Non-critical — fallback to showing all leads in single section
+      }
+    }
+    void fetchRecoveryItems();
+    return () => { cancelled = true; };
+  }, [businesses]);
+
   // Not found state
   if (run.error && !run.isLoading) {
     return (
@@ -760,13 +799,55 @@ export default function DiscoveryRunDetailPage() {
         </div>
       )}
 
-      {details.data && leads.length === 0 && (
+      {details.data && leads.length === 0 && recoveryItems.length === 0 && (
         <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
           <div className="mb-2 flex items-center gap-2">
             <Users className="h-4 w-4 text-muted-foreground/40" />
             <h2 className="text-base font-bold tracking-tight">Converted Leads</h2>
           </div>
           <p className="text-[11px] text-muted-foreground/40">No leads converted yet</p>
+        </div>
+      )}
+
+      {/* Sent to Contact Recovery */}
+      {recoveryItems.length > 0 && (
+        <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
+          <div className="mb-4 flex items-center gap-2">
+            <RefreshCw className="h-4 w-4 text-amber-400" />
+            <h2 className="text-base font-bold tracking-tight">Sent to Contact Recovery</h2>
+            <span className="ml-auto rounded-md bg-white/[0.04] px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums text-muted-foreground/60">
+              {recoveryItems.length}
+            </span>
+          </div>
+          <p className="mb-3 text-[11px] text-muted-foreground/50">
+            These businesses had potential but no verified contact was found. They were sent to the contact recovery pipeline for further processing.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {recoveryItems.map((item) => (
+              <Link
+                key={item.business_id}
+                href="/dashboard/leads/recovery"
+                className="flex items-center gap-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 transition-colors hover:border-amber-500/30 hover:bg-amber-500/10"
+              >
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/10">
+                  <RefreshCw className="h-3.5 w-3.5 text-amber-400" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs font-semibold">{item.business_name}</p>
+                  <p className="truncate text-[10px] text-muted-foreground/50">
+                    {item.reason.replace(/_/g, ' ')}
+                  </p>
+                </div>
+                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ${
+                  item.status === 'OPEN'
+                    ? 'bg-amber-500/15 text-amber-400'
+                    : 'bg-muted/20 text-muted-foreground/50'
+                }`}>
+                  {item.status}
+                </span>
+              </Link>
+            ))}
+          </div>
         </div>
       )}
 

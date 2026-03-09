@@ -733,10 +733,16 @@ export default function BusinessIntelligencePage() {
 
       if (fetchError) throw new Error(fetchError.message);
 
-      const rows = (data ?? []) as BusinessRow[];
+      let rows = (data ?? []) as BusinessRow[];
+
+      // Track which businesses have recovery items and which have converted leads
+      const recoveryBizIds = new Set<string>();
+      const convertedBizIds = new Set<string>();
 
       if (rows.length > 0) {
         const bizIds = rows.map((row) => row.id);
+
+        // Fetch recovery items
         const { data: recoveryRows } = await supabase
           .from('contact_recovery_items')
           .select('business_id,status,reason,updated_at')
@@ -746,6 +752,7 @@ export default function BusinessIntelligencePage() {
         if (recoveryRows && recoveryRows.length > 0) {
           const latestByBusiness = new Map<string, { status: 'OPEN' | 'REJECTED'; reason: string; updated_at: string }>();
           for (const row of recoveryRows as Array<{ business_id: string; status: 'OPEN' | 'REJECTED'; reason: string; updated_at: string }>) {
+            recoveryBizIds.add(row.business_id);
             if (!latestByBusiness.has(row.business_id)) {
               latestByBusiness.set(row.business_id, row);
             }
@@ -757,17 +764,18 @@ export default function BusinessIntelligencePage() {
             businessRow.manualReviewUpdatedAt = recovery?.updated_at ?? null;
           }
         }
-      }
 
-      // Fetch lead blended scores via business_conversions → leads
-      if (rows.length > 0) {
-        const bizIds = rows.map((b) => b.id);
+        // Fetch lead blended scores via business_conversions → leads
         const { data: conversions } = await supabase
           .from('business_conversions')
           .select('business_id, lead_id')
           .in('business_id', bizIds);
 
         if (conversions && conversions.length > 0) {
+          for (const conv of conversions as Array<{ business_id: string; lead_id: string }>) {
+            convertedBizIds.add(conv.business_id);
+          }
+
           const leadIds = [...new Set(conversions.map((c: { lead_id: string }) => c.lead_id))];
           const { data: leads } = await supabase
             .from('leads')
@@ -805,10 +813,22 @@ export default function BusinessIntelligencePage() {
             }
           }
         }
+
+        // B4: Filter out businesses that are ONLY in contact recovery (no converted lead).
+        // Edge case: if a business has BOTH a converted lead AND a recovery item, keep it (lead takes precedence).
+        rows = rows.filter((row) => {
+          const hasRecovery = recoveryBizIds.has(row.id);
+          const hasLead = convertedBizIds.has(row.id);
+          // Exclude if recovery-only (no lead)
+          if (hasRecovery && !hasLead) return false;
+          return true;
+        });
       }
 
       setBusinesses(rows);
-      setTotal(count ?? 0);
+      // Adjust total count to reflect filtered results
+      const filteredOutCount = recoveryBizIds.size - [...recoveryBizIds].filter((id) => convertedBizIds.has(id)).length;
+      setTotal(Math.max((count ?? 0) - filteredOutCount, 0));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load businesses');
     } finally {
