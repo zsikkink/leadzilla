@@ -115,10 +115,7 @@ interface CostEventData {
 
 const KNOWN_COST_PROVIDERS = [
   'GOOGLE_PLACES',
-  'SERPAPI',
   'GOOGLE_CUSTOM_SEARCH',
-  'APIFY_WEBSITE',
-  'APIFY_INSTAGRAM',
   'HUNTER',
   'APOLLO',
 ] as const;
@@ -224,7 +221,7 @@ function SearchTaskItem({
             {normalizedStatus}
           </span>
           <span className="rounded-md bg-white/[0.04] px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums">
-            {task.resultsCount}
+            {businesses.length}
           </span>
         </div>
       </button>
@@ -416,7 +413,7 @@ export default function DiscoveryRunDetailPage() {
   const leads = details.data?.leads ?? [];
 
   const failedTasks = searchTasks.filter((t) => t.status === 'FAILED');
-  const aggregatedCosts = useMemo(() => aggregateCosts(costEvents), [costEvents]);
+  const aggregatedCosts = useMemo(() => aggregateCosts(costEvents).filter((c) => c.calls > 0), [costEvents]);
   const totalCostCents = aggregatedCosts.reduce((sum, c) => sum + c.costCents, 0);
 
   // Not found state
@@ -558,26 +555,56 @@ export default function DiscoveryRunDetailPage() {
         )}
 
         {/* Progress bar for active runs */}
-        {isActive && run.data.totalItems > 0 && (
-          <div className="mt-4">
-            <div className="h-2 w-full overflow-hidden rounded-full bg-border/30">
-              <div
-                className="h-full rounded-full bg-blue-400 transition-all duration-700 ease-out"
-                style={{
-                  width: `${Math.max(
-                    Math.round(
-                      (run.data.processedItems / run.data.totalItems) * 100,
-                    ),
-                    run.data.processedItems > 0 ? 3 : 0,
-                  )}%`,
-                }}
-              />
-            </div>
-            <p className="mt-1 text-[10px] text-muted-foreground/40">
-              {run.data.processedItems} of {run.data.totalItems} tasks processed
-            </p>
-          </div>
-        )}
+        {isActive && (() => {
+          const runConfig = (details.data?.run as Record<string, unknown> | undefined)?.config as Record<string, unknown> | undefined;
+          const targetLeads = typeof runConfig?.limit === 'number' ? runConfig.limit : null;
+
+          if (targetLeads !== null) {
+            const leadsFound = leads.length;
+            const progressPct = Math.max(
+              Math.round((leadsFound / targetLeads) * 100),
+              leadsFound > 0 ? 3 : 0,
+            );
+            return (
+              <div className="mt-4">
+                <div className="h-2 w-full overflow-hidden rounded-full bg-border/30">
+                  <div
+                    className="h-full rounded-full bg-blue-400 transition-all duration-700 ease-out"
+                    style={{ width: `${Math.min(progressPct, 100)}%` }}
+                  />
+                </div>
+                <p className="mt-1 text-[10px] text-muted-foreground/40">
+                  {leadsFound} of {targetLeads} leads found
+                </p>
+              </div>
+            );
+          }
+
+          if (run.data && run.data.totalItems > 0) {
+            return (
+              <div className="mt-4">
+                <div className="h-2 w-full overflow-hidden rounded-full bg-border/30">
+                  <div
+                    className="h-full rounded-full bg-blue-400 transition-all duration-700 ease-out"
+                    style={{
+                      width: `${Math.max(
+                        Math.round(
+                          (run.data.processedItems / run.data.totalItems) * 100,
+                        ),
+                        run.data.processedItems > 0 ? 3 : 0,
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <p className="mt-1 text-[10px] text-muted-foreground/40">
+                  {run.data.processedItems} of {run.data.totalItems} tasks processed
+                </p>
+              </div>
+            );
+          }
+
+          return null;
+        })()}
       </div>
 
       {/* Summary strip */}

@@ -103,14 +103,12 @@ function RecoveryListCard({
           : 'border-border/40 bg-card hover:border-border/70 hover:bg-card/80',
       )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold text-foreground">{item.business.name}</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {[item.business.city, item.business.country].filter(Boolean).join(', ') || 'Location unavailable'}
-          </p>
-        </div>
-        <span className="rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-300">
+      <div>
+        <p className="text-sm font-semibold text-foreground">{item.business.name}</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {[item.business.city, item.business.country].filter(Boolean).join(', ') || 'Location unavailable'}
+        </p>
+        <span className="mt-2 inline-block rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-300">
           {formatReason(item.reason)}
         </span>
       </div>
@@ -148,15 +146,13 @@ function RecoveryDetailPanel({
     <div className="space-y-4 rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
       <div className="flex flex-col gap-3 border-b border-border/40 pb-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-xl font-bold tracking-tight text-foreground">{item.business.name}</h2>
-            <span className="rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-300">
-              {formatReason(item.reason)}
-            </span>
-          </div>
+          <h2 className="text-xl font-bold tracking-tight text-foreground">{item.business.name}</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             Run {item.discoveryRunId.slice(0, 8)} • {item.icpProfileName ?? 'Unknown ICP'}
           </p>
+          <span className="mt-2 inline-block rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-300">
+            {formatReason(item.reason)}
+          </span>
         </div>
         {item.status === 'OPEN' ? (
           <button
@@ -217,69 +213,6 @@ function RecoveryDetailPanel({
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
         <section className="space-y-4">
           <div className="rounded-xl border border-border/40 bg-background/30 p-4">
-            <h3 className="text-sm font-semibold text-foreground">Business Context</h3>
-            <div className="mt-3 grid gap-3 text-sm text-muted-foreground sm:grid-cols-2">
-              <div className="flex items-center gap-2">
-                <MapPin className="h-4 w-4 text-muted-foreground/50" />
-                <span>{[item.business.city, item.business.country].filter(Boolean).join(', ') || 'Location unavailable'}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Building2 className="h-4 w-4 text-muted-foreground/50" />
-                <span>{item.business.category ?? 'Category unavailable'}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Globe className="h-4 w-4 text-muted-foreground/50" />
-                <span>{item.business.websiteDomain ?? 'No website domain'}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Instagram className="h-4 w-4 text-muted-foreground/50" />
-                <span>{item.business.instagramHandle ? `@${item.business.instagramHandle}` : 'No Instagram handle'}</span>
-              </div>
-            </div>
-            {item.snapshot.businessInsights ? (
-              <div className="mt-4 rounded-lg border border-border/40 bg-card/70 p-3 text-sm text-muted-foreground">
-                {item.snapshot.businessInsights}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="rounded-xl border border-border/40 bg-background/30 p-4">
-            <div className="flex items-center gap-2">
-              <Wrench className="h-4 w-4 text-amber-300" />
-              <h3 className="text-sm font-semibold text-foreground">Recovery Attempts</h3>
-            </div>
-            <div className="mt-3 space-y-3">
-              {item.snapshot.attempts.length > 0 ? item.snapshot.attempts.map((attempt, index) => (
-                <div key={`${attempt.provider}-${attempt.mode ?? 'none'}-${index}`} className="rounded-lg border border-border/40 bg-card/70 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-foreground">{attempt.provider}</p>
-                      <p className="text-xs text-muted-foreground">{attempt.mode ? `${attempt.stage} • ${attempt.mode}` : attempt.stage}</p>
-                    </div>
-                    <span className="rounded-full bg-muted/40 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">
-                      {formatAttemptStatus(attempt.status)}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Results: {attempt.resultCount ?? 0}
-                  </p>
-                  {attempt.notes.length > 0 ? (
-                    <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                      {attempt.notes.map((note) => (
-                        <p key={note}>{note}</p>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              )) : (
-                <p className="text-sm text-muted-foreground">No recovery attempts were recorded.</p>
-              )}
-            </div>
-          </div>
-        </section>
-
-        <section className="space-y-4">
-          <div className="rounded-xl border border-border/40 bg-background/30 p-4">
             <div className="flex items-center gap-2">
               <UserRound className="h-4 w-4 text-muted-foreground/70" />
               <h3 className="text-sm font-semibold text-foreground">Top Candidates</h3>
@@ -307,11 +240,23 @@ function RecoveryDetailPanel({
                   <div className="mt-3 space-y-2 text-xs text-muted-foreground">
                     <div className="flex items-center gap-2">
                       <Mail className="h-3.5 w-3.5" />
-                      <span>{candidate.email ?? 'No personal email found'}</span>
+                      {candidate.email ? (
+                        <a href={`mailto:${candidate.email}`} className="text-amber-200 hover:text-amber-100 hover:underline">
+                          {candidate.email}
+                        </a>
+                      ) : (
+                        <span>No personal email found</span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <Linkedin className="h-3.5 w-3.5" />
-                      <span>{candidate.linkedinUrl ?? 'No LinkedIn profile found'}</span>
+                      {candidate.linkedinUrl ? (
+                        <a href={candidate.linkedinUrl} target="_blank" rel="noreferrer" className="text-amber-200 hover:text-amber-100 hover:underline">
+                          {candidate.linkedinUrl.replace(/^https?:\/\/(www\.)?/, '')}
+                        </a>
+                      ) : (
+                        <span>No LinkedIn profile found</span>
+                      )}
                     </div>
                   </div>
 
@@ -349,6 +294,91 @@ function RecoveryDetailPanel({
           </div>
 
           <div className="rounded-xl border border-border/40 bg-background/30 p-4">
+            <h3 className="text-sm font-semibold text-foreground">Business Context</h3>
+            <div className="mt-3 grid gap-3 text-sm text-muted-foreground sm:grid-cols-2">
+              <div className="flex items-center gap-2">
+                <MapPin className="h-4 w-4 text-muted-foreground/50" />
+                <span>{[item.business.city, item.business.country].filter(Boolean).join(', ') || 'Location unavailable'}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Building2 className="h-4 w-4 text-muted-foreground/50" />
+                <span>{item.business.category ?? 'Category unavailable'}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Globe className="h-4 w-4 text-muted-foreground/50" />
+                {item.business.websiteDomain ? (
+                  <a href={`https://${item.business.websiteDomain}`} target="_blank" rel="noreferrer" className="text-amber-200 hover:text-amber-100 hover:underline">
+                    {item.business.websiteDomain}
+                  </a>
+                ) : (
+                  <span>No website domain</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Instagram className="h-4 w-4 text-muted-foreground/50" />
+                {item.business.instagramHandle ? (
+                  <a href={`https://instagram.com/${item.business.instagramHandle}`} target="_blank" rel="noreferrer" className="text-amber-200 hover:text-amber-100 hover:underline">
+                    @{item.business.instagramHandle}
+                  </a>
+                ) : (
+                  <span>No Instagram handle</span>
+                )}
+              </div>
+            </div>
+            {item.snapshot.businessInsights ? (
+              <div className="mt-4 rounded-lg border border-border/40 bg-card/70 p-3 text-sm text-muted-foreground">
+                {(() => {
+                  try {
+                    const parsed: unknown = JSON.parse(item.snapshot.businessInsights);
+                    if (typeof parsed === 'object' && parsed !== null && 'insights' in parsed) {
+                      return String((parsed as Record<string, unknown>).insights);
+                    }
+                    return item.snapshot.businessInsights;
+                  } catch {
+                    return item.snapshot.businessInsights;
+                  }
+                })()}
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        <section className="space-y-4">
+          <div className="rounded-xl border border-border/40 bg-background/30 p-4">
+            <div className="flex items-center gap-2">
+              <Wrench className="h-4 w-4 text-amber-300" />
+              <h3 className="text-sm font-semibold text-foreground">Recovery Attempts</h3>
+            </div>
+            <div className="mt-3 space-y-3">
+              {item.snapshot.attempts.length > 0 ? item.snapshot.attempts.map((attempt, index) => (
+                <div key={`${attempt.provider}-${attempt.mode ?? 'none'}-${index}`} className="rounded-lg border border-border/40 bg-card/70 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">{attempt.provider}</p>
+                      <p className="text-xs text-muted-foreground">{attempt.mode ? `${attempt.stage} • ${attempt.mode}` : attempt.stage}</p>
+                    </div>
+                    <span className="rounded-full bg-muted/40 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">
+                      {formatAttemptStatus(attempt.status)}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Results: {attempt.resultCount ?? 0}
+                  </p>
+                  {attempt.notes.length > 0 ? (
+                    <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                      {attempt.notes.map((note) => (
+                        <p key={note}>{note}</p>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              )) : (
+                <p className="text-sm text-muted-foreground">No recovery attempts were recorded.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border/40 bg-background/30 p-4">
             <div className="flex items-center gap-2">
               <Sparkles className="h-4 w-4 text-muted-foreground/70" />
               <h3 className="text-sm font-semibold text-foreground">Telemetry</h3>
@@ -370,7 +400,7 @@ function RecoveryDetailPanel({
                     href={url}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex items-center gap-1 rounded-full bg-muted/30 px-2.5 py-1 text-[11px] font-medium text-muted-foreground"
+                    className="inline-flex items-center gap-1 rounded-full bg-muted/30 px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
                   >
                     Evidence
                     <Globe className="h-3 w-3" />
@@ -552,7 +582,7 @@ export default function ContactRecoveryPage() {
       ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
-        <div className="space-y-3 xl:max-h-[calc(100vh-220px)] xl:overflow-y-auto xl:pr-1">
+        <div className="space-y-3 xl:max-h-[calc(100vh-160px)] xl:overflow-y-auto xl:pr-1">
           {recovery.isLoading ? (
             <div className="flex items-center gap-2 rounded-xl border border-border/30 bg-card p-6">
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground/40" />

@@ -10,10 +10,8 @@ import {
 import { createLogger } from '@lead-flood/observability';
 import {
   ApolloDiscoveryAdapter,
-  SerpApiWebSearchAdapter,
   HunterEnrichmentAdapter,
   InstagramScraperAdapter,
-  LinkedInSearchAdapter,
   OpenAiAdapter,
   ResendAdapter,
   TrengoAdapter,
@@ -357,18 +355,6 @@ async function main(): Promise<void> {
     baseUrl: env.OPENAI_BASE_URL,
   });
 
-  const serpApiWebSearchAdapter = env.SERPAPI_WEB_SEARCH_ENABLED
-    ? new SerpApiWebSearchAdapter({
-        apiKey: env.SERPAPI_API_KEY,
-      })
-    : null;
-
-  const linkedInSearchAdapter = serpApiWebSearchAdapter
-    ? new LinkedInSearchAdapter({
-        searchAdapter: serpApiWebSearchAdapter,
-      })
-    : null;
-
   const resendAdapter = new ResendAdapter({
     apiKey: env.RESEND_API_KEY,
     fromEmail: env.RESEND_FROM_EMAIL,
@@ -600,12 +586,6 @@ async function main(): Promise<void> {
         instagramScraperAdapter,
         smtpVerifier: new SmtpVerifier(),
         openAiAdapter: openAiAdapter.isConfigured ? openAiAdapter : undefined,
-        linkedInSearchAdapter: linkedInSearchAdapter
-          ? {
-              discoverDecisionMaker: (input) => linkedInSearchAdapter.discoverDecisionMaker(input),
-              isConfigured: linkedInSearchAdapter.isConfigured,
-            }
-          : undefined,
         llmExtractionConfig: openAiAdapter.isConfigured
           ? {
               openAiApiKey: env.OPENAI_API_KEY,

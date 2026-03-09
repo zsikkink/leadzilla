@@ -82,6 +82,7 @@ export interface WebsiteScraperData {
   pageTitle: string | null;
   metaDescription: string | null;
   detectedCountry: string | null;
+  aboutPageText: string | null;
 
   // Crawl metadata
   pagesCrawled: number;
@@ -191,6 +192,9 @@ const PRIORITY_B_PATHS = [
 ];
 
 const ALL_PRIORITY_PATHS = [...PRIORITY_A_PATHS, ...PRIORITY_B_PATHS];
+
+/** Paths that indicate an about/team page for raw text extraction. */
+const ABOUT_TEAM_PAGE_PATHS = ['/about', '/about-us', '/team', '/our-team', '/leadership', '/people'];
 
 // ── Social platform patterns ───────────────────────────────────────────────
 
@@ -1825,6 +1829,10 @@ export class WebsiteScraperAdapter {
     let mergedHasTestimonials = false;
     let mergedHasCaseStudies = false;
 
+    // About/team page raw text for LLM extraction
+    const aboutPageTextParts: string[] = [];
+    const ABOUT_TEXT_LIMIT = 8000;
+
     for (const page of pages) {
       const { $, url: pageUrl } = page;
 
@@ -1924,6 +1932,24 @@ export class WebsiteScraperAdapter {
       if (pageSignals.hasClientLogos) mergedHasClientLogos = true;
       if (pageSignals.hasTestimonials) mergedHasTestimonials = true;
       if (pageSignals.hasCaseStudies) mergedHasCaseStudies = true;
+
+      // Collect raw text from about/team pages for LLM extraction
+      try {
+        const parsedUrl = new URL(pageUrl);
+        const normalizedPath = parsedUrl.pathname.toLowerCase().replace(/\/+$/, '') || '/';
+        if (ABOUT_TEAM_PAGE_PATHS.includes(normalizedPath)) {
+          const currentTotal = aboutPageTextParts.reduce((sum, part) => sum + part.length, 0);
+          if (currentTotal < ABOUT_TEXT_LIMIT) {
+            const rawText = $.text().replace(/\s+/g, ' ').trim();
+            if (rawText.length > 0) {
+              const remaining = ABOUT_TEXT_LIMIT - currentTotal;
+              aboutPageTextParts.push(rawText.slice(0, remaining));
+            }
+          }
+        }
+      } catch {
+        // Invalid URL — skip about-page text extraction for this page
+      }
     }
 
     // Convert tech sets to arrays
@@ -1975,6 +2001,7 @@ export class WebsiteScraperAdapter {
       pageTitle,
       metaDescription,
       detectedCountry,
+      aboutPageText: aboutPageTextParts.length > 0 ? aboutPageTextParts.join(' ') : null,
 
       // Crawl metadata
       pagesCrawled: pages.length,
