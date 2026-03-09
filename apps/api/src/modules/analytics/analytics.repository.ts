@@ -255,6 +255,34 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
 
     const qualifiedCount = rollupAgg._sum.discoveredCount ?? discoveredCount;
 
+    // Cost aggregation: sum costCents across leads matching the filter
+    const costAgg = await prisma.lead.aggregate({
+      where: {
+        deletedAt: null,
+        ...(icpProfileId
+          ? {
+              discoveryRecords: {
+                some: { icpProfileId },
+              },
+            }
+          : {}),
+        ...(from || to
+          ? {
+              createdAt: {
+                ...(from ? { gte: from } : {}),
+                ...(to ? { lte: to } : {}),
+              },
+            }
+          : {}),
+      },
+      _sum: { costCents: true },
+      _count: { id: true },
+    });
+
+    const totalCostCents = costAgg._sum.costCents ?? 0;
+    const leadCount = costAgg._count.id || discoveredCount || 1;
+    const costPerLead = Math.round((totalCostCents / leadCount) * 100) / 100;
+
     return {
       from: from?.toISOString() ?? null,
       to: to?.toISOString() ?? null,
@@ -268,6 +296,8 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
       repliesCount,
       meetingsCount,
       dealsWonCount,
+      totalCostCents,
+      costPerLead,
     };
   }
 

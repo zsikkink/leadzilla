@@ -1,7 +1,9 @@
 import type {
+  ContactRecoveryDetailResponse,
   ConversationResponse,
   CreateDiscoveryRunRequest,
   CreateDiscoveryRunResponse,
+  CreateIcpProfileRequest,
   CreateLeadRequest,
   CreateLeadResponse,
   DiscoveryRunStatusResponse,
@@ -10,8 +12,13 @@ import type {
   FunnelResponse,
   GetLeadResponse,
   IcpProfileResponse,
+  ListContactRecoveryItemsQuery,
+  ListContactRecoveryItemsResponse,
   ListDiscoveryRecordsQuery,
   ListDiscoveryRecordsResponse,
+  ListDiscoveryRunsQuery,
+  ListDiscoveryRunsResponse,
+  ListFeedbackEventsResponse,
   ListIcpProfilesQuery,
   ListIcpProfilesResponse,
   ListLeadsQuery,
@@ -22,6 +29,7 @@ import type {
   ListMessageSendsResponse,
   MessageDraftResponse,
   ModelMetricsResponse,
+  PipelineStatsResponse,
   QualificationRuleResponse,
   RetrainStatusResponse,
   ScoreDistributionResponse,
@@ -114,6 +122,24 @@ export class ApiClient {
     return this.request(`/v1/leads/${id}`);
   }
 
+  listContactRecoveryItems(query: ListContactRecoveryItemsQuery): Promise<ListContactRecoveryItemsResponse> {
+    return this.request(`/v1/leads/recovery?${toSearchParams(query as Record<string, unknown>)}`);
+  }
+
+  getContactRecoveryItem(id: string): Promise<ContactRecoveryDetailResponse> {
+    return this.request(`/v1/leads/recovery/${id}`);
+  }
+
+  rejectContactRecoveryItem(
+    id: string,
+    data?: { reason?: string | undefined },
+  ): Promise<ContactRecoveryDetailResponse> {
+    return this.request(`/v1/leads/recovery/${id}/reject`, {
+      method: 'PATCH',
+      body: JSON.stringify(data ?? {}),
+    });
+  }
+
   createLead(data: CreateLeadRequest): Promise<CreateLeadResponse> {
     return this.request('/v1/leads', {
       method: 'POST',
@@ -135,10 +161,23 @@ export class ApiClient {
     return this.request(`/v1/icps/${icpId}/rules`);
   }
 
+  createIcp(data: CreateIcpProfileRequest): Promise<IcpProfileResponse> {
+    return this.request('/v1/icps', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   updateIcp(icpId: string, data: UpdateIcpProfileRequest): Promise<IcpProfileResponse> {
     return this.request(`/v1/icps/${icpId}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
+    });
+  }
+
+  deleteIcp(icpId: string): Promise<void> {
+    return this.request(`/v1/icps/${icpId}`, {
+      method: 'DELETE',
     });
   }
 
@@ -161,6 +200,19 @@ export class ApiClient {
 
   rejectDraft(draftId: string, data: { rejectedByUserId: string; rejectedReason: string }): Promise<MessageDraftResponse> {
     return this.request(`/v1/messaging/drafts/${draftId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  generateDraft(data: {
+    leadId: string;
+    icpProfileId: string;
+    scorePredictionId?: string | undefined;
+    channel?: string | undefined;
+    promptVersion: string;
+  }): Promise<unknown> {
+    return this.request('/v1/messaging/drafts/generate', {
       method: 'POST',
       body: JSON.stringify(data),
     });
@@ -220,6 +272,11 @@ export class ApiClient {
     return this.request(`/v1/feedback/summary${qs}`);
   }
 
+  listFeedbackEvents(query?: Record<string, unknown>): Promise<ListFeedbackEventsResponse> {
+    const qs = query ? `?${toSearchParams(query)}` : '';
+    return this.request(`/v1/feedback/events${qs}`);
+  }
+
   // ── Discovery ───────────────────────────────────
   createDiscoveryRun(data: CreateDiscoveryRunRequest): Promise<CreateDiscoveryRunResponse> {
     return this.request('/v1/discovery/runs', {
@@ -235,5 +292,53 @@ export class ApiClient {
   listDiscoveryRecords(query?: ListDiscoveryRecordsQuery): Promise<ListDiscoveryRecordsResponse> {
     const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
     return this.request(`/v1/discovery/records${qs}`);
+  }
+
+  listDiscoveryRuns(query?: ListDiscoveryRunsQuery): Promise<ListDiscoveryRunsResponse> {
+    const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
+    return this.request(`/v1/discovery/runs${qs}`);
+  }
+
+  getDiscoveryRunDetails(runId: string): Promise<{
+    run: Record<string, unknown>;
+    searchTasks: Array<{ id: string; queryText: string; countryCode: string; city: string | null; status: string; resultsCount: number; provider: string; error: string | null }>;
+    businesses: Array<{ id: string; name: string; websiteDomain: string | null; deterministicScore: number | null; scoreBand: string | null; preQualified: boolean; disqualificationReason: string | null; searchTaskId: string | null }>;
+    leads: Array<Record<string, unknown>>;
+    costEvents: Array<{ id: string; provider: string; action: string; creditCost: number; createdAt: string }>;
+  }> {
+    return this.request(`/v1/discovery/runs/${runId}/details`);
+  }
+
+  previewCategories(industries: string[]): Promise<{
+    mappings: Array<{
+      industry: string;
+      categories: string[];
+      source: 'mapped' | 'fuzzy' | 'direct';
+    }>;
+  }> {
+    return this.request('/v1/discovery/preview-categories', {
+      method: 'POST',
+      body: JSON.stringify({ industries }),
+    });
+  }
+
+  getPipelineStats(): Promise<PipelineStatsResponse> {
+    return this.request('/v1/stats/pipeline');
+  }
+
+  // ── Settings ───────────────────────────────────
+  listPipelineSettings(): Promise<{ items: { key: string; value: unknown; updatedAt: string }[] }> {
+    return this.request('/v1/settings/pipeline');
+  }
+
+  getPipelineSetting(key: string): Promise<{ key: string; value: unknown; updatedAt: string }> {
+    return this.request(`/v1/settings/pipeline/${key}`);
+  }
+
+  updatePipelineSetting(key: string, value: unknown): Promise<{ key: string; value: unknown; updatedAt: string }> {
+    return this.request(`/v1/settings/pipeline/${key}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    });
   }
 }
