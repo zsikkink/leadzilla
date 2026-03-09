@@ -1,14 +1,25 @@
 import { z } from 'zod';
 
+// ── Recommendation types ────────────────────────────────────
 export const ManagerRecommendationTypeSchema = z.enum([
   'ADJUST_WEIGHT',
   'ADJUST_THRESHOLD',
   'PAUSE_ICP',
   'INCREASE_VOLUME',
   'PREFER_VARIANT',
+  'DISABLE_FEATURE',
+  'SWITCH_SOURCE',
 ]);
 export type ManagerRecommendationType = z.infer<typeof ManagerRecommendationTypeSchema>;
 
+export const ManagerRecommendationStatusSchema = z.enum([
+  'active',
+  'dismissed',
+  'applied',
+]);
+export type ManagerRecommendationStatus = z.infer<typeof ManagerRecommendationStatusSchema>;
+
+// ── Core recommendation shape (embedded in analysis) ────────
 export const ManagerRecommendationSchema = z
   .object({
     type: ManagerRecommendationTypeSchema,
@@ -22,6 +33,27 @@ export const ManagerRecommendationSchema = z
   .strict();
 export type ManagerRecommendation = z.infer<typeof ManagerRecommendationSchema>;
 
+// ── Stored recommendation (persisted individually) ──────────
+export const StoredRecommendationSchema = z.object({
+  id: z.string(),
+  type: ManagerRecommendationTypeSchema,
+  title: z.string(),
+  description: z.string(),
+  icpProfileId: z.string().nullable(),
+  icpName: z.string().nullable(),
+  field: z.string().nullable(),
+  currentValue: z.number().nullable(),
+  recommendedValue: z.number().nullable(),
+  confidence: z.number().min(0).max(1),
+  priority: z.number().int().min(1).max(10),
+  status: ManagerRecommendationStatusSchema,
+  analysisRunId: z.string().nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type StoredRecommendation = z.infer<typeof StoredRecommendationSchema>;
+
+// ── Analysis breakdowns (for manager.analyze job) ───────────
 export const IcpBreakdownItemSchema = z
   .object({
     icpProfileId: z.string(),
@@ -47,20 +79,6 @@ export const VariantBreakdownItemSchema = z
   })
   .strict();
 export type VariantBreakdownItem = z.infer<typeof VariantBreakdownItemSchema>;
-
-export const AbInsightPerIcpItemSchema = z
-  .object({
-    icpProfileId: z.string(),
-    icpName: z.string(),
-    variantKey: z.string(),
-    sends: z.number().int().min(0),
-    replies: z.number().int().min(0),
-    replyRate: z.number(),
-    positiveOutcomes: z.number().int().min(0),
-    positiveRate: z.number(),
-  })
-  .strict();
-export type AbInsightPerIcpItem = z.infer<typeof AbInsightPerIcpItemSchema>;
 
 export const ScoreBandBreakdownItemSchema = z
   .object({
@@ -95,6 +113,7 @@ export const TrendComparisonSchema = z
   .strict();
 export type TrendComparison = z.infer<typeof TrendComparisonSchema>;
 
+// ── Full analysis response (from manager.analyze job) ───────
 export const ManagerAnalysisResponseSchema = z
   .object({
     id: z.string(),
@@ -110,7 +129,6 @@ export const ManagerAnalysisResponseSchema = z
     overallBounceRate: z.number(),
     icpBreakdown: z.array(IcpBreakdownItemSchema),
     variantBreakdown: z.array(VariantBreakdownItemSchema),
-    abInsightsPerIcp: z.array(AbInsightPerIcpItemSchema).optional(),
     scoreBandBreakdown: z.array(ScoreBandBreakdownItemSchema),
     trend: TrendComparisonSchema,
     recommendations: z.array(ManagerRecommendationSchema),
@@ -119,6 +137,22 @@ export const ManagerAnalysisResponseSchema = z
   .strict();
 export type ManagerAnalysisResponse = z.infer<typeof ManagerAnalysisResponseSchema>;
 
+// ── API query/response for recommendations endpoint ─────────
+export const StoredRecommendationsQuerySchema = z
+  .object({
+    status: ManagerRecommendationStatusSchema.optional(),
+    icpProfileId: z.string().optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .strict();
+export type StoredRecommendationsQuery = z.infer<typeof StoredRecommendationsQuerySchema>;
+
+export const StoredRecommendationsResponseSchema = z.object({
+  items: z.array(StoredRecommendationSchema),
+});
+export type StoredRecommendationsResponse = z.infer<typeof StoredRecommendationsResponseSchema>;
+
+// ── Legacy query for full analysis (manager-recommendations) ─
 export const ManagerRecommendationsQuerySchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -132,3 +166,9 @@ export const ManagerRecommendationsResponseSchema = z
   })
   .strict();
 export type ManagerRecommendationsResponse = z.infer<typeof ManagerRecommendationsResponseSchema>;
+
+// ── Dismiss/update recommendation ───────────────────────────
+export const UpdateRecommendationStatusSchema = z.object({
+  status: ManagerRecommendationStatusSchema,
+});
+export type UpdateRecommendationStatusRequest = z.infer<typeof UpdateRecommendationStatusSchema>;

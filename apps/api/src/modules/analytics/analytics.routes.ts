@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   ErrorResponseSchema,
@@ -13,6 +12,10 @@ import {
   RetrainStatusResponseSchema,
   ScoreDistributionQuerySchema,
   ScoreDistributionResponseSchema,
+  StoredRecommendationsQuerySchema,
+  StoredRecommendationsResponseSchema,
+  UpdateRecommendationStatusSchema,
+  StoredRecommendationSchema,
 } from '@lead-flood/contracts';
 
 import { AnalyticsNotImplementedError } from './analytics.errors.js';
@@ -21,7 +24,6 @@ import { buildAnalyticsService, type AnalyticsRollupJobPayload } from './analyti
 
 export interface AnalyticsRouteDependencies {
   enqueueAnalyticsRollup?: ((payload: AnalyticsRollupJobPayload) => Promise<void>) | undefined;
-  adminApiKey?: string | undefined;
 }
 
 function sendValidationError(reply: FastifyReply, requestId: string, message: string) {
@@ -53,21 +55,6 @@ export function registerAnalyticsRoutes(
   const repository = new PrismaAnalyticsRepository();
   const service = buildAnalyticsService(repository, {
     enqueueAnalyticsRollup: dependencies?.enqueueAnalyticsRollup,
-  });
-
-  app.get('/v1/analytics/overview', async (request, reply) => {
-    try {
-      const [funnel, scoreDistribution] = await Promise.all([
-        service.getFunnel({}),
-        service.getScoreDistribution({}),
-      ]);
-      return { funnel, scoreDistribution };
-    } catch (error: unknown) {
-      if (handleModuleError(error, request, reply)) {
-        return;
-      }
-      throw error;
-    }
   });
 
   app.get('/v1/analytics/funnel', async (request, reply) => {
@@ -138,6 +125,7 @@ export function registerAnalyticsRoutes(
     }
   });
 
+  // ── Manager analysis history ────────────────────────────────
   app.get('/v1/analytics/manager-recommendations', async (request, reply) => {
     const parsedQuery = ManagerRecommendationsQuerySchema.safeParse(request.query);
     if (!parsedQuery.success) {
@@ -155,34 +143,43 @@ export function registerAnalyticsRoutes(
     }
   });
 
+  // ── Stored recommendations (individual, with status) ────────
+  app.get('/v1/analytics/recommendations', async (request, reply) => {
+    const parsedQuery = StoredRecommendationsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid recommendations query');
+    }
+
+    try {
+      const result = await service.getStoredRecommendations(parsedQuery.data);
+      return StoredRecommendationsResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.patch('/v1/analytics/recommendations/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsedBody = UpdateRecommendationStatusSchema.safeParse(request.body);
+    if (!parsedBody.success) {
+      return sendValidationError(reply, request.id, 'Invalid recommendation update payload');
+    }
+
+    try {
+      const result = await service.updateRecommendationStatus(id, parsedBody.data);
+      return StoredRecommendationSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
   app.post('/v1/analytics/rollups/recompute', async (request, reply) => {
-    // Admin-only: verify x-admin-key header
-    const adminKey = dependencies?.adminApiKey;
-    if (!adminKey) {
-      reply.status(503).send(
-        ErrorResponseSchema.parse({
-          error: 'Admin API key not configured',
-          requestId: request.id,
-        }),
-      );
-      return;
-    }
-
-    const provided = request.headers['x-admin-key'];
-    const candidate = Array.isArray(provided) ? (provided[0] ?? '') : (provided ?? '');
-    if (
-      candidate.length !== adminKey.length ||
-      !timingSafeEqual(Buffer.from(candidate, 'utf8'), Buffer.from(adminKey, 'utf8'))
-    ) {
-      reply.status(401).send(
-        ErrorResponseSchema.parse({
-          error: 'Unauthorized',
-          requestId: request.id,
-        }),
-      );
-      return;
-    }
-
     const parsedBody = RecomputeRollupRequestSchema.safeParse(request.body);
     if (!parsedBody.success) {
       return sendValidationError(reply, request.id, 'Invalid rollup recompute payload');

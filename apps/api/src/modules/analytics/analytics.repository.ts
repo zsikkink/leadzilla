@@ -1,5 +1,4 @@
 import type {
-  AbInsightPerIcpItem,
   FunnelQuery,
   FunnelResponse,
   IcpBreakdownItem,
@@ -15,7 +14,11 @@ import type {
   ScoreBandBreakdownItem,
   ScoreDistributionQuery,
   ScoreDistributionResponse,
+  StoredRecommendation,
+  StoredRecommendationsQuery,
+  StoredRecommendationsResponse,
   TrendComparison,
+  UpdateRecommendationStatusRequest,
   VariantBreakdownItem,
 } from '@lead-flood/contracts';
 import { prisma } from '@lead-flood/db';
@@ -29,6 +32,8 @@ export interface AnalyticsRepository {
   getRetrainStatus(query: RetrainStatusQuery): Promise<RetrainStatusResponse>;
   recomputeRollup(input: RecomputeRollupRequest): Promise<void>;
   getManagerRecommendations(query: ManagerRecommendationsQuery): Promise<ManagerRecommendationsResponse>;
+  getStoredRecommendations(query: StoredRecommendationsQuery): Promise<StoredRecommendationsResponse>;
+  updateRecommendationStatus(id: string, input: UpdateRecommendationStatusRequest): Promise<StoredRecommendation>;
 }
 
 export class StubAnalyticsRepository implements AnalyticsRepository {
@@ -55,6 +60,14 @@ export class StubAnalyticsRepository implements AnalyticsRepository {
   async getManagerRecommendations(_query: ManagerRecommendationsQuery): Promise<ManagerRecommendationsResponse> {
     throw new AnalyticsNotImplementedError('TODO: manager recommendations persistence');
   }
+
+  async getStoredRecommendations(_query: StoredRecommendationsQuery): Promise<StoredRecommendationsResponse> {
+    throw new AnalyticsNotImplementedError('TODO: stored recommendations persistence');
+  }
+
+  async updateRecommendationStatus(_id: string, _input: UpdateRecommendationStatusRequest): Promise<StoredRecommendation> {
+    throw new AnalyticsNotImplementedError('TODO: update recommendation status persistence');
+  }
 }
 
 export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
@@ -62,6 +75,18 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
     const from = query.from ? new Date(query.from) : null;
     const to = query.to ? new Date(query.to) : null;
     const icpProfileId = query.icpProfileId ?? null;
+
+    const rollupWhere = {
+      ...(from || to
+        ? {
+            day: {
+              ...(from ? { gte: from } : {}),
+              ...(to ? { lte: to } : {}),
+            },
+          }
+        : {}),
+      ...(icpProfileId ? { icpProfileId } : {}),
+    };
 
     const discoveryDateWhere = from || to
       ? {
@@ -117,38 +142,18 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
         }
       : {};
 
-    // V2 pipeline: Business records don't have a direct icpProfileId relation.
-    // When ICP filtering is active, resolve matching discovery run IDs first.
-    const businessDateWhere = from || to
-      ? {
-          createdAt: {
-            ...(from ? { gte: from } : {}),
-            ...(to ? { lte: to } : {}),
-          },
-        }
-      : {};
-
-    let icpDiscoveryRunIds: string[] | null = null;
-    if (icpProfileId) {
-      const icpRuns = await prisma.jobExecution.findMany({
-        where: {
-          type: 'discovery.run',
-          payload: { path: ['icpProfileId'], equals: icpProfileId },
-        },
-        select: { id: true },
-      });
-      icpDiscoveryRunIds = icpRuns.map((r) => r.id);
-    }
-
-    const businessIcpWhere = icpDiscoveryRunIds !== null
-      ? { discoveryRunId: { in: icpDiscoveryRunIds } }
-      : {};
+    const rollupAgg = await prisma.analyticsDailyRollup.aggregate({
+      where: rollupWhere,
+      _sum: {
+        discoveredCount: true,
+        enrichedCount: true,
+        scoredCount: true,
+      },
+    });
 
     const [
-      v2DiscoveredCount,
-      v1DiscoveredCount,
-      v2EnrichedCount,
-      v1EnrichedCount,
+      discoveredCount,
+      enrichedCount,
       scoredCount,
       messagesGeneratedCount,
       messagesSentCount,
@@ -156,14 +161,6 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
       meetingsCount,
       dealsWonCount,
     ] = await Promise.all([
-      // V2 discovered: Business records
-      prisma.business.count({
-        where: {
-          ...businessDateWhere,
-          ...businessIcpWhere,
-        },
-      }),
-      // V1 legacy discovered: LeadDiscoveryRecord
       prisma.leadDiscoveryRecord.count({
         where: {
           ...(icpProfileId ? { icpProfileId } : {}),
@@ -171,29 +168,6 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
           status: 'DISCOVERED',
         },
       }),
-      // V2 enriched: Leads with a BusinessConversion record (went through V2 pipeline)
-      prisma.lead.count({
-        where: {
-          deletedAt: null,
-          businessConversions: { some: {} },
-          ...(from || to
-            ? {
-                createdAt: {
-                  ...(from ? { gte: from } : {}),
-                  ...(to ? { lte: to } : {}),
-                },
-              }
-            : {}),
-          ...(icpDiscoveryRunIds !== null
-            ? {
-                business: {
-                  discoveryRunId: { in: icpDiscoveryRunIds },
-                },
-              }
-            : {}),
-        },
-      }),
-      // V1 legacy enriched: LeadEnrichmentRecord
       prisma.leadEnrichmentRecord.count({
         where: {
           ...enrichmentDateWhere,
@@ -279,41 +253,7 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
       }),
     ]);
 
-    // Combine v1 (legacy) + v2 (Business) counts
-    const discoveredCount = v2DiscoveredCount + v1DiscoveredCount;
-    const enrichedCount = v2EnrichedCount + v1EnrichedCount;
-    // Use enrichedCount as proxy for qualified — in V2 pipeline, feature extraction
-    // always follows enrichment. Previously used rollup table which caused inconsistent
-    // results across date ranges (rollup data partially present → 7d > 30d anomaly).
-    const qualifiedCount = enrichedCount;
-
-    // Cost aggregation: sum costCents across leads matching the filter
-    const costAgg = await prisma.lead.aggregate({
-      where: {
-        deletedAt: null,
-        ...(icpProfileId
-          ? {
-              discoveryRecords: {
-                some: { icpProfileId },
-              },
-            }
-          : {}),
-        ...(from || to
-          ? {
-              createdAt: {
-                ...(from ? { gte: from } : {}),
-                ...(to ? { lte: to } : {}),
-              },
-            }
-          : {}),
-      },
-      _sum: { costCents: true },
-      _count: { id: true },
-    });
-
-    const totalCostCents = costAgg._sum.costCents ?? 0;
-    const leadCount = costAgg._count.id || discoveredCount || 1;
-    const costPerLead = Math.round((totalCostCents / leadCount) * 100) / 100;
+    const qualifiedCount = rollupAgg._sum.discoveredCount ?? discoveredCount;
 
     return {
       from: from?.toISOString() ?? null,
@@ -328,8 +268,6 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
       repliesCount,
       meetingsCount,
       dealsWonCount,
-      totalCostCents,
-      costPerLead,
     };
   }
 
@@ -462,38 +400,6 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
     };
   }
 
-  override async getManagerRecommendations(query: ManagerRecommendationsQuery): Promise<ManagerRecommendationsResponse> {
-    const limit = query.limit ?? 10;
-
-    const analyses = await prisma.managerAnalysis.findMany({
-      orderBy: [{ createdAt: 'desc' }],
-      take: limit,
-    });
-
-    const items: ManagerAnalysisResponse[] = analyses.map((analysis) => ({
-      id: analysis.id,
-      runId: analysis.runId,
-      weekStart: analysis.weekStart.toISOString(),
-      weekEnd: analysis.weekEnd.toISOString(),
-      totalSends: analysis.totalSends,
-      totalReplies: analysis.totalReplies,
-      totalPositive: analysis.totalPositive,
-      totalBounced: analysis.totalBounced,
-      overallReplyRate: analysis.overallReplyRate,
-      overallPositiveRate: analysis.overallPositiveRate,
-      overallBounceRate: analysis.overallBounceRate,
-      icpBreakdown: (analysis.icpBreakdownJson as unknown as IcpBreakdownItem[]) ?? [],
-      variantBreakdown: (analysis.variantBreakdownJson as unknown as VariantBreakdownItem[]) ?? [],
-      abInsightsPerIcp: analysis.abInsightsPerIcpJson != null ? (analysis.abInsightsPerIcpJson as unknown as AbInsightPerIcpItem[]) : undefined,
-      scoreBandBreakdown: (analysis.scoreBandBreakdownJson as unknown as ScoreBandBreakdownItem[]) ?? [],
-      trend: analysis.trendJson as unknown as TrendComparison,
-      recommendations: (analysis.recommendationsJson as unknown as ManagerRecommendation[]) ?? [],
-      createdAt: analysis.createdAt.toISOString(),
-    }));
-
-    return { items };
-  }
-
   override async recomputeRollup(input: RecomputeRollupRequest): Promise<void> {
     const dayStart = new Date(`${input.day}T00:00:00.000Z`);
     const dayEnd = new Date(`${input.day}T23:59:59.999Z`);
@@ -508,17 +414,6 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
           .then((profiles) => profiles.map((profile) => profile.id));
 
     for (const icpProfileId of icpProfilesToProcess) {
-      // V2: resolve discovery run IDs for this ICP to filter Business→Lead chain
-      const icpDiscoveryRunIds = await prisma.jobExecution
-        .findMany({
-          where: {
-            type: 'discovery.run',
-            payload: { path: ['icpProfileId'], equals: icpProfileId },
-          },
-          select: { id: true },
-        })
-        .then((runs) => runs.map((r) => r.id));
-
       const [discoveredCount, enrichedCount, scoredCount] = await Promise.all([
         prisma.leadDiscoveryRecord.count({
           where: {
@@ -527,14 +422,14 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
             status: 'DISCOVERED',
           },
         }),
-        // V2: count Leads with a BusinessConversion (went through V2 pipeline)
-        prisma.lead.count({
+        prisma.leadEnrichmentRecord.count({
           where: {
-            deletedAt: null,
-            businessConversions: { some: {} },
-            createdAt: { gte: dayStart, lte: dayEnd },
-            business: {
-              discoveryRunId: { in: icpDiscoveryRunIds },
+            status: 'COMPLETED',
+            enrichedAt: { gte: dayStart, lte: dayEnd },
+            lead: {
+              discoveryRecords: {
+                some: { icpProfileId },
+              },
             },
           },
         }),
@@ -562,5 +457,99 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
         },
       });
     }
+  }
+
+  override async getManagerRecommendations(query: ManagerRecommendationsQuery): Promise<ManagerRecommendationsResponse> {
+    const limit = query.limit ?? 10;
+
+    const analyses = await prisma.managerAnalysis.findMany({
+      orderBy: [{ createdAt: 'desc' }],
+      take: limit,
+    });
+
+    const items: ManagerAnalysisResponse[] = analyses.map((analysis) => ({
+      id: analysis.id,
+      runId: analysis.runId,
+      weekStart: analysis.weekStart.toISOString(),
+      weekEnd: analysis.weekEnd.toISOString(),
+      totalSends: analysis.totalSends,
+      totalReplies: analysis.totalReplies,
+      totalPositive: analysis.totalPositive,
+      totalBounced: analysis.totalBounced,
+      overallReplyRate: analysis.overallReplyRate,
+      overallPositiveRate: analysis.overallPositiveRate,
+      overallBounceRate: analysis.overallBounceRate,
+      icpBreakdown: (analysis.icpBreakdownJson as unknown as IcpBreakdownItem[]) ?? [],
+      variantBreakdown: (analysis.variantBreakdownJson as unknown as VariantBreakdownItem[]) ?? [],
+      scoreBandBreakdown: (analysis.scoreBandBreakdownJson as unknown as ScoreBandBreakdownItem[]) ?? [],
+      trend: analysis.trendJson as unknown as TrendComparison,
+      recommendations: (analysis.recommendationsJson as unknown as ManagerRecommendation[]) ?? [],
+      createdAt: analysis.createdAt.toISOString(),
+    }));
+
+    return { items };
+  }
+
+  override async getStoredRecommendations(query: StoredRecommendationsQuery): Promise<StoredRecommendationsResponse> {
+    const limit = query.limit ?? 50;
+
+    const where: Record<string, unknown> = {};
+    if (query.status) {
+      where['status'] = query.status;
+    }
+    if (query.icpProfileId) {
+      where['icpProfileId'] = query.icpProfileId;
+    }
+
+    const records = await prisma.managerRecommendationRecord.findMany({
+      where,
+      orderBy: [{ priority: 'asc' }, { createdAt: 'desc' }],
+      take: limit,
+    });
+
+    const items: StoredRecommendation[] = records.map((rec) => ({
+      id: rec.id,
+      type: rec.type as StoredRecommendation['type'],
+      title: rec.title,
+      description: rec.description,
+      icpProfileId: rec.icpProfileId,
+      icpName: rec.icpName,
+      field: rec.field,
+      currentValue: rec.currentValue,
+      recommendedValue: rec.recommendedValue,
+      confidence: rec.confidence,
+      priority: rec.priority,
+      status: rec.status as StoredRecommendation['status'],
+      analysisRunId: rec.analysisRunId,
+      createdAt: rec.createdAt.toISOString(),
+      updatedAt: rec.updatedAt.toISOString(),
+    }));
+
+    return { items };
+  }
+
+  override async updateRecommendationStatus(id: string, input: UpdateRecommendationStatusRequest): Promise<StoredRecommendation> {
+    const rec = await prisma.managerRecommendationRecord.update({
+      where: { id },
+      data: { status: input.status },
+    });
+
+    return {
+      id: rec.id,
+      type: rec.type as StoredRecommendation['type'],
+      title: rec.title,
+      description: rec.description,
+      icpProfileId: rec.icpProfileId,
+      icpName: rec.icpName,
+      field: rec.field,
+      currentValue: rec.currentValue,
+      recommendedValue: rec.recommendedValue,
+      confidence: rec.confidence,
+      priority: rec.priority,
+      status: rec.status as StoredRecommendation['status'],
+      analysisRunId: rec.analysisRunId,
+      createdAt: rec.createdAt.toISOString(),
+      updatedAt: rec.updatedAt.toISOString(),
+    };
   }
 }

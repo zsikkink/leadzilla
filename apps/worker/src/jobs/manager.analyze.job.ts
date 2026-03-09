@@ -1,16 +1,12 @@
 import type {
-  AbInsightPerIcpItem,
   IcpBreakdownItem,
   ManagerRecommendation,
   ScoreBandBreakdownItem,
   TrendComparison,
   VariantBreakdownItem,
 } from '@lead-flood/contracts';
-import { prisma, toInputJson } from '@lead-flood/db';
+import { prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
-
-import { formatErrorMessage } from '../errors.js';
-import { chiSquaredTest } from '../utils/chi-squared.js';
 
 export const MANAGER_ANALYZE_JOB_NAME = 'manager.analyze';
 
@@ -40,10 +36,63 @@ const NEGATIVE_EVENT_TYPES = ['BOUNCED', 'UNSUBSCRIBED'] as const;
 
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
+function formatErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
 function safeRate(numerator: number, denominator: number): number {
   if (denominator === 0) return 0;
   return Math.round((numerator / denominator) * 10000) / 10000;
 }
+
+// ── Chi-squared test for A/B significance ───────────────────
+function chiSquaredTest(
+  successA: number,
+  totalA: number,
+  successB: number,
+  totalB: number,
+): { chiSquared: number; pValue: string; significant: boolean } {
+  const failA = totalA - successA;
+  const failB = totalB - successB;
+  const total = totalA + totalB;
+  const totalSuccess = successA + successB;
+  const totalFail = failA + failB;
+
+  if (total === 0 || totalSuccess === 0 || totalFail === 0) {
+    return { chiSquared: 0, pValue: '1.00', significant: false };
+  }
+
+  const expectedSuccessA = (totalA * totalSuccess) / total;
+  const expectedFailA = (totalA * totalFail) / total;
+  const expectedSuccessB = (totalB * totalSuccess) / total;
+  const expectedFailB = (totalB * totalFail) / total;
+
+  const chi2 =
+    ((successA - expectedSuccessA) ** 2) / expectedSuccessA +
+    ((failA - expectedFailA) ** 2) / expectedFailA +
+    ((successB - expectedSuccessB) ** 2) / expectedSuccessB +
+    ((failB - expectedFailB) ** 2) / expectedFailB;
+
+  // p-value approximation using chi-squared CDF (1 df)
+  // For 1 degree of freedom: p ≈ erfc(sqrt(chi2/2))
+  // Use simple thresholds: chi2 > 3.841 → p < 0.05 (significant)
+  const significant = chi2 > 3.841;
+  let pValue: string;
+  if (chi2 > 10.828) pValue = '<0.001';
+  else if (chi2 > 6.635) pValue = '<0.01';
+  else if (chi2 > 3.841) pValue = '<0.05';
+  else if (chi2 > 2.706) pValue = '<0.10';
+  else pValue = '>0.10';
+
+  return {
+    chiSquared: Math.round(chi2 * 100) / 100,
+    pValue,
+    significant,
+  };
+}
+
+// ── Data queries ────────────────────────────────────────────
 
 async function computeIcpBreakdown(
   weekStart: Date,
@@ -54,7 +103,6 @@ async function computeIcpBreakdown(
     select: { id: true, name: true },
   });
 
-  // Batch: count sends per ICP in parallel (was sequential)
   const sendCounts = await Promise.all(
     icpProfiles.map((icp) =>
       prisma.messageSend.count({
@@ -67,12 +115,10 @@ async function computeIcpBreakdown(
     ),
   );
 
-  // Only fetch feedback for ICPs with sends
   const activeIcps = icpProfiles
     .map((icp, i) => ({ ...icp, sends: sendCounts[i]! }))
     .filter((icp) => icp.sends > 0);
 
-  // Batch: count feedback events per ICP in parallel
   const feedbackCounts = await Promise.all(
     activeIcps.map((icp) =>
       Promise.all([
@@ -150,7 +196,6 @@ async function computeVariantBreakdown(
     }
   }
 
-  // Count replies per variant
   const sendIds = variantSends.map((s) => s.id);
   if (sendIds.length > 0) {
     const replyEvents = await prisma.feedbackEvent.findMany({
@@ -193,125 +238,12 @@ async function computeVariantBreakdown(
   return results.sort((a, b) => b.replyRate - a.replyRate);
 }
 
-async function computeAbInsightsPerIcp(
-  weekStart: Date,
-  weekEnd: Date,
-): Promise<AbInsightPerIcpItem[]> {
-  // Fetch all sends with their variant key and ICP profile in the time window
-  const sends = await prisma.messageSend.findMany({
-    where: {
-      sentAt: { gte: weekStart, lt: weekEnd },
-      status: { in: ['SENT', 'DELIVERED', 'REPLIED'] },
-    },
-    select: {
-      id: true,
-      messageVariant: {
-        select: { variantKey: true },
-      },
-      messageDraft: {
-        select: {
-          icpProfileId: true,
-          icpProfile: { select: { name: true } },
-        },
-      },
-    },
-  });
-
-  // Group by (icpProfileId, variantKey)
-  const groupMap = new Map<
-    string,
-    { icpProfileId: string; icpName: string; variantKey: string; sendIds: string[]; sends: number; replies: number; positiveOutcomes: number }
-  >();
-
-  for (const send of sends) {
-    const icpId = send.messageDraft.icpProfileId;
-    const icpName = send.messageDraft.icpProfile.name;
-    const variantKey = send.messageVariant.variantKey;
-    const groupKey = `${icpId}:${variantKey}`;
-
-    const existing = groupMap.get(groupKey);
-    if (existing) {
-      existing.sends += 1;
-      existing.sendIds.push(send.id);
-    } else {
-      groupMap.set(groupKey, {
-        icpProfileId: icpId,
-        icpName,
-        variantKey,
-        sendIds: [send.id],
-        sends: 1,
-        replies: 0,
-        positiveOutcomes: 0,
-      });
-    }
-  }
-
-  // Batch-fetch reply and positive events for all sendIds
-  const allSendIds = sends.map((s) => s.id);
-  if (allSendIds.length > 0) {
-    const feedbackEvents = await prisma.feedbackEvent.findMany({
-      where: {
-        occurredAt: { gte: weekStart, lt: weekEnd },
-        eventType: { in: ['REPLIED', 'MEETING_BOOKED', 'DEAL_WON'] },
-        messageSendId: { in: allSendIds },
-      },
-      select: {
-        eventType: true,
-        messageSendId: true,
-        messageSend: {
-          select: {
-            messageVariant: { select: { variantKey: true } },
-            messageDraft: { select: { icpProfileId: true } },
-          },
-        },
-      },
-    });
-
-    for (const event of feedbackEvents) {
-      if (!event.messageSend) continue;
-      const icpId = event.messageSend.messageDraft.icpProfileId;
-      const variantKey = event.messageSend.messageVariant.variantKey;
-      const groupKey = `${icpId}:${variantKey}`;
-      const group = groupMap.get(groupKey);
-      if (group) {
-        if (event.eventType === 'REPLIED') {
-          group.replies += 1;
-        } else {
-          group.positiveOutcomes += 1;
-        }
-      }
-    }
-  }
-
-  const results: AbInsightPerIcpItem[] = [];
-  for (const [, data] of groupMap) {
-    results.push({
-      icpProfileId: data.icpProfileId,
-      icpName: data.icpName,
-      variantKey: data.variantKey,
-      sends: data.sends,
-      replies: data.replies,
-      replyRate: safeRate(data.replies, data.sends),
-      positiveOutcomes: data.positiveOutcomes,
-      positiveRate: safeRate(data.positiveOutcomes, data.sends),
-    });
-  }
-
-  // Sort by ICP, then variant for readable output
-  return results.sort((a, b) => {
-    const icpCmp = a.icpName.localeCompare(b.icpName);
-    if (icpCmp !== 0) return icpCmp;
-    return a.variantKey.localeCompare(b.variantKey);
-  });
-}
-
 async function computeScoreBandBreakdown(
   weekStart: Date,
   weekEnd: Date,
 ): Promise<ScoreBandBreakdownItem[]> {
   const bands = ['HIGH', 'MEDIUM', 'LOW'] as const;
 
-  // Batch: count sends per band in parallel (was sequential)
   const sendCounts = await Promise.all(
     bands.map((band) =>
       prisma.messageSend.count({
@@ -326,7 +258,6 @@ async function computeScoreBandBreakdown(
     ),
   );
 
-  // Batch: count feedback per band in parallel (only for bands with sends)
   const feedbackCounts = await Promise.all(
     bands.map((band, i) => {
       if (sendCounts[i] === 0) return Promise.resolve([0, 0] as const);
@@ -405,12 +336,56 @@ async function computeWeekMetrics(
   return { sends, replies, positive, bounced };
 }
 
+// ── Discovery yield analysis ────────────────────────────────
+
+async function computeDiscoveryYield(): Promise<{
+  icpYieldRates: Array<{ icpProfileId: string; icpName: string; yieldRate: number; totalDiscovered: number; totalLeads: number }>;
+}> {
+  const icpProfiles = await prisma.icpProfile.findMany({
+    where: { isActive: true },
+    select: { id: true, name: true },
+  });
+
+  const results = await Promise.all(
+    icpProfiles.map(async (icp) => {
+      // Count discovery records and leads per ICP
+      const [totalDiscovered, totalLeads] = await Promise.all([
+        prisma.leadDiscoveryRecord.count({
+          where: {
+            icpProfileId: icp.id,
+            status: 'DISCOVERED',
+          },
+        }),
+        prisma.lead.count({
+          where: {
+            discoveryRecords: {
+              some: { icpProfileId: icp.id },
+            },
+          },
+        }),
+      ]);
+
+      return {
+        icpProfileId: icp.id,
+        icpName: icp.name,
+        yieldRate: safeRate(totalLeads, totalDiscovered),
+        totalDiscovered,
+        totalLeads,
+      };
+    }),
+  );
+
+  return { icpYieldRates: results };
+}
+
+// ── Recommendation generator ────────────────────────────────
+
 function generateRecommendations(
   icpBreakdown: IcpBreakdownItem[],
   variantBreakdown: VariantBreakdownItem[],
   scoreBandBreakdown: ScoreBandBreakdownItem[],
   trend: TrendComparison,
-  abInsightsPerIcp: AbInsightPerIcpItem[],
+  discoveryYield: { icpYieldRates: Array<{ icpProfileId: string; icpName: string; yieldRate: number; totalDiscovered: number; totalLeads: number }> },
 ): ManagerRecommendation[] {
   const recommendations: ManagerRecommendation[] = [];
 
@@ -444,16 +419,15 @@ function generateRecommendations(
     }
   }
 
-  // 3. Compare HIGH vs MEDIUM score band performance (chi-squared gated)
+  // 3. Compare HIGH vs MEDIUM score band performance
   const highBand = scoreBandBreakdown.find((b) => b.scoreBand === 'HIGH');
   const mediumBand = scoreBandBreakdown.find((b) => b.scoreBand === 'MEDIUM');
 
   if (highBand && mediumBand && highBand.sends >= 5 && mediumBand.sends >= 5) {
-    // If MEDIUM actually performs better than HIGH, threshold may be wrong
     if (mediumBand.replyRate > highBand.replyRate && mediumBand.replyRate > 0) {
       const bandTest = chiSquaredTest(mediumBand.replies, mediumBand.sends, highBand.replies, highBand.sends);
       const significanceNote = bandTest.significant
-        ? ` (statistically significant: p=${bandTest.pValue}, χ²=${bandTest.chiSquared})`
+        ? ` (statistically significant: p=${bandTest.pValue}, chi2=${bandTest.chiSquared})`
         : ` (not yet statistically significant: p=${bandTest.pValue}, needs more data)`;
 
       recommendations.push({
@@ -463,11 +437,10 @@ function generateRecommendations(
         currentValue: 0.5,
         recommendedValue: 0.4,
         confidence: bandTest.significant ? 0.7 : 0.4,
-        reasoning: `MEDIUM band reply rate (${(mediumBand.replyRate * 100).toFixed(1)}%) exceeds HIGH band (${(highBand.replyRate * 100).toFixed(1)}%)${significanceNote}. The scoring threshold may be miscalibrated — consider lowering it to capture these responsive leads.`,
+        reasoning: `MEDIUM band reply rate (${(mediumBand.replyRate * 100).toFixed(1)}%) exceeds HIGH band (${(highBand.replyRate * 100).toFixed(1)}%)${significanceNote}. The scoring threshold may be miscalibrated.`,
       });
     }
 
-    // If HIGH has low positive rate, scoring weights may need adjustment
     if (highBand.positiveRate < 0.02 && highBand.sends >= 10) {
       recommendations.push({
         type: 'ADJUST_WEIGHT',
@@ -476,12 +449,12 @@ function generateRecommendations(
         currentValue: 0.6,
         recommendedValue: 0.5,
         confidence: 0.55,
-        reasoning: `HIGH-scored leads have only ${(highBand.positiveRate * 100).toFixed(1)}% positive outcome rate. Deterministic scoring factors may be overweighted relative to actual conversion signals.`,
+        reasoning: `HIGH-scored leads have only ${(highBand.positiveRate * 100).toFixed(1)}% positive outcome rate. Deterministic scoring factors may be overweighted.`,
       });
     }
   }
 
-  // 4. If MEDIUM band performs well, recommend increasing volume
+  // 4. MEDIUM band performing well → increase volume
   if (mediumBand && mediumBand.sends >= 5 && mediumBand.replyRate > 0.05) {
     recommendations.push({
       type: 'INCREASE_VOLUME',
@@ -507,11 +480,11 @@ function generateRecommendations(
       currentValue: trend.currentWeek.replyRate,
       recommendedValue: null,
       confidence: 0.65,
-      reasoning: `Reply rate dropped ${(Math.abs(trend.replyRateDelta) * 100).toFixed(1)} percentage points week-over-week (${(trend.previousWeek.replyRate * 100).toFixed(1)}% → ${(trend.currentWeek.replyRate * 100).toFixed(1)}%). Investigate messaging quality or deliverability issues.`,
+      reasoning: `Reply rate dropped ${(Math.abs(trend.replyRateDelta) * 100).toFixed(1)} percentage points week-over-week (${(trend.previousWeek.replyRate * 100).toFixed(1)}% to ${(trend.currentWeek.replyRate * 100).toFixed(1)}%). Investigate messaging quality or deliverability issues.`,
     });
   }
 
-  // 6. Variant A/B insights — flag underperforming variants (chi-squared gated)
+  // 6. Variant A/B insights (chi-squared gated)
   if (variantBreakdown.length >= 2) {
     const sorted = [...variantBreakdown].sort((a, b) => b.replyRate - a.replyRate);
     const best = sorted[0]!;
@@ -526,60 +499,118 @@ function generateRecommendations(
 
       if (abTest.significant) {
         recommendations.push({
-          type: 'ADJUST_WEIGHT',
+          type: 'PREFER_VARIANT',
           icpProfileId: null,
           field: `variant:${worst.variantKey}`,
           currentValue: worst.replyRate,
           recommendedValue: null,
           confidence: Math.min(0.9, 0.5 + (best.sends + worst.sends) * 0.01),
-          reasoning: `Variant "${best.variantKey}" outperforms "${worst.variantKey}" by ${((best.replyRate - worst.replyRate) * 100).toFixed(1)} percentage points (${(best.replyRate * 100).toFixed(1)}% vs ${(worst.replyRate * 100).toFixed(1)}%, p=${abTest.pValue}, χ²=${abTest.chiSquared}). Consider retiring the underperforming variant.`,
+          reasoning: `Variant "${best.variantKey}" outperforms "${worst.variantKey}" by ${((best.replyRate - worst.replyRate) * 100).toFixed(1)} percentage points (${(best.replyRate * 100).toFixed(1)}% vs ${(worst.replyRate * 100).toFixed(1)}%, p=${abTest.pValue}). Consider retiring the underperforming variant.`,
         });
       }
     }
   }
 
-  // 7. Per-ICP A/B variant insights — recommend preferred variant per ICP
-  const icpVariantPairs = new Map<string, AbInsightPerIcpItem[]>();
-  for (const item of abInsightsPerIcp) {
-    const existing = icpVariantPairs.get(item.icpProfileId);
-    if (existing) {
-      existing.push(item);
-    } else {
-      icpVariantPairs.set(item.icpProfileId, [item]);
+  // 7. Discovery yield analysis — low-yield ICPs
+  for (const yieldItem of discoveryYield.icpYieldRates) {
+    if (yieldItem.totalDiscovered >= 20 && yieldItem.yieldRate < 0.03) {
+      recommendations.push({
+        type: 'SWITCH_SOURCE',
+        icpProfileId: yieldItem.icpProfileId,
+        field: 'discoveryYieldRate',
+        currentValue: yieldItem.yieldRate,
+        recommendedValue: null,
+        confidence: Math.min(0.85, 0.4 + yieldItem.totalDiscovered * 0.005),
+        reasoning: `ICP "${yieldItem.icpName}" has a ${(yieldItem.yieldRate * 100).toFixed(1)}% discovery yield rate (${yieldItem.totalLeads} leads from ${yieldItem.totalDiscovered} discovered). Consider switching search categories or adjusting the discovery strategy for this segment.`,
+      });
     }
   }
 
-  for (const [icpId, variants] of icpVariantPairs) {
-    if (variants.length < 2) continue;
-
-    const sorted = [...variants].sort((a, b) => b.replyRate - a.replyRate);
-    const best = sorted[0]!;
-    const worst = sorted[sorted.length - 1]!;
-
-    // Only recommend if both have meaningful volume and chi-squared significant
-    if (
-      best.sends >= 3 &&
-      worst.sends >= 3 &&
-      best.replyRate - worst.replyRate > 0.03
-    ) {
-      const abTest = chiSquaredTest(best.replies, best.sends, worst.replies, worst.sends);
-
-      if (abTest.significant) {
-        recommendations.push({
-          type: 'PREFER_VARIANT',
-          icpProfileId: icpId,
-          field: `ab:${best.variantKey}`,
-          currentValue: worst.replyRate,
-          recommendedValue: best.replyRate,
-          confidence: Math.min(0.9, 0.4 + (best.sends + worst.sends) * 0.015),
-          reasoning: `For ICP "${best.icpName}", variant "${best.variantKey}" has ${(best.replyRate * 100).toFixed(1)}% reply rate vs "${worst.variantKey}" at ${(worst.replyRate * 100).toFixed(1)}% (${best.sends + worst.sends} total sends, p=${abTest.pValue}, χ²=${abTest.chiSquared}). Consider preferring "${best.variantKey}" for this segment.`,
-        });
-      }
+  // 8. High-yield ICPs → increase discovery volume
+  for (const yieldItem of discoveryYield.icpYieldRates) {
+    if (yieldItem.totalDiscovered >= 10 && yieldItem.yieldRate > 0.15) {
+      recommendations.push({
+        type: 'INCREASE_VOLUME',
+        icpProfileId: yieldItem.icpProfileId,
+        field: 'discoveryVolume',
+        currentValue: yieldItem.totalDiscovered,
+        recommendedValue: null,
+        confidence: Math.min(0.8, 0.4 + yieldItem.yieldRate * 2),
+        reasoning: `ICP "${yieldItem.icpName}" has a strong ${(yieldItem.yieldRate * 100).toFixed(1)}% discovery yield rate. Consider increasing search budget to capture more high-converting leads in this segment.`,
+      });
     }
   }
 
   return recommendations;
 }
+
+// ── Persist recommendations as individual records ───────────
+
+function generateTitle(rec: ManagerRecommendation): string {
+  switch (rec.type) {
+    case 'PAUSE_ICP':
+      return `Pause outreach for underperforming ICP`;
+    case 'ADJUST_THRESHOLD':
+      return `Adjust scoring threshold`;
+    case 'ADJUST_WEIGHT':
+      return `Review scoring weight balance`;
+    case 'INCREASE_VOLUME':
+      return `Increase discovery volume`;
+    case 'PREFER_VARIANT':
+      return `Prefer winning message variant`;
+    case 'DISABLE_FEATURE':
+      return `Consider disabling low-signal feature`;
+    case 'SWITCH_SOURCE':
+      return `Review discovery source for low-yield segment`;
+    default:
+      return `Pipeline optimization recommendation`;
+  }
+}
+
+function computePriority(rec: ManagerRecommendation): number {
+  // Higher confidence + actionable type = higher priority (1 = highest)
+  let base = Math.round((1 - rec.confidence) * 10);
+  if (rec.type === 'PAUSE_ICP') base = Math.max(1, base - 2);
+  if (rec.type === 'ADJUST_THRESHOLD') base = Math.max(1, base - 1);
+  return Math.max(1, Math.min(10, base));
+}
+
+async function persistRecommendationRecords(
+  analysisId: string,
+  recommendations: ManagerRecommendation[],
+  icpBreakdown: IcpBreakdownItem[],
+  logger: ManagerAnalyzeLogger,
+): Promise<void> {
+  const icpNameMap = new Map(icpBreakdown.map((icp) => [icp.icpProfileId, icp.icpName]));
+
+  for (const rec of recommendations) {
+    try {
+      await prisma.managerRecommendationRecord.create({
+        data: {
+          type: rec.type,
+          title: generateTitle(rec),
+          description: rec.reasoning,
+          icpProfileId: rec.icpProfileId,
+          icpName: rec.icpProfileId ? (icpNameMap.get(rec.icpProfileId) ?? null) : null,
+          field: rec.field,
+          currentValue: rec.currentValue,
+          recommendedValue: rec.recommendedValue,
+          confidence: rec.confidence,
+          priority: computePriority(rec),
+          status: 'active',
+          analysisRunId: analysisId,
+        },
+      });
+    } catch (err) {
+      logger.warn(
+        { error: formatErrorMessage(err), type: rec.type, field: rec.field },
+        'Failed to persist recommendation record (non-fatal)',
+      );
+    }
+  }
+}
+
+// ── Main job handler ────────────────────────────────────────
 
 export async function handleManagerAnalyzeJob(
   logger: ManagerAnalyzeLogger,
@@ -599,27 +630,26 @@ export async function handleManagerAnalyzeJob(
   );
 
   try {
-    // Compute time windows: current week = last 7 days, previous week = 7-14 days ago
     const now = new Date();
     const weekEnd = now;
     const weekStart = new Date(now.getTime() - ONE_WEEK_MS);
     const prevWeekStart = new Date(weekStart.getTime() - ONE_WEEK_MS);
 
-    // Run analysis in parallel
+    // Run all analyses in parallel
     const [
       currentMetrics,
       prevMetrics,
       icpBreakdown,
       variantBreakdown,
       scoreBandBreakdown,
-      abInsightsPerIcp,
+      discoveryYield,
     ] = await Promise.all([
       computeWeekMetrics(weekStart, weekEnd),
       computeWeekMetrics(prevWeekStart, weekStart),
       computeIcpBreakdown(weekStart, weekEnd),
       computeVariantBreakdown(weekStart, weekEnd),
       computeScoreBandBreakdown(weekStart, weekEnd),
-      computeAbInsightsPerIcp(weekStart, weekEnd),
+      computeDiscoveryYield(),
     ]);
 
     const currentReplyRate = safeRate(currentMetrics.replies, currentMetrics.sends);
@@ -653,11 +683,11 @@ export async function handleManagerAnalyzeJob(
       variantBreakdown,
       scoreBandBreakdown,
       trend,
-      abInsightsPerIcp,
+      discoveryYield,
     );
 
-    // Persist analysis
-    await prisma.managerAnalysis.create({
+    // Persist the full analysis
+    const analysis = await prisma.managerAnalysis.create({
       data: {
         runId,
         weekStart,
@@ -669,15 +699,17 @@ export async function handleManagerAnalyzeJob(
         overallReplyRate: currentReplyRate,
         overallPositiveRate: currentPositiveRate,
         overallBounceRate: currentBounceRate,
-        icpBreakdownJson: toInputJson(icpBreakdown),
-        variantBreakdownJson: toInputJson(variantBreakdown),
-        scoreBandBreakdownJson: toInputJson(scoreBandBreakdown),
-        trendJson: toInputJson(trend),
-        abInsightsPerIcpJson: toInputJson(abInsightsPerIcp),
-        recommendationsJson: toInputJson(recommendations),
+        icpBreakdownJson: JSON.parse(JSON.stringify(icpBreakdown)),
+        variantBreakdownJson: JSON.parse(JSON.stringify(variantBreakdown)),
+        scoreBandBreakdownJson: JSON.parse(JSON.stringify(scoreBandBreakdown)),
+        trendJson: JSON.parse(JSON.stringify(trend)),
+        recommendationsJson: JSON.parse(JSON.stringify(recommendations)),
         recommendationCount: recommendations.length,
       },
     });
+
+    // Persist individual recommendation records
+    await persistRecommendationRecords(analysis.id, recommendations, icpBreakdown, logger);
 
     // Log each recommendation for visibility
     for (const rec of recommendations) {
@@ -691,25 +723,6 @@ export async function handleManagerAnalyzeJob(
           confidence: rec.confidence,
         },
         `Recommendation: ${rec.reasoning}`,
-      );
-    }
-
-    // Log per-ICP A/B insights for visibility
-    for (const insight of abInsightsPerIcp) {
-      logger.info(
-        {
-          jobId: job.id,
-          runId,
-          icpProfileId: insight.icpProfileId,
-          icpName: insight.icpName,
-          variantKey: insight.variantKey,
-          sends: insight.sends,
-          replies: insight.replies,
-          replyRate: insight.replyRate,
-          positiveOutcomes: insight.positiveOutcomes,
-          positiveRate: insight.positiveRate,
-        },
-        `A/B insight: ICP "${insight.icpName}" variant "${insight.variantKey}" — ${insight.sends} sends, ${(insight.replyRate * 100).toFixed(1)}% reply rate`,
       );
     }
 
@@ -730,6 +743,7 @@ export async function handleManagerAnalyzeJob(
         variantCount: variantBreakdown.length,
         recommendationCount: recommendations.length,
         replyRateDelta: trend.replyRateDelta,
+        discoveryYieldIcps: discoveryYield.icpYieldRates.length,
       },
       'Completed manager.analyze job',
     );

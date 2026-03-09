@@ -10,6 +10,10 @@ import type {
   RetrainStatusResponse,
   ScoreDistributionQuery,
   ScoreDistributionResponse,
+  StoredRecommendation,
+  StoredRecommendationsQuery,
+  StoredRecommendationsResponse,
+  UpdateRecommendationStatusRequest,
 } from '@lead-flood/contracts';
 
 import type { AnalyticsRepository } from './analytics.repository.js';
@@ -34,6 +38,8 @@ export interface AnalyticsService {
   getRetrainStatus(query: RetrainStatusQuery): Promise<RetrainStatusResponse>;
   recomputeRollup(input: RecomputeRollupRequest): Promise<void>;
   getManagerRecommendations(query: ManagerRecommendationsQuery): Promise<ManagerRecommendationsResponse>;
+  getStoredRecommendations(query: StoredRecommendationsQuery): Promise<StoredRecommendationsResponse>;
+  updateRecommendationStatus(id: string, input: UpdateRecommendationStatusRequest): Promise<StoredRecommendation>;
 }
 
 export function buildAnalyticsService(
@@ -69,6 +75,12 @@ export function buildAnalyticsService(
     },
     async getManagerRecommendations(query) {
       return repository.getManagerRecommendations(query);
+    },
+    async getStoredRecommendations(query) {
+      return repository.getStoredRecommendations(query);
+    },
+    async updateRecommendationStatus(id, input) {
+      return repository.updateRecommendationStatus(id, input);
     },
   };
 }
