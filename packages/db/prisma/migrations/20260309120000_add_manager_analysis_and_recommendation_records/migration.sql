@@ -1,30 +1,5 @@
--- CreateTable: ManagerAnalysis
-CREATE TABLE "ManagerAnalysis" (
-    "id" TEXT NOT NULL,
-    "runId" TEXT NOT NULL,
-    "weekStart" TIMESTAMP(3) NOT NULL,
-    "weekEnd" TIMESTAMP(3) NOT NULL,
-    "totalSends" INTEGER NOT NULL DEFAULT 0,
-    "totalReplies" INTEGER NOT NULL DEFAULT 0,
-    "totalPositive" INTEGER NOT NULL DEFAULT 0,
-    "totalBounced" INTEGER NOT NULL DEFAULT 0,
-    "overallReplyRate" DOUBLE PRECISION NOT NULL DEFAULT 0,
-    "overallPositiveRate" DOUBLE PRECISION NOT NULL DEFAULT 0,
-    "overallBounceRate" DOUBLE PRECISION NOT NULL DEFAULT 0,
-    "icpBreakdownJson" JSONB NOT NULL,
-    "variantBreakdownJson" JSONB NOT NULL,
-    "scoreBandBreakdownJson" JSONB NOT NULL,
-    "trendJson" JSONB NOT NULL,
-    "recommendationsJson" JSONB NOT NULL,
-    "recommendationCount" INTEGER NOT NULL DEFAULT 0,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "ManagerAnalysis_pkey" PRIMARY KEY ("id")
-);
-
-CREATE UNIQUE INDEX "ManagerAnalysis_runId_key" ON "ManagerAnalysis"("runId");
-CREATE INDEX "ManagerAnalysis_weekStart_idx" ON "ManagerAnalysis"("weekStart");
-CREATE INDEX "ManagerAnalysis_createdAt_idx" ON "ManagerAnalysis"("createdAt");
+-- Add storedRecommendations relation to ManagerAnalysis
+-- ManagerAnalysis table already exists; only creating ManagerRecommendationRecord
 
 -- CreateTable: manager_recommendation_records
 CREATE TABLE "manager_recommendation_records" (
