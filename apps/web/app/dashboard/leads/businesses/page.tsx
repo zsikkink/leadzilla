@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   AlertTriangle,
@@ -28,6 +28,7 @@ import { SocialLinkIcon } from '@/components/social-link-icon.js';
 import { cn } from '@/lib/utils.js';
 import { getSupabaseBrowserClient } from '@/lib/supabase-client.js';
 import { countryName } from '@/lib/countries.js';
+import { sortTeamMembers } from '@/lib/team-members.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -336,6 +337,7 @@ function mergeSocialLinksForBiz(
 }
 
 function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; contacts: BusinessContact[]; onClose: () => void }) {
+  const orderedContacts = useMemo(() => sortTeamMembers(contacts).ordered, [contacts]);
   const websiteScrape = biz.apify_website_scrape_json;
   const instagramScrape = biz.apify_instagram_scrape_json;
 
@@ -626,10 +628,10 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
         )}
 
         {/* Team Members (D8: primary/alternative badges + source) */}
-        {contacts.length > 0 && (
-          <Section title="Team Members" icon={Users} iconColor="text-amber-400" count={contacts.length} defaultOpen>
+        {orderedContacts.length > 0 && (
+          <Section title="Team Members" icon={Users} iconColor="text-amber-400" count={orderedContacts.length} defaultOpen>
             <div className="space-y-2">
-              {contacts.map((tm, idx) => (
+              {orderedContacts.map((tm, idx) => (
                 <div key={tm.id} className="flex items-center gap-3 rounded-lg border border-border/20 bg-slate-800 px-3 py-2">
                   <div className="flex h-7 w-7 items-center justify-center rounded-md bg-amber-500/10 text-[10px] font-bold text-amber-400">{tm.fullName.charAt(0)}</div>
                   <div className="min-w-0 flex-1">
@@ -642,6 +644,7 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
                       )}
                     </div>
                     {tm.jobTitle ? <p className="text-[10px] text-muted-foreground/50 truncate">{tm.jobTitle}</p> : null}
+                    {tm.email ? <p className="truncate font-mono text-[10px] text-foreground/75">{tm.email}</p> : null}
                     {tm.source ? <p className="text-[9px] text-muted-foreground/30">{tm.source}</p> : null}
                   </div>
                   <div className="flex shrink-0 gap-1.5">

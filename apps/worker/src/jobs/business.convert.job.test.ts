@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  classifySeniorityLocal,
+  getDecisionMakerTier,
   calculateRecoveryEvidenceStrength,
   hasMaterialRecoveryEvidenceImprovement,
   isJunkPersonalEmail,
@@ -76,5 +78,25 @@ describe('contact recovery evidence helpers', () => {
     expect(isJunkPersonalEmail('john@doe.com')).toBe(true);
     expect(isJunkPersonalEmail('example@mysite.com')).toBe(true);
     expect(isJunkPersonalEmail('kate@atlasclinic.example')).toBe(false);
+  });
+
+  it('classifies executive titles with an explicit hierarchy', () => {
+    expect(getDecisionMakerTier('Chief Executive Officer')).toBe(0);
+    expect(getDecisionMakerTier('Founder')).toBe(0);
+    expect(getDecisionMakerTier('Chief Information Officer')).toBe(1);
+    expect(getDecisionMakerTier('Chief Financial Officer')).toBe(1);
+    expect(getDecisionMakerTier('VP Revenue')).toBe(2);
+    expect(getDecisionMakerTier('Head of Operations')).toBe(2);
+    expect(getDecisionMakerTier('Legal Director')).toBe(3);
+    expect(getDecisionMakerTier('Marketing Manager')).toBe(4);
+    expect(getDecisionMakerTier('Marketing Coordinator')).toBe(5);
+  });
+
+  it('maps explicit hierarchy tiers into seniority buckets', () => {
+    expect(classifySeniorityLocal('Chief Executive Officer')).toBe('executive');
+    expect(classifySeniorityLocal('Chief Information Officer')).toBe('executive');
+    expect(classifySeniorityLocal('Legal Director')).toBe('director');
+    expect(classifySeniorityLocal('Marketing Manager')).toBe('manager');
+    expect(classifySeniorityLocal('Marketing Coordinator')).toBe('other');
   });
 });

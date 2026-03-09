@@ -753,6 +753,7 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
                     id: true,
                     firstName: true,
                     lastName: true,
+                    status: true,
                     business: {
                       select: { name: true },
                     },
@@ -771,6 +772,7 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
     for (const event of costEvents) {
       if (!event.business) continue;
       for (const conversion of event.business.businessConversions) {
+        if (conversion.lead.status === 'rejected') continue;
         if (seen.has(conversion.lead.id)) continue;
         seen.add(conversion.lead.id);
         leads.push({

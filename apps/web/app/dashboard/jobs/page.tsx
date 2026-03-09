@@ -47,7 +47,7 @@ const STATUS_CONFIG: Record<
     textClass: 'text-blue-400',
   },
   SUCCEEDED: {
-    label: 'Completed',
+    label: 'Successful',
     dotClass: 'bg-zbooni-green',
     bgClass: 'bg-zbooni-green/10',
     textClass: 'text-zbooni-green',

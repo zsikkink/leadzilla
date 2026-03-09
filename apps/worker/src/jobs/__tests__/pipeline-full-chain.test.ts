@@ -385,12 +385,13 @@ describe('pipeline full chain: features.compute → message.send', () => {
     expect(prediction!.blendedScore).toBeGreaterThanOrEqual(0.5);
     expect(['MEDIUM', 'HIGH']).toContain(prediction!.scoreBand);
 
-    // Verify message generation was enqueued (blendedScore >= 0.5)
-    expect(enqueueMessageGenerate).toHaveBeenCalledTimes(1);
-    const msgGenCall = enqueueMessageGenerate.mock.calls[0]![0] as Record<string, unknown>;
-    expect(msgGenCall.leadId).toBe(discoveredLeadId);
-    expect(msgGenCall.icpProfileId).toBe(ICP_ID);
-    expect(msgGenCall.scorePredictionId).toBe(prediction!.id);
+    // Qualified leads now wait for manual draft generation instead of auto-enqueueing message.generate.
+    expect(enqueueMessageGenerate).not.toHaveBeenCalled();
+    const qualifiedLead = await prisma.lead.findUnique({
+      where: { id: discoveredLeadId },
+      select: { status: true },
+    });
+    expect(qualifiedLead?.status).toBe('qualified');
   });
 
   // -----------------------------------------------------------------------

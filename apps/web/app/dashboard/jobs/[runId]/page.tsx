@@ -47,7 +47,7 @@ const STATUS_CONFIG: Record<
     textClass: 'text-blue-400',
   },
   SUCCEEDED: {
-    label: 'Completed',
+    label: 'Successful',
     dotClass: 'bg-zbooni-green',
     bgClass: 'bg-zbooni-green/10',
     textClass: 'text-zbooni-green',
@@ -321,6 +321,11 @@ function aggregateCosts(events: CostEventData[]) {
     provider,
     ...data,
   }));
+}
+
+function formatProviderName(provider: string): string {
+  if (provider === 'SERPAPI') return 'GOOGLE_PLACES';
+  return provider;
 }
 
 // ── Main page ────────────────────────────────────────────────────────────
@@ -958,7 +963,7 @@ export default function DiscoveryRunDetailPage() {
                     className="border-b border-border/10 last:border-0"
                   >
                     <td className="px-4 py-2.5 text-xs font-semibold">
-                      {cost.provider}
+                      {formatProviderName(cost.provider)}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-xs tabular-nums text-muted-foreground">
                       {cost.calls}

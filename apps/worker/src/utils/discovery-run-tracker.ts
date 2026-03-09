@@ -410,7 +410,7 @@ export async function tryFinalizeDiscoveryRun(
     const newBusinesses = typeof result.newBusinesses === 'number' ? result.newBusinesses : 0;
     if (newBusinesses === 0 && totalBusinesses > 0) {
       // No new businesses to process (all already known) — finalize successfully.
-      await finalizeRun(possibleRunId, result, 'completed', 0, 0, 0, 0, logger, null, totalBusinesses, {});
+      await finalizeRun(possibleRunId, result, 'completed', 0, 0, 0, 0, 0, logger, null, totalBusinesses, {});
       return;
     }
     if (totalBusinesses === 0 || isTimedOut) {
@@ -419,6 +419,7 @@ export async function tryFinalizeDiscoveryRun(
         possibleRunId,
         result,
         'failed',
+        0,
         0,
         0,
         0,
@@ -451,10 +452,12 @@ export async function tryFinalizeDiscoveryRun(
   // 4. For qualified/pending businesses, check lead pipeline status
   const qualificationThreshold = await getQualificationThreshold();
   let messageDraftedLeads = 0;
-  let lowScoredLeads = 0;
+  let convertedLeads = 0;
+  let rejectedLeads = 0;
   let failedLeads = 0;
   let inFlightItems = 0;
   let recoveryTerminalCount = 0;
+  const leadTargetReached = result.leadTargetReached === true;
 
   if (qualifiedOrPendingIds.length > 0) {
     // Get BusinessConversions to find associated leads
@@ -509,16 +512,27 @@ export async function tryFinalizeDiscoveryRun(
       for (const lead of leads) {
         if (lead.deletedAt || lead.status === 'failed') {
           failedLeads++;
+        } else if (lead.status === 'rejected') {
+          rejectedLeads++;
+        } else if (
+          lead.status === 'qualified'
+          || lead.status === 'drafted'
+          || lead.status === 'messaged'
+          || lead.status === 'replied'
+          || lead.status === 'cold'
+        ) {
+          convertedLeads++;
+          if (lead.messageDrafts.length > 0) {
+            messageDraftedLeads++;
+          }
         } else if (lead.messageDrafts.length > 0) {
-          // message.generate completed — terminal success
+          convertedLeads++;
           messageDraftedLeads++;
         } else if (lead.scorePredictions.length > 0) {
           const latest = lead.scorePredictions[0]!;
           if (latest.scoreBand === 'LOW' || latest.blendedScore < qualificationThreshold) {
-            // Scored LOW or below qualification threshold → no downstream enqueued, terminal
-            lowScoredLeads++;
+            rejectedLeads++;
           } else {
-            // Scored above threshold — waiting for apollo.enrich → message.generate
             inFlightItems++;
           }
         } else {
@@ -529,16 +543,16 @@ export async function tryFinalizeDiscoveryRun(
     }
   }
 
-  if (!isTimedOut && pendingQueueItems > 0) {
+  if (!leadTargetReached && !isTimedOut && pendingQueueItems > 0) {
     inFlightItems += pendingQueueItems;
   }
 
   // 5. Compute terminal count for progress tracking
-  const completedLeads = messageDraftedLeads + lowScoredLeads;
-  const terminalCount = completedLeads + failedLeads + disqualifiedIds.size + recoveryTerminalCount;
+  const completedLeads = convertedLeads;
+  const terminalCount = completedLeads + rejectedLeads + failedLeads + disqualifiedIds.size + recoveryTerminalCount;
 
   // 6. Finalize if all items are terminal OR safety timeout
-  if (inFlightItems === 0 || isTimedOut) {
+  if (leadTargetReached || inFlightItems === 0 || isTimedOut) {
     const status = isTimedOut && inFlightItems > 0 ? 'failed' : 'completed';
 
     const timeoutNote = isTimedOut && inFlightItems > 0
@@ -560,6 +574,7 @@ export async function tryFinalizeDiscoveryRun(
       status,
       completedLeads,
       messageDraftedLeads,
+      rejectedLeads,
       failedLeads,
       disqualifiedIds.size + recoveryTerminalCount,
       logger,
@@ -578,7 +593,6 @@ export async function tryFinalizeDiscoveryRun(
     // Not ready to finalize, but update progress so the frontend shows accurate lead count
     const newBiz = toNonNegativeCount(result.newBusinesses);
     const alreadyKnownBiz = Math.max(0, totalBusinesses - newBiz);
-    const convertedLeads = completedLeads + failedLeads;
 
     await prisma.jobExecution.update({
       where: { id: possibleRunId },
@@ -589,16 +603,18 @@ export async function tryFinalizeDiscoveryRun(
           processedItems: terminalCount,
           failedItems: failedLeads,
           leadFailedItems: failedLeads,
+          rejectedLeads,
           // Full funnel counts for frontend display
           totalFound: totalBusinesses,
           alreadyKnown: alreadyKnownBiz,
           newFound: newBiz,
           disqualified: disqualifiedIds.size + recoveryTerminalCount,
-          converted: convertedLeads,
+          converted: completedLeads,
           outcome: {
             businessesFound: totalBusinesses,
             businessesDisqualified: disqualifiedIds.size + recoveryTerminalCount,
-            leadsCreated: convertedLeads,
+            leadsCreated: completedLeads,
+            rejectedLeads,
             messagesDrafted: messageDraftedLeads,
             disqualificationReasons: disqualReasons,
           },
@@ -656,6 +672,7 @@ export async function checkStaleDiscoveryRuns(logger: TrackerLogger): Promise<vo
         0,
         0,
         0,
+        0,
         logger,
         `Force-finalized: run stuck in running state for ${Math.round(elapsedMs / 60000)}min without searchTasksComplete flag`,
         0,
@@ -708,10 +725,11 @@ export async function checkLeadTargetReached(
   const targetLeads = typeof payload.limit === 'number' ? payload.limit : null;
   if (targetLeads === null || targetLeads <= 0) return false;
 
-  // Count non-deleted leads whose business belongs to this discovery run
+  // Count non-deleted, non-terminal-failure leads whose business belongs to this discovery run.
   const leadCount = await prisma.lead.count({
     where: {
       deletedAt: null,
+      status: { notIn: ['rejected', 'failed'] },
       business: { discoveryRunId },
     },
   });
@@ -775,6 +793,7 @@ async function finalizeRun(
   status: 'completed' | 'failed',
   completedLeads: number,
   messageDraftedLeads: number,
+  rejectedLeads: number,
   failedLeads: number,
   disqualifiedCount: number,
   logger: TrackerLogger,
@@ -787,8 +806,8 @@ async function finalizeRun(
   // Derive full funnel counts from run data
   const newBusinesses = toNonNegativeCount(currentResult.newBusinesses);
   const alreadyKnown = Math.max(0, totalBusinesses - newBusinesses);
-  const converted = completedLeads + failedLeads; // leads created (both successful and failed)
-  const terminalItems = completedLeads + failedLeads + disqualifiedCount;
+  const converted = completedLeads;
+  const terminalItems = completedLeads + rejectedLeads + failedLeads + disqualifiedCount;
 
   // Atomic update: only finalize if still running (prevents double-finalization)
   const updated = await prisma.jobExecution.updateMany({
@@ -805,6 +824,7 @@ async function finalizeRun(
         failedItems,
         leadFailedItems: failedLeads,
         completedLeads,
+        rejectedLeads,
         pipelineFailedItems: failedLeads,
         // Full funnel counts for frontend display
         totalFound: totalBusinesses,
@@ -816,6 +836,7 @@ async function finalizeRun(
           businessesFound: totalBusinesses,
           businessesDisqualified: disqualifiedCount,
           leadsCreated: converted,
+          rejectedLeads,
           messagesDrafted: messageDraftedLeads,
           disqualificationReasons,
         },

@@ -124,6 +124,96 @@ describe('tryFinalizeDiscoveryRun', () => {
     expect(prismaMock.jobExecution.updateMany).toHaveBeenCalled();
   });
 
+  it('excludes rejected leads from converted counts while still finalizing a lead-target run', async () => {
+    prismaMock.jobExecution.findUnique.mockResolvedValue({
+      id: 'run_1',
+      type: 'discovery.run',
+      status: 'running',
+      result: {
+        searchTasksComplete: true,
+        searchTasksCompletedAt: new Date().toISOString(),
+        newBusinesses: 3,
+        totalFound: 3,
+        leadTargetReached: true,
+        leadTargetCount: 2,
+      },
+    });
+    prismaMock.business.findMany.mockResolvedValue([
+      { id: 'biz_1', preQualified: true, disqualificationReason: null },
+      { id: 'biz_2', preQualified: true, disqualificationReason: null },
+      { id: 'biz_3', preQualified: true, disqualificationReason: null },
+    ]);
+    prismaMock.businessConversion.findMany.mockResolvedValue([
+      { businessId: 'biz_1', leadId: 'lead_1', metadata: { discoveryRunId: 'run_1' } },
+      { businessId: 'biz_2', leadId: 'lead_2', metadata: { discoveryRunId: 'run_1' } },
+      { businessId: 'biz_3', leadId: 'lead_3', metadata: { discoveryRunId: 'run_1' } },
+    ]);
+    prismaMock.contactRecoveryItem.findMany.mockResolvedValue([]);
+    prismaMock.lead.findMany.mockResolvedValue([
+      { id: 'lead_1', status: 'qualified', deletedAt: null, messageDrafts: [], scorePredictions: [{ scoreBand: 'HIGH', blendedScore: 0.72 }] },
+      { id: 'lead_2', status: 'drafted', deletedAt: null, messageDrafts: [{ id: 'draft_1' }], scorePredictions: [{ scoreBand: 'HIGH', blendedScore: 0.81 }] },
+      { id: 'lead_3', status: 'rejected', deletedAt: null, messageDrafts: [], scorePredictions: [{ scoreBand: 'LOW', blendedScore: 0.22 }] },
+    ]);
+    prismaMock.$queryRawUnsafe.mockResolvedValue([{ count: 5 }]);
+    prismaMock.jobExecution.updateMany.mockResolvedValue({ count: 1 });
+
+    const { tryFinalizeDiscoveryRun } = await import('./discovery-run-tracker.js');
+
+    await tryFinalizeDiscoveryRun('run_1', {
+      info: vi.fn(),
+      warn: vi.fn(),
+    });
+
+    expect(prismaMock.jobExecution.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'completed',
+          result: expect.objectContaining({
+            converted: 2,
+            rejectedLeads: 1,
+            outcome: expect.objectContaining({
+              leadsCreated: 2,
+              rejectedLeads: 1,
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('counts contact recovery as terminal without inflating converted leads', async () => {
+    prismaMock.business.findMany.mockResolvedValue([
+      { id: 'biz_1', preQualified: true, disqualificationReason: null },
+      { id: 'biz_2', preQualified: false, disqualificationReason: 'NO_WEBSITE_DOMAIN' },
+    ]);
+    prismaMock.businessConversion.findMany.mockResolvedValue([]);
+    prismaMock.contactRecoveryItem.findMany.mockResolvedValue([
+      { businessId: 'biz_1', reason: 'NO_EMAIL' },
+    ]);
+    prismaMock.$queryRawUnsafe.mockResolvedValue([]);
+    prismaMock.jobExecution.updateMany.mockResolvedValue({ count: 1 });
+
+    const { tryFinalizeDiscoveryRun } = await import('./discovery-run-tracker.js');
+
+    await tryFinalizeDiscoveryRun('run_1', {
+      info: vi.fn(),
+      warn: vi.fn(),
+    });
+
+    expect(prismaMock.jobExecution.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          result: expect.objectContaining({
+            converted: 0,
+            outcome: expect.objectContaining({
+              leadsCreated: 0,
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
   it('requeues stale created business.convert jobs only for active valid runs', async () => {
     prismaMock.$queryRawUnsafe.mockResolvedValueOnce([
       {

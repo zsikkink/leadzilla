@@ -5,6 +5,9 @@ const prismaMock = {
     findUnique: vi.fn(),
     update: vi.fn(),
   },
+  discoveryCostEvent: {
+    findMany: vi.fn(),
+  },
   $queryRawUnsafe: vi.fn(),
   $executeRawUnsafe: vi.fn(),
 };
@@ -119,5 +122,71 @@ describe('PrismaDiscoveryAdminRepository.cancelDiscoveryRun', () => {
       terminalStatus: 'completed',
       cancelledPendingJobsCount: 1,
     });
+  });
+});
+
+describe('PrismaDiscoveryAdminRepository.getDiscoveryRunDetail', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns only non-rejected converted leads in the converted section', async () => {
+    prismaMock.jobExecution.findUnique.mockResolvedValue({
+      id: 'run_123',
+      type: 'discovery.run',
+      status: 'completed',
+      attempts: 1,
+      payload: {},
+      result: {},
+      error: null,
+      createdAt: new Date('2026-03-09T00:00:00.000Z'),
+      startedAt: new Date('2026-03-09T00:01:00.000Z'),
+      finishedAt: new Date('2026-03-09T00:02:00.000Z'),
+      updatedAt: new Date('2026-03-09T00:02:00.000Z'),
+    });
+    prismaMock.discoveryCostEvent.findMany.mockResolvedValue([
+      {
+        business: {
+          id: 'biz_1',
+          name: 'Alpha Co',
+          businessConversions: [
+            {
+              lead: {
+                id: 'lead_ok',
+                firstName: 'Ava',
+                lastName: 'Jones',
+                status: 'qualified',
+                business: { name: 'Alpha Co' },
+              },
+            },
+            {
+              lead: {
+                id: 'lead_rejected',
+                firstName: 'Bob',
+                lastName: 'Smith',
+                status: 'rejected',
+                business: { name: 'Alpha Co' },
+              },
+            },
+          ],
+        },
+      },
+    ]);
+
+    const { PrismaDiscoveryAdminRepository } = await import('./discovery-admin.repository.js');
+    const repository = new PrismaDiscoveryAdminRepository();
+
+    await expect(repository.getDiscoveryRunDetail('run_123')).resolves.toEqual(
+      expect.objectContaining({
+        leads: [
+          {
+            id: 'lead_ok',
+            firstName: 'Ava',
+            lastName: 'Jones',
+            companyName: 'Alpha Co',
+          },
+        ],
+      }),
+    );
   });
 });

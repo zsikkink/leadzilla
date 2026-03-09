@@ -509,15 +509,13 @@ export default function LeadsPage() {
                               const isAboveThreshold = qualificationThreshold !== null
                                 && blendedScore !== null
                                 && blendedScore >= qualificationThreshold;
-                              const isBelowThreshold = qualificationThreshold !== null
-                                && (blendedScore === null || blendedScore < qualificationThreshold);
-                              const isActionable = lead.status === 'enriched' || lead.status === 'new' || lead.status === 'scored';
+                              const canGenerateDraft = lead.status === 'qualified' && isAboveThreshold;
 
-                              if (isAboveThreshold || !isActionable) return null;
+                              if (!canGenerateDraft) return null;
 
                               return (
                                 <>
-                                  {isBelowThreshold && lead.latestIcpProfileId ? (
+                                  {lead.latestIcpProfileId ? (
                                     <button
                                       type="button"
                                       title="Generate message draft"

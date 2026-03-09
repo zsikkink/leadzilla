@@ -670,16 +670,45 @@ function seniorityRank(seniority: string | null): number {
   }
 }
 
-/** Classify seniority from a title string (local version for Hunter/Apollo contacts). */
-function classifySeniorityLocal(title: string): 'executive' | 'director' | 'manager' | 'other' {
+/** Explicit title hierarchy for deterministic decision-maker selection. */
+export function getDecisionMakerTier(title: string | null): number {
+  if (!title) return 5;
+
   const lower = title.toLowerCase();
-  if (/\b(ceo|cto|cfo|coo|cmo|cpo|cio|founder|co-founder|cofounder|owner|president|chairm)/i.test(lower)) {
+
+  if (/\b(ceo|chief executive officer|founder|co-founder|cofounder|owner|president|chair(?:man|woman|person)?|chair\b)/i.test(lower)) {
+    return 0;
+  }
+
+  if (/\b(cfo|chief financial officer|coo|chief operating officer|cto|chief technology officer|cio|chief information officer|cmo|chief marketing officer|cpo|chief product officer|chief people officer|managing director|general manager)\b/i.test(lower)) {
+    return 1;
+  }
+
+  if (/\b(vp|vice\s*president|head\s+of|head\b|svp|evp)\b/i.test(lower)) {
+    return 2;
+  }
+
+  if (/\bdirector\b/i.test(lower)) {
+    return 3;
+  }
+
+  if (/\b(manager|lead|supervisor)\b/i.test(lower)) {
+    return 4;
+  }
+
+  return 5;
+}
+
+/** Classify seniority from a title string (local version for Hunter/Apollo contacts). */
+export function classifySeniorityLocal(title: string): 'executive' | 'director' | 'manager' | 'other' {
+  const tier = getDecisionMakerTier(title);
+  if (tier <= 1) {
     return 'executive';
   }
-  if (/\b(director|vp|vice\s*president|head\s+of|svp|evp)/i.test(lower)) {
+  if (tier <= 3) {
     return 'director';
   }
-  if (/\b(manager|lead|supervisor|coordinator)/i.test(lower)) {
+  if (tier === 4) {
     return 'manager';
   }
   return 'other';
@@ -1806,6 +1835,8 @@ export async function handleBusinessConvertJob(
   gateStats.identityConfidence = identityConfidence;
 
   const rankCandidates = (candidates: ContactCandidate[]): ContactCandidate[] => candidates.slice().sort((a, b) => {
+    const tierDiff = getDecisionMakerTier(a.title) - getDecisionMakerTier(b.title);
+    if (tierDiff !== 0) return tierDiff;
     const senDiff = seniorityRank(a.seniority) - seniorityRank(b.seniority);
     if (senDiff !== 0) return senDiff;
     const confDiff = (b.confidence ?? 0) - (a.confidence ?? 0);
@@ -2181,6 +2212,10 @@ export async function handleBusinessConvertJob(
                 },
                 decisionProvenance: {
                   winnerSelectionMethod,
+                  selectedCandidateName: resolvedContact?.name ?? null,
+                  selectedCandidateTitle: resolvedContact?.title ?? null,
+                  selectedCandidateEmail: contactEmail,
+                  selectedCandidateTier: resolvedContact?.title ? getDecisionMakerTier(resolvedContact.title) : null,
                   adjudicationVerdict: adjudication?.verdict ?? null,
                   adjudicationConfidenceBucket: adjudication?.confidenceBucket ?? null,
                   adjudicationRationale: adjudication?.rationale ?? null,
@@ -2324,6 +2359,10 @@ export async function handleBusinessConvertJob(
           },
           decisionProvenance: {
             winnerSelectionMethod,
+            selectedCandidateName: resolvedContact?.name ?? null,
+            selectedCandidateTitle: resolvedContact?.title ?? null,
+            selectedCandidateEmail: contactEmail,
+            selectedCandidateTier: resolvedContact?.title ? getDecisionMakerTier(resolvedContact.title) : null,
             adjudicationVerdict: adjudication?.verdict ?? null,
             adjudicationConfidenceBucket: adjudication?.confidenceBucket ?? null,
             adjudicationRationale: adjudication?.rationale ?? null,

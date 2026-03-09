@@ -367,7 +367,8 @@ export async function handleScoringComputeJob(
         }
 
         if (blendedScore >= qualificationThreshold) {
-          // Prefer apollo.enrich (post-scoring reveal) over direct message.generate
+          // Keep discovery leads in `qualified` until a human explicitly starts draft generation.
+          // Apollo reveal can still run to enrich contact data, but drafting is manual.
           if (deps?.enqueueApolloEnrich) {
             // Look up BusinessConversion for apolloHasEmail/apolloHasDirectPhone
             const businessConversion = await prisma.businessConversion.findFirst({
@@ -389,23 +390,6 @@ export async function handleScoringComputeJob(
             logger.info(
               { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, blendedScore, scoreBand },
               'Enqueued apollo.enrich for qualifying lead',
-            );
-          } else if (deps?.enqueueMessageGenerate) {
-            // Fallback: direct to message.generate if apollo.enrich not wired
-            const phoneData = leadPhoneMap.get(targetLeadId);
-            const hasPhone = Boolean(phoneData?.decisionMakerPhone || phoneData?.phone);
-            const channel = blendedScore >= 0.67 && hasPhone ? 'WHATSAPP' : 'EMAIL';
-            await deps.enqueueMessageGenerate({
-              leadId: targetLeadId,
-              icpProfileId: targetIcpId,
-              scorePredictionId: prediction.id,
-              runId,
-              correlationId: effectiveCorrelationId,
-              channel,
-            });
-            logger.info(
-              { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, blendedScore },
-              'Enqueued message.generate for qualifying lead (no apollo.enrich)',
             );
           }
         }

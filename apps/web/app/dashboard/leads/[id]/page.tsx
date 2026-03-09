@@ -34,6 +34,7 @@ import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
 import { countryName } from '../../../../src/lib/countries.js';
 import { getSupabaseBrowserClient } from '../../../../src/lib/supabase-client.js';
+import { sortTeamMembers } from '../../../../src/lib/team-members.js';
 
 interface EnrichmentField {
   label: string;
@@ -476,7 +477,6 @@ export default function LeadDetailPage() {
   const [businessData, setBusinessData] = useState<BusinessScrapeData | null>(null);
   const [businessId, setBusinessId] = useState<string | null>(null);
   const [teamMembers, setTeamMembers] = useState<Array<{ id: string; fullName: string; jobTitle: string | null; email: string | null; phone: string | null; linkedinUrl: string | null; seniority: string | null; source: string | null }>>([]);
-  const [primaryLinkedinUrl, setPrimaryLinkedinUrl] = useState<string | null>(null);
   const [instagramPosts, setInstagramPosts] = useState<Array<{
     caption: string;
     likes: number;
@@ -559,8 +559,6 @@ export default function LeadDetailPage() {
             source: (c.source as string) ?? null,
           }));
           setTeamMembers(mapped);
-          const firstLinkedin = mapped.find((m) => m.linkedinUrl)?.linkedinUrl ?? null;
-          setPrimaryLinkedinUrl(firstLinkedin);
         } else if (!cancelled) {
           // Fallback: extract decision makers from website scrape data
           const websiteScrape = biz.apify_website_scrape_json as Record<string, unknown> | null;
@@ -618,7 +616,8 @@ export default function LeadDetailPage() {
   const backupContacts = useMemo(() => {
     if (!lead.data) return [];
     const currentEmail = lead.data.email?.toLowerCase();
-    return teamMembers.filter((tm) => tm.email && tm.email.toLowerCase() !== currentEmail);
+    return sortTeamMembers(teamMembers, lead.data.email).ordered
+      .filter((tm) => tm.email && tm.email.toLowerCase() !== currentEmail);
   }, [teamMembers, lead.data]);
 
   const maxFollowUpNumber = useMemo(() => {
@@ -679,6 +678,11 @@ export default function LeadDetailPage() {
   }
 
   const l = lead.data;
+  const sortedTeamMembers = useMemo(
+    () => sortTeamMembers(teamMembers, l.email).ordered,
+    [teamMembers, l.email],
+  );
+  const primaryLinkedinUrl = sortedTeamMembers[0]?.linkedinUrl ?? sortedTeamMembers.find((member) => member.linkedinUrl)?.linkedinUrl ?? null;
   const enrichmentFields = extractEnrichmentFields(l.enrichmentData);
   const scoreInfo = extractScoreInfo(l.enrichmentData);
 
@@ -942,16 +946,16 @@ export default function LeadDetailPage() {
       ) : null}
 
       {/* Team Members (D8: Primary/Alternative badges + source labels) */}
-      {teamMembers.length > 0 ? (
+      {sortedTeamMembers.length > 0 ? (
         <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
           <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
             <Users className="h-4 w-4 text-amber-400" />
             Team Members
-            <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">{teamMembers.length}</span>
+            <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">{sortedTeamMembers.length}</span>
           </h2>
           <div className="grid gap-2 sm:grid-cols-2">
-            {teamMembers.map((tm, idx) => {
-              const isPrimary = idx === 0 && tm.email?.toLowerCase() === l.email?.toLowerCase();
+            {sortedTeamMembers.map((tm, idx) => {
+              const isPrimary = idx === 0;
               return (
                 <div key={tm.id} className="flex items-center gap-3 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2.5">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-[11px] font-bold text-amber-400">
@@ -965,13 +969,14 @@ export default function LeadDetailPage() {
                       ) : (
                         <span className="shrink-0 rounded-full bg-muted/20 px-1.5 py-0.5 text-[9px] font-bold text-muted-foreground/50">Alternative</span>
                       )}
-                      {tm.seniority && tm.seniority !== 'other' ? (
+                    {tm.seniority && tm.seniority !== 'other' ? (
                         <span className="shrink-0 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[9px] font-bold text-blue-400">
                           {tm.seniority.charAt(0).toUpperCase() + tm.seniority.slice(1)}
                         </span>
                       ) : null}
                     </div>
                     {tm.jobTitle ? <p className="text-[11px] text-muted-foreground/50 truncate">{tm.jobTitle}</p> : null}
+                    {tm.email ? <p className="truncate font-mono text-[11px] text-foreground/75">{tm.email}</p> : null}
                     {tm.source ? <p className="text-[9px] text-muted-foreground/30">{tm.source}</p> : null}
                   </div>
                   <div className="flex shrink-0 gap-1.5">

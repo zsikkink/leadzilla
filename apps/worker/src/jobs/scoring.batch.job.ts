@@ -58,7 +58,7 @@ const DEFAULT_BATCH_SIZE = 50;
 export async function handleScoringBatchJob(
   logger: ScoringBatchLogger,
   job: Job<ScoringBatchJobPayload>,
-  deps?: ScoringBatchJobDependencies,
+  _deps?: ScoringBatchJobDependencies,
 ): Promise<void> {
   const { runId, correlationId, batchSize: requestedBatchSize, icpProfileId } = job.data;
   const effectiveCorrelationId = correlationId ?? job.id;
@@ -220,7 +220,7 @@ export async function handleScoringBatchJob(
         const scoreBand = toScoreBand(blendedScore, scoreTierBands);
 
         // Persist prediction
-        const prediction = await prisma.leadScorePrediction.upsert({
+        await prisma.leadScorePrediction.upsert({
           where: {
             leadId_icpProfileId_featureSnapshotId_modelVersionId: {
               leadId: lead.id,
@@ -314,18 +314,8 @@ export async function handleScoringBatchJob(
           );
         }
 
-        // Enqueue message generation for qualified leads
-        if (blendedScore >= qualificationThreshold && deps?.enqueueMessageGenerate) {
-          const hasPhone = Boolean(lead.decisionMakerPhone || lead.phone);
-          const channel = blendedScore >= 0.67 && hasPhone ? 'WHATSAPP' : 'EMAIL';
-          await deps.enqueueMessageGenerate({
-            leadId: lead.id,
-            icpProfileId: targetIcpId,
-            scorePredictionId: prediction.id,
-            channel,
-          });
-          qualified += 1;
-        } else if (blendedScore >= qualificationThreshold) {
+        // Qualified leads stay in `qualified` until a human starts draft generation.
+        if (blendedScore >= qualificationThreshold) {
           qualified += 1;
         }
       }
