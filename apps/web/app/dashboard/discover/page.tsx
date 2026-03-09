@@ -663,10 +663,10 @@ export default function DiscoverPage() {
             // ~50% of discovered businesses pass prequalification and reach Hunter
             const hunterLookups = Math.ceil(searchBudget * 0.5);
             const estLeads = desiredLeads;
-            // Dollar cost: SerpAPI $0.01/search, Hunter $0.03/lookup (Starter plan: 2000 credits @ ~$49)
-            const serpApiCost = searchBudget * 0.01;
+            // Dollar cost: Google Places $0.01/search, Hunter $0.03/lookup (Starter plan: 2000 credits @ ~$49)
+            const googlePlacesCost = searchBudget * 0.01;
             const hunterCost = hunterLookups * 0.03;
-            const totalCost = serpApiCost + hunterCost;
+            const totalCost = googlePlacesCost + hunterCost;
             return (
               <div className="rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 px-4 py-3">
                 <div className="flex items-center gap-2 mb-2">
@@ -690,7 +690,7 @@ export default function DiscoverPage() {
                   <p className="text-xs text-muted-foreground/70">
                     Est. cost: <strong className="text-foreground">~${totalCost.toFixed(2)}</strong>
                     <span className="text-muted-foreground/50">
-                      {' '}(SerpAPI ${serpApiCost.toFixed(2)} + Hunter ${hunterCost.toFixed(2)})
+                      {' '}(Google Places ${googlePlacesCost.toFixed(2)} + Hunter ${hunterCost.toFixed(2)})
                     </span>
                   </p>
                 </div>
