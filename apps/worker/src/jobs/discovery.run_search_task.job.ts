@@ -11,6 +11,7 @@ import { classifyError } from '../errors.js';
 import {
   markSearchTasksComplete,
   tryFinalizeDiscoveryRun,
+  isLeadTargetReached,
 } from '../utils/discovery-run-tracker.js';
 
 export const DISCOVERY_RUN_SEARCH_TASK_JOB_NAME = 'discovery.run_search_task';
@@ -545,6 +546,27 @@ export async function handleDiscoveryRunSearchTaskJob(
         targetUniqueBusinesses: targetBiz,
       },
       'Early-stop: reached target unique business count',
+    );
+    return;
+  }
+
+  // Early-stop: lead target already reached (flagged by business.convert)
+  if (job.data.discoveryRunId && await isLeadTargetReached(job.data.discoveryRunId)) {
+    if (job.data.discoveryRunId) {
+      await completeSearchPhase(job.data.discoveryRunId, runState, logger, job.data.icpProfileId);
+      releaseSlot(runKey, runState);
+    }
+    if (job.data.jobRunId) {
+      await finalizeJobRun(job.data.jobRunId, runState, 'SUCCESS', null);
+      releaseSlot(runKey, runState);
+    }
+    logger.info(
+      {
+        slot,
+        correlationId,
+        newBusinesses: runState.newBusinesses,
+      },
+      'Early-stop: lead target reached — stopping search task loop',
     );
     return;
   }

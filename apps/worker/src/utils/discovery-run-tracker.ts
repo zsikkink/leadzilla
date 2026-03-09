@@ -672,6 +672,101 @@ export async function checkStaleDiscoveryRuns(logger: TrackerLogger): Promise<vo
   }
 }
 
+/**
+ * Check if the lead target for a discovery run has been reached.
+ * Returns true if the run has a `limit` in its payload and the number of
+ * non-deleted leads linked to businesses in this run meets or exceeds it.
+ *
+ * When the target IS reached, sets `leadTargetReached: true` on the run's
+ * result JSON and marks search tasks as complete (if not already).
+ * Downstream jobs (business.prequalify, business.convert, run_search_task)
+ * check this flag and skip processing, effectively draining the pipeline.
+ */
+export async function checkLeadTargetReached(
+  discoveryRunId: string,
+  logger: TrackerLogger,
+): Promise<boolean> {
+  const execution = await prisma.jobExecution.findUnique({
+    where: { id: discoveryRunId },
+    select: { payload: true, result: true, status: true },
+  });
+
+  if (!execution || execution.status !== 'running') return false;
+
+  const result = execution.result && typeof execution.result === 'object' && !Array.isArray(execution.result)
+    ? execution.result as Record<string, unknown>
+    : {};
+
+  // Already flagged — skip re-checking
+  if (result.leadTargetReached === true) return true;
+
+  const payload = execution.payload && typeof execution.payload === 'object' && !Array.isArray(execution.payload)
+    ? execution.payload as Record<string, unknown>
+    : null;
+  if (!payload) return false;
+
+  const targetLeads = typeof payload.limit === 'number' ? payload.limit : null;
+  if (targetLeads === null || targetLeads <= 0) return false;
+
+  // Count non-deleted leads whose business belongs to this discovery run
+  const leadCount = await prisma.lead.count({
+    where: {
+      deletedAt: null,
+      business: { discoveryRunId },
+    },
+  });
+
+  if (leadCount < targetLeads) return false;
+
+  // Target reached — set flag and mark search complete
+  logger.info(
+    { discoveryRunId, leadCount, targetLeads },
+    'Lead target reached — flagging run for graceful cancellation',
+  );
+
+  await prisma.jobExecution.update({
+    where: { id: discoveryRunId },
+    data: {
+      result: toInputJson({
+        ...result,
+        leadTargetReached: true,
+        leadTargetReachedAt: new Date().toISOString(),
+        leadTargetCount: targetLeads,
+        actualLeadCount: leadCount,
+        // Also mark search tasks complete so tryFinalizeDiscoveryRun can finalize
+        searchTasksComplete: true,
+        ...(!result.searchTasksCompletedAt
+          ? { searchTasksCompletedAt: new Date().toISOString() }
+          : {}),
+      }),
+    },
+  });
+
+  return true;
+}
+
+/**
+ * Quick check: has the lead target flag been set on a discovery run?
+ * Used by pipeline jobs to short-circuit processing when enough leads exist.
+ * Returns false for non-existent runs or runs without the flag.
+ */
+export async function isLeadTargetReached(
+  discoveryRunId: string,
+): Promise<boolean> {
+  const execution = await prisma.jobExecution.findUnique({
+    where: { id: discoveryRunId },
+    select: { result: true },
+  });
+
+  if (!execution) return false;
+
+  const result = execution.result && typeof execution.result === 'object' && !Array.isArray(execution.result)
+    ? execution.result as Record<string, unknown>
+    : null;
+
+  return result?.leadTargetReached === true;
+}
+
 // ── Internal ──────────────────────────────────────────────────────────────
 
 async function finalizeRun(

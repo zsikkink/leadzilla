@@ -9,7 +9,7 @@ import type {
 import type { Job, SendOptions } from 'pg-boss';
 
 import { RetryableError } from '../errors.js';
-import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
+import { tryFinalizeDiscoveryRun, checkLeadTargetReached } from '../utils/discovery-run-tracker.js';
 import { isProviderWithinBudget } from '../utils/pipeline-settings.js';
 import {
   adjudicateDecisionMakerCandidates,
@@ -126,9 +126,16 @@ interface ContactRecoveryTelemetryState {
 async function isDiscoveryRunTerminal(discoveryRunId: string): Promise<boolean> {
   const run = await prisma.jobExecution.findUnique({
     where: { id: discoveryRunId },
-    select: { status: true },
+    select: { status: true, result: true },
   });
-  return run?.status === 'cancelled' || run?.status === 'completed' || run?.status === 'failed';
+  if (run?.status === 'cancelled' || run?.status === 'completed' || run?.status === 'failed') {
+    return true;
+  }
+  // Also treat as terminal if the lead target has been reached
+  const result = run?.result && typeof run.result === 'object' && !Array.isArray(run.result)
+    ? run.result as Record<string, unknown>
+    : null;
+  return result?.leadTargetReached === true;
 }
 
 type HunterDomainSearchResult =
@@ -2429,7 +2436,18 @@ export async function handleBusinessConvertJob(
     );
   }
 
-  // ── 10. Completion log ────────────────────────────────────────────────
+  // ── 10. Check if lead target reached — flag run for graceful cancellation ─
+  if (txResult.isNew) {
+    const targetReached = await checkLeadTargetReached(discoveryRunId, logger);
+    if (targetReached) {
+      logger.info(
+        { ...logCtx, leadId: txResult.lead.id },
+        'Lead target reached — remaining pipeline jobs will be skipped',
+      );
+    }
+  }
+
+  // ── 11. Completion log ────────────────────────────────────────────────
   gateStats.outcome = isDraftedLead ? 'drafted' : 'lead_created';
   logger.info(
     {

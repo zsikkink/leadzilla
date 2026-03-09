@@ -74,9 +74,16 @@ export interface BusinessPrequalifyLogger {
 async function isDiscoveryRunTerminal(discoveryRunId: string): Promise<boolean> {
   const run = await prisma.jobExecution.findUnique({
     where: { id: discoveryRunId },
-    select: { status: true },
+    select: { status: true, result: true },
   });
-  return run?.status === 'cancelled' || run?.status === 'completed' || run?.status === 'failed';
+  if (run?.status === 'cancelled' || run?.status === 'completed' || run?.status === 'failed') {
+    return true;
+  }
+  // Also treat as terminal if the lead target has been reached
+  const result = run?.result && typeof run.result === 'object' && !Array.isArray(run.result)
+    ? run.result as Record<string, unknown>
+    : null;
+  return result?.leadTargetReached === true;
 }
 
 // ── DNS resolution check ──────────────────────────────────────────────
