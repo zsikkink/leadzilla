@@ -141,11 +141,11 @@ describe('needsPlaywrightFallback', () => {
     expect(needsPlaywrightFallback(data, SPARSE_PAGE_HTML)).toBe(false);
   });
 
-  it('returns false when data has social links', () => {
+  it('returns true when data has social links but no decision makers (team page may be JS-rendered)', () => {
     const data = emptyScraperData({
       socialLinks: [{ platform: 'instagram', url: 'https://instagram.com/test', handle: 'test' }],
     });
-    expect(needsPlaywrightFallback(data, SPARSE_PAGE_HTML)).toBe(false);
+    expect(needsPlaywrightFallback(data, SPARSE_PAGE_HTML)).toBe(true);
   });
 
   it('returns false when data has decision makers', () => {
@@ -162,7 +162,7 @@ describe('needsPlaywrightFallback', () => {
     expect(needsPlaywrightFallback(data, SPARSE_PAGE_HTML)).toBe(false);
   });
 
-  it('returns false for rich page with signals', () => {
+  it('returns true for rich page with social links but no decision makers', () => {
     const data = emptyScraperData({
       contactInfo: {
         emails: [{ email: 'test@example.com', context: 'text', pageUrl: 'https://example.com' }],
@@ -170,6 +170,27 @@ describe('needsPlaywrightFallback', () => {
         addresses: [],
       },
       socialLinks: [{ platform: 'instagram', url: 'https://instagram.com/test', handle: 'test' }],
+    });
+    // Social links present but no decision makers → Playwright should try to find team page
+    expect(needsPlaywrightFallback(data, RICH_PAGE_HTML)).toBe(true);
+  });
+
+  it('returns false for rich page with decision makers and social links', () => {
+    const data = emptyScraperData({
+      contactInfo: {
+        emails: [{ email: 'test@example.com', context: 'text', pageUrl: 'https://example.com' }],
+        phones: [{ number: '+971501234567', type: 'whatsapp', pageUrl: 'https://example.com' }],
+        addresses: [],
+      },
+      socialLinks: [{ platform: 'instagram', url: 'https://instagram.com/test', handle: 'test' }],
+      decisionMakers: [{
+        name: 'John Smith',
+        title: 'CEO',
+        email: 'john@example.com',
+        linkedinUrl: null,
+        seniority: 'executive',
+        source: 'https://example.com/team',
+      }],
     });
     expect(needsPlaywrightFallback(data, RICH_PAGE_HTML)).toBe(false);
   });

@@ -1307,6 +1307,10 @@ export function needsPlaywrightFallback(
     data.decisionMakers.length === 0;
   if (hasZeroSignals) return true;
 
+  // No decision makers found but page has other signals (emails/social) —
+  // team data may be JS-rendered; worth trying Playwright
+  if (data.decisionMakers.length === 0 && data.socialLinks.length > 0) return true;
+
   return false;
 }
 

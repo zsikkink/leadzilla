@@ -1173,6 +1173,32 @@ export async function handleBusinessConvertJob(
   }
 
   const allCandidates: ContactCandidate[] = [];
+  // Gate pass-rate tracking — logged at end of job for pipeline diagnostics
+  const gateStats = {
+    websiteDMs: 0,
+    websiteEmailsKept: 0,
+    instagramEmailFound: false,
+    emailMatchAttempts: 0,
+    emailMatchHigh: 0,
+    hunterTotal: 0,
+    hunterGenericDrop: 0,
+    hunterInvalidDrop: 0,
+    hunterLowConfDrop: 0,
+    hunterSmtpDrop: 0,
+    hunterPass: 0,
+    apolloTotal: 0,
+    apolloGenericDrop: 0,
+    apolloSmtpDrop: 0,
+    apolloPass: 0,
+    llmExtracted: 0,
+    llmFakeNames: 0,
+    nameValChecked: 0,
+    nameValRejected: 0,
+    cseCandidatesAdded: 0,
+    totalCandidates: 0,
+    withEmail: 0,
+    outcome: 'pending' as string,
+  };
   let apolloContactJson: unknown = null;
   let hunterContactJson: unknown = null;
   const costEvents: Array<{ provider: 'APOLLO' | 'HUNTER' | 'SERPAPI' | 'GOOGLE_CUSTOM_SEARCH'; costCents: number; apiCallType: string }> = [];
@@ -1198,9 +1224,11 @@ export async function handleBusinessConvertJob(
 
   // 5a. Website scrape decision makers (max 5, already ranked by positionRank)
   if (websiteScrapeData?.decisionMakers && websiteScrapeData.decisionMakers.length > 0) {
+    gateStats.websiteDMs = websiteScrapeData.decisionMakers.length;
     for (const dm of websiteScrapeData.decisionMakers) {
       // Filter generic emails
       const email = dm.email && !isGenericEmail(dm.email) && !isJunkPersonalEmail(dm.email) ? dm.email : null;
+      if (email) gateStats.websiteEmailsKept++;
       // Filter generic phones using context-aware heuristic
       const phone = dm.phone && !isGenericPhone(dm.phone, true, estimatedEmployees, dm.source)
         ? dm.phone : null;
@@ -1232,7 +1260,8 @@ export async function handleBusinessConvertJob(
   }
 
   // 5b. Instagram business email as a contact
-  if (instagramData?.businessEmail && !isGenericEmail(instagramData.businessEmail) && !isJunkPersonalEmail(instagramData.businessEmail)) {
+  if (instagramData?.businessEmail && !isJunkPersonalEmail(instagramData.businessEmail)) {
+    gateStats.instagramEmailFound = true;
     let igEmailValid = true;
     if (deps.smtpVerifier?.isConfigured) {
       const verification = await deps.smtpVerifier.verify(instagramData.businessEmail);
@@ -1266,8 +1295,10 @@ export async function handleBusinessConvertJob(
       if (isGenericEmail(rawEmail) || isJunkPersonalEmail(rawEmail)) continue;
       if (assignedEmails.has(rawEmail.toLowerCase())) continue;
 
+      gateStats.emailMatchAttempts++;
       const match = matchEmailToDecisionMaker(rawEmail, dms);
       if (match && match.confidence === 'HIGH') {
+        gateStats.emailMatchHigh++;
         // SMTP verify before adding
         let verified = true;
         if (deps.smtpVerifier?.isConfigured) {
@@ -1379,10 +1410,15 @@ export async function handleBusinessConvertJob(
       if (hunterResult.status === 'success' && hunterResult.contacts.length > 0) {
         hunterContactJson = hunterResult.contacts;
         for (const hc of hunterResult.contacts) {
-          if (isGenericEmail(hc.email) || isJunkPersonalEmail(hc.email)) continue;
+          gateStats.hunterTotal++;
+          if (isGenericEmail(hc.email) || isJunkPersonalEmail(hc.email)) {
+            gateStats.hunterGenericDrop++;
+            continue;
+          }
 
           // Skip emails Hunter marks as invalid
           if (hc.verification === 'invalid') {
+            gateStats.hunterInvalidDrop++;
             logger.info(
               { ...logCtx, email: hc.email, hunterVerification: hc.verification },
               'Skipping Hunter contact — marked invalid by Hunter',
@@ -1391,10 +1427,11 @@ export async function handleBusinessConvertJob(
           }
 
           // Skip low-confidence emails (likely pattern-guessed, unverified)
-          if (hc.confidence !== null && hc.confidence < 70) {
+          if (hc.confidence !== null && hc.confidence < 55) {
+            gateStats.hunterLowConfDrop++;
             logger.info(
               { ...logCtx, email: hc.email, hunterConfidence: hc.confidence },
-              'Skipping Hunter contact — confidence below 70',
+              'Skipping Hunter contact — confidence below 55',
             );
             continue;
           }
@@ -1403,6 +1440,7 @@ export async function handleBusinessConvertJob(
           if (hc.verification !== 'valid' && deps.smtpVerifier?.isConfigured) {
             const smtpResult = await deps.smtpVerifier.verify(hc.email);
             if (smtpResult.status !== 'valid' && smtpResult.status !== 'catch_all') {
+              gateStats.hunterSmtpDrop++;
               logger.info(
                 { ...logCtx, email: hc.email, smtpStatus: smtpResult.status, hunterVerification: hc.verification },
                 'Hunter contact failed SMTP verification',
@@ -1411,6 +1449,7 @@ export async function handleBusinessConvertJob(
             }
           }
 
+          gateStats.hunterPass++;
           allCandidates.push({
             name: [hc.firstName ?? '', hc.lastName ?? ''].filter(Boolean).join(' ') || 'Unknown Contact',
             title: hc.position,
@@ -1453,12 +1492,17 @@ export async function handleBusinessConvertJob(
       const apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
       if (apolloResult.status === 'success' && apolloResult.contacts.length > 0) {
         for (const ac of apolloResult.contacts) {
-          if (isGenericEmail(ac.email) || isJunkPersonalEmail(ac.email)) continue;
+          gateStats.apolloTotal++;
+          if (isGenericEmail(ac.email) || isJunkPersonalEmail(ac.email)) {
+            gateStats.apolloGenericDrop++;
+            continue;
+          }
 
           // SMTP verify Apollo email if verifier is available
           if (deps.smtpVerifier?.isConfigured) {
             const smtpResult = await deps.smtpVerifier.verify(ac.email);
             if (smtpResult.status !== 'valid' && smtpResult.status !== 'catch_all') {
+              gateStats.apolloSmtpDrop++;
               logger.info(
                 { ...logCtx, email: ac.email, smtpStatus: smtpResult.status },
                 'Apollo contact failed SMTP verification',
@@ -1467,6 +1511,7 @@ export async function handleBusinessConvertJob(
             }
           }
 
+          gateStats.apolloPass++;
           apolloContactJson = ac;
           allCandidates.push({
             name: [ac.firstName, ac.lastName].filter(Boolean).join(' ') || 'Unknown Contact',
@@ -1541,6 +1586,7 @@ export async function handleBusinessConvertJob(
           });
         }
 
+        gateStats.llmExtracted = llmContacts.length;
         if (llmContacts.length > 0) {
           logger.info(
             { ...logCtx, llmContactsFound: llmContacts.length },
@@ -1570,6 +1616,7 @@ export async function handleBusinessConvertJob(
           .map((v) => v.name.toLowerCase()),
       );
 
+      gateStats.llmFakeNames = fakenames.size;
       if (fakenames.size > 0) {
         // Remove fake-name candidates from allCandidates
         for (let i = allCandidates.length - 1; i >= 0; i--) {
@@ -1586,9 +1633,14 @@ export async function handleBusinessConvertJob(
   }
 
   // ── 5h. Rule-based name validation — apply to ALL remaining candidates (B2)
+  // Exempt Instagram-sourced contacts with emails — they're worth keeping
+  // even with "Unknown Contact" name, routed to Business Intel as drafted leads
+  gateStats.nameValChecked = allCandidates.length;
   for (let i = allCandidates.length - 1; i >= 0; i--) {
     const candidate = allCandidates[i]!;
+    if (candidate.source === 'instagram' && candidate.email) continue;
     if (!isValidPersonName(candidate.name, business.name)) {
+      gateStats.nameValRejected++;
       logger.info(
         { ...logCtx, invalidName: candidate.name, source: candidate.source },
         'Contact rejected by name validation',
@@ -1728,6 +1780,7 @@ export async function handleBusinessConvertJob(
           addedCandidates += 1;
           recoveryTelemetry.cseCandidatesAdded += 1;
           recoveryTelemetry.cseCandidatesValidated += 1;
+          gateStats.cseCandidatesAdded++;
           allCandidates.push({
             name: profile.name,
             title: profile.title,
@@ -1938,7 +1991,24 @@ export async function handleBusinessConvertJob(
     }
   }
 
-  // ── 6f. No sendable personal email → open recovery queue item ──────────
+  // ── 6f. Fallback: use generic/Instagram email for drafted leads ────────
+  // Instead of fully disqualifying, create a 'drafted' lead routed to Business Intel
+  let isDraftedLead = false;
+  if (!contactEmail && businessEmailField) {
+    contactEmail = businessEmailField;
+    businessEmailField = null; // Promoted to primary — no longer secondary
+    isDraftedLead = true;
+    logger.info(
+      { ...logCtx, fallbackEmail: contactEmail },
+      'No personal email — using generic email for drafted lead (Business Intel)',
+    );
+  }
+
+  // Populate gate stats before outcome decision
+  gateStats.totalCandidates = allCandidates.length;
+  gateStats.withEmail = allCandidates.filter((c) => c.email !== null).length;
+
+  // ── 6g. No email at all → open recovery queue item ────────────────────
   if (!contactEmail) {
     const recoveryReason = resolvedContact ? 'NO_EMAIL' : 'NO_CONTACTS_FOUND';
     recoveryTelemetry.finalOutcome = 'recovery_opened';
@@ -1978,9 +2048,10 @@ export async function handleBusinessConvertJob(
       snapshot: recoverySnapshot,
     });
 
+    gateStats.outcome = 'recovery';
     logger.warn(
-      { ...logCtx, reason: recoveryReason, candidateCount: allCandidates.length },
-      'No sendable personal email found — opened contact recovery item',
+      { ...logCtx, reason: recoveryReason, candidateCount: allCandidates.length, gateStats },
+      'No email found at all — opened contact recovery item',
     );
     await prisma.business.update({
       where: { id: businessId },
@@ -2144,7 +2215,7 @@ export async function handleBusinessConvertJob(
         decisionMakerTitle: resolvedContact?.title ?? null,
         decisionMakerPhone: resolvedContact?.phone ?? null,
         source: leadSource,
-        status: shouldAutoReject ? 'rejected' : 'new',
+        status: shouldAutoReject ? 'rejected' : isDraftedLead ? 'drafted' : 'new',
       },
     });
 
@@ -2317,7 +2388,7 @@ export async function handleBusinessConvertJob(
   }
 
   // ── 9. Enqueue features.compute if lead is newly created and NOT auto-rejected ─
-  if (txResult.isNew && !shouldAutoReject && deps.enqueueFeaturesCompute) {
+  if (txResult.isNew && !shouldAutoReject && !isDraftedLead && deps.enqueueFeaturesCompute) {
     await deps.enqueueFeaturesCompute({
       runId: discoveryRunId,
       leadId: txResult.lead.id,
@@ -2333,16 +2404,19 @@ export async function handleBusinessConvertJob(
   }
 
   // ── 10. Completion log ────────────────────────────────────────────────
+  gateStats.outcome = isDraftedLead ? 'drafted' : 'lead_created';
   logger.info(
     {
       ...logCtx,
       leadId: txResult.lead.id,
       isNewLead: txResult.isNew,
+      isDraftedLead,
       autoRejected: shouldAutoReject,
       contactSource: resolvedContact?.source ?? 'none',
       businessContactCount: Math.min(allCandidates.length, 5),
       paidProvidersCalled: costEvents.length,
       leadSource,
+      gateStats,
     },
     'Completed business.convert job',
   );
