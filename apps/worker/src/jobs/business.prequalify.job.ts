@@ -193,6 +193,7 @@ export async function handleBusinessPrequalifyJob(
   try {
     if (await isDiscoveryRunTerminal(discoveryRunId)) {
       logger.warn(logCtx, 'Discovery run already terminal — skipping pre-qualification');
+      await tryFinalizeDiscoveryRun(discoveryRunId, logger);
       return;
     }
 

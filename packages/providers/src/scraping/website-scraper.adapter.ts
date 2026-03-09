@@ -1940,8 +1940,14 @@ export class WebsiteScraperAdapter {
         if (ABOUT_TEAM_PAGE_PATHS.includes(normalizedPath)) {
           const currentTotal = aboutPageTextParts.reduce((sum, part) => sum + part.length, 0);
           if (currentTotal < ABOUT_TEXT_LIMIT) {
-            const rawText = $.text().replace(/\s+/g, ' ').trim();
-            if (rawText.length > 0) {
+            // Clone to avoid mutating the parsed doc used elsewhere
+            const $clone = cheerio.load($.html() ?? '');
+            // Remove elements that inject binary/non-text content
+            $clone('script, style, noscript, img, svg, iframe, object, embed, video, audio, canvas, picture, source').remove();
+            const rawText = $clone('body').text().replace(/\s+/g, ' ').trim();
+            // Discard if mostly non-printable (binary data leaked through)
+            const printableRatio = rawText.replace(/[^\x20-\x7E\u00A0-\uFFFF]/g, '').length / (rawText.length || 1);
+            if (rawText.length > 0 && printableRatio > 0.8) {
               const remaining = ABOUT_TEXT_LIMIT - currentTotal;
               aboutPageTextParts.push(rawText.slice(0, remaining));
             }

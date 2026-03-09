@@ -971,6 +971,7 @@ export async function handleBusinessConvertJob(
 
   if (await isDiscoveryRunTerminal(discoveryRunId)) {
     logger.warn(logCtx, 'Discovery run already terminal — skipping conversion');
+    await tryFinalizeDiscoveryRun(discoveryRunId, logger);
     return;
   }
 
@@ -1507,15 +1508,18 @@ export async function handleBusinessConvertJob(
     isCredibleNamedCandidate(candidate, business.name),
   );
   const identityThreshold = isHighValueBusiness ? 0.48 : 0.58;
+  // Hunter searches by domain — only needs prequalified + no valid email
+  const shouldSkipHunter = business.preQualified === false || hasValidEmail;
+  // Apollo/expensive enrichment — needs identity confidence (more targeted)
   const shouldStopPaidEnrichment = business.preQualified === false
     || !hasCredibleNamedCandidate
     || identityConfidence < identityThreshold
     || hasValidEmail;
 
-  if (!shouldStopPaidEnrichment && !hasValidEmail) {
+  if (!shouldSkipHunter && !hasValidEmail) {
     logger.info(
-      { ...logCtx, identityConfidence, identityThreshold },
-      'No valid email from free sources — paid enrichment gate passed',
+      { ...logCtx, identityConfidence, identityThreshold, hasCredibleNamedCandidate },
+      'No valid email from free sources — Hunter gate passed',
     );
 
     // Hunter (cheaper) — check budget ceiling first
@@ -1609,7 +1613,10 @@ export async function handleBusinessConvertJob(
       });
     }
 
-    // Apollo (more expensive — only if pre-screen says email exists + within budget)
+  }
+
+  // Apollo (more expensive — needs identity confidence + budget)
+  if (!shouldStopPaidEnrichment && !hasValidEmail) {
     const hasEmailAfterHunter = allCandidates.some((c) => c.email !== null);
     const apolloWithinBudget = await isProviderWithinBudget('APOLLO');
     const apolloBusinessBudget = await canSpendOnProviderForBusiness({
@@ -1680,15 +1687,14 @@ export async function handleBusinessConvertJob(
         notes: [],
       });
     }
-  } else if (!hasValidEmail) {
+  } else if (!hasValidEmail && !shouldSkipHunter) {
+    // Apollo gate blocked but Hunter already ran above
     gateStats.paidGateBlocked = true;
-    gateStats.paidGateReason = business.preQualified === false
-      ? 'business_not_prequalified'
-      : !hasCredibleNamedCandidate
-        ? 'no_credible_named_candidate'
-        : identityConfidence < identityThreshold
-          ? 'identity_confidence_below_threshold'
-          : 'validated_personal_email_already_present';
+    gateStats.paidGateReason = !hasCredibleNamedCandidate
+      ? 'no_credible_named_candidate'
+      : identityConfidence < identityThreshold
+        ? 'identity_confidence_below_threshold'
+        : 'validated_personal_email_already_present';
     logger.info(
       {
         ...logCtx,
@@ -1697,7 +1703,16 @@ export async function handleBusinessConvertJob(
         paidGateReason: gateStats.paidGateReason,
         hasCredibleNamedCandidate,
       },
-      'Skipping paid enrichment due to hard stop-spending gate',
+      'Skipping Apollo enrichment due to identity confidence gate (Hunter ran independently)',
+    );
+  } else if (!hasValidEmail) {
+    gateStats.paidGateBlocked = true;
+    gateStats.paidGateReason = business.preQualified === false
+      ? 'business_not_prequalified'
+      : 'validated_personal_email_already_present';
+    logger.info(
+      { ...logCtx, paidGateReason: gateStats.paidGateReason },
+      'Skipping paid enrichment — business not prequalified',
     );
   } else {
     logger.info(
