@@ -1,0 +1,73 @@
+table_name,column_name,data_type,is_nullable
+JobExecution,id,text,NO
+JobExecution,type,text,NO
+JobExecution,status,USER-DEFINED,NO
+JobExecution,attempts,integer,NO
+JobExecution,payload,jsonb,NO
+JobExecution,result,jsonb,YES
+JobExecution,error,text,YES
+JobExecution,leadId,text,YES
+JobExecution,createdAt,timestamp without time zone,NO
+JobExecution,startedAt,timestamp without time zone,YES
+JobExecution,finishedAt,timestamp without time zone,YES
+JobExecution,updatedAt,timestamp without time zone,NO
+ModelVersion,id,text,NO
+ModelVersion,trainingRunId,text,NO
+ModelVersion,modelType,USER-DEFINED,NO
+ModelVersion,versionTag,text,NO
+ModelVersion,stage,USER-DEFINED,NO
+ModelVersion,featureSchemaJson,jsonb,NO
+ModelVersion,coefficientsJson,jsonb,YES
+ModelVersion,intercept,double precision,YES
+ModelVersion,deterministicWeightsJson,jsonb,NO
+ModelVersion,artifactUri,text,YES
+ModelVersion,checksum,text,NO
+ModelVersion,trainedAt,timestamp without time zone,NO
+ModelVersion,activatedAt,timestamp without time zone,YES
+ModelVersion,retiredAt,timestamp without time zone,YES
+ModelVersion,createdAt,timestamp without time zone,NO
+ModelVersion,updatedAt,timestamp without time zone,NO
+TrainingRun,id,text,NO
+TrainingRun,modelType,USER-DEFINED,NO
+TrainingRun,status,USER-DEFINED,NO
+TrainingRun,trigger,USER-DEFINED,NO
+TrainingRun,triggeredByUserId,text,YES
+TrainingRun,configJson,jsonb,NO
+TrainingRun,trainingWindowStart,timestamp without time zone,NO
+TrainingRun,trainingWindowEnd,timestamp without time zone,NO
+TrainingRun,datasetSize,integer,NO
+TrainingRun,positiveCount,integer,NO
+TrainingRun,negativeCount,integer,NO
+TrainingRun,startedAt,timestamp without time zone,YES
+TrainingRun,endedAt,timestamp without time zone,YES
+TrainingRun,errorMessage,text,YES
+TrainingRun,createdAt,timestamp without time zone,NO
+TrainingRun,updatedAt,timestamp without time zone,NO
+app_admins,user_id,uuid,NO
+app_admins,created_at,timestamp with time zone,NO
+job_requests,id,bigint,NO
+job_requests,created_at,timestamp with time zone,NO
+job_requests,updated_at,timestamp with time zone,NO
+job_requests,requested_by,uuid,NO
+job_requests,request_type,USER-DEFINED,NO
+job_requests,status,USER-DEFINED,NO
+job_requests,params_json,jsonb,NO
+job_requests,claimed_by,text,YES
+job_requests,claimed_at,timestamp with time zone,YES
+job_requests,started_at,timestamp with time zone,YES
+job_requests,finished_at,timestamp with time zone,YES
+job_requests,error_text,text,YES
+job_requests,job_run_id,text,YES
+job_requests,idempotency_key,text,YES
+job_runs,id,text,NO
+job_runs,job_name,text,NO
+job_runs,started_at,timestamp without time zone,NO
+job_runs,finished_at,timestamp without time zone,YES
+job_runs,duration_ms,integer,YES
+job_runs,status,USER-DEFINED,NO
+job_runs,params_json,jsonb,NO
+job_runs,counters_json,jsonb,YES
+job_runs,resource_json,jsonb,YES
+job_runs,error_text,text,YES
+job_runs,created_at,timestamp without time zone,NO
+job_runs,updated_at,timestamp without time zone,NO
