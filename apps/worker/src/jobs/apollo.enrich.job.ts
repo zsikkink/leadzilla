@@ -58,7 +58,7 @@ export interface ApolloEnrichJobDependencies {
     runId: string;
     correlationId?: string | undefined;
     channel: 'EMAIL' | 'WHATSAPP';
-    autoApprove: boolean;
+    autoApprove?: boolean | undefined;
   }) => Promise<void>) | undefined;
 }
 
@@ -104,36 +104,8 @@ export async function handleApolloEnrichJob(
   });
   const blendedScore = scorePrediction?.blendedScore ?? 0;
 
-  // LOW → skip entirely, do not enqueue message.generate
-  if (scoreBand === 'LOW') {
-    logger.info(logCtx, 'LOW score band — skipping apollo.enrich entirely');
-    await tryFinalizeDiscoveryRun(runId, logger);
-    return;
-  }
-
-  // Enrichment threshold gate: skip paid Apollo reveal if score is too low
-  const enrichmentThreshold = await getEnrichmentThreshold();
-  if (blendedScore < enrichmentThreshold) {
-    logger.info(
-      { ...logCtx, blendedScore, enrichmentThreshold },
-      'Score below enrichment threshold — skipping paid Apollo reveal',
-    );
-    await tryFinalizeDiscoveryRun(runId, logger);
-    return;
-  }
-
-  // Provider budget ceiling gate: skip if Apollo has exceeded daily budget
-  const apolloWithinBudget = await isProviderWithinBudget('APOLLO');
-  if (!apolloWithinBudget) {
-    logger.warn(
-      logCtx,
-      'Apollo daily budget ceiling exceeded — skipping paid reveal',
-    );
-    await tryFinalizeDiscoveryRun(runId, logger);
-    return;
-  }
-
-  // Load lead data
+  // Load lead data up-front so we can continue pipeline to message.generate
+  // even when paid Apollo reveal is skipped.
   const lead = await prisma.lead.findUnique({
     where: { id: leadId },
     select: {
@@ -153,6 +125,66 @@ export async function handleApolloEnrichJob(
 
   const hasEmail = Boolean(lead.email && lead.email.includes('@'));
   const hasPhone = Boolean(lead.decisionMakerPhone || lead.phone);
+
+  const enqueueMessageGenerateIfSendable = async (
+    emailAvailable: boolean,
+    phoneAvailable: boolean,
+    reason: string,
+  ): Promise<void> => {
+    if (!emailAvailable) return;
+    if (!deps?.enqueueMessageGenerate) {
+      logger.warn(
+        { ...logCtx, reason },
+        'Qualified lead has email but enqueueMessageGenerate dependency is missing',
+      );
+      return;
+    }
+
+    const channel: 'EMAIL' | 'WHATSAPP' = scoreBand === 'HIGH' && phoneAvailable ? 'WHATSAPP' : 'EMAIL';
+    await deps.enqueueMessageGenerate({
+      leadId,
+      icpProfileId,
+      scorePredictionId,
+      runId,
+      correlationId: effectiveCorrelationId,
+      channel,
+    });
+    logger.info(
+      { ...logCtx, reason, channel, emailAvailable, phoneAvailable },
+      'Enqueued message.generate after apollo.enrich',
+    );
+  };
+
+  // LOW → skip entirely, do not enqueue message.generate
+  if (scoreBand === 'LOW') {
+    logger.info(logCtx, 'LOW score band — skipping apollo.enrich entirely');
+    await tryFinalizeDiscoveryRun(runId, logger);
+    return;
+  }
+
+  // Enrichment threshold gate: skip paid Apollo reveal if score is too low
+  const enrichmentThreshold = await getEnrichmentThreshold();
+  if (blendedScore < enrichmentThreshold) {
+    logger.info(
+      { ...logCtx, blendedScore, enrichmentThreshold },
+      'Score below enrichment threshold — skipping paid Apollo reveal',
+    );
+    await enqueueMessageGenerateIfSendable(hasEmail, hasPhone, 'skip_paid_reveal_threshold');
+    await tryFinalizeDiscoveryRun(runId, logger);
+    return;
+  }
+
+  // Provider budget ceiling gate: skip if Apollo has exceeded daily budget
+  const apolloWithinBudget = await isProviderWithinBudget('APOLLO');
+  if (!apolloWithinBudget) {
+    logger.warn(
+      logCtx,
+      'Apollo daily budget ceiling exceeded — skipping paid reveal',
+    );
+    await enqueueMessageGenerateIfSendable(hasEmail, hasPhone, 'skip_paid_reveal_budget');
+    await tryFinalizeDiscoveryRun(runId, logger);
+    return;
+  }
 
   // Determine what needs to be revealed
   let needsEmailReveal = false;
@@ -177,12 +209,13 @@ export async function handleApolloEnrichJob(
     }
   }
 
-  // If nothing to reveal, the lead remains qualified and ready for manual drafting.
+  // If nothing to reveal, continue to message generation when sendable.
   if (!needsEmailReveal && !needsPhoneReveal) {
     logger.info(
       { ...logCtx, hasEmail, hasPhone },
-      'No Apollo reveal needed — lead remains qualified for manual drafting',
+      'No Apollo reveal needed — proceeding with existing contact data',
     );
+    await enqueueMessageGenerateIfSendable(hasEmail, hasPhone, 'no_reveal_needed');
     await tryFinalizeDiscoveryRun(runId, logger);
     return;
   }
@@ -202,12 +235,14 @@ export async function handleApolloEnrichJob(
 
   if (!domain) {
     logger.warn(logCtx, 'No domain available for Apollo reveal — skipping');
+    await enqueueMessageGenerateIfSendable(hasEmail, hasPhone, 'skip_paid_reveal_no_domain');
     await tryFinalizeDiscoveryRun(runId, logger);
     return;
   }
 
   if (!deps?.apolloAdapter.isConfigured) {
     logger.warn(logCtx, 'Apollo adapter not configured — skipping reveal');
+    await enqueueMessageGenerateIfSendable(hasEmail, hasPhone, 'skip_paid_reveal_not_configured');
     await tryFinalizeDiscoveryRun(runId, logger);
     return;
   }
@@ -231,6 +266,7 @@ export async function handleApolloEnrichJob(
       { ...logCtx, apolloStatus: apolloResult.status },
       'Apollo reveal returned no contacts — keeping qualified lead as-is',
     );
+    await enqueueMessageGenerateIfSendable(hasEmail, hasPhone, 'skip_paid_reveal_empty');
     await tryFinalizeDiscoveryRun(runId, logger);
     return;
   }
@@ -267,8 +303,11 @@ export async function handleApolloEnrichJob(
   }
 
   const finalHasEmail = hasEmail || revealedEmail;
+  const finalHasPhone = hasPhone || revealedPhone;
   if (!finalHasEmail) {
     logger.warn(logCtx, 'Lead still has no email after Apollo reveal — cannot enqueue message.generate');
+  } else {
+    await enqueueMessageGenerateIfSendable(finalHasEmail, finalHasPhone, 'revealed_or_existing');
   }
 
   await tryFinalizeDiscoveryRun(runId, logger);

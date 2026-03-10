@@ -17,9 +17,12 @@ import {
   ensureBaselineModelVersion,
   extractFeatureVectorForModel,
   findActiveTrainedModel,
-  getQualificationThreshold,
 } from '../scoring/shared.js';
-import { getDeterministicAiBlend, getScoreTierBands } from '../utils/pipeline-settings.js';
+import {
+  getDeterministicAiBlend,
+  getScoreQualificationThreshold,
+  getScoreTierBands,
+} from '../utils/pipeline-settings.js';
 
 export const SCORING_COMPUTE_JOB_NAME = 'scoring.compute';
 /** Batch/API-triggered scoring singleton key. Per-lead scoring (from features.compute) uses a 3-part key: scoring.compute:${runId}:${leadId}:${icpProfileId} */
@@ -94,7 +97,7 @@ export async function handleScoringComputeJob(
 
   try {
     // Dynamic qualification threshold from PipelineSetting table
-    const qualificationThreshold = await getQualificationThreshold();
+    const qualificationThreshold = await getScoreQualificationThreshold();
 
     const effectiveModelVersionId =
       modelVersionId ??

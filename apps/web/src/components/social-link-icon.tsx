@@ -22,6 +22,23 @@ const PLATFORM_ICONS: Record<string, LucideIcon> = {
   website: Globe,
 };
 
+export const SOCIAL_BRAND_COLORS: Record<string, string> = {
+  instagram: '#E4405F',
+  linkedin: '#0A66C2',
+  facebook: '#1877F2',
+  twitter: '#000000',
+  x: '#000000',
+  youtube: '#FF0000',
+  whatsapp: '#25D366',
+  tiktok: '#000000',
+  website: '#6366F1',
+};
+
+export function normalizeSocialPlatform(platform: string): string {
+  const normalized = platform.toLowerCase();
+  return PLATFORM_ICONS[normalized] ? normalized : 'website';
+}
+
 export function SocialLinkIcon({
   platform,
   className,
@@ -29,6 +46,6 @@ export function SocialLinkIcon({
   platform: string;
   className?: string | undefined;
 }) {
-  const Icon = PLATFORM_ICONS[platform.toLowerCase()] ?? Globe;
+  const Icon = PLATFORM_ICONS[normalizeSocialPlatform(platform)] ?? Globe;
   return <Icon className={className} />;
 }

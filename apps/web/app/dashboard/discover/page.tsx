@@ -1,6 +1,10 @@
 'use client';
 
-import type { IcpProfileResponse, PipelineRunStatus } from '@lead-flood/contracts';
+import type {
+  DiscoveryCountryCodeContract,
+  IcpProfileResponse,
+  PipelineRunStatus,
+} from '@lead-flood/contracts';
 import {
   AlertCircle,
   CheckCircle2,
@@ -25,7 +29,7 @@ import { getSupabaseBrowserClient } from '../../../src/lib/supabase-client.js';
 import { cn } from '../../../src/lib/utils.js';
 
 // ── City mapping by country ──────────────────────────────
-const COUNTRY_CITIES: Record<string, string[]> = {
+const COUNTRY_CITIES: Record<DiscoveryCountryCodeContract, string[]> = {
   AE: ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Ras Al Khaimah', 'Fujairah', 'Umm Al Quwain', 'Al Ain'],
   SA: ['Riyadh', 'Jeddah', 'Dammam', 'Mecca', 'Medina', 'Khobar', 'Tabuk', 'Abha'],
   BH: ['Manama', 'Muharraq', 'Riffa', 'Hamad Town'],
@@ -44,6 +48,29 @@ const COUNTRY_CITIES: Record<string, string[]> = {
   SY: ['Damascus', 'Aleppo', 'Homs', 'Latakia'],
   PS: ['Ramallah', 'Gaza', 'Nablus', 'Hebron', 'Bethlehem'],
   SD: ['Khartoum', 'Omdurman', 'Port Sudan', 'Kassala'],
+};
+
+const ICP_COUNTRY_NAME_TO_CODE: Record<string, DiscoveryCountryCodeContract> = {
+  'united arab emirates': 'AE',
+  'saudi arabia': 'SA',
+  egypt: 'EG',
+  jordan: 'JO',
+  bahrain: 'BH',
+  kuwait: 'KW',
+  qatar: 'QA',
+  oman: 'OM',
+  lebanon: 'LB',
+  iraq: 'IQ',
+  morocco: 'MA',
+  tunisia: 'TN',
+  algeria: 'DZ',
+  libya: 'LY',
+  yemen: 'YE',
+  syria: 'SY',
+  palestine: 'PS',
+  sudan: 'SD',
+  uae: 'AE',
+  ksa: 'SA',
 };
 
 const LIMIT_OPTIONS = [
@@ -285,6 +312,28 @@ function buildBatch(
   };
 }
 
+function toCountryCodeFromIcpTarget(
+  value: string | null | undefined,
+): DiscoveryCountryCodeContract | null {
+  if (!value) return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const normalized = trimmed.toLowerCase();
+  const directMapped = ICP_COUNTRY_NAME_TO_CODE[normalized];
+  if (directMapped) {
+    return directMapped;
+  }
+
+  const upper = trimmed.toUpperCase();
+  if (upper in COUNTRY_CITIES) {
+    return upper as DiscoveryCountryCodeContract;
+  }
+
+  return toDiscoveryCountryCodes([trimmed])[0] ?? null;
+}
+
 // ── Main page ──────────────────────────────────────
 
 export default function DiscoverPage() {
@@ -374,28 +423,41 @@ export default function DiscoverPage() {
     [discoveryRuns.data, icps.data],
   );
 
-  // Derive countries from selected ICPs
-  const derivedCountries = useMemo(() => {
+  // Derive country codes from selected ICPs
+  const selectedIcpCountryCodes = useMemo<DiscoveryCountryCodeContract[]>(() => {
     if (!icps.data) return [];
-    const targetCountries: string[] = [];
+    const countryCodes = new Set<DiscoveryCountryCodeContract>();
     for (const id of selectedIcpIds) {
       const icp = icps.data.items.find((i) => i.id === id);
       if (icp) {
-        targetCountries.push(...icp.targetCountries);
+        for (const countryNameValue of icp.targetCountries) {
+          const countryCode = toCountryCodeFromIcpTarget(countryNameValue);
+          if (countryCode) {
+            countryCodes.add(countryCode);
+          }
+        }
       }
     }
-    return toDiscoveryCountryCodes(targetCountries).sort((a, b) => a.localeCompare(b));
+    return Array.from(countryCodes).sort((a, b) => a.localeCompare(b));
   }, [selectedIcpIds, icps.data]);
 
-  // Available cities based on derived countries
+  const countriesForCityPicker = useMemo<DiscoveryCountryCodeContract[]>(
+    () =>
+      selectedIcpIds.size === 0
+        ? (Object.keys(COUNTRY_CITIES) as DiscoveryCountryCodeContract[]).sort((a, b) => a.localeCompare(b))
+        : selectedIcpCountryCodes,
+    [selectedIcpIds, selectedIcpCountryCodes],
+  );
+
+  // Available cities based on selected ICP countries (or all countries if no ICP selected)
   const availableCities = useMemo(() => {
     const cities = new Set<string>();
-    for (const country of derivedCountries) {
+    for (const country of countriesForCityPicker) {
       const mapped = COUNTRY_CITIES[country];
       if (mapped) for (const c of mapped) cities.add(c);
     }
     return Array.from(cities).sort();
-  }, [derivedCountries]);
+  }, [countriesForCityPicker]);
 
   // Reset city selection when countries change
   useEffect(() => {
@@ -431,7 +493,7 @@ export default function DiscoverPage() {
   };
 
   const handleStartDiscovery = async () => {
-    if (selectedIcpIds.size === 0 || derivedCountries.length === 0) return;
+    if (selectedIcpIds.size === 0 || selectedIcpCountryCodes.length === 0) return;
 
     setIsSubmitting(true);
     setSubmitError(null);
@@ -442,7 +504,7 @@ export default function DiscoverPage() {
       // Single API call with all selected ICPs — limit is split server-side
       await apiClient.createDiscoveryRun({
         icpProfileIds: Array.from(selectedIcpIds),
-        countries: derivedCountries,
+        countries: selectedIcpCountryCodes,
         ...(cities ? { cities } : {}),
         includeWebsiteAnalysis,
         includeSocialMediaAnalysis,
@@ -555,16 +617,16 @@ export default function DiscoverPage() {
                   <Globe className="h-3.5 w-3.5 text-muted-foreground" />
                   <span className="text-xs font-semibold text-muted-foreground">Target Countries</span>
                 </div>
-                {derivedCountries.length > 0 ? (
+                {countriesForCityPicker.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5">
-                    {derivedCountries.map((c) => (
+                    {countriesForCityPicker.map((c) => (
                       <span key={c} className="rounded-full bg-zbooni-teal/10 px-2.5 py-1 text-xs font-medium text-zbooni-teal">
                         {countryName(c)}
                       </span>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-xs text-muted-foreground/50">Select an ICP profile to see target countries</p>
+                  <p className="text-xs text-muted-foreground/50">No mapped target countries found for the selected ICP profiles</p>
                 )}
               </div>
 
@@ -713,7 +775,7 @@ export default function DiscoverPage() {
           <button
             type="button"
             onClick={handleStartDiscovery}
-            disabled={selectedIcpIds.size === 0 || derivedCountries.length === 0 || isSubmitting || !!isRunning}
+            disabled={selectedIcpIds.size === 0 || selectedIcpCountryCodes.length === 0 || isSubmitting || !!isRunning}
             className="inline-flex w-full items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-zbooni-green to-zbooni-teal px-6 py-3 text-sm font-bold text-zbooni-dark shadow-lg shadow-zbooni-green/20 transition-all hover:shadow-xl hover:shadow-zbooni-green/30 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
           >
             {isSubmitting ? (

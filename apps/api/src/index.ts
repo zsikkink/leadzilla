@@ -897,14 +897,15 @@ async function main(): Promise<void> {
               ],
             }
           : {}),
-        // Exclude businesses whose leads were rejected (below threshold / hard filter)
-        // — those belong on the Rejected page, not Contact Recovery
+        // Exclude businesses whose associated leads are currently rejected.
+        // Do NOT key this off LeadRejection existence, because a lead may have
+        // historical rejection records but later move back to a non-rejected status.
         NOT: {
           business: {
             businessConversions: {
               some: {
                 lead: {
-                  rejection: { isNot: null },
+                  status: 'rejected',
                 },
               },
             },

@@ -574,6 +574,7 @@ interface IcpMeta {
   salesCycle?: string | undefined;
   opsComplexity?: string | undefined;
   revenuePotential?: string | undefined;
+  salesHook?: string | undefined;
   hook?: string | undefined;
   angle?: string[] | undefined;
 }
@@ -588,6 +589,7 @@ function extractMeta(metadataJson: Record<string, unknown> | null | undefined): 
     salesCycle: typeof m.salesCycle === 'string' ? m.salesCycle : undefined,
     opsComplexity: typeof m.opsComplexity === 'string' ? m.opsComplexity : undefined,
     revenuePotential: typeof m.revenuePotential === 'string' ? m.revenuePotential : undefined,
+    salesHook: typeof m.salesHook === 'string' ? m.salesHook : undefined,
     hook: typeof m.hook === 'string' ? m.hook : undefined,
     angle: Array.isArray(m.angle) ? (m.angle as string[]) : undefined,
   };
@@ -742,9 +744,14 @@ export default function IcpDetailPage() {
             <div className="flex-1">
               <EditableField
                 label="Sales Hook"
-                value={meta.hook ?? ''}
+                value={meta.salesHook ?? meta.hook ?? ''}
                 multiline
-                onSave={(val) => handleUpdate('metadataJson', { ...meta, hook: val || undefined })}
+                onSave={(val) =>
+                  handleUpdate('metadataJson', {
+                    ...meta,
+                    salesHook: val || undefined,
+                    hook: val || undefined,
+                  })}
                 textClassName="italic text-muted-foreground"
               />
             </div>

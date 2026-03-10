@@ -12,6 +12,7 @@ import {
   Instagram,
   Linkedin,
   Loader2,
+  Camera,
   Mail,
   MapPin,
   Monitor,
@@ -23,18 +24,22 @@ import {
   Users,
 } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 
 import { AboutBusinessCard } from '../../../../src/components/about-business-card.js';
 import { LeadStatusBadge } from '../../../../src/components/lead-status-badge.js';
 import { ScoreBandBadge } from '../../../../src/components/score-band-badge.js';
 import { ScoringBreakdown } from '../../../../src/components/scoring-breakdown.js';
-import { SocialLinkIcon } from '../../../../src/components/social-link-icon.js';
+import {
+  normalizeSocialPlatform,
+  SOCIAL_BRAND_COLORS,
+  SocialLinkIcon,
+} from '../../../../src/components/social-link-icon.js';
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
 import { countryName } from '../../../../src/lib/countries.js';
 import { getSupabaseBrowserClient } from '../../../../src/lib/supabase-client.js';
-import { sortTeamMembers } from '../../../../src/lib/team-members.js';
+import { getTeamMemberTier, sortTeamMembers } from '../../../../src/lib/team-members.js';
 
 interface EnrichmentField {
   label: string;
@@ -115,6 +120,56 @@ interface ContactEmail { email: string; context?: string | undefined }
 interface ContactPhone { number: string; type?: string | undefined }
 interface ContactAddress { text: string }
 interface SocialLink { platform: string; url: string; handle?: string | undefined }
+interface TeamMember {
+  id: string;
+  fullName: string;
+  jobTitle: string | null;
+  email: string | null;
+  phone: string | null;
+  linkedinUrl: string | null;
+  seniority: string | null;
+  positionRank: number | null;
+  source: string | null;
+  fromBusinessContacts: boolean;
+}
+interface InstagramPost {
+  caption: string;
+  likes: number;
+  comments: number;
+  timestamp: string;
+  url: string | null;
+  thumbnailUrl: string | null;
+  postType: 'image' | 'video' | 'carousel';
+}
+
+function normalizeEmail(email: string | null | undefined): string | null {
+  if (!email) return null;
+  const normalized = email.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function getLeadTitleFromEnrichment(enrichmentData: unknown): string | null {
+  if (!enrichmentData || typeof enrichmentData !== 'object') return null;
+  const data = enrichmentData as Record<string, unknown>;
+  const title = data.title ?? data.job_title ?? data.position;
+  return typeof title === 'string' && title.trim().length > 0 ? title.trim() : null;
+}
+
+function isExecutiveOrDirector(member: Pick<TeamMember, 'seniority' | 'jobTitle'>): boolean {
+  return getTeamMemberTier(member.seniority, member.jobTitle) <= 1;
+}
+
+function getInstagramPostType(raw: unknown): 'image' | 'video' | 'carousel' {
+  if (raw === 'video') return 'video';
+  if (raw === 'carousel') return 'carousel';
+  return 'image';
+}
+
+function getInstagramPostTypeLabel(postType: 'image' | 'video' | 'carousel'): string {
+  if (postType === 'video') return 'Video';
+  if (postType === 'carousel') return 'Carousel';
+  return 'Image';
+}
 
 function extractBusinessDecisionMakers(scrape: Record<string, unknown>): DecisionMaker[] {
   const raw = scrape.decisionMakers;
@@ -403,19 +458,29 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
             <Globe className="mr-1 inline h-3 w-3" />Social Presence
           </p>
           <div className="flex flex-wrap gap-2">
-            {mergedSocialLinks.map((sl, i) => (
-              <a
-                key={i}
-                href={sl.url.startsWith('http') ? sl.url : `https://${sl.url}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-full border border-border/30 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground transition-colors hover:text-zbooni-teal hover:border-zbooni-teal/30"
-              >
-                <SocialLinkIcon platform={sl.platform} className="h-3 w-3" />
-                {sl.platform}
-                <ExternalLink className="h-2.5 w-2.5" />
-              </a>
-            ))}
+            {mergedSocialLinks.map((sl, i) => {
+              const platform = normalizeSocialPlatform(sl.platform);
+              const brandColor = SOCIAL_BRAND_COLORS[platform] ?? SOCIAL_BRAND_COLORS.website;
+              const hoverStyle = {
+                '--social-brand-color': brandColor,
+                '--social-brand-shadow': `${brandColor}40`,
+              } as CSSProperties;
+
+              return (
+                <a
+                  key={i}
+                  href={sl.url.startsWith('http') ? sl.url : `https://${sl.url}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={hoverStyle}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border/30 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground transition-all duration-200 hover:text-[var(--social-brand-color)] hover:border-[var(--social-brand-color)] hover:shadow-[0_0_8px_var(--social-brand-shadow)]"
+                >
+                  <SocialLinkIcon platform={sl.platform} className="h-3 w-3" />
+                  {sl.platform}
+                  <ExternalLink className="h-2.5 w-2.5" />
+                </a>
+              );
+            })}
           </div>
         </div>
       )}
@@ -476,15 +541,8 @@ export default function LeadDetailPage() {
   // Fetch linked Business scraper data via business_conversions → businesses
   const [businessData, setBusinessData] = useState<BusinessScrapeData | null>(null);
   const [businessId, setBusinessId] = useState<string | null>(null);
-  const [teamMembers, setTeamMembers] = useState<Array<{ id: string; fullName: string; jobTitle: string | null; email: string | null; phone: string | null; linkedinUrl: string | null; seniority: string | null; source: string | null }>>([]);
-  const [instagramPosts, setInstagramPosts] = useState<Array<{
-    caption: string;
-    likes: number;
-    comments: number;
-    timestamp: string;
-    url: string | null;
-    thumbnailUrl: string | null;
-  }>>([]);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const [instagramPosts, setInstagramPosts] = useState<InstagramPost[]>([]);
   const [leadPhoneSource, setLeadPhoneSource] = useState<string | null>(null);
   const [leadBusinessEmail, setLeadBusinessEmail] = useState<string | null>(null);
   useEffect(() => {
@@ -544,11 +602,21 @@ export default function LeadDetailPage() {
           .from('business_contacts')
           .select('id, name, title, email, phone, linkedinUrl, seniority, positionRank, source')
           .eq('businessId', bizId)
-          .order('createdAt', { ascending: false })
-          .limit(10);
+          .order('positionRank', { ascending: true })
+          .order('createdAt', { ascending: false });
 
         if (contacts && contacts.length > 0 && !cancelled) {
-          const mapped = contacts.map((c: { id: string; name: string; title: string | null; email: string | null; phone: string | null; linkedinUrl: string | null; seniority: string | null; source: string | null }) => ({
+          const mapped = contacts.map((c: {
+            id: string;
+            name: string;
+            title: string | null;
+            email: string | null;
+            phone: string | null;
+            linkedinUrl: string | null;
+            seniority: string | null;
+            positionRank: number | null;
+            source: string | null;
+          }) => ({
             id: c.id,
             fullName: c.name,
             jobTitle: c.title,
@@ -556,7 +624,9 @@ export default function LeadDetailPage() {
             phone: c.phone,
             linkedinUrl: c.linkedinUrl,
             seniority: c.seniority,
+            positionRank: c.positionRank,
             source: (c.source as string) ?? null,
+            fromBusinessContacts: true,
           }));
           setTeamMembers(mapped);
         } else if (!cancelled) {
@@ -565,7 +635,7 @@ export default function LeadDetailPage() {
           if (websiteScrape) {
             const dms = websiteScrape.decisionMakers as Array<Record<string, unknown>> | undefined;
             if (Array.isArray(dms) && dms.length > 0) {
-              setTeamMembers(dms.slice(0, 10).map((dm, idx) => ({
+              setTeamMembers(dms.map((dm, idx) => ({
                 id: `dm-${idx}`,
                 fullName: typeof dm.name === 'string' ? dm.name : 'Unknown',
                 jobTitle: typeof dm.title === 'string' ? dm.title : null,
@@ -573,7 +643,9 @@ export default function LeadDetailPage() {
                 phone: null,
                 linkedinUrl: typeof dm.linkedinUrl === 'string' ? dm.linkedinUrl : null,
                 seniority: null,
+                positionRank: null,
                 source: 'Website',
+                fromBusinessContacts: false,
               })));
             }
           }
@@ -594,9 +666,15 @@ export default function LeadDetailPage() {
                 : (typeof p.comments === 'number' ? p.comments : (typeof p.commentsCount === 'number' ? p.commentsCount : 0)),
               timestamp: typeof p.timestamp === 'string' ? p.timestamp : (typeof p.takenAtTimestamp === 'string' ? p.takenAtTimestamp : ''),
               url: typeof p.url === 'string' ? p.url : (typeof p.shortCode === 'string' ? `https://instagram.com/p/${p.shortCode}` : null),
-              thumbnailUrl: typeof p.thumbnailUrl === 'string'
-                ? p.thumbnailUrl
-                : (typeof p.displayUrl === 'string' ? p.displayUrl : null),
+              thumbnailUrl:
+                typeof p.thumbnailUrl === 'string'
+                  ? p.thumbnailUrl
+                  : (
+                    typeof p.displayUrl === 'string'
+                      ? p.displayUrl
+                      : (typeof p.url === 'string' ? p.url : null)
+                  ),
+              postType: getInstagramPostType(typeof p.postType === 'string' ? p.postType.toLowerCase() : null),
             }));
           setInstagramPosts(posts);
         }
@@ -668,6 +746,30 @@ export default function LeadDetailPage() {
   const sortedTeamMembers = useMemo(
     () => (l ? sortTeamMembers(teamMembers, l.email).ordered : []),
     [teamMembers, l],
+  );
+  const leadEmailNormalized = normalizeEmail(l?.email);
+  const leadTitle = getLeadTitleFromEnrichment(l?.enrichmentData);
+  const leadMatchedTeamMember = leadEmailNormalized
+    ? sortedTeamMembers.find((member) => normalizeEmail(member.email) === leadEmailNormalized) ?? null
+    : null;
+  const fallbackLeadTier = getTeamMemberTier(
+    null,
+    leadTitle,
+  );
+  const primaryLeadTier = leadMatchedTeamMember
+    ? getTeamMemberTier(leadMatchedTeamMember.seniority, leadMatchedTeamMember.jobTitle)
+    : fallbackLeadTier;
+  const executiveDirectorContacts = sortedTeamMembers.filter((member) => (
+    member.fromBusinessContacts &&
+    isExecutiveOrDirector(member) &&
+    normalizeEmail(member.email) !== leadEmailNormalized
+  ));
+  const firstExecutiveDirectorContact = executiveDirectorContacts[0] ?? null;
+  const hasPrimaryAuthoritySignal = leadMatchedTeamMember !== null || Boolean(leadTitle);
+  const showLowAuthorityWarning = (
+    hasPrimaryAuthoritySignal &&
+    primaryLeadTier >= 2 &&
+    executiveDirectorContacts.length > 0
   );
   const primaryLinkedinUrl = sortedTeamMembers[0]?.linkedinUrl ?? sortedTeamMembers.find((member) => member.linkedinUrl)?.linkedinUrl ?? null;
   const enrichmentFields = l ? extractEnrichmentFields(l.enrichmentData) : [];
@@ -945,7 +1047,31 @@ export default function LeadDetailPage() {
         </div>
       ) : null}
 
-      {/* Team Members (D8: Primary/Alternative badges + source labels) */}
+      {showLowAuthorityWarning ? (
+        <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 px-4 py-3">
+          <div className="flex items-start gap-2.5 text-sm text-amber-200">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <p className="font-semibold">
+                Primary contact is non-executive. Decision makers identified below — consider reaching them directly via LinkedIn.
+              </p>
+              {firstExecutiveDirectorContact?.linkedinUrl ? (
+                <a
+                  href={firstExecutiveDirectorContact.linkedinUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-amber-100 underline decoration-amber-100/60 underline-offset-2 hover:text-white"
+                >
+                  View {firstExecutiveDirectorContact.fullName} on LinkedIn
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Team Members */}
       {sortedTeamMembers.length > 0 ? (
         <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
           <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
@@ -953,48 +1079,90 @@ export default function LeadDetailPage() {
             Team Members
             <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">{sortedTeamMembers.length}</span>
           </h2>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid gap-2.5 sm:grid-cols-2">
             {sortedTeamMembers.map((tm, idx) => {
-              const isPrimary = idx === 0;
+              const isPrimary = leadEmailNormalized
+                ? normalizeEmail(tm.email) === leadEmailNormalized
+                : idx === 0;
+              const isDecisionMaker = isExecutiveOrDirector(tm);
+              const seniorityLabel = tm.seniority ? tm.seniority.charAt(0).toUpperCase() + tm.seniority.slice(1) : null;
+
               return (
-                <div key={tm.id} className="flex items-center gap-3 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2.5">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-[11px] font-bold text-amber-400">
-                    {tm.fullName.charAt(0)}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <p className="text-sm font-semibold truncate">{tm.fullName}</p>
-                      {isPrimary ? (
-                        <span className="shrink-0 rounded-full bg-zbooni-green/15 px-1.5 py-0.5 text-[9px] font-bold text-zbooni-green">Primary</span>
-                      ) : (
-                        <span className="shrink-0 rounded-full bg-muted/20 px-1.5 py-0.5 text-[9px] font-bold text-muted-foreground/50">Alternative</span>
-                      )}
-                    {tm.seniority && tm.seniority !== 'other' ? (
-                        <span className="shrink-0 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[9px] font-bold text-blue-400">
-                          {tm.seniority.charAt(0).toUpperCase() + tm.seniority.slice(1)}
-                        </span>
-                      ) : null}
+                <div
+                  key={tm.id}
+                  className="rounded-lg border border-border/25 bg-zbooni-dark/35 p-3"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-[11px] font-bold text-amber-400">
+                      {tm.fullName.charAt(0)}
                     </div>
-                    {tm.jobTitle ? <p className="text-[11px] text-muted-foreground/50 truncate">{tm.jobTitle}</p> : null}
-                    {tm.email ? <p className="truncate font-mono text-[11px] text-foreground/75">{tm.email}</p> : null}
-                    {tm.source ? <p className="text-[9px] text-muted-foreground/30">{tm.source}</p> : null}
-                  </div>
-                  <div className="flex shrink-0 gap-1.5">
-                    {tm.email ? (
-                      <a href={`mailto:${tm.email}`} title={tm.email} className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
-                        <Mail className="h-3.5 w-3.5" />
-                      </a>
-                    ) : null}
-                    {tm.phone ? (
-                      <a href={`tel:${tm.phone}`} title={tm.phone} className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
-                        <Phone className="h-3.5 w-3.5" />
-                      </a>
-                    ) : null}
-                    {tm.linkedinUrl ? (
-                      <a href={tm.linkedinUrl} target="_blank" rel="noopener noreferrer" title="LinkedIn" className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
-                        <Linkedin className="h-3.5 w-3.5" />
-                      </a>
-                    ) : null}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <p className="truncate text-sm font-semibold">{tm.fullName}</p>
+                        {isPrimary ? (
+                          <span className="rounded-full border border-zbooni-green/40 bg-zbooni-green/20 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-zbooni-green">
+                            Primary
+                          </span>
+                        ) : null}
+                        {isDecisionMaker && !isPrimary ? (
+                          <span className="rounded-full border border-amber-400/40 bg-amber-400/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-300">
+                            Decision Maker
+                          </span>
+                        ) : null}
+                        {seniorityLabel && seniorityLabel.toLowerCase() !== 'other' ? (
+                          <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-blue-300">
+                            {seniorityLabel}
+                          </span>
+                        ) : null}
+                        {tm.source ? (
+                          <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                            {tm.source}
+                          </span>
+                        ) : null}
+                      </div>
+                      {tm.jobTitle ? (
+                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground/60">{tm.jobTitle}</p>
+                      ) : null}
+
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px]">
+                        {tm.email ? (
+                          <a
+                            href={`mailto:${tm.email}`}
+                            className="inline-flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green"
+                          >
+                            <Mail className="h-3.5 w-3.5" />
+                            <span className="font-mono">{tm.email}</span>
+                          </a>
+                        ) : (
+                          <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-medium text-muted-foreground/60">
+                            No email found
+                          </span>
+                        )}
+
+                        {tm.phone ? (
+                          <a
+                            href={`tel:${tm.phone}`}
+                            className="inline-flex items-center gap-1 text-muted-foreground/80 transition-colors hover:text-foreground"
+                          >
+                            <Phone className="h-3.5 w-3.5" />
+                            {tm.phone}
+                          </a>
+                        ) : null}
+
+                        {tm.linkedinUrl ? (
+                          <a
+                            href={tm.linkedinUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green"
+                          >
+                            <Linkedin className="h-3.5 w-3.5" />
+                            LinkedIn
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ) : null}
+                      </div>
+                    </div>
                   </div>
                 </div>
               );
@@ -1019,9 +1187,16 @@ export default function LeadDetailPage() {
                     <img
                       src={post.thumbnailUrl}
                       alt="Instagram post preview"
-                      className="h-20 w-20 shrink-0 rounded-md border border-border/30 object-cover"
+                      className="h-16 w-16 shrink-0 rounded-md border border-border/30 object-cover"
                     />
-                  ) : null}
+                  ) : (
+                    <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-md border border-dashed border-border/40 bg-zbooni-dark/50 text-muted-foreground/60">
+                      <Camera className="h-4 w-4" />
+                      <span className="mt-1 text-[9px] font-semibold uppercase tracking-wide">
+                        {getInstagramPostTypeLabel(post.postType)}
+                      </span>
+                    </div>
+                  )}
                   <div className="min-w-0 flex-1">
                     <p className="text-sm text-muted-foreground/80 line-clamp-3">{post.caption || 'No caption'}</p>
                     <div className="mt-2 flex items-center gap-4 text-[11px] text-muted-foreground/50">

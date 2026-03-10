@@ -4,6 +4,7 @@ import type { Job, SendOptions } from 'pg-boss';
 
 import { classifyError } from '../errors.js';
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
+import { getMinReviewCount } from '../utils/pipeline-settings.js';
 
 export const BUSINESS_PREQUALIFY_JOB_NAME = 'business.prequalify';
 
@@ -167,13 +168,7 @@ export async function handleBusinessPrequalifyJob(
   // Use explicit payload value, else pipeline setting, else default
   let effectiveMinReviewCount = minReviewCount ?? DEFAULT_MIN_REVIEW_COUNT;
   if (minReviewCount === undefined) {
-    const setting = await prisma.pipelineSetting.findUnique({
-      where: { key: 'min_review_count' },
-    });
-    if (setting?.valueJson !== undefined && setting.valueJson !== null) {
-      const parsed = typeof setting.valueJson === 'number' ? setting.valueJson : Number(setting.valueJson);
-      if (!isNaN(parsed)) effectiveMinReviewCount = parsed;
-    }
+    effectiveMinReviewCount = await getMinReviewCount();
   }
 
   const logCtx = {

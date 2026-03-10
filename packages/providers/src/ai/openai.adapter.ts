@@ -232,20 +232,30 @@ export class OpenAiAdapter {
       };
     }
 
-    // Compose system message: [ROLE] --- [SYSTEM PROMPT] [INSTRUCTIONS] [OUTPUT FORMAT]
+    // Compose system message: [ROLE] --- [SYSTEM PROMPT] [MANDATORY HOOK] [USER INSTRUCTIONS] [OUTPUT FORMAT]
     const role = (context.customRole && context.customRole.trim()) || DEFAULT_MESSAGING_ROLE;
     const prompt = (context.customSystemPrompt && context.customSystemPrompt.trim()) || DEFAULT_MESSAGING_SYSTEM_PROMPT;
+    const icpHook = context.icpHook?.trim() || null;
 
-    const systemPromptParts = [role, '\n---\n', prompt];
+    const hookInstruction = icpHook
+      ? `You MUST incorporate the following sales hook as the core angle of your message. Do not substitute it with generic statistics or filler. Sales hook: "${icpHook}"`
+      : 'No specific sales hook was provided. You MUST derive a concrete, relevant hook from the ICP description and business intelligence. Avoid generic filler.';
+
+    const systemPromptParts = [
+      role,
+      '\n---\n',
+      prompt,
+      '\n\nMANDATORY ICP HOOK INSTRUCTION:',
+      hookInstruction,
+    ];
 
     if (context.messagingInstructions && context.messagingInstructions.trim()) {
       systemPromptParts.push(
-        '\n\nADDITIONAL INSTRUCTIONS FROM SALES TEAM:',
-        context.messagingInstructions,
+        `\n\nAdditional instructions from the user: ${context.messagingInstructions.trim()}`,
       );
     }
 
-    systemPromptParts.push('\n\n' + OUTPUT_FORMAT_SPEC);
+    systemPromptParts.push(`\n\n${OUTPUT_FORMAT_SPEC}`);
 
     const systemPrompt = systemPromptParts.join('\n');
 
@@ -256,7 +266,6 @@ export class OpenAiAdapter {
       context.country ? `Country: ${context.country}` : null,
       `Score band: ${context.scoreBand} (${context.blendedScore.toFixed(2)})`,
       `ICP description: ${context.icpDescription}`,
-      context.icpHook ? `ICP hook (use as opening line): ${context.icpHook}` : null,
       context.icpAngle ? `ICP angle (value proposition framing): ${context.icpAngle}` : null,
       context.businessIntelligence
         ? `\nBusiness Intelligence:\n${context.businessIntelligence}`

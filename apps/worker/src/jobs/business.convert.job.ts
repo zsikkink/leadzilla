@@ -89,6 +89,7 @@ type ContactTerminalReason =
   | 'named_candidate_no_email'
   | 'email_inferred_failed_verification'
   | 'ambiguous_winner';
+type ContactRecoveryReason = 'NO_CONTACTS_FOUND' | 'NO_EMAIL' | 'DECISION_MAKER_IDENTIFIED';
 
 export interface RecoveryEvidenceStrength {
   evidenceScore: number;
@@ -438,6 +439,18 @@ export function calculateRecoveryEvidenceStrength(input: {
     sendableCandidateCount: input.topCandidates.filter((candidate) => candidate.email !== null).length,
     namedCandidateCount: input.topCandidates.filter((candidate) => candidate.name.trim().length > 0).length,
   };
+}
+
+export function resolveRecoveryReasonWhenNoPersonalEmail(input: {
+  resolvedContact: { positionRank: number } | null;
+}): ContactRecoveryReason {
+  if (!input.resolvedContact) {
+    return 'NO_CONTACTS_FOUND';
+  }
+
+  return input.resolvedContact.positionRank <= 1
+    ? 'DECISION_MAKER_IDENTIFIED'
+    : 'NO_EMAIL';
 }
 
 export function hasMaterialRecoveryEvidenceImprovement(
@@ -908,7 +921,7 @@ async function upsertContactRecoveryItem(input: {
   businessId: string;
   icpProfileId: string;
   discoveryRunId: string;
-  reason: 'NO_CONTACTS_FOUND' | 'NO_EMAIL' | 'DECISION_MAKER_IDENTIFIED';
+  reason: ContactRecoveryReason;
   snapshot: ContactRecoverySnapshot;
 }): Promise<void> {
   const nextStrength = extractStrengthFromSnapshot(input.snapshot);
@@ -2033,7 +2046,9 @@ export async function handleBusinessConvertJob(
   // ── 6g. No email at all → open recovery queue item ────────────────────
   if (!contactEmail) {
     const inconclusiveButPromising = hasCredibleNamedCandidate && identityConfidence >= identityThreshold;
-    const recoveryReason = resolvedContact ? 'NO_EMAIL' : 'NO_CONTACTS_FOUND';
+    const recoveryReason = resolveRecoveryReasonWhenNoPersonalEmail({
+      resolvedContact,
+    });
     terminalReason = !resolvedContact
       ? 'no_named_candidate_found'
       : adjudication?.verdict === 'inconclusive'
@@ -2084,6 +2099,25 @@ export async function handleBusinessConvertJob(
       reason: recoveryReason,
       snapshot: recoverySnapshot,
     });
+
+    // Persist discovered decision-makers even without a sendable email so
+    // lead detail/business detail pages can render full team context.
+    if (allCandidates.length > 0) {
+      await prisma.businessContact.createMany({
+        data: allCandidates.slice(0, 5).map((c) => ({
+          businessId,
+          name: c.name,
+          title: c.title,
+          email: c.email,
+          phone: c.phone,
+          linkedinUrl: c.linkedinUrl,
+          seniority: c.seniority,
+          positionRank: c.positionRank,
+          source: c.source,
+        })),
+        skipDuplicates: true,
+      });
+    }
 
     gateStats.outcome = 'recovery';
     logger.warn(
@@ -2243,10 +2277,10 @@ export async function handleBusinessConvertJob(
           data: allCandidates.slice(0, 5).map((c) => ({
             businessId: business.id,
             name: c.name,
-            ...(c.title !== null ? { title: c.title } : {}),
-            ...(c.email !== null ? { email: c.email } : {}),
-            ...(c.phone !== null ? { phone: c.phone } : {}),
-            ...(c.linkedinUrl !== null ? { linkedinUrl: c.linkedinUrl } : {}),
+            title: c.title,
+            email: c.email,
+            phone: c.phone,
+            linkedinUrl: c.linkedinUrl,
             seniority: c.seniority,
             positionRank: c.positionRank,
             source: c.source,
@@ -2379,10 +2413,10 @@ export async function handleBusinessConvertJob(
         data: allCandidates.slice(0, 5).map((c) => ({
           businessId: business.id,
           name: c.name,
-          ...(c.title !== null ? { title: c.title } : {}),
-          ...(c.email !== null ? { email: c.email } : {}),
-          ...(c.phone !== null ? { phone: c.phone } : {}),
-          ...(c.linkedinUrl !== null ? { linkedinUrl: c.linkedinUrl } : {}),
+          title: c.title,
+          email: c.email,
+          phone: c.phone,
+          linkedinUrl: c.linkedinUrl,
           seniority: c.seniority,
           positionRank: c.positionRank,
           source: c.source,
