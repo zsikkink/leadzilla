@@ -1,7 +1,7 @@
 'use client';
 
-import type { CreateIcpProfileRequest } from '@lead-flood/contracts';
-import { Plus, X } from 'lucide-react';
+import type { CreateIcpProfileRequest, QualificationLogic } from '@lead-flood/contracts';
+import { ChevronDown, ChevronRight, Plus, X } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
@@ -32,6 +32,13 @@ export default function IcpsPage() {
   const [description, setDescription] = useState('');
   const [targetIndustries, setTargetIndustries] = useState('');
   const [targetCountries, setTargetCountries] = useState('');
+  const [salesHook, setSalesHook] = useState('');
+  const [minCompanySize, setMinCompanySize] = useState('');
+  const [maxCompanySize, setMaxCompanySize] = useState('');
+  const [requiredTechnologies, setRequiredTechnologies] = useState('');
+  const [excludedDomains, setExcludedDomains] = useState('');
+  const [qualificationLogic, setQualificationLogic] = useState('');
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
   const [isActive, setIsActive] = useState(true);
 
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -68,6 +75,13 @@ export default function IcpsPage() {
     setDescription('');
     setTargetIndustries('');
     setTargetCountries('');
+    setSalesHook('');
+    setMinCompanySize('');
+    setMaxCompanySize('');
+    setRequiredTechnologies('');
+    setExcludedDomains('');
+    setQualificationLogic('');
+    setShowAdvancedSettings(false);
     setIsActive(true);
     setFormError(null);
   };
@@ -89,20 +103,61 @@ export default function IcpsPage() {
     return items.length > 0 ? items : undefined;
   };
 
+  const parseOptionalPositiveInteger = (value: string): number | undefined => {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const parsed = Number.parseInt(trimmed, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error('Company size fields must be positive whole numbers.');
+    }
+    return parsed;
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setFormError(null);
     setIsSubmitting(true);
 
-    const data: CreateIcpProfileRequest = {
-      name: name.trim(),
-      ...(description.trim() ? { description: description.trim() } : {}),
-      ...(parseCommaSeparated(targetIndustries) ? { targetIndustries: parseCommaSeparated(targetIndustries) } : {}),
-      ...(parseCommaSeparated(targetCountries) ? { targetCountries: parseCommaSeparated(targetCountries) } : {}),
-      isActive,
-    };
-
     try {
+      const parsedMinCompanySize = parseOptionalPositiveInteger(minCompanySize);
+      const parsedMaxCompanySize = parseOptionalPositiveInteger(maxCompanySize);
+      if (
+        parsedMinCompanySize !== undefined &&
+        parsedMaxCompanySize !== undefined &&
+        parsedMinCompanySize > parsedMaxCompanySize
+      ) {
+        throw new Error('Min Company Size must be less than or equal to Max Company Size.');
+      }
+
+      const parsedTargetIndustries = parseCommaSeparated(targetIndustries);
+      const parsedTargetCountries = parseCommaSeparated(targetCountries);
+      const parsedRequiredTechnologies = parseCommaSeparated(requiredTechnologies);
+      const parsedExcludedDomains = parseCommaSeparated(excludedDomains);
+      const normalizedQualificationLogic = qualificationLogic.trim().toUpperCase();
+      if (normalizedQualificationLogic.length > 0 && normalizedQualificationLogic !== 'WEIGHTED') {
+        throw new Error('Qualification Logic currently supports only WEIGHTED.');
+      }
+      const parsedQualificationLogic = normalizedQualificationLogic.length > 0
+        ? ('WEIGHTED' as QualificationLogic)
+        : undefined;
+      const metadataJson = {
+        ...(salesHook.trim() ? { salesHook: salesHook.trim() } : {}),
+      };
+
+      const data: CreateIcpProfileRequest = {
+        name: name.trim(),
+        ...(description.trim() ? { description: description.trim() } : {}),
+        ...(parsedTargetIndustries ? { targetIndustries: parsedTargetIndustries } : {}),
+        ...(parsedTargetCountries ? { targetCountries: parsedTargetCountries } : {}),
+        ...(Object.keys(metadataJson).length > 0 ? { metadataJson } : {}),
+        ...(parsedMinCompanySize !== undefined ? { minCompanySize: parsedMinCompanySize } : {}),
+        ...(parsedMaxCompanySize !== undefined ? { maxCompanySize: parsedMaxCompanySize } : {}),
+        ...(parsedRequiredTechnologies ? { requiredTechnologies: parsedRequiredTechnologies } : {}),
+        ...(parsedExcludedDomains ? { excludedDomains: parsedExcludedDomains } : {}),
+        ...(parsedQualificationLogic ? { qualificationLogic: parsedQualificationLogic } : {}),
+        isActive,
+      };
+
       await apiClient.createIcp(data);
       toast.success('ICP profile created');
       closeModal();
@@ -306,6 +361,125 @@ export default function IcpsPage() {
                   placeholder="Type MENA to auto-fill all MENA countries"
                 />
                 <p className="text-xs text-muted-foreground/60">Comma-separated list. Type &quot;MENA&quot; to auto-fill all 18 MENA countries.</p>
+              </div>
+
+              {/* Sales Hook */}
+              <div className="space-y-2">
+                <label htmlFor="icp-sales-hook" className="text-sm font-medium text-muted-foreground">
+                  Sales Hook
+                </label>
+                <textarea
+                  id="icp-sales-hook"
+                  rows={3}
+                  value={salesHook}
+                  onChange={(e) => setSalesHook(e.target.value)}
+                  className="flex w-full rounded-xl border border-input bg-background px-4 py-3 text-sm transition-colors placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
+                  placeholder="What opening value proposition should the AI lead with for this ICP?"
+                />
+                <p className="text-xs text-muted-foreground/60">
+                  The specific value proposition or opening line the AI will use when crafting messages for leads in this ICP.
+                </p>
+              </div>
+
+              {/* Advanced Settings */}
+              <div className="rounded-xl border border-input bg-background">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedSettings((prev) => !prev)}
+                  className="flex w-full items-center justify-between px-4 py-3 text-left"
+                  aria-expanded={showAdvancedSettings}
+                  aria-controls="icp-advanced-settings"
+                >
+                  <span className="text-sm font-medium text-muted-foreground">Advanced Settings (Optional)</span>
+                  {showAdvancedSettings ? (
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  )}
+                </button>
+
+                {showAdvancedSettings ? (
+                  <div id="icp-advanced-settings" className="space-y-4 border-t border-input px-4 py-4">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <label htmlFor="icp-min-company-size" className="text-sm font-medium text-muted-foreground">
+                          Min Company Size
+                        </label>
+                        <input
+                          id="icp-min-company-size"
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={minCompanySize}
+                          onChange={(e) => setMinCompanySize(e.target.value)}
+                          className="flex h-11 w-full rounded-xl border border-input bg-background px-4 text-sm transition-colors placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                          placeholder="e.g. 10"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <label htmlFor="icp-max-company-size" className="text-sm font-medium text-muted-foreground">
+                          Max Company Size
+                        </label>
+                        <input
+                          id="icp-max-company-size"
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={maxCompanySize}
+                          onChange={(e) => setMaxCompanySize(e.target.value)}
+                          className="flex h-11 w-full rounded-xl border border-input bg-background px-4 text-sm transition-colors placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                          placeholder="e.g. 500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label htmlFor="icp-required-technologies" className="text-sm font-medium text-muted-foreground">
+                        Required Technologies
+                      </label>
+                      <input
+                        id="icp-required-technologies"
+                        type="text"
+                        value={requiredTechnologies}
+                        onChange={(e) => setRequiredTechnologies(e.target.value)}
+                        className="flex h-11 w-full rounded-xl border border-input bg-background px-4 text-sm transition-colors placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        placeholder="Shopify, HubSpot, Salesforce"
+                      />
+                      <p className="text-xs text-muted-foreground/60">Comma-separated list</p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label htmlFor="icp-excluded-domains" className="text-sm font-medium text-muted-foreground">
+                        Excluded Domains
+                      </label>
+                      <input
+                        id="icp-excluded-domains"
+                        type="text"
+                        value={excludedDomains}
+                        onChange={(e) => setExcludedDomains(e.target.value)}
+                        className="flex h-11 w-full rounded-xl border border-input bg-background px-4 text-sm transition-colors placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        placeholder="gmail.com, yahoo.com"
+                      />
+                      <p className="text-xs text-muted-foreground/60">Comma-separated list</p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label htmlFor="icp-qualification-logic" className="text-sm font-medium text-muted-foreground">
+                        Qualification Logic
+                      </label>
+                      <textarea
+                        id="icp-qualification-logic"
+                        rows={3}
+                        value={qualificationLogic}
+                        onChange={(e) => setQualificationLogic(e.target.value)}
+                        className="flex w-full rounded-xl border border-input bg-background px-4 py-3 text-sm transition-colors placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
+                        placeholder="WEIGHTED"
+                      />
+                      <p className="text-xs text-muted-foreground/60">Currently supported value: WEIGHTED</p>
+                    </div>
+                  </div>
+                ) : null}
               </div>
 
               {/* Active Toggle */}
