@@ -1,896 +1,893 @@
-# Road to Mastery: Lead-Flood System Walkthrough
+# Lead-Flood: How It Works
 
-Your system. Your mental model. No more black boxes.
-
----
-
-## How To Use This Document
-
-Each module = one pipeline stage. Work through them **in order**, one per session, **with Claude as your teacher**.
-
-For each module:
-
-1. **Read the plain English description** -- understand WHAT this stage does before looking at code
-2. **Open the exact files listed** -- read them top to bottom. Don't skim.
-3. **Draw the flow** -- on paper, whiteboard, or iPad: trigger --> function calls --> database writes --> what happens next
-4. **Answer the checkpoint questions** -- if you can't answer without re-reading code, you don't own the mental model yet
-5. **Try the hands-on exercise** -- guided exploration that builds debugging intuition
-
-**Prompt Claude like this:** "Explain what this function does line by line" -- NOT "fix this."
-
-**One session = one module. No multi-tasking. No mega plans.**
+A complete walkthrough of how Lead-Flood finds businesses, qualifies them, discovers contacts, scores them, and sends personalized outreach — automatically.
 
 ---
 
-## Your System at a Glance
+## The Big Picture
 
-Before diving in, here's the 30-second version of your entire pipeline:
+Lead-Flood is an **automated sales pipeline**. You tell it what kind of business you want to sell to, and it:
 
-```
-FRONTEND (Next.js)                    API (Fastify)                         WORKER (pg-boss)
-========================             ========================              ========================
-User clicks                          POST /v1/discovery/runs               discovery.seed
-"Start Discovery"  ----HTTP---->     validates with Zod         ------>    run_search_task
-                                     writes OutboxEvent + Job              business.prequalify
-                                                                          business.convert
-                                                                              |
-Dashboard polls                                                           enrichment.run
-for status updates  <---HTTP----     GET /v1/discovery/runs/:id           features.compute
-                                                                          scoring.compute
-                                                                              |
-Lead list shows                                                           message.generate
-scored leads        <---HTTP----     GET /v1/leads                        message.send
-                                                                              |
-                                     POST /v1/webhooks/trengo             followup.check (cron)
-                                     (WhatsApp reply comes in) ------>    reply.classify
-                                                                          notify.sales (Slack)
-                                                                              |
-                                                                          labels.generate (cron)
-                                                                          model.train (weekly)
-                                                                          model.evaluate
-```
+1. **Finds** those businesses on Google Maps
+2. **Filters** out the junk (parked websites, too-small businesses, wrong industry)
+3. **Researches** each business (scrapes their website, checks their Instagram, finds contacts)
+4. **Scores** each lead (how likely are they to buy?)
+5. **Writes** a personalized sales message using AI
+6. **Sends** that message via email or WhatsApp
+7. **Follows up** automatically if they don't reply
+8. **Learns** from what works and recommends improvements
 
-**4 apps, 1 shared database:**
-- `apps/web` -- Next.js dashboard (what the user sees)
-- `apps/api` -- Fastify REST API (validates requests, writes jobs)
-- `apps/worker` -- pg-boss job processor (does the actual work)
-- `packages/db` -- Prisma schema + migrations (shared data model)
-
-**Supporting packages:**
-- `packages/contracts` -- Zod schemas shared between API and frontend
-- `packages/providers` -- Adapters for external APIs (Hunter, SerpAPI, Trengo, Resend, OpenAI, etc.)
-- `packages/discovery` -- Discovery pipeline logic (search task generation, provider config)
-- `packages/scoring` -- Scoring engine (deterministic rules, logistic regression, blending)
+The whole thing runs without human intervention once you click "Start Discovery" — though you can review and approve messages manually if you prefer.
 
 ---
 
-## Module 0: The Skeleton -- How Requests Flow Through Your System
+## Step-by-Step Flow
 
-**Goal:** Understand the fundamental pattern: user action --> API --> database --> worker --> results.
+### Step 0: Set Up Your Ideal Customer Profile (ICP)
 
-Every feature in your system follows this exact pattern. Once you understand it, you understand the skeleton of every bug.
+Before anything runs, you define **who you're looking for**. An ICP is basically a checklist that describes your dream customer:
 
-### The Flow (Your Actual System)
+- **Industries**: e.g., "Restaurants", "Beauty Salons", "Real Estate Agencies"
+- **Countries**: e.g., UAE, Saudi Arabia, Egypt
+- **Qualification rules**: What makes a business worth contacting?
+  - Must have a website (hard requirement — no website = disqualified)
+  - Must have 15+ Google reviews (configurable)
+  - Bonus points for: WhatsApp listed, Instagram presence, online payments
+  - Penalty for: No contact info, low engagement
 
-```
-1. User clicks "Start Discovery" on /dashboard/discover
-       |
-2. Frontend calls apiClient.createDiscoveryRun()
-       |  (apps/web/src/lib/api-client.ts)
-       |
-3. HTTP POST /v1/discovery/runs with Bearer JWT token
-       |
-4. Fastify receives request
-       |  (apps/api/src/modules/discovery/discovery.routes.ts)
-       |
-5. Auth guard checks JWT (apps/api/src/auth/guard.ts)
-       |
-6. Zod validates request body (packages/contracts/src/discovery.contract.ts)
-       |
-7. Rate limits checked: max 3 concurrent, max 10/day
-       |
-8. Service creates DiscoveryRun record in database
-       |  (apps/api/src/modules/discovery/discovery.service.ts)
-       |
-9. Enqueue function sends job to pg-boss queue "discovery.seed"
-       |  (apps/api/src/index.ts -- enqueueDiscoveryRun())
-       |  with singletonKey for idempotency + retry options
-       |
-10. API returns { jobRunId, status: 'RUNNING' } (202 Accepted)
-       |
-11. Frontend starts polling GET /v1/discovery/runs/:runId every 3 seconds
-       |
-12. Worker picks up the job from pg-boss queue
-       |  (apps/worker/src/index.ts -- registerWorker())
-       |
-13. Job handler executes (apps/worker/src/jobs/discovery.seed.job.ts)
-       |
-14. Results written to database (Business records, SearchTask records)
-       |
-15. Next job enqueued (discovery.run_search_task)
-       |
-16. Frontend poll sees updated status, re-renders
-```
-
-### Files To Read (In This Order)
-
-**Start at the frontend trigger:**
-1. `apps/web/app/dashboard/discover/page.tsx` -- The discovery form. Find the `createDiscoveryRun()` call. Notice how it loops through selected ICPs.
-
-**Follow to the API:**
-2. `apps/web/src/lib/api-client.ts` -- The HTTP client. Find `createDiscoveryRun()` method. See how it constructs the request.
-3. `apps/api/src/modules/discovery/discovery.routes.ts` -- The route handler. Lines 88-169. Read the rate limit checks (lines 111-154).
-4. `apps/api/src/auth/guard.ts` -- The JWT auth guard. Understand: extract token --> verify --> attach user to request.
-5. `packages/contracts/src/discovery.contract.ts` -- The Zod schemas. This is the "contract" between frontend and API.
-
-**Follow to the worker:**
-6. `apps/api/src/index.ts` -- Lines 354-386: `enqueueDiscoveryRun()`. This is where the API hands off to pg-boss. Note: if `countries[]` provided, it routes to `discovery.seed` (v2 pipeline). Otherwise legacy `discovery.run`.
-7. `apps/worker/src/index.ts` -- The giant wiring file. Find where `discovery.seed` is registered (search for "discovery.seed"). See the `registerWorker()` pattern.
-8. `apps/worker/src/queues.ts` -- All 26 queue definitions with retry policies.
-9. `apps/worker/src/jobs/discovery.seed.job.ts` -- The actual job handler. This is where work happens.
-
-**The data model:**
-10. `packages/db/prisma/schema.prisma` -- Read the whole thing. 30 models. Focus on: Lead, Business, OutboxEvent, JobExecution, DiscoveryRun (if exists), SearchTask.
-
-### Key Concepts
-
-- **Outbox Pattern**: API creates a database record AND an OutboxEvent in the same transaction. If the API crashes after writing but before responding, the outbox event is still in the database. A cron job retries failed outbox events. This means: jobs never get lost.
-
-- **singletonKey**: When pg-boss sends a job, it includes a `singletonKey` like `discovery.seed:${runId}`. If the same key already exists in the queue, pg-boss ignores the duplicate. This is idempotency -- the same action can't create duplicate jobs.
-
-- **Dependency Injection via Closures**: Routes don't directly import pg-boss. Instead, `index.ts` creates enqueue functions (closures) and passes them to route handlers. If the enqueue function isn't provided, the route returns 501 (Not Implemented). This is why you see `if (options.enqueueDiscoveryRun)` guards in server.ts.
-
-### Checkpoint Questions
-
-Answer these WITHOUT looking at the code. If you can't, re-read the files:
-
-- [ ] What HTTP method and path triggers a discovery run?
-- [ ] What happens between "request received" and "job created"? (Name 3 things)
-- [ ] What is a singletonKey and why does it matter?
-- [ ] If the API server crashes after writing the OutboxEvent but before calling boss.send(), what happens to the job?
-- [ ] The frontend polls every 3 seconds. What endpoint does it poll? What status values can it get back?
-- [ ] If you send the same discovery request twice rapidly, will it create two jobs? Why or why not?
-
-### Hands-On Exercise
-
-Open two terminal windows:
-1. Terminal 1: `pnpm dev` (starts API + Web + Worker)
-2. Terminal 2: Watch the worker logs
-
-Go to `http://localhost:3000/dashboard/discover`, fill in a discovery form, and click Start Discovery. Watch Terminal 2. You should see:
-- "Processing job: discovery.seed" log
-- Search task creation logs
-- "Enqueuing: discovery.run_search_task" log
-
-**Then ask Claude:** "Show me the exact path from the Start Discovery button click to the first line of discovery.seed.job.ts. List every function call in order."
+Think of the ICP as a filter + scoring rubric combined. It drives every decision downstream.
 
 ---
 
-## Module 1: Discovery Pipeline -- Finding Businesses (V2)
+### Step 1: Start Discovery
 
-**Goal:** Understand the 4-step discovery pipeline that turns a search query into Business records.
+**What you do**: Click "Start Discovery" in the dashboard. Pick your ICPs, countries, cities, and how many leads you want (1–1,000).
 
-### What This Stage Does
+**What happens behind the scenes**:
 
-Your v2 discovery pipeline has 4 jobs in sequence:
+1. The system calculates a **search budget** — how many Google searches it needs to run to find enough qualifying businesses. The formula:
 
-```
-discovery.seed
-    "What should we search for?"
-    Takes ICP profile + countries --> generates SearchTask records
-    (e.g., "restaurants in Dubai", "retail shops in Riyadh")
-        |
-discovery.run_search_task
-    "Go find businesses"
-    Picks up SearchTasks, calls SerpAPI/Google Places
-    Creates Business records from search results
-    Runs in parallel (multiple concurrent slots)
-        |
-business.prequalify
-    "Is this business worth investigating?"
-    Quick checks: has website domain? has enough reviews (min 15)?
-    Cheap filters before expensive API calls
-        |
-business.convert
-    "Turn this business into a lead"
-    Calls Hunter (domain search, up to 5 contacts)
-    Calls website scraper (5 pages: /, /about, /contact, /team, /pricing)
-    Calls Instagram scraper (if handle found)
-    Creates Lead record(s) from best contacts found
-```
+   ```
+   targetBusinesses = (desiredLeads / conversionRate) × 5
+   maxSearchTasks   = targetBusinesses / searchEfficiency
+   ```
 
-### Key Concepts
+   - **conversionRate**: What percentage of discovered businesses become leads. Learned from past runs (exponential moving average — 30% new data, 70% historical). Default for first run: 10%.
+   - **searchEfficiency**: How many unique businesses each search task finds. Also learned. Default: 10.
+   - **5x buffer**: The system deliberately over-provisions because not every business will qualify. The pipeline has its own early-stop mechanism (explained later) so the extra budget doesn't get wasted.
+   - **Safety cap**: There's a hard ceiling based on your requested lead count, so the budget can never spiral:
 
-- **Search Task Frontier**: `discovery.seed` doesn't search directly. It generates a queue of SearchTask records -- each one is a specific query like "coffee shops in Abu Dhabi page 2". Then `run_search_task` workers process them in parallel.
+     | Leads Requested | Max Search Tasks |
+     |----------------|-----------------|
+     | 5 | 75 |
+     | 10 | 125 |
+     | 25 | 250 |
+     | 50 | 400 |
+     | 100 | 750 |
+     | 250 | 1,000 |
+     | 500 | 1,250 |
+     | 1,000 | 1,500 |
 
-- **ICP-to-Category Mapping**: Your ICP profiles (segments A-H for Zbooni) map to industry categories. The mapping lives in `packages/discovery/src/queries/icp-category-map.ts`. Each category generates specific search templates.
+2. It creates a **Discovery Run** record (think of it as a job ticket with a unique ID) and an **OutboxEvent** in the same database transaction. The outbox pattern is the reliability backbone of the system — the job and its dispatch instruction are saved together, so if the system crashes between saving and dispatching, nothing is lost.
 
-- **Provider Adapter Pattern**: Every external API (SerpAPI, Hunter, Apollo, Apify) has an adapter that NEVER throws errors. Instead it returns:
-  ```
-  { status: 'success', data: {...} }        -- worked
-  { status: 'retryable_error', failure: {...} }  -- try again (rate limit, timeout)
-  { status: 'terminal_error', failure: {...} }   -- stop trying (bad API key, not found)
-  ```
-
-- **Business vs Lead**: A Business is a company (name, domain, location). A Lead is a person at that company (email, phone, title). `business.convert` bridges Business --> Lead using Hunter domain search + scraping.
-
-- **Scraper V2**: Website scraper crawls 5 pages, extracts decision makers, contact info, social links, tech stack, and business signals. Instagram scraper uses browser cookie auth to get follower count, verification status, business category.
-
-### Files To Read
-
-1. `apps/worker/src/jobs/discovery.seed.job.ts` -- Generates search tasks from ICP config
-2. `apps/worker/src/jobs/discovery.run_search_task.job.ts` -- Executes searches via SerpAPI
-3. `apps/worker/src/jobs/business.prequalify.job.ts` -- Pre-enrichment qualification (cheap filters)
-4. `apps/worker/src/jobs/business.convert.job.ts` -- Business-to-Lead conversion (Hunter + scrapers)
-5. `packages/discovery/src/config.ts` -- Discovery runtime config (provider selection, fallback)
-6. `packages/discovery/src/queries/generate_tasks.ts` -- How search queries are built from ICP
-7. `packages/providers/src/enrichment/hunter.adapter.ts` -- Hunter adapter (domain search + email lookup)
-8. `packages/providers/src/scraping/website-scraper.adapter.ts` -- Multi-page website scraper
-9. `packages/providers/src/scraping/instagram-scraper.adapter.ts` -- Instagram cookie-auth scraper
-
-### Checkpoint Questions
-
-- [ ] What are the 4 jobs in the v2 discovery pipeline, in order?
-- [ ] What's a SearchTask? What fields does it have? What statuses can it be in?
-- [ ] What does "pre-qualification" check, and why do it BEFORE calling Hunter/scrapers?
-- [ ] In `business.convert`, what happens if Hunter returns 0 contacts for a domain?
-- [ ] What's the difference between a Business record and a Lead record? What fields does each have?
-- [ ] The website scraper crawls 5 specific pages. What are they and why those 5?
-- [ ] If SerpAPI is rate-limited (429), what happens to the SearchTask?
-- [ ] How does the system know it already found a business? (deduplication)
-
-### Hands-On Exercise
-
-Run a discovery, then query the database:
-```sql
--- See the search tasks that were generated
-SELECT id, task_type, country_code, query_text, status FROM "SearchTask" ORDER BY "createdAt" DESC LIMIT 20;
-
--- See the businesses that were found
-SELECT id, name, website_domain, country_code, review_count, pre_qualified FROM "Business" ORDER BY "createdAt" DESC LIMIT 20;
-
--- See which businesses became leads
-SELECT l.id, l.email, l.first_name, b.name as business_name FROM "Lead" l JOIN "Business" b ON l.business_id = b.id ORDER BY l."createdAt" DESC LIMIT 20;
-```
-
-Ask Claude: "Walk me through what happens inside business.convert.job.ts when Hunter returns 3 contacts for a domain. Which contact becomes the Lead and why?"
+3. A background **dispatcher** polls the outbox every 5 seconds, picks up new events, and sends them to **pg-boss** (the job queue). pg-boss manages retries, scheduling, and concurrency for all background work. If any handoff fails, the dispatcher retries with a 60-second backoff delay and up to 3 attempts before moving the event to a dead-letter queue for manual inspection.
 
 ---
 
-## Module 2: Enrichment -- Adding Contact Details
+### Step 2: Generate Search Tasks
 
-**Goal:** Understand how bare leads get enriched with verified contact data.
+**Job**: `discovery.seed`
 
-### What This Stage Does
+The system takes your ICP's target industries and maps them to **Google Maps search categories**. For example:
 
-After `business.convert` creates a Lead with basic info from Hunter domain search, `enrichment.run` goes deeper: verifies emails, finds additional phone numbers, pulls company details from People Data Labs or public web lookups.
+- ICP: "Restaurants in UAE"
+- Cities selected: Dubai, Abu Dhabi
+- Categories mapped: "restaurant", "cafe", "fine dining"
 
-```
-enrichment.run
-    Lead has: name, maybe email, domain
-        |
-    Try Hunter email verification/lookup
-        |
-    If gaps remain: try PDL (People Data Labs)
-        |
-    If still gaps: try PublicWebLookup (WHOIS, DNS)
-        |
-    Create LeadEnrichmentRecord with normalized data
-        |
-    Enqueue: features.compute
-```
+This produces search tasks like:
+- "restaurant in Dubai"
+- "cafe in Dubai"
+- "restaurant in Abu Dhabi"
+- "cafe in Abu Dhabi"
+- ...and so on
 
-### Key Concepts
+Each combination of **category × country × city** = one search task. The system uses **stratified sampling** — it guarantees at least one task per geographic stratum (each country-city pair) so no region gets entirely skipped, even if the budget would otherwise favor larger cities.
 
-- **Automatic Trigger**: Enrichment runs automatically after `business.convert`. It's not manually triggered (though the API does have `POST /v1/enrichment/runs` for manual re-enrichment).
+Users can also set **category overrides** on an ICP (stored in the ICP's metadata). If you know your target businesses call themselves "cafeteria" instead of "restaurant" in a specific market, you can add those custom categories and they'll be used instead of the auto-mapped ones.
 
-- **Provider Rotation**: The system cycles through providers (Hunter, PDL, PublicWebLookup) based on budget and rate limits. Not every lead hits every provider.
+If seed generation produces zero tasks (bad ICP config, no matching categories), the run is marked as **failed** immediately with an error message explaining why.
 
-- **Normalized Payload**: Every enrichment provider returns different shapes. The adapter normalizes them into:
-  ```typescript
-  { email, phone, domain, companyName, industry, employeeCount, country, city, linkedinUrl, website }
-  ```
-
-- **Idempotency**: Each enrichment run has a `singletonKey: enrichment.run:${leadId}:convert` so duplicate enrichments are impossible.
-
-### Files To Read
-
-1. `apps/worker/src/jobs/enrichment.run.job.ts` -- Main enrichment orchestrator
-2. `packages/providers/src/enrichment/hunter.adapter.ts` -- Hunter email lookup + domain search
-3. `packages/providers/src/enrichment/pdl.adapter.ts` -- People Data Labs adapter
-4. `packages/providers/src/enrichment/publicWebLookup.adapter.ts` -- Free public lookups
-5. `packages/providers/src/enrichment/normalized.types.ts` -- The shared normalized shape
-
-### Checkpoint Questions
-
-- [ ] What triggers enrichment -- is it always automatic or can it be manual too?
-- [ ] What's the difference between Hunter's email lookup and domain search?
-- [ ] What does a LeadEnrichmentRecord look like in the database?
-- [ ] If ALL providers fail (no email found), what status does the lead get?
-- [ ] What job runs after enrichment completes?
-- [ ] What's the singletonKey pattern for enrichment, and why?
-
-### Hands-On Exercise
-
-```sql
--- See enrichment records
-SELECT id, lead_id, provider, status, error_message FROM "LeadEnrichmentRecord" ORDER BY "createdAt" DESC LIMIT 20;
-
--- Compare lead data before and after enrichment
-SELECT id, email, phone, status, enrichment_data::text FROM "Lead" WHERE status = 'enriched' LIMIT 5;
-```
-
-Ask Claude: "In enrichment.run.job.ts, trace what happens when Hunter returns `retryable_error`. Does the whole job retry or just the Hunter call?"
+The seed job then enqueues multiple parallel **run_search_task** workers (default: 4 concurrent slots), each pulling from the shared task pool.
 
 ---
 
-## Module 3: Feature Extraction + Scoring -- Deciding Who's Worth Contacting
+### Step 3: Search Google Maps
 
-**Goal:** Understand the scoring brain -- the system that decides which leads get messages.
+**Job**: `discovery.run_search_task` (runs many in parallel)
 
-### What This Stage Does
+Each worker slot grabs the next `PENDING` search task from the pool (using a database lock to prevent two workers grabbing the same task), changes its status to `RUNNING`, and calls the **Google Places API**.
 
-Two jobs, always in sequence:
+**What comes back from Google Places**:
+- Business name, formatted address, address components
+- Website URL, Google Maps link
+- Phone number (national + international format)
+- Google rating and review count
+- Primary business type/category
+- Geographic coordinates (lat/lng)
 
-```
-features.compute
-    Takes: Lead + EnrichmentRecord + Business + Scraper data
-    Produces: 67 features (numbers and booleans)
-    Examples: has_email (1/0), review_count (raw number),
-              country_match (1/0), employee_count (number),
-              decision_maker_count, tech_stack_size,
-              instagram_is_verified, social_link_count
-        |
-scoring.compute
-    Takes: FeatureSnapshot (67 features) + ICP rules + ML model
-    Produces: blendedScore (0.0 to 1.0)
+**Deduplication**: Before creating a new Business record, the system checks for existing businesses by:
+1. **Website domain** (primary key for dedup — most reliable)
+2. **Phone number in E.164 format** (fallback if no website)
 
-    Three scoring components blended together:
-    1. Deterministic: your ICP rules (WEIGHTED + HARD_FILTER)
-    2. Logistic regression: ML model trained on feedback data
-    3. Blend ratio: depends on model quality
-       - No model:           90% deterministic / 10% logistic
-       - AUC >= 0.70 (200+): 70% deterministic / 30% logistic
-       - AUC >= 0.80 (500+): 50% deterministic / 50% logistic
+If a match is found, signals are **merged** — the system takes the maximum values for numeric fields (reviews, ratings) and ORs boolean fields (hasWhatsapp, etc.). This means a business that appears in 3 different searches gets the best data from all 3.
 
-    If blendedScore >= 0.3 --> QUALIFIED --> enqueue message.generate
-    Score bands: LOW (< 0.35), MEDIUM (0.35-0.65), HIGH (>= 0.65)
-```
+For each new business, the system also stores **BusinessEvidence** — the raw Google Places result linked to the search task that found it. This creates an audit trail: you can always trace back which search found which business.
 
-### Key Concepts
+**Result hashing**: If a search task returns the exact same top-20 results as the previous attempt (hash comparison), it's marked as `DONE` with a `SKIPPED` flag — no point processing duplicates.
 
-- **67 Feature Keys**: Your feature set has grown through iterations. The full list is in `packages/scoring/` or the worker's feature computation logic. Key groups:
-  - Contact quality (has_email, has_phone, email_verified)
-  - Company signals (employee_count, review_count, rating)
-  - Location match (country_match, city_match)
-  - Social presence (instagram_followers, social_link_count, has_linkedin)
-  - Tech signals (tech_stack_size, has_crm, has_live_chat, has_analytics)
-  - Decision makers (decision_maker_count, has_executive_contact)
-  - Website quality (website_email_count, website_phone_count)
+**Early-stop mechanism**: After each batch of new businesses is created, the system calls `checkLeadTargetReached()`. This counts how many non-rejected leads already exist for this discovery run. If the count hits the requested lead limit, it sets a `leadTargetReached: true` flag on the run. From that point, every downstream job (prequalify, convert, and remaining search tasks) checks this flag and **skips** — they call `tryFinalizeDiscoveryRun()` instead. This prevents the system from continuing to burn API credits after the target is already met.
 
-- **HARD_FILTER Rules**: These are pass/fail gates. If a lead fails ANY hard filter (e.g., "must be in UAE"), its deterministic score is 0 regardless of other signals.
-
-- **WEIGHTED Rules**: These add or subtract points. Each rule has a weight (-10 to +10). The weighted average becomes the deterministic score.
-
-- **ICP Profiles**: Each Zbooni segment (A through H) has its own set of rules. The universal rules (2 HARD_FILTERs + 13 WEIGHTED) are shared across all ICPs.
-
-- **48 ML Feature Keys**: The logistic regression model uses a subset of 48 features (defined in `TRAINED_MODEL_FEATURE_KEYS`). Not all 67 features are used for ML -- some are only for deterministic scoring.
-
-### Files To Read
-
-1. `apps/worker/src/jobs/features.compute.job.ts` -- Computes 67 features from all data sources
-2. `apps/worker/src/jobs/scoring.compute.job.ts` -- Runs deterministic + logistic scoring, blends
-3. `packages/scoring/` -- Scoring engine internals (logistic regression, deterministic rules, blending)
-4. `packages/db/prisma/schema.prisma` -- Find: IcpProfile, QualificationRule, LeadFeatureSnapshot, LeadScorePrediction
-
-### Checkpoint Questions
-
-- [ ] Name 5 features and explain why each matters for finding good Zbooni customers
-- [ ] What is a HARD_FILTER and what happens when a lead fails one?
-- [ ] What's the current blend ratio if you have no trained model yet?
-- [ ] What score threshold qualifies a lead for messaging? What score band is that?
-- [ ] If you wanted to add a new feature "has_tiktok_presence", what files would you modify?
-- [ ] What's the difference between the 67 feature keys and the 48 ML feature keys?
-
-### Hands-On Exercise
-
-```sql
--- See feature snapshots
-SELECT id, lead_id, features_json::text FROM "LeadFeatureSnapshot" ORDER BY "createdAt" DESC LIMIT 5;
-
--- See score predictions with breakdown
-SELECT id, lead_id, deterministic_score, logistic_score, blended_score, score_band, reasons_json::text
-FROM "LeadScorePrediction" ORDER BY "createdAt" DESC LIMIT 10;
-
--- See ICP rules
-SELECT r.name, r.rule_type, r.field_key, r.operator, r.value_json::text, r.weight
-FROM "QualificationRule" r
-JOIN "IcpProfile" p ON r.icp_profile_id = p.id
-WHERE p.is_active = true
-ORDER BY r.rule_type, r.order_index;
-```
-
-Ask Claude: "Explain the blended scoring formula step by step. If a lead has deterministic_score=0.8 and logistic_score=0.4, and there's no trained model, what's the blended score?"
+**Google Places restrictions**:
+- Rate limit: 2 requests per second (with exponential backoff + jitter on errors)
+- Timeout: 30 seconds per request
+- Max 3 retry attempts on transient errors (429, 500, 502, 503, 504)
+- Permanent failures (402 billing, 403 auth) are not retried
+- Results are filtered by country bounding boxes (configured per MENA country)
 
 ---
 
-## Module 4: Message Generation -- Crafting Outreach
+### Step 4: Pre-Qualify (Quick Filter)
 
-**Goal:** Understand how scored leads become personalized WhatsApp/email messages.
+**Job**: `business.prequalify`
 
-### What This Stage Does
+A fast, free filter that weeds out obvious bad matches **before** we spend money on research. The system checks each business in this exact order:
 
-```
-message.generate
-    Input: qualified lead (score >= 0.3) + ICP context + score reasoning
-        |
-    Call OpenAI to generate 2 A/B message variants
-    (variant_a and variant_b, assigned by leadId hash)
-        |
-    Each variant has: subject, bodyText, bodyHtml, ctaText
-    Channels: EMAIL and/or WHATSAPP
-        |
-    Create MessageDraft (PENDING approval) + MessageVariant records
-        |
-    Dedup check: skip if lead already has active message from different ICP
-        |
-    If auto-approved: enqueue message.send
-    If manual approval required: wait for dashboard user to approve/reject
-```
+1. **Discovery run terminal check**: Is the discovery run already cancelled, completed, failed, or has `leadTargetReached`? If so, skip this business entirely and call `tryFinalizeDiscoveryRun()`.
 
-### Key Concepts
+2. **Website domain required**: If the business has no website domain at all, it's disqualified with reason `NO_WEBSITE_DOMAIN`. A business without a website is essentially unreachable for B2B outreach.
 
-- **A/B Testing**: Each lead gets assigned to variant_a or variant_b deterministically (hash of leadId). This ensures consistent assignment for analytics.
+3. **Minimum review count**: Compares the business's Google review count against the threshold. The threshold comes from (in priority order): the discovery run payload, the `min_review_count` pipeline setting, or the default of 15. **Important nuance**: if the review count is null/unknown (Google didn't return it), the check is skipped — we give the benefit of the doubt rather than rejecting on missing data.
 
-- **Approval Flow**: Messages can be auto-approved (system sends immediately) or require manual approval via the dashboard (`POST /v1/messaging/drafts/:draftId/approve`).
+4. **DNS resolution**: The system performs a real DNS lookup (`dns.resolve4` then `dns.resolve6`) on the website domain. If both fail, the domain doesn't exist on the internet — disqualified with reason `DOMAIN_NOT_RESOLVING`.
 
-- **Follow-Up Generation**: Follow-up messages (followUpNumber 1, 2, 3) use the same generation pipeline but with different ICP feature emphasis (feature rotation). The `pitchedFeature` field tracks which feature was highlighted.
+5. **Parked domain detection**: The system fetches the website (`https://{domain}`) with an 8-second timeout and checks for signs of a parked/for-sale domain:
+   - Does it redirect to a known registrar? (GoDaddy, Sedo, Dan.com, HugeDomains, Afternic)
+   - Is the response tiny (<5KB) AND contains parked-domain keywords?
+   - If yes to either: disqualified with reason `PARKED_DOMAIN`.
+   - If the fetch fails (network error, timeout): **not** disqualified. The domain might just be temporarily down — we'll find out more in the next step.
 
-- **OpenAI Adapter**: Uses GPT-4o-mini for message generation (cheap + fast) and GPT-4o for scoring/classification (smart). The prompt includes lead data, company info, ICP context, and score reasoning.
+**If all checks pass**: The business is marked `preQualified: true`, any previous disqualification reason is cleared, and a `business.convert` job is enqueued.
 
-### Files To Read
+**If any check fails**: The business is marked `preQualified: false` with a specific `disqualificationReason`, and the system calls `tryFinalizeDiscoveryRun()` (since this business is now a dead end, the run might be ready to wrap up).
 
-1. `apps/worker/src/jobs/message.generate.job.ts` -- Message generation orchestrator
-2. `packages/providers/src/ai/openai.adapter.ts` -- OpenAI adapter (generateMessages, scoreMessage, classifyReply)
-3. `apps/web/app/dashboard/messages/page.tsx` -- Message approval UI
-4. `apps/api/src/modules/messaging/messaging.routes.ts` -- Approve/reject endpoints
+**Apollo pre-screen** (free): If Apollo is configured, the system also calls `preScreenDomain(domain)` during this step. This costs **zero credits** — it just checks whether Apollo has any email or phone data for this domain, and returns the top contact's title if available. This information is used later to decide whether it's worth making a paid Apollo call.
 
-### Checkpoint Questions
-
-- [ ] What data about the lead gets included in the OpenAI prompt?
-- [ ] How does the system decide variant_a vs variant_b for a specific lead?
-- [ ] What's the difference between auto-approved and manually approved messages?
-- [ ] What happens if OpenAI returns a bad response (timeout, rate limit)?
-- [ ] How does follow-up message generation differ from initial generation?
-- [ ] What prevents the same lead from getting messages from two different ICPs?
-
-### Hands-On Exercise
-
-```sql
--- See message drafts and their variants
-SELECT d.id, d.lead_id, d.approval_status, d.follow_up_number, d.pitched_feature,
-       v.variant_key, v.channel, v.subject, LEFT(v.body_text, 100) as body_preview
-FROM "MessageDraft" d
-JOIN "MessageVariant" v ON v.message_draft_id = d.id
-ORDER BY d."createdAt" DESC LIMIT 20;
-```
-
-Ask Claude: "In message.generate.job.ts, what context object gets passed to the OpenAI adapter? List every field."
+**Retry policy**: 3 attempts, 30-second delay, exponential backoff. After 3 failures, the job moves to a dead-letter queue.
 
 ---
 
-## Module 5: Message Sending -- Delivering to the Lead
+### Step 5: Research & Enrich (Contact Discovery)
 
-**Goal:** Understand routing, rate limits, suppression, and delivery tracking.
+**Job**: `business.convert`
 
-### What This Stage Does
+This is the most complex and expensive step. It transforms a raw business listing into a contactable lead with a real person's name, email, and phone. Here's the exact sequence:
 
-```
-message.send
-    Input: approved MessageDraft + selected MessageVariant
-        |
-    Suppression checks:
-    - Already sent? (SENT or DELIVERED status) --> skip
-    - Lead BOUNCED or UNSUBSCRIBED? --> skip
-        |
-    Channel routing:
-    - WHATSAPP --> Trengo adapter (template message for first contact)
-    - EMAIL --> Resend adapter
-        |
-    Rate limit enforcement:
-    - WhatsApp: 50/day limit (counts only SENT, not QUEUED)
-    - Email: configurable daily limit
-    - UAE business hours: 9:00-18:00 GST (UTC+4)
-    - Outside hours: re-enqueue with startAfter = next business hour
-        |
-    Send via provider
-        |
-    Create MessageSend record (QUEUED --> SENT or FAILED)
-    Set nextFollowUpAfter = now + 72 hours
-```
+#### 5A. Website Scrape (free)
 
-### Key Concepts
+The system scrapes the business's website and extracts:
 
-- **Channel Inheritance**: The channel (EMAIL vs WHATSAPP) comes from the MessageVariant, which was set during generation based on available contact data (has phone? --> WhatsApp, has email? --> Email, has both? --> score-based: HIGH leads get WhatsApp).
+- **Decision makers**: Names, titles, emails, phones, LinkedIn URLs found on `/about`, `/team`, `/leadership` pages. Each person gets a seniority classification (`executive`, `director`, `manager`, `other`) and a position rank.
+- **Contact information**: All emails with their context (e.g., "found on contact page"), all phone numbers with type classification (`whatsapp`, `mobile`, `landline`, `unknown`), physical addresses.
+- **Social links**: Instagram, LinkedIn, Facebook, Twitter, TikTok, YouTube, WhatsApp — extracted from headers, footers, and team profiles.
+- **Technology stack** (8 categories): Analytics tools, CRM systems, live chat widgets, email marketing platforms, e-commerce platforms, payment processors, CSS frameworks, hosting providers. Detected via script tags, CSS selectors, and meta tags.
+- **Business signals**: Estimated employee count, website freshness, payment methods (credit card, PayPal, Apple Pay, Google Pay, etc.), product catalogs, pricing pages, booking forms.
+- **About page text**: Plain text aggregated from about/team pages, capped at 8,000 characters. Used later for AI-powered name extraction.
 
-- **Trengo Template Messages**: WhatsApp Business API requires a pre-approved template for the FIRST message to a new contact. After the customer replies, you get a 24-hour session window for free-form messages.
+**Cache**: Website scrape results are cached for 7 days. If the same domain was scraped recently, the cached version is used instead of making a new request.
 
-- **Dedup Guard**: Before sending, the job checks if a message with the same lead + variant was already SENT or DELIVERED. This prevents double-sends from job retries.
+**Skip condition**: Skipped if the user unchecked "Include website analysis" when starting the discovery run, or if the scraper adapter isn't configured.
 
-- **Rate Limiter**: Counts only SENT messages (not QUEUED) against the daily limit. This was a bug fix from Wave 2 audit -- previously QUEUED messages counted, which blocked legitimate sends.
+#### 5B. Instagram Scrape (free)
 
-### Files To Read
+If the business has an Instagram handle (found on their website's social links, or already known), the system scrapes their profile:
 
-1. `apps/worker/src/jobs/message.send.job.ts` -- Send orchestrator with rate limiting + suppression
-2. `packages/providers/src/messaging/trengo.adapter.ts` -- WhatsApp via Trengo
-3. `packages/providers/src/messaging/resend.adapter.ts` -- Email via Resend
-4. `apps/api/src/modules/messaging/messaging.routes.ts` -- Lines for approve endpoint (approve --> enqueue message.send)
+- Follower count, following count, media count
+- Engagement rate, last post date, posting frequency
+- Bio text and bio link
+- Business account status, verified badge
+- Business category, business email, business phone
+- Recent posts (captions, like counts, comment counts)
 
-### Checkpoint Questions
+**Authentication**: Instagram requires authentication for full data access. The system tries three methods in order:
+1. **Browser cookies** (`INSTAGRAM_COOKIES` env var) — most reliable, avoids checkpoint challenges. These expire after ~90 days and need manual refresh from a real browser.
+2. **Username/password** — standard login, but vulnerable to Instagram's checkpoint/verification challenges.
+3. **Public access** — no auth, limited data (may miss business-specific fields).
 
-- [ ] What determines whether a lead gets email vs WhatsApp?
-- [ ] It's 7pm GST (19:00) and there are 10 messages queued. What happens?
-- [ ] What statuses can a MessageSend record have? List all 6.
-- [ ] How is the 50/day WhatsApp limit tracked?
-- [ ] If Trengo's API returns a 429 (rate limit), what happens to the job?
-- [ ] What prevents the same message from being sent twice if the job retries?
+**Skip condition**: Skipped if no Instagram handle is found, or user unchecked "Include social media analysis", or the scraper isn't configured.
 
-### Hands-On Exercise
+#### 5C. Contact Candidate Collection
 
-```sql
--- See message sends with delivery status
-SELECT id, lead_id, channel, provider, status, failure_code, sent_at, follow_up_number
-FROM "MessageSend" ORDER BY "createdAt" DESC LIMIT 20;
+This is where it gets intricate. The system builds a **candidate pool** of potential contacts from multiple sources, then ranks them to find the best person to reach out to. Sources are checked in this order:
 
--- Check WhatsApp daily count (rate limiter check)
-SELECT COUNT(*) as whatsapp_sent_today
-FROM "MessageSend"
-WHERE channel = 'WHATSAPP' AND status = 'SENT'
-AND sent_at >= CURRENT_DATE;
-```
+**Source 1 — Website decision makers**: All people found on the website's about/team pages. Each candidate's email is SMTP-verified immediately. Generic emails (see list below) and junk emails are filtered out.
 
----
+**Source 2 — Instagram business email**: If the Instagram profile has a business email, it's added as a candidate. Only used if it's not a junk domain.
 
-## Module 6: Follow-ups + Reply Classification -- Closing the Loop
+**Source 3 — Email-to-DM matching** (free): The system tries to match loose emails found on the website (like emails on the contact page) to named decision makers using common email patterns:
+- `first.last@domain.com`
+- `flast@domain.com`
+- `first@domain.com`
+- `f.last@domain.com`
+- `firstlast@domain.com`
+- `first_last@domain.com`
 
-**Goal:** Understand the feedback loop: follow-ups go out, replies come in, system learns.
+If a scraped email matches a decision maker's name in one of these patterns, it's attributed to that person. Only high-confidence matches are kept. Each match is SMTP-verified before being added.
 
-### What This Stage Does
+**Source 4 — Email pattern inference** (free): If the system has at least one confirmed email at the domain, it detects the dominant pattern (e.g., "this company uses first.last@ format") and generates candidate emails for decision makers who don't have one yet. Each generated email is SMTP-verified — if the SMTP server rejects it, it's discarded.
 
-**Outbound: Follow-ups**
-```
-followup.check (cron: hourly during 5-14 UTC, which is 9-18 GST)
-    Find MessageSend records where:
-    - status = SENT or DELIVERED (not REPLIED, not FAILED)
-    - followUpNumber < 3
-    - nextFollowUpAfter <= now
-    - Lead hasn't replied or converted
-        |
-    For each: enqueue message.generate with followUpNumber + 1
-    Feature rotation: each follow-up emphasizes a different ICP feature
-```
+**Source 5 — Hunter domain search** (paid, ~$0.01 per call): Hunter searches by domain and returns up to 5 email addresses associated with the company. See "Hunter Rules" below for full details.
 
-**Inbound: Reply Processing**
-```
-Trengo webhook (POST /v1/webhooks/trengo)
-    WhatsApp reply arrives
-        |
-    HMAC-SHA256 signature verification (timing-safe compare)
-        |
-    Correlate reply to original MessageSend via providerConversationId
-        |
-    Create FeedbackEvent (REPLIED)
-        |
-    Enqueue: reply.classify
-        |
-reply.classify
-    Call OpenAI to classify intent:
-    - INTERESTED (wants to learn more)
-    - NOT_INTERESTED (polite decline)
-    - OUT_OF_OFFICE (auto-reply)
-    - UNSUBSCRIBE (stop contacting)
-        |
-    Update FeedbackEvent.replyClassification
-    Update Lead status
-    If UNSUBSCRIBE: suppress all future messages
-    If INTERESTED: notify sales team
-        |
-    Enqueue: notify.sales
-        |
-notify.sales
-    Send Slack notification with lead details + classification
-    singletonKey prevents duplicate notifications
-```
+**Source 6 — Apollo contact search** (paid, ~$0.01 per call): Apollo searches for executives at the company. See "Apollo Rules" below for full details.
 
-### Key Concepts
+**Source 7 — LLM extraction fallback** (free if scrape data available): If no valid candidates were found from the website scrape (validation failed or the scrape was empty), the system sends the about page text (minimum 50 characters) to OpenAI to extract names, titles, and phone numbers using AI. This catches cases where the website structure is unusual and the regular scraper missed people.
 
-- **Webhook Security**: The Trengo webhook uses HMAC-SHA256 (secret + raw body --> hex digest). The Resend webhook uses Svix format (base64 secret, svix headers, 5-min replay prevention). Both use `timingSafeEqual` to prevent timing attacks.
+#### Hunter Rules & Restrictions
 
-- **3 Follow-up Maximum**: After 3 follow-ups with no reply, the system stops. This prevents harassment and protects your sender reputation.
+Hunter is a **domain-based email finder**. You give it a domain (e.g., `acme.com`) and it returns email addresses associated with that domain.
 
-- **Feature Rotation**: Each follow-up highlights a different selling point. Follow-up 1 might emphasize "payment processing", follow-up 2 "WhatsApp commerce", follow-up 3 "UAE market presence". Tracked via `pitchedFeature` on MessageDraft.
+**When Hunter runs**:
+- Business must be pre-qualified (`preQualified: true`)
+- No valid personal email found yet from free sources (website scrape, pattern inference, etc.)
+- Hunter adapter must be configured (API key set)
+- Must be within the daily provider budget ceiling
 
-- **UNSUBSCRIBE Suppression**: When a reply is classified as UNSUBSCRIBE, the system creates a FeedbackEvent that permanently blocks future messages to that lead. The suppression check happens in `message.send` before any send attempt.
+**When Hunter is skipped**:
+- If a valid personal (non-generic) email was already found — no point paying for what we already have
+- If the business failed pre-qualification
+- If the daily budget for Hunter is exhausted
 
-### Files To Read
+**What Hunter returns**: Up to 5 contacts per domain, each with: first name, last name, email, position (title), confidence score (0-100), verification status.
 
-1. `apps/worker/src/jobs/followup.check.job.ts` -- Cron job that schedules follow-ups
-2. `apps/api/src/modules/webhook/webhook.routes.ts` -- Trengo + Resend webhook handlers (HMAC verification)
-3. `apps/worker/src/jobs/reply.classify.job.ts` -- OpenAI intent classification
-4. `apps/worker/src/jobs/notify.sales.job.ts` -- Slack notification dispatch
+**Filtering applied to Hunter results**:
+- **Generic emails dropped**: Emails where the local part (before the @) is a generic prefix like `info`, `contact`, `hello`, `support`, `admin`, `sales`, `office`, `help`, `service`, `enquiry`, `inquiry`, `general`, `team`, `mail`, `noreply`, `no-reply`, `webmaster`, `postmaster`, `marketing`, `hr`, `finance`, `billing`, `accounts`, `reception`, `feedback`, `appointments`, `events`, `press`, `media`, `partnerships`, `careers`, `jobs`, `recruitment`, `booking`, `bookings`, `inquiries`, `reservations`, `care`, `customercare`, `customer-care`. These are role-based inboxes, not personal emails — we need to reach a specific person.
+- **Junk emails dropped**: Emails on known junk domains (`wixpress.com`, `sentry.wixpress.com`, `example.com`, `mysite.com`, `doe.com`) or with test prefixes (`example`, `test`, `demo`, `sample`).
+- **Low confidence dropped**: Contacts with Hunter confidence score below **55** are discarded (unless Hunter explicitly marked the email as verified).
+- **Invalid verification dropped**: If Hunter's own verification flagged the email as `invalid`, it's discarded.
+- **SMTP re-verification**: Even after passing Hunter's filters, each email is SMTP-verified by our own verifier to double-check deliverability.
 
-### Checkpoint Questions
+**Rate limit**: Minimum 250ms between Hunter API calls. One call per business (unless the business is flagged as "high value" — meaning it has strong signals from the free sources).
 
-- [ ] What cron schedule does followup.check run on? Why those hours?
-- [ ] How does the system find leads that need follow-up? Describe the query conditions.
-- [ ] How does the Trengo webhook verify it's legit and not spoofed?
-- [ ] What are the 4 possible reply classifications?
-- [ ] If a lead replies "not interested" 1 hour after a follow-up is generated but before it's sent, what happens?
-- [ ] What side effects happen when a reply is classified as INTERESTED? List them all.
+**Contact ranking**: Hunter results are ranked by position (Owner > CEO > Chief > Founder > Director > VP > President > Head > Manager, with "unknown" last). Personal emails are always preferred over generic ones.
 
-### Hands-On Exercise
+#### Apollo Rules & Restrictions
 
-```sql
--- See feedback events (replies)
-SELECT id, lead_id, event_type, reply_classification, reply_text, source
-FROM "FeedbackEvent" ORDER BY "createdAt" DESC LIMIT 20;
+Apollo is an **executive contact database**. It's more expensive than Hunter but returns richer data — direct phone numbers, verified titles, and seniority levels.
 
--- Find leads with follow-ups
-SELECT lead_id, COUNT(*) as total_sends, MAX(follow_up_number) as max_followup
-FROM "MessageSend"
-GROUP BY lead_id
-HAVING COUNT(*) > 1
-ORDER BY total_sends DESC LIMIT 10;
-```
+**Apollo has three operating modes**:
 
----
+1. **Pre-screen** (FREE, used in Step 4):
+   - Checks if Apollo has *any* data for this domain without revealing it
+   - Returns: `hasEmail` (yes/no), `hasDirectPhone` (yes/no), `topContactTitle` (e.g., "CEO")
+   - Costs zero credits — it's a metadata check, not a data reveal
+   - Used to decide whether to invest in a full Apollo call later
 
-## Module 7: The Learning Loop -- ML Pipeline
+2. **Full enrichment** (PAID, used in Step 5):
+   - Returns up to 5 contacts with full emails, phone numbers, titles, and seniority
+   - Costs 1 credit per call (regardless of how many contacts are returned)
+   - Filtered the same way as Hunter: generic emails dropped, junk emails dropped, each email SMTP-verified
 
-**Goal:** Understand how the system gets smarter over time by learning from outcomes.
+3. **Post-scoring enrichment** (PAID, used in Step 8):
+   - Same as full enrichment but only for leads that already scored MEDIUM or HIGH
+   - What data gets revealed depends on score band:
+     - **LOW**: Apollo is skipped entirely — no money spent
+     - **MEDIUM**: Only email is revealed (if the lead is missing one)
+     - **HIGH**: Both email and direct phone number are revealed
 
-### What This Stage Does
+**When full enrichment runs (Step 5)**:
+- Business must be pre-qualified
+- Must have a **credible named candidate** — meaning a real person with a valid name AND either executive/director seniority OR confidence score ≥ 0.55
+- **Identity confidence** must be above threshold:
+  - For high-value businesses (strong signals from free sources): ≥ 0.48
+  - For standard businesses: ≥ 0.58
+- No valid email already found from free sources
+- Apollo pre-screen must have indicated email data exists
+- Must be within the daily budget ceiling
+- Max 1 Apollo call per business (unless high-value)
 
-```
-labels.generate (hourly cron)
-    Scans FeedbackEvents + cold lead timeouts
-    Creates TrainingLabel records:
-    - Positive (label=1): MEETING_BOOKED, DEAL_WON
-    - Negative (label=0): DEAL_LOST, UNSUBSCRIBED
-    - Cold (label=0): no feedback in 30 days
-        |
-    If >= 50 new labels: auto-enqueue model.train
+**Rate limit**: Minimum 250ms between calls. 429 (rate limit) responses trigger a 30-second wait before retry. 10-second timeout per request.
 
-model.train (weekly cron: Monday 3 AM UTC)
-    Loads TrainingLabels + FeatureSnapshots
-    80/20 train/test split
-    Trains logistic regression on 48 feature keys
-    Uses class weights for balanced gradients:
-      weight = total_samples / (2 * class_count)
-        |
-    Creates TrainingRun + ModelVersion records
-    Enqueues: model.evaluate
+#### 5D. Name Validation
 
-model.evaluate
-    Evaluates on train/test/validation splits
-    Computes: AUC, precision, recall, F1, Brier score
-    If AUC >= 0.60: activates model (marks ACTIVE)
-    Previous model: moved to ARCHIVED
-```
+Every candidate goes through strict name validation before being considered. The system rejects:
 
-### Key Concepts
+- Names shorter than 2 or longer than 50 characters
+- "Unknown Contact" (placeholder from Instagram scrape)
+- Placeholder names: "John Doe", "Jane Doe", "Test User", "Test Contact", "Example Person"
+- Generic web phrases: "Contact Us", "About Us", "Our Team", "Book Now"
+- All-uppercase names longer than 3 characters (usually company names, not people)
+- Names that match the business name (case-insensitive) — these are usually the company name, not a person
+- Corporate suffixes: LLC, Inc, Ltd, Events, Company, Group, Management, Corp, Enterprise, International, Services, Solutions, Corporation, Holdings, Consulting, Associates
+- Names made entirely of role words: Expert, Skilled, Quality, Customer, Support, Senior, Junior, Assistant, Specialist, Consultant, Manager, Technician, Professional, Certified
 
-- **Dynamic Blend Ratio**: As the ML model improves, it gets more influence on the final score. Starting at 90/10 (mostly rules), graduating to 50/50 when the model proves itself with AUC >= 0.80 and 500+ training samples.
+**Exception**: Instagram contacts with verified emails bypass name validation — the email proves they're real even if the name looks unusual.
 
-- **Cold Lead Timeout**: If a lead hasn't responded in 30 days, it gets labeled as negative (label=0). This provides negative signal even without explicit "not interested" replies.
+#### 5E. Decision-Maker Ranking
 
-- **Class Weights**: If you have 100 positive and 900 negative labels, the model would be biased toward predicting negative. Class weights compensate: `total / (2 * class_count)` gives each class equal influence.
+After collecting and validating all candidates, the system ranks them to pick the best one. The ranking uses a **title tier system**:
 
-- **Model Promotion Gate**: A new model only goes ACTIVE if its AUC >= 0.60. This prevents a poorly-trained model from replacing a good one.
+| Tier | Titles | Why |
+|------|--------|-----|
+| 0 (highest) | CEO, Founder, Owner, President, Chair, COO | Decision-makers with budget authority |
+| 1 | CFO, CTO, CIO, CMO, CPO, Managing Director, General Manager | C-suite functional executives |
+| 2 | VP, Vice President, Head of, SVP, EVP | Senior leadership |
+| 3 | Director | Mid-senior management |
+| 4 | Manager, Lead, Supervisor | Mid-level management |
+| 5+ (lowest) | Everything else | Individual contributors |
 
-### Files To Read
+**Sort order** (applied in sequence — first criterion wins ties):
+1. **Title tier** (lower = more senior = better)
+2. **Confidence score** (higher = better) — computed from: base 0.35 + has email (+0.25) + has LinkedIn (+0.20) + source bonus (website scrape +0.10, Apollo +0.05) + seniority bonus (executive +0.10, director +0.05)
+3. **Position rank** (lower = better) — assigned by source: website scrape = 10, pattern-inferred = 15, Hunter = 50, Apollo = 50
 
-1. `apps/worker/src/jobs/labels.generate.job.ts` -- Converts feedback into training data
-2. `apps/worker/src/jobs/model.train.job.ts` -- Logistic regression training
-3. `apps/worker/src/jobs/model.evaluate.job.ts` -- Model evaluation + promotion
-4. `apps/worker/src/schedules.ts` -- All cron schedules in one place
+**LLM adjudication** (optional): If 2+ candidates are very close (confidence difference ≤ 0.08 AND seniority difference ≤ 1 tier), the system calls OpenAI to break the tie. The AI reviews up to 5 top candidates and picks the best outreach target based on title relevance, seniority, and contact completeness. The winner gets a confidence boost (+0.12) and position rank improvement (-5). If the AI can't decide, the tie is noted for recovery telemetry.
 
-### Checkpoint Questions
+#### 5F. Lead Creation (or Recovery)
 
-- [ ] What events create positive training labels? What creates negative ones?
-- [ ] How does the cold lead timeout work? What's the timeframe?
-- [ ] What does AUC measure? Why is it used instead of accuracy?
-- [ ] If your model has AUC = 0.55, does it get activated? Why or why not?
-- [ ] How often does training run? What triggers it outside the cron?
-- [ ] With 10 leads all NOT_INTERESTED, can the model learn? Why is this problematic?
+After ranking, one of three things happens:
+
+**Path A — Lead created**: If there's a candidate with a verified email, a Lead record is created in a database transaction with:
+- First name, last name (never falls back to business name)
+- Email (personal, verified), phone (if available)
+- Business email (generic fallback like info@company.com, if personal is different)
+- Decision maker title, seniority, phone
+- Source: `GOOGLE_PLACES_DISCOVERY` (tracking which provider found the original business)
+- Status: `new` (ready for feature extraction)
+- Up to 5 top candidates are stored as `BusinessContact` records (so you can see who else was found)
+- A `BusinessConversion` record links the Business → Lead with full metadata (Apollo/Hunter JSON, telemetry)
+- Any existing contact recovery item for this business+ICP is deleted (no longer needed)
+
+**Path B — Drafted lead**: If the contact is inconclusive but promising (has a credible named candidate AND identity confidence ≥ threshold, but no verified email), the lead is created with status `drafted` instead. This means it exists in the system but won't flow through the automated pipeline — a human should review it.
+
+**Path C — Contact recovery item**: If no usable contact was found at all, a `ContactRecoveryItem` is created with:
+- Reason: `NO_CONTACTS_FOUND` (no valid candidate exists) or `NO_EMAIL` (valid candidate found but no email)
+- Status: `OPEN` (active in the recovery queue for manual review)
+- A snapshot of the top 5 candidates, all telemetry data, identity/contact confidence scores, and a terminal reason (e.g., `no_named_candidate_found`, `named_candidate_no_email`, `email_inferred_failed_verification`, `ambiguous_winner`)
+
+These recovery items show up on the Recovery page in the dashboard with all the context needed for manual outreach.
+
+**After lead creation**: The system calls `checkLeadTargetReached()` — if this was the Nth lead (where N = the requested lead count), the entire pipeline starts winding down. Then `features.compute` is enqueued for the new lead.
+
+#### SMTP Verification (used throughout Step 5)
+
+Every email discovered in this step is verified via SMTP before being trusted. Here's how it works:
+
+1. **MX lookup**: Find the mail server for the email's domain (cached for 60 seconds per domain)
+2. **SMTP handshake**: Connect to the mail server, introduce ourselves, ask if the address exists
+3. **Catch-all detection**: If the server accepts the email, we send a second check with a random fake address. If the server also accepts the fake address, it's a **catch-all** domain (accepts all addresses regardless — we can't confirm individual emails are real)
+
+**Verification statuses**:
+- `valid` — Mailbox exists, not catch-all, not disposable
+- `catch_all` — Domain accepts all addresses (can't confirm this specific one)
+- `invalid` — Mailbox explicitly rejected by the server
+- `disposable` — Known throwaway email domain (blocklist of 500+ domains)
+- `no_mx` — No mail server found for this domain
+- `smtp_error` — Connection or handshake failed
+- `timeout` — Server didn't respond in time
+
+**Caching**: Definitive results (`valid`, `invalid`, `catch_all`, `disposable`) are cached for 24 hours. Transient errors (`timeout`, `smtp_error`) are NOT cached because they might resolve on retry.
+
+**Rate limiting**: Maximum 1 SMTP check per second per domain (serialized) to avoid being flagged as spam by mail servers.
 
 ---
 
-## Module 8: Analytics + System Health -- Measuring Everything
+### Step 6: Extract Features (Prepare for Scoring)
 
-**Goal:** Understand how metrics are computed and how the system monitors itself.
+**Job**: `features.compute`
 
-### What This Stage Does
+Before scoring, the system extracts **43 measurable data points** (features) about each lead. These are the inputs to the scoring formula. The extractor pulls from multiple data sources in priority order: Apify scrape data (most reliable) → enrichment records (Apollo/Hunter) → discovery data (Google Places) → business record (fallback).
 
-**Analytics Pipeline:**
-```
-analytics.rollup (daily cron: 1 AM UTC)
-    Aggregates per day, per ICP:
-    - discoveredCount, enrichedCount, scoredCount
-    - validEmailCount, validDomainCount
-    - industryMatchRate, geoMatchRate
-    - sentCount, failedCount, repliedCount, bouncedCount
-    Writes: AnalyticsDailyRollup records
+Here are all 43 features, grouped by what they measure:
 
-manager.analyze (weekly cron: Monday 9 AM UTC)
-    Analyzes weekly trends per ICP:
-    - Reply rates, conversion rates
-    - A/B variant performance comparison
-    - Score band effectiveness
-    Writes: ManagerAnalysis records
-```
+#### Digital Presence & Social Signals
+| Feature | What It Measures |
+|---------|-----------------|
+| `has_whatsapp` | Business has WhatsApp listed (on website, Google listing, or social links) |
+| `has_instagram` | Business has an Instagram account |
+| `has_linkedin` | Business or decision maker has a LinkedIn profile |
+| `follower_count` | Raw Instagram follower count |
+| `follower_count_tier` | Follower bucket: 0 (none) → 1 (1-500) → 2 (501-5K) → 3 (5K-50K) → 4 (50K+) |
+| `follower_growth_signal` | Is the follower count growing? (comparing recent data points) |
+| `high_engagement_signal` | Does the account have above-average engagement rate for its follower count? |
+| `instagram_follower_count` | Instagram follower count specifically (from Instagram scrape) |
+| `instagram_engagement_rate` | Likes + comments / followers ratio |
+| `instagram_is_business_account` | Is the Instagram account marked as a business account? |
+| `instagram_days_since_last_post` | How many days since the last Instagram post? |
+| `instagram_has_bio_link` | Does the Instagram bio have a clickable link? |
+| `social_link_count` | Total number of social media profiles found (out of 7 platforms) |
+| `recent_activity` | Has the business shown activity in the last 30 days? (posts, website updates, etc.) |
 
-**System Health (5 maintenance jobs):**
-```
-pipeline.health (every 15 min)     -- Checks: DLQ depth, stale jobs, success rates
-                                      Alerts to Slack if thresholds breached
+#### E-Commerce & Payment Readiness
+| Feature | What It Measures |
+|---------|-----------------|
+| `accepts_online_payments` | Does the website accept any form of online payment? |
+| `shopify_detected` | Is the website built on Shopify? |
+| `pure_self_serve_ecom` | Is it a fully automated e-commerce store (no human interaction needed)? This is actually a **negative** signal for Zbooni — they sell chat-based commerce, which requires human touch |
+| `apify_payment_widget_count` | How many different payment widgets are on the website? |
+| `apify_has_shopify` | Shopify detection from the website scraper specifically |
+| `apify_has_booking_form` | Does the website have a booking or appointment form? |
+| `apify_has_pricing_tiers` | Does the website show tiered pricing (different plans/packages)? |
+| `apify_has_product_catalog` | Does the website have a product catalog or menu? |
+| `variable_pricing_detected` | Are there custom/variable pricing signals? (quotes, "starting from", etc.) |
+| `has_booking_or_contact_form` | Does the website have a booking form OR a contact form? |
 
-lead.recovery (every 15 min)       -- Finds leads stuck in 'processing' > 1 hour
-                                      Marks as 'failed' so they can be retried
+#### Business Signals
+| Feature | What It Measures |
+|---------|-----------------|
+| `review_count` | Raw Google review count |
+| `review_count_tier` | Review bucket: 0 (none) → 1 (1-10) → 2 (11-50) → 3 (51-200) → 4 (200+) |
+| `physical_address_present` | Does the business have a physical location listed? |
+| `multi_staff_detected` | Are there multiple team members visible? (team page, multiple contacts) |
+| `estimated_employees` | Estimated headcount (from website/LinkedIn data) |
+| `tech_stack_size` | How many technologies were detected on the website? |
+| `custom_order_signals` | Are there signs of custom/bespoke orders? (made-to-order, customization options) |
+| `high_ticket_signals` | Are there high-value transaction signals? (luxury items, premium services, large contracts) |
+| `subscription_billing_detected` | Does the business use subscription/recurring billing? |
+| `upsell_signals` | Are there upsell/cross-sell signals? (bundles, add-ons, "customers also bought") |
+| `international_customer_signals` | Signs of serving international customers? (multiple currencies, shipping info) |
 
-dlq.process (hourly)               -- Retries dead-letter queue items
-                                      Backoff: 1h -> 4h -> 24h -> alert
+#### Contact Quality
+| Feature | What It Measures |
+|---------|-----------------|
+| `has_decision_maker_phone` | Do we have a direct phone number for the decision maker? |
+| `apollo_has_direct_phone` | Did Apollo specifically confirm a direct phone number exists? |
+| `decision_maker_count` | How many decision makers were found at this company? |
+| `website_email_count` | How many email addresses were found on the website? |
+| `website_phone_count` | How many phone numbers were found on the website? |
 
-outbox.cleanup (every 30 min)      -- Deletes processed OutboxEvents older than 30 days
+#### ICP Fit
+| Feature | What It Measures |
+|---------|-----------------|
+| `industry_match` | Does the business's category match the ICP's target industries? |
+| `geo_match` | Is the business in one of the ICP's target countries? |
+| `icp_segment_priority` | How important is this ICP segment? Priority 2 (highest) for P1 industries, Priority 1 for P2, Priority 0 for everything else |
 
-heartbeat (every minute)           -- No-op log to prove worker is alive
-```
+#### Data Quality
+Not a scored feature, but computed during extraction:
 
-### Files To Read
+**Data alignment score**: A cross-source consistency check that catches data mismatches (e.g., the Google listing is for a restaurant but the website is for a law firm). Weighted across 4 checks:
+- Domain consistency (30%): Does the Google business name match the website `<title>` tag? (Dice coefficient similarity)
+- Brand consistency (25%): Does the website domain match the Instagram username?
+- Geographic consistency (25%): Does the country from Google/enrichment match the country detected on the website?
+- Contact consistency (20%): Does the lead's email domain match the business's website domain?
 
-1. `apps/worker/src/jobs/analytics.rollup.job.ts` -- Daily funnel metrics
-2. `apps/worker/src/jobs/manager.analyze.job.ts` -- Weekly insights
-3. `apps/worker/src/jobs/pipeline.health.job.ts` -- Health monitoring + Slack alerts
-4. `apps/worker/src/jobs/lead.recovery.job.ts` -- Stuck lead recovery
-5. `apps/worker/src/jobs/dlq.process.job.ts` -- Dead letter queue processing
-6. `apps/worker/src/schedules.ts` -- All 13 cron schedules
-7. `apps/web/app/dashboard/page.tsx` -- Main dashboard (displays funnel + KPIs)
-8. `apps/web/app/dashboard/analytics/page.tsx` -- Full analytics page
-
-### Checkpoint Questions
-
-- [ ] What's the conversion funnel? List each stage and metric.
-- [ ] How often does the analytics rollup run?
-- [ ] What does pipeline.health check? What thresholds trigger a Slack alert?
-- [ ] A lead has been in "processing" status for 3 hours. What happens?
-- [ ] What does the dead-letter queue backoff look like? (1h, 4h, 24h)
-- [ ] The dashboard shows 31 discovered, 14 leads, 12 scored above threshold, 0 replies. Where are leads dropping off?
-
----
-
-## After You Complete All 8 Modules
-
-You should be able to:
-
-1. **Look at any error log** and immediately know which stage/job produced it
-2. **Describe the full lifecycle of a lead** from SearchTask to reply classification, naming every table, job, and provider it touches
-3. **Predict the impact of a change** -- "if I modify the scoring weights, what downstream effects will that have on message generation?"
-4. **Give Claude Code precise instructions** -- "In `message.send.job.ts` line 94, the suppression check isn't catching BOUNCED leads. The status comparison might be case-sensitive."
-5. **Run 2-3 parallel sessions safely** because you know which files belong to which pipeline stage
-
----
-
-## The Framework: Before You Prompt Claude Code
-
-### The 4 Questions
-1. **What am I trying to do?** (one sentence)
-2. **What stage of the pipeline does this touch?** (discovery, enrichment, scoring, messaging, follow-ups, ML, analytics)
-3. **What files will need to change?** (you should know this from the walkthrough)
-4. **What could break downstream?** (what jobs depend on this stage's output?)
-
-### Session Rules
-- **Session 1**: Frontend-only work (pages, components, API client calls)
-- **Session 2**: One specific backend job or pipeline stage
-- **Never**: Two sessions touching the same job, same database table, or same provider adapter
-- **Max until walkthrough complete**: 2 sessions
-
-### When Something Breaks
-1. Read the error message. What file and line?
-2. What pipeline stage is that file in?
-3. What data was the job processing when it failed?
-4. Form a hypothesis: "I think X is happening because Y"
-5. Tell Claude your hypothesis and ask it to verify -- NOT "fix this"
-
-### Prompt Templates (Copy-Paste These)
-```
-LEARNING: "In [file.ts], explain what the function [name] does line by line.
-What data comes in, what happens to it, and what goes out?"
-
-DEBUGGING: "In [file.ts] line [N], I expected [X] but got [Y].
-My hypothesis: [your guess]. Verify this and explain what's actually happening."
-
-TARGETED FIX: "In [file.ts], the [specific thing] is [specific problem].
-The fix should be in [function name] around line [N].
-Don't change anything else."
-```
+If the alignment score falls below **0.3**, it triggers a hard filter — the lead is rejected on the assumption the data sources are describing different businesses. Scores between 0.3-0.5 are flagged as "caution" but processing continues.
 
 ---
 
-## The Complete Job Map (Reference)
+### Step 7: Score the Lead
 
-| Job | Queue | Trigger | Schedule | Next Job |
-|-----|-------|---------|----------|----------|
-| discovery.seed | `discovery.seed` | API / Weekly Mon 4AM | `0 4 * * 1` | run_search_task |
-| run_search_task | `discovery.run_search_task` | discovery.seed | -- | business.prequalify |
-| business.prequalify | `business.prequalify` | run_search_task | -- | business.convert |
-| business.convert | `business.convert` | business.prequalify | -- | enrichment.run |
-| enrichment.run | `enrichment.run` | business.convert / API | -- | features.compute |
-| features.compute | `features.compute` | enrichment.run | -- | scoring.compute |
-| scoring.compute | `scoring.compute` | features.compute | Daily 2:15AM | message.generate |
-| scoring.batch | `scoring.batch` | -- | Hourly | message.generate |
-| message.generate | `message.generate` | scoring.compute | -- | message.send |
-| message.send | `message.send` | message.generate / API approve | -- | -- |
-| followup.check | `followup.check` | -- | Hourly 5-14 UTC | message.generate |
-| reply.classify | `reply.classify` | Trengo webhook | -- | notify.sales |
-| notify.sales | `notify.sales` | reply.classify | -- | -- |
-| labels.generate | `labels.generate` | -- | Hourly | model.train |
-| model.train | `model.train` | labels.generate / Mon 3AM | `0 3 * * 1` | model.evaluate |
-| model.evaluate | `model.evaluate` | model.train | -- | -- |
-| analytics.rollup | `analytics.rollup` | -- | Daily 1AM | -- |
-| manager.analyze | `manager.analyze` | -- | Mon 9AM | -- |
-| pipeline.health | `pipeline.health` | -- | Every 15 min | -- |
-| lead.recovery | `lead.recovery` | -- | Every 15 min | -- |
-| dlq.process | `dlq.process` | -- | Hourly | -- |
-| outbox.cleanup | `outbox.cleanup` | -- | Every 30 min | -- |
-| heartbeat | `system.heartbeat` | -- | Every minute | -- |
+**Job**: `scoring.compute`
+
+This is where the system decides: **is this lead worth contacting?** It produces a score from 0 to 1 (displayed as 0–100 in the UI).
+
+#### 7A. Rule-Based Score (Deterministic)
+
+The ICP's qualification rules are applied to the lead's features. There are two types of rules:
+
+**Hard filters** (pass/fail, no partial credit):
+- If ANY hard filter fails, the lead scores **0** and is immediately rejected
+- Example: "Country must be in [UAE, KSA, Jordan, Egypt]" — if the business is in India, it's out regardless of how good everything else looks
+- Hard filters are checked first, before any weighted scoring happens
+
+**Weighted rules** (contribute to score):
+- Each rule has a **weight** — positive weights reward matches, negative weights penalize them
+- Positive example: "Has WhatsApp" with weight +3 — if the business has WhatsApp, +3 goes into the positive pool
+- Negative example: "Pure self-serve e-commerce" with weight -3 — if the business is pure self-serve, -3 goes into the penalty pool
+
+**The formula** (after hard filters pass):
+
+```
+Step 1: Calculate match ratio (how many positive rules matched?)
+  matchRatio = (sum of matched positive weights + 1) / (sum of all positive weights + 1)
+  The "+1" on both sides is Laplace smoothing — it prevents division by zero
+  and ensures a business with no data doesn't score exactly 0.
+
+Step 2: Calculate penalty factor (how many negative rules matched?)
+  penaltyFactor = 1 - (matched negative weight / total negative weight) × 0.8
+  Bounded between 0.2 (worst: all negatives matched) and 1.0 (best: no negatives)
+  The 0.8 multiplier means even the worst-case penalty only removes 80% of the score.
+
+Step 3: Combine
+  qualificationScore = 0.10 + matchRatio × penaltyFactor × 0.90
+
+  - BASE_SCORE is 0.10 — every lead that passes hard filters starts with at least 10%
+  - The 0.90 multiplier means the weighted rules can contribute up to 90% of the score
+  - So the theoretical range is 0.10 (no positive matches) to 1.00 (everything matches, nothing penalized)
+```
+
+**Category bonus/penalty**: The scoring formula also groups rules into 5 categories and checks how well each category performed:
+
+1. **Sales Motion Fit**: `has_whatsapp`, `has_instagram`, `custom_order_signals`, `apollo_has_direct_phone`, `decision_maker_count`
+2. **Payment Complexity**: `apify_payment_widget_count`, `apify_has_pricing_tiers`, `high_ticket_signals`
+3. **Risk & Urgency**: `recent_activity`, `has_booking_or_contact_form`, `website_email_count`, `website_phone_count`
+4. **Switching Willingness**: `follower_growth_signal`, `high_engagement_signal`, `social_link_count`, `has_linkedin`, `tech_stack_size`
+5. **General**: All disqualification rules, matching signals, ICP alignment
+
+Each category needs ≥50% match rate to be considered "passed." Based on how many categories passed:
+- **3+ categories including Sales Motion + Payment**: +10% bonus ("PROCEED" — strong fit across multiple dimensions)
+- **2+ categories**: +5% bonus ("SELECTIVE" — moderate fit)
+- **<2 categories**: -5% penalty ("DISQUALIFY" — weak fit overall)
+
+The final score is clamped to [0, 1].
+
+#### 7B. Machine Learning Score (Trained Model)
+
+A **logistic regression model** trained on actual outreach outcomes (who replied, who bounced, who went cold). It looks at all 43 features and produces a probability score.
+
+- The model is only available after enough labeled data exists — at minimum 200 scored leads with feedback
+- When no model exists, the ML score defaults to 0 and the blend effectively becomes 100% rule-based
+- The model uses **class weights** (`total / (2 × classCount)`) to handle imbalanced data (most leads don't reply, so positive replies get higher weight during training)
+
+#### 7C. Blending the Two Scores
+
+The final score is a weighted average of the rule-based and ML scores:
+
+```
+blendedScore = deterministicWeight × deterministicScore + aiWeight × mlScore
+```
+
+The weights shift dynamically based on how good the ML model is:
+
+| Condition | Rule Weight | ML Weight | Why |
+|-----------|-----------|----------|-----|
+| No model, or model AUC < 0.70 | 90% | 10% | ML hasn't proven itself yet — trust the rules |
+| AUC ≥ 0.70 AND 200+ labeled samples | 70% | 30% | Model is decent — start trusting it more |
+| AUC ≥ 0.80 AND 500+ labeled samples | 50% | 50% | Model is strong — equal partnership |
+
+**AUC** (Area Under the Curve) is a measure of how well the model distinguishes good leads from bad ones. 0.50 = random guessing, 1.00 = perfect. The thresholds above ensure the system only trusts the ML model after it's demonstrated real predictive power.
+
+**Manual override**: If you set the "Deterministic/ML blend" in settings, that overrides the dynamic calculation entirely.
+
+#### 7D. Score Bands & What Happens Next
+
+| Band | Score Range | What Happens |
+|------|-----------|--------------|
+| **LOW** | Below 0.34 (34%) | Lead is **rejected** — not worth pursuing. No further processing. |
+| **MEDIUM** | 0.34 – 0.66 | Lead is **qualified**. Gets post-scoring Apollo enrichment (email only). Moves to message generation. |
+| **HIGH** | 0.67+ (67%) | Lead is **qualified**. Gets full Apollo enrichment (email + phone). Auto-approved for messaging if that setting is on. |
+
+The **qualification threshold** (minimum score to not be rejected) defaults to 0.40 but is configurable via pipeline settings. Note this is different from the band thresholds — a lead can be in the LOW band (below 0.34) but still above 0.40 if you've customized the settings.
 
 ---
 
-## The Complete Database Map (Reference)
+### Step 8: Post-Scoring Enrichment (Optional)
 
-**Core Entities:**
-- `Lead` -- A person (contact) at a company
-- `Business` -- A company found via discovery
-- `IcpProfile` -- Customer segment definition (Zbooni A-H)
-- `QualificationRule` -- Scoring rule attached to an ICP
+**Job**: `apollo.enrich`
 
-**Pipeline Data:**
-- `SearchTask` -- Discovery search queue item
-- `LeadDiscoveryRecord` -- How a lead was discovered
-- `LeadEnrichmentRecord` -- Enrichment results per provider
-- `LeadFeatureSnapshot` -- 67-feature vector at point in time
-- `LeadScorePrediction` -- Deterministic + logistic + blended score
-- `BusinessConversion` -- Bridge record: Business --> Lead
-- `BusinessEvidence` -- SERP result evidence for a business
+For MEDIUM and HIGH leads only. This is where Apollo's **paid** data gets used strategically based on the lead's score:
 
-**Messaging:**
-- `MessageDraft` -- AI-generated message (pending approval)
-- `MessageVariant` -- A/B variant of a draft (subject, body, CTA)
-- `MessageSend` -- Sent message record with delivery status
-- `FeedbackEvent` -- Reply/bounce/meeting from a lead
+- **MEDIUM leads**: Apollo reveals **email only** (if the lead is missing a verified email). Phone numbers are withheld to save credits.
+- **HIGH leads**: Apollo reveals **both email and direct phone number**. These are the most promising leads, worth the full investment.
 
-**ML Pipeline:**
-- `TrainingLabel` -- Positive/negative label for ML training
-- `TrainingRun` -- ML training job execution
-- `ModelVersion` -- Trained model artifact (coefficients, intercept)
-- `ModelEvaluation` -- AUC, precision, recall per model
+If Apollo isn't configured, or if the lead already has both email and phone, this step is skipped.
 
-**Operational:**
-- `OutboxEvent` -- Event-sourcing for async job dispatch
-- `JobExecution` -- Legacy job tracking
-- `JobRun` -- Cron/scheduled job execution log
-- `AnalyticsDailyRollup` -- Daily funnel metrics per ICP
-- `ManagerAnalysis` -- Weekly performance report
-- `DiscoveryCostEvent` -- API call cost tracking
-- `PipelineSetting` -- Key-value configuration store
-- `Source` -- Website/domain discovery source
+After enrichment, the system updates the lead's contact information and enqueues `message.generate`.
 
 ---
 
-## One Last Thing
+### Step 9: Generate Personalized Messages
 
-You built this in 3 weeks. The architecture -- outbox pattern, provider adapters with error classification, ML learning loop, 23 background jobs with automatic chaining -- that's genuinely enterprise-grade. The issue isn't what you built. It's that you built it faster than you internalized it.
+**Job**: `message.generate`
 
-This walkthrough closes that gap. After 8 modules, you'll be the architect directing Claude Code, not the other way around.
+For each qualified lead, the system uses **GPT-4o** to write a personalized outreach message. Here's what the AI receives as context:
 
-One module per session. Start now.
+**Lead context**:
+- Contact name, email, company name, industry, country
+- Score band (LOW/MEDIUM/HIGH) and blended score
+- All 43 features as structured data
+- Business intelligence from website scrape (tech stack, payment methods, etc.)
+- Instagram signals (followers, engagement, activity)
+
+**ICP context**:
+- ICP description and target segment
+- Sales hook and angle (the specific value proposition for this type of business)
+- Custom messaging instructions (if configured)
+
+**AI identity**: The AI writes as a senior SDR at Zbooni, using a peer-level consultant voice — professional warmth, direct, not pushy. It follows the **Acknowledge-Compliment-Ask (ACA)** framework:
+1. Acknowledge something specific about the business (from scrape data)
+2. Compliment a genuine strength
+3. Ask an open question that leads to a conversation
+
+**Hard rules for the AI**:
+- Never say: "to be honest", "decision-maker?", "jump on a call", "game-changer", "hope this finds you well"
+- Never mention competitors by name
+- No emojis
+- Position Zbooni as a "chat revenue layer" (not a payment link tool)
+
+**Output**: 2-3 message variants per channel, each with:
+- Subject line (2-6 word question, email only — null for WhatsApp)
+- Body text (40-120 words, plain text)
+- Call to action text (or null if embedded in body)
+
+Temperature is set to 0.7 (moderately creative — varied enough to feel natural, constrained enough to stay on-message).
+
+**Approval flow**:
+- If **auto-approve is enabled** AND the lead's blended score falls within the configured auto-approve range → message status = `AUTO_APPROVED`, and `message.send` is immediately enqueued
+- Otherwise → message status = `PENDING`, visible in the dashboard for manual review
+
+**Follow-up messages**: When this job is triggered for a follow-up (not the initial outreach), it receives additional context: which features/angles were already pitched in previous messages, and a `v1-followup` prompt variant that avoids repeating the same pitch.
+
+---
+
+### Step 10: Send Messages
+
+**Job**: `message.send`
+
+Delivers the approved message through the appropriate channel.
+
+**Pre-send checks** (applied to ALL sends):
+- **Suppression check**: Skip if the lead has ever had a `BOUNCED` or `UNSUBSCRIBED` feedback event, or if the lead has been soft-deleted
+- **Dedup check**: Skip if a `MessageSend` record with status `SENT` or `DELIVERED` already exists for this draft+variant (prevents double-sends on retries)
+- **Idempotency key**: Every send carries a unique idempotency key — if the send request reaches the provider twice (crash + retry), the provider rejects the duplicate
+
+#### Email (via Resend)
+- **Daily limit**: Configurable (`emailDailyLimit` setting, default 100/day). The rate limiter tracks sends per 24-hour rolling window.
+- **When rate-limited**: The job doesn't fail — it re-enqueues itself with a `startAfter` timestamp set to when the next sending window opens. This means emails smoothly spread across days instead of piling up.
+- **Bounce handling**: Resend sends webhook events when emails bounce. These create `FeedbackEvent` records with type `BOUNCED`. Bounced leads are suppressed from all future sends.
+
+#### WhatsApp (via Trengo)
+- **Daily limit**: 50 messages/day (configurable via `whatsappDailyLimit` setting)
+- **Business hours only**: Messages are only sent during UAE business hours (9:00 AM – 6:00 PM Gulf Standard Time). Jobs that arrive outside this window are re-enqueued for the next business day morning.
+- **First contact**: Must use a **template message** — WhatsApp requires pre-approved templates for initiating conversations. The template ID is configured per Trengo channel.
+- **Follow-ups**: After the lead replies, subsequent messages can be free-form text — but only within a **24-hour session window** from the lead's last reply. After 24 hours, it's back to template messages.
+- **Phone required**: The lead must have a phone number in E.164 format (e.g., +971501234567). No phone = no WhatsApp.
+
+**After successful send**:
+- Lead status updates to `messaged`
+- A `MessageSend` record is created with the provider's message ID, timestamp, and channel
+- The system computes `nextFollowUpAfter` — when the next follow-up should be sent if no reply comes
+
+**Failure handling**:
+- **Retryable** (429 rate limit, 5xx server error): Throws a `RetryableError` — pg-boss retries up to 5 times with 90-second delay and exponential backoff
+- **Terminal** (400-499 except 429): Marked as `FAILED` with a failure code and reason. No retry — something is fundamentally wrong (bad phone format, template rejected, etc.)
+- **Missing data** (no phone for WhatsApp channel): Marked as `FAILED`, logged, no retry
+
+---
+
+### Step 11: Follow-Ups (Automatic)
+
+**Job**: `followup.check` (runs daily on a cron schedule)
+
+The system finds all sent messages that are due for a follow-up:
+
+**Eligibility criteria** (all must be true):
+- Message was sent or replied to (status `SENT` or `REPLIED`)
+- Follow-up number < max follow-ups (default 3, configurable)
+- `nextFollowUpAfter` timestamp has passed
+- Lead isn't deleted and has status `messaged` or `replied`
+- No terminal feedback events: `UNSUBSCRIBED`, `MEETING_BOOKED`, `DEAL_WON`, or `BOUNCED`. Note that `REPLIED` is intentionally NOT terminal — the system keeps following up even after a reply, because a reply doesn't necessarily mean a deal
+
+**For each eligible message**:
+1. Clear `nextFollowUpAfter` (idempotency guard — prevents processing the same follow-up twice)
+2. Load the list of features/angles already pitched in previous messages (prevents repeating the same pitch)
+3. Check auto-approve eligibility based on the lead's latest blended score
+4. Enqueue `message.generate` with the incremented follow-up number, parent message ID, and previously-pitched features
+
+**Default follow-up timing**:
+- Follow-up 1: 72 hours (3 days) after initial send
+- Follow-up 2: 7 days after follow-up 1
+- After follow-up 3: No more automatic follow-ups
+
+After max follow-ups with no reply, the lead eventually moves to **"cold"** status (after the configurable cold lead timeout, default 30 days).
+
+**Backup contact rotation**: If a lead has 3+ follow-ups with no reply AND the system found other contacts at the same business during Step 5, the dashboard shows a banner suggesting you try a different person at the same company. The `BusinessContact` records from Step 5 provide the alternatives.
+
+---
+
+### Step 12: Feedback & Learning
+
+When someone responds (or an email bounces), the system captures it and uses it to improve:
+
+**Feedback sources**:
+- **Resend webhooks**: Email delivery events — bounced, delivered, opened, clicked, complained
+- **Trengo webhooks**: WhatsApp events — replied, read, failed
+- Each event creates a `FeedbackEvent` record linked to the lead and message
+
+**What feedback means for the lead**:
+- `BOUNCED` → Lead is suppressed from all future sends. Email marked as invalid.
+- `REPLIED` → Lead status updates to `replied`. Great signal.
+- `UNSUBSCRIBED` → Lead suppressed. Marked for compliance.
+- `MEETING_BOOKED` → Pipeline success. Tracked as conversion.
+- `DEAL_WON` → Pipeline success. Highest-value outcome.
+
+**Learning loop 1: ML Model Retraining** (`model.train` — runs on schedule)
+
+The system accumulates labeled data over time: for each scored lead, it eventually knows the outcome (replied, bounced, cold, meeting booked). When enough new labels accumulate (threshold: 50 new labels since last training), the model retrains:
+
+1. Load all scored leads with feedback outcomes
+2. Extract their feature snapshots (the 43 features frozen at scoring time)
+3. Train a new logistic regression model with class weights for balanced gradients
+4. Evaluate on a holdout set — compute AUC, precision, recall
+5. If AUC ≥ model activation threshold (default 0.60) AND AUC ≥ current active model: deploy as the new active `ModelVersion`
+6. If AUC is worse: keep the old model. No regression allowed.
+
+The blend ratio (Step 7C) automatically adjusts based on the new model's AUC.
+
+**Learning loop 2: Weekly Manager Analysis** (`manager.analyze`)
+
+A weekly job that analyzes the past 7 days of pipeline performance and generates recommendations:
+
+- **ICP breakdown**: Reply rate, bounce rate, and conversion rate per ICP
+- **Message variant performance**: Which A/B variants got more replies? (variant-level analytics)
+- **Score band breakdown**: How did LOW/MEDIUM/HIGH leads actually perform?
+- **Week-over-week trends**: Is reply rate improving or declining?
+
+**Generated recommendations** (stored in `ManagerRecommendationRecord` table, shown on dashboard):
+- "ICP A has 30% reply rate vs 8% baseline — increase lead target"
+- "ICP D is bouncing at 25% — pause it and review email quality"
+- "Lower qualification threshold by 0.05 — expand the funnel without hurting quality"
+- "Message variant B outperformed A by 2x — use as default"
+
+Each recommendation includes: type, title, description, affected ICP, relevant field, current value, recommended value, confidence level, and priority.
+
+**Learning loop 3: Adaptive Search Budgets**
+
+After each discovery run completes, the system updates two per-ICP metrics using an exponential moving average (30% new, 70% historical):
+- **Conversion rate**: leads created / unique businesses discovered
+- **Search efficiency**: unique businesses / search tasks processed
+
+These metrics are stored in `PipelineSetting` table and automatically used by the next discovery run's budget calculator (Step 1). Over time, the system gets significantly more efficient — it learns how many searches it actually needs to find a given number of leads for each ICP.
+
+---
+
+## Lead Lifecycle (Status Flow)
+
+```
+new → processing → enriched → scored → qualified → drafted → messaged → replied
+                                            ↓                     ↓
+                                        rejected                 cold
+                                                           (no reply after
+                                                            max follow-ups)
+```
+
+Special statuses:
+- **stuck**: Processing took too long (>1 hour, configurable via `stuck_lead_threshold_ms`). Auto-detected by a background job and flagged for investigation. The threshold exists because a lead stuck in "processing" means something broke silently.
+- **failed**: A critical, unrecoverable error occurred. The lead couldn't be processed, enriched, or scored. Needs manual investigation.
+
+---
+
+## Discovery Run Lifecycle
+
+A discovery run goes through its own lifecycle independent of individual leads:
+
+1. **queued**: Created by the API, waiting for the dispatcher to pick it up
+2. **running**: The seed job has started, search tasks are executing, businesses are being processed
+3. **completed**: All work is done. The run records final metrics:
+   - `disqualified`: businesses that failed pre-qualification
+   - `converted`: leads created with status qualified/drafted/messaged/replied/cold (NOT new/processing — those are still in-flight)
+   - `rejectedLeads`: leads that scored below threshold
+   - `recovered`: businesses sent to contact recovery
+   - `messageDrafted`: leads with message drafts
+4. **cancelled**: User clicked "Cancel" in the dashboard. All in-flight jobs (queued, retry, AND active states) are killed across all pipeline queues. Lingering search tasks in PENDING/RUNNING are force-failed with a cancellation error.
+5. **failed**: Something went wrong at the seed/system level (e.g., zero search tasks generated)
+
+**Finalization logic** (`tryFinalizeDiscoveryRun`): The run transitions from `running` → `completed` when:
+- All search tasks are complete AND either the lead target was reached OR all in-flight items have been processed
+- OR a safety timeout of 2 hours has passed since search tasks completed (prevents stuck runs)
+
+Finalization also saves the learned conversion rate and search efficiency for the next run.
+
+---
+
+## What You Can Configure
+
+All of these are adjustable from the Settings page (`/dashboard/settings`):
+
+| Setting | What It Controls | Default | Impact |
+|---------|-----------------|---------|--------|
+| Auto-approve | Skip manual message review for high-scoring leads | Off | When on, HIGH leads get messaged immediately |
+| Auto-approve score range | Min and max score for auto-approval | 100/100 (effectively disabled) | Set to e.g. 60/100 to auto-approve scores ≥60 |
+| Qualification threshold | Minimum blended score to qualify a lead | 0.40 | Lower = more leads (riskier). Higher = fewer leads (safer) |
+| Min review count | Ignore businesses with fewer Google reviews | 15 | Lower catches more small businesses. Higher filters for established ones |
+| Max follow-ups | How many times to follow up before giving up | 3 | More follow-ups = more persistent but can annoy |
+| Email daily limit | Max outreach emails per day | 100 | Protects sender reputation and stays within provider limits |
+| WhatsApp daily limit | Max WhatsApp messages per day | 50 | WhatsApp has strict anti-spam limits — exceeding can get the number blocked |
+| Deterministic/ML blend | How much to trust the ML model vs rules (0–100%) | Dynamic (auto) | Set manually to override the automatic AUC-based blend |
+| Score tier bands | Where to draw LOW/MEDIUM/HIGH boundaries | 0.34 / 0.67 | Adjusts how aggressively leads are classified |
+| Enrichment threshold | Minimum score for paid enrichment (Apollo) | 0.30 | Lower = spend more on enrichment. Higher = only enrich top leads |
+| Follow-up max count | Maximum follow-up messages per lead | 3 | More = persistent, fewer = conservative |
+| Provider budget ceiling | Maximum daily spend on paid APIs (dollars) | Unlimited | Hard cap on daily Hunter + Apollo + other paid API costs |
+| Model activation AUC | Minimum AUC for ML model to be deployed | 0.60 | Higher = only deploy very accurate models |
+| Cold lead timeout | Days without feedback before marking a lead "cold" | 30 | Shorter = faster cleanup. Longer = more patience |
+| DLQ max retries | Max retries before permanent failure | 3 | How many times to retry failed jobs before giving up |
+| Outbox retention | Days to keep completed outbox events | 30 | Cleanup setting — doesn't affect pipeline behavior |
+
+---
+
+## Cost & API Usage
+
+The system tracks every paid API call and its cost in `DiscoveryCostEvent` records, linked to specific discovery runs and businesses:
+
+| Provider | What It's Used For | When It's Called | Cost | Rate Limit |
+|----------|-------------------|-----------------|------|-----------|
+| **Google Places** | Finding businesses on Maps | Step 3 (every search task) | Per search query | 2 requests/second |
+| **Hunter** | Finding email addresses by domain | Step 5 (only if no free email found) | ~$0.01 per domain search | 250ms between calls |
+| **Apollo (pre-screen)** | Checking if contacts exist | Step 4 (pre-qualification) | FREE | 250ms between calls |
+| **Apollo (full)** | Revealing executive contacts | Step 5 or 8 (only for qualified leads) | ~$0.01 per search | 250ms between calls, 30s on rate limit |
+| **OpenAI (GPT-4o)** | Writing personalized messages | Step 9 (per qualified lead) | Per token | No explicit limit |
+| **Resend** | Sending emails | Step 10 (per approved message) | Per email sent | Daily ceiling (configurable) |
+| **Trengo** | Sending WhatsApp messages | Step 10 (per approved message) | Per message sent | 50/day + business hours only |
+| **Website scraper** | Reading business websites | Step 5 (per pre-qualified business) | Free (self-hosted) | Cached 7 days |
+| **Instagram scraper** | Checking business Instagram | Step 5 (per business with handle) | Free (self-hosted) | Configurable RPS |
+| **SMTP verifier** | Checking if emails are real | Step 5 (per discovered email) | Free (direct DNS/SMTP) | 1/sec per domain, cached 24h |
+
+The dashboard shows cost breakdowns per discovery run so you can see exactly what you're spending and where.
+
+**Built-in cost controls**:
+- **Adaptive search budgets**: Learns from past runs — uses fewer search tasks over time as conversion rates stabilize
+- **Early-stop on target reached**: Stops searching the moment enough leads are found (not when the budget runs out)
+- **Free-first enrichment**: Website scrape, Instagram scrape, email pattern inference, and Apollo pre-screen are all free. Paid providers (Hunter, Apollo full) only fire after free sources are exhausted.
+- **Score-gated enrichment**: Expensive Apollo full enrichment only runs for leads that already scored MEDIUM or HIGH
+- **SMTP caching**: Same domain verified once, cached 24 hours. Same email verified once, cached 24 hours.
+- **Provider budget ceiling**: Hard daily dollar cap across all paid APIs (configurable)
+- **Per-business limits**: Max 1 Hunter call and 1 Apollo call per business (unless flagged high-value)
+
+---
+
+## Error Handling & Reliability
+
+The system is designed to **not lose work**, even when things go wrong:
+
+- **Outbox pattern**: Every job is saved to the database before being queued. The outbox event and the business data are written in the same database transaction — either both succeed or neither does. If the worker crashes, the dispatcher re-picks up unsent events automatically (polls every 5 seconds).
+
+- **Two types of errors**:
+  - **RetryableError** (network timeout, rate limit, server error): pg-boss retries automatically — up to 5 attempts with 90-second delay and exponential backoff. After all retries exhausted, the job moves to a dead-letter queue.
+  - **PermanentError** (missing required data, invalid format, API rejected the request): Marked as failed immediately. No retry — the error won't fix itself.
+
+- **Stuck detection**: A background job periodically scans for leads stuck in `processing` status for over 1 hour (configurable). These get flagged as `stuck` so you can investigate. The threshold exists because "processing" should take minutes, not hours.
+
+- **Search task recovery**: A cron job runs every 15 minutes to find search tasks stuck in `RUNNING` state (worker died mid-execution). It resets them to `PENDING` so another worker can pick them up.
+
+- **Discovery run safety timeout**: If a run has been in `running` state for 2+ hours after its search tasks completed, it's force-finalized. This catches edge cases where all individual jobs completed but the finalization trigger was missed.
+
+- **Cancellation**: You can cancel a running discovery at any time from the dashboard. The system:
+  1. Kills all queued jobs across ALL pipeline queues (discovery, prequalify, convert, features, scoring, enrichment, messaging)
+  2. Kills jobs in `active` state too (not just queued) — catches jobs currently executing
+  3. Force-fails any search tasks still in `PENDING` or `RUNNING` state with an explicit cancellation error
+  4. Updates the run status to `cancelled` with metadata: how many jobs were cancelled, how many search tasks were cleaned up
+
+- **Dead-letter queue (DLQ)**: Jobs that fail all retries land here. A batch processor periodically reviews DLQ items (configurable batch size, default 100). Items exceeding the max retry count (default 3) are marked as permanently failed.
+
+- **Idempotent operations**: Every job is designed to be safely re-runnable. If the same business is processed twice (due to a retry), the second run detects the existing data and either skips or merges — it won't create duplicate leads or send duplicate messages.
+
+---
+
+## Key Terminology
+
+| Term | Plain English |
+|------|--------------|
+| **ICP** | Ideal Customer Profile — your description of the perfect customer (industry, country, scoring rules) |
+| **Discovery Run** | One batch execution of "go find me leads" — has its own lifecycle, budget, and metrics |
+| **Search Task** | A single Google Maps search query (e.g., "restaurants in Dubai") — the smallest unit of discovery |
+| **Business** | A company found on Google Maps. Not yet a lead — it's just a business listing until we find a person there |
+| **Lead** | A specific person at a business that we want to contact. Has a name, email, score, and message history |
+| **Pre-qualification** | Quick, free filtering (DNS, parked domain, reviews) before expensive enrichment |
+| **Enrichment** | Researching a business — scraping website, checking Instagram, finding contacts via Hunter/Apollo |
+| **Feature** | A measurable data point about a lead. 43 total, covering contact quality, digital presence, payment readiness, etc. |
+| **Blended Score** | The final 0-100 quality score combining rule-based scoring and machine learning predictions |
+| **Score Band** | LOW (<34), MEDIUM (34-66), HIGH (67+) — determines how much enrichment and whether auto-approve kicks in |
+| **Hard Filter** | A pass/fail qualification rule. Fail one and you're rejected regardless of score. Example: wrong country. |
+| **Weighted Rule** | A scoring rule that adds or subtracts points. Example: "Has WhatsApp" = +3 points. |
+| **Message Variant** | One version of a sales message. The system generates 2-3 per channel for A/B testing. |
+| **Contact Recovery** | When a promising business has no findable contacts — flagged for manual lookup with all available context |
+| **Identity Confidence** | A 0-1 score representing how certain the system is that it found a real, relevant person at the business |
+| **Outbox** | A reliability pattern — jobs are saved to the database first, then dispatched to the queue. Nothing is ever lost. |
+| **pg-boss** | The job queue system that manages all background tasks, retries, scheduling, and concurrency |
+| **Dead-Letter Queue (DLQ)** | Where jobs go after exhausting all retries. A holding area for manual review of persistent failures |
+| **AUC** | Area Under the Curve — measures how well the ML model distinguishes good leads from bad. 0.5 = random, 1.0 = perfect |
+| **EMA** | Exponential Moving Average — a smoothing method for updating conversion rates. 30% new data + 70% historical. |
+| **Laplace Smoothing** | Adding +1 to numerator and denominator to prevent 0/0 division and ensure no lead gets an exact zero score |
+| **SMTP Verification** | Directly asking a mail server "does this email address exist?" without sending an actual email |
+| **Catch-All Domain** | A mail server that accepts ALL email addresses (even fake ones). Makes it impossible to verify individual emails. |
+| **E.164** | International phone number format (e.g., +971501234567). Required for WhatsApp messaging. |
+| **Singleton Key** | A unique identifier per job (e.g., `business.convert:{businessId}`) that prevents the same job from running twice simultaneously |
