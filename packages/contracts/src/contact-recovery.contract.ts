@@ -10,7 +10,7 @@ import {
 } from './leads.contract.js';
 
 export const ContactRecoveryStatusSchema = z.enum(['OPEN', 'REJECTED']);
-export const ContactRecoveryReasonSchema = z.enum(['NO_CONTACTS_FOUND', 'NO_EMAIL']);
+export const ContactRecoveryReasonSchema = z.enum(['NO_CONTACTS_FOUND', 'NO_EMAIL', 'DECISION_MAKER_IDENTIFIED']);
 export const ContactRecoveryOutcomeSchema = z.enum(['lead_created', 'recovery_opened', 'no_contact_terminal']);
 
 export const ContactRecoveryAttemptSchema = z

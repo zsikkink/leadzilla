@@ -908,7 +908,7 @@ async function upsertContactRecoveryItem(input: {
   businessId: string;
   icpProfileId: string;
   discoveryRunId: string;
-  reason: 'NO_CONTACTS_FOUND' | 'NO_EMAIL';
+  reason: 'NO_CONTACTS_FOUND' | 'NO_EMAIL' | 'DECISION_MAKER_IDENTIFIED';
   snapshot: ContactRecoverySnapshot;
 }): Promise<void> {
   const nextStrength = extractStrengthFromSnapshot(input.snapshot);

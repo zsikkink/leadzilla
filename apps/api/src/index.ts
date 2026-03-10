@@ -34,7 +34,7 @@ function mapContactRecoveryItem(record: {
   icpProfileId: string;
   discoveryRunId: string;
   status: 'OPEN' | 'REJECTED';
-  reason: 'NO_CONTACTS_FOUND' | 'NO_EMAIL';
+  reason: 'NO_CONTACTS_FOUND' | 'NO_EMAIL' | 'DECISION_MAKER_IDENTIFIED';
   evidenceScore: number;
   candidateCount: number;
   recoverySnapshot: Prisma.JsonValue;

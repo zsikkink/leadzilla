@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "ContactRecoveryReason" ADD VALUE 'DECISION_MAKER_IDENTIFIED';
