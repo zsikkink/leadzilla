@@ -2,6 +2,7 @@
 
 import type { LeadScoreBand, LeadStatus } from '@lead-flood/contracts';
 import { Eye, Loader2, MessageSquare, Phone, Undo2, X } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
@@ -93,6 +94,7 @@ const REASON_COLORS: Record<string, string> = {
   DUPLICATE_DOMAIN: 'bg-purple-500/15 text-purple-400',
   UNVERIFIED_CONTACT: 'bg-red-500/15 text-red-400',
   BELOW_THRESHOLD: 'bg-red-500/15 text-red-400',
+  HARD_FILTER_FAILED: 'bg-red-500/15 text-red-400',
   NO_DECISION_MAKER: 'bg-yellow-500/15 text-yellow-400',
 };
 
@@ -196,26 +198,37 @@ export default function LeadsPage() {
         const supabase = getSupabaseBrowserClient();
         const { data, error } = await supabase
           .from('lead_rejections')
-          .select('id, leadId:leadId, reason, score, rejectedAt:rejectedAt, metadata, businessId:businessId, icpProfileId:icpProfileId')
+          .select('id, leadId, reason, score, rejectedAt, metadata, businessId, icpProfileId')
           .order('rejectedAt', { ascending: false })
           .limit(100);
 
-        if (cancelled || error) {
-          if (error) toast.error('Failed to load rejected leads');
+        if (cancelled) {
+          return;
+        }
+        if (error) {
+          toast.error('Failed to load rejected leads');
+          setRejectedLeads([]);
           return;
         }
 
         // Now fetch lead details for each rejection
-        const leadIds = (data ?? []).map((r: { leadId: string }) => r.leadId);
+        const leadIds = (data ?? [])
+          .map((r) => (typeof r.leadId === 'string' ? r.leadId : null))
+          .filter((leadId): leadId is string => leadId !== null);
         if (leadIds.length === 0) {
           setRejectedLeads([]);
           return;
         }
 
-        const { data: leadRows } = await supabase
+        const { data: leadRows, error: leadError } = await supabase
           .from('Lead')
           .select('id, firstName, lastName, email, enrichmentData, icpProfileId, businessId')
           .in('id', leadIds);
+        if (leadError) {
+          toast.error('Failed to load rejected lead details');
+          setRejectedLeads([]);
+          return;
+        }
 
         // Load ICP profile names for display
         const icpIds = [...new Set((leadRows ?? []).map((l) => l.icpProfileId as string | null).filter(Boolean))] as string[];
@@ -223,10 +236,13 @@ export default function LeadsPage() {
         const allIcpIds = [...new Set([...icpIds, ...rejectionIcpIds])];
         const icpMap = new Map<string, string>();
         if (allIcpIds.length > 0) {
-          const { data: icpRows } = await supabase
+          const { data: icpRows, error: icpError } = await supabase
             .from('IcpProfile')
             .select('id, name')
             .in('id', allIcpIds);
+          if (icpError) {
+            toast.error('Failed to load ICP profile names');
+          }
           for (const icp of icpRows ?? []) {
             icpMap.set(icp.id as string, icp.name as string);
           }
@@ -241,10 +257,13 @@ export default function LeadsPage() {
         ] as string[];
         const bizMap = new Map<string, { name: string; websiteDomain: string | null; instagramHandle: string | null; category: string | null; city: string | null; country: string | null }>();
         if (businessIds.length > 0) {
-          const { data: bizRows } = await supabase
+          const { data: bizRows, error: bizError } = await supabase
             .from('businesses')
-            .select('id, name, websiteDomain:websiteDomain, instagramHandle:instagramHandle, category, city, country')
+            .select('id, name, websiteDomain:website_domain, instagramHandle:instagram_handle, category, city, countryCode:country_code')
             .in('id', businessIds);
+          if (bizError) {
+            toast.error('Failed to load business details for rejected leads');
+          }
           for (const b of bizRows ?? []) {
             bizMap.set(b.id as string, {
               name: b.name as string,
@@ -252,7 +271,7 @@ export default function LeadsPage() {
               instagramHandle: b.instagramHandle as string | null,
               category: b.category as string | null,
               city: b.city as string | null,
-              country: b.country as string | null,
+              country: b.countryCode as string | null,
             });
           }
         }
@@ -276,7 +295,7 @@ export default function LeadsPage() {
 
         if (!cancelled) {
           setRejectedLeads(
-            (data ?? []).map((r: { id: string; leadId: string; reason: string; score: number | null; rejectedAt: string; metadata?: unknown; businessId?: string | null }) => {
+            (data ?? []).map((r: { id: string; leadId: string; reason: string; score: number | null; rejectedAt: string; metadata?: unknown; businessId?: string | null; icpProfileId?: string | null }) => {
               const lead = leadMap.get(r.leadId);
               const metadata = r.metadata && typeof r.metadata === 'object' && !Array.isArray(r.metadata)
                 ? r.metadata as Record<string, unknown>
@@ -287,6 +306,7 @@ export default function LeadsPage() {
               // Get business data — try rejection's businessId first, then lead's businessId
               const bizId = (r.businessId as string | null) ?? lead?.businessId ?? null;
               const biz = bizId ? bizMap.get(bizId) : null;
+              const rejectionIcpProfileId = (r.icpProfileId as string | null) ?? null;
               return {
                 id: r.id,
                 leadId: r.leadId,
@@ -294,7 +314,7 @@ export default function LeadsPage() {
                 lastName: lead?.lastName ?? null,
                 email: lead?.email ?? '',
                 companyName: lead?.companyName ?? biz?.name ?? null,
-                icpProfileName: lead?.icpProfileName ?? null,
+                icpProfileName: lead?.icpProfileName ?? (rejectionIcpProfileId ? (icpMap.get(rejectionIcpProfileId) ?? null) : null),
                 reason: r.reason,
                 reasonDetails: failedHardFilters,
                 score: r.score,
@@ -662,19 +682,27 @@ export default function LeadsPage() {
             <table className="w-full text-sm">
               <thead className="sticky top-0 z-10">
                 <tr className="border-b border-border/50 bg-card text-left">
-                  <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Name</th>
-                  <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Company</th>
+                  <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Company Name</th>
+                  <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Contact Name</th>
                   <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Email</th>
-                  <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">ICP</th>
-                  <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Reason</th>
+                  <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">ICP Profile</th>
+                  <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Rejection Reason</th>
                   <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Score</th>
-                  <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Rejected</th>
+                  <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Rejected Date</th>
                   <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {rejectedLeads.map((rl) => (
                   <tr key={rl.id} className="border-b border-border/30 transition-colors last:border-0 hover:bg-accent/50">
+                    <td className="px-4 py-3 text-muted-foreground">
+                      <div>
+                        <p>{rl.companyName || rl.businessName || 'Unknown company'}</p>
+                        {rl.websiteDomain ? (
+                          <p className="mt-0.5 text-[10px] text-muted-foreground/60">{rl.websiteDomain}</p>
+                        ) : null}
+                      </div>
+                    </td>
                     <td
                       className="cursor-pointer px-4 py-3 font-medium"
                       onClick={() => router.push(`/dashboard/leads/${rl.leadId}`)}
@@ -683,14 +711,6 @@ export default function LeadsPage() {
                         <p>{[rl.firstName, rl.lastName].filter(Boolean).join(' ') || rl.businessName || 'Unknown'}</p>
                         {rl.category ? (
                           <p className="mt-0.5 text-[10px] text-muted-foreground/60">{rl.category}</p>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      <div>
-                        <p>{rl.companyName || rl.businessName || 'Unknown company'}</p>
-                        {rl.websiteDomain ? (
-                          <p className="mt-0.5 text-[10px] text-muted-foreground/60">{rl.websiteDomain}</p>
                         ) : null}
                       </div>
                     </td>
@@ -715,9 +735,16 @@ export default function LeadsPage() {
                         {rl.reason.replace(/_/g, ' ')}
                       </span>
                       {rl.reasonDetails.length > 0 ? (
-                        <p className="mt-1 text-[10px] text-muted-foreground/70">
-                          {rl.reasonDetails.join(', ')}
-                        </p>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {rl.reasonDetails.map((detail) => (
+                            <span
+                              key={`${rl.id}-${detail}`}
+                              className="inline-flex rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300"
+                            >
+                              {detail.replace(/_/g, ' ')}
+                            </span>
+                          ))}
+                        </div>
                       ) : null}
                     </td>
                     <td className="px-4 py-3 text-right">
@@ -734,14 +761,13 @@ export default function LeadsPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => router.push(`/dashboard/leads/${rl.leadId}`)}
+                        <Link
+                          href={`/dashboard/leads/${rl.leadId}`}
                           title="View details"
-                          className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-accent/50 hover:text-foreground"
+                          className="inline-flex rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-accent/50 hover:text-foreground"
                         >
                           <Eye className="h-3.5 w-3.5" />
-                        </button>
+                        </Link>
                         <button
                           type="button"
                           title="Restore lead"

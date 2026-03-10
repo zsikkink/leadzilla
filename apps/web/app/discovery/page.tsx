@@ -3,9 +3,6 @@
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  Copy,
   DollarSign,
   FileText,
   Gauge,
@@ -501,6 +498,33 @@ const NUMERIC_SETTING_KEYS = new Set([
   'providerBudgetCeiling',
 ]);
 
+const PIPELINE_SETTING_LABELS = Object.fromEntries(
+  PIPELINE_SETTINGS.map((setting) => [setting.key, setting.label]),
+) as Record<string, string>;
+
+const ADDITIONAL_SETTING_LABELS: Record<string, string> = {
+  auto_approve_enabled: 'Auto-Approve Messages',
+  auto_approve_score_min: 'Auto-Approve Min Score',
+  auto_approve_score_max: 'Auto-Approve Max Score',
+  messagingRole: 'Messaging Role',
+  messagingSystemPrompt: 'Messaging System Prompt',
+  messagingInstructions: 'Messaging Instructions',
+};
+
+function getSettingDisplayLabel(key: string): string {
+  return PIPELINE_SETTING_LABELS[key] ?? ADDITIONAL_SETTING_LABELS[key] ?? key;
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  if (typeof error === 'string' && error.trim().length > 0) {
+    return error;
+  }
+  return 'unknown error';
+}
+
 // ── Main page ──────────────────────────────────────────────────────────
 
 export default function ControlsSettingsPage() {
@@ -510,9 +534,7 @@ export default function ControlsSettingsPage() {
   const [autoApproveScoreMin, setAutoApproveScoreMin] = useState(0.5);
   const [autoApproveScoreMax, setAutoApproveScoreMax] = useState(1.0);
   const [messagingRole, setMessagingRole] = useState('');
-  const [messagingRoleExpanded, setMessagingRoleExpanded] = useState(false);
   const [messagingSystemPrompt, setMessagingSystemPrompt] = useState('');
-  const [messagingSystemPromptExpanded, setMessagingSystemPromptExpanded] = useState(false);
   const [messagingInstructions, setMessagingInstructions] = useState('');
   const [hasChanges, setHasChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -594,30 +616,52 @@ export default function ControlsSettingsPage() {
 
   const handleSave = useCallback(async () => {
     setIsSaving(true);
-    try {
-      // Save all settings in parallel
-      const settingEntries = Object.entries(settings) as [string, unknown][];
-      const promises = settingEntries.map(([key, value]) =>
-        apiClient.updatePipelineSetting(key, value),
-      );
-      // Also save auto-approve, messaging role, system prompt, and instructions
-      promises.push(
-        apiClient.updatePipelineSetting('auto_approve_enabled', autoApproveEnabled),
-        apiClient.updatePipelineSetting('auto_approve_score_min', autoApproveScoreMin),
-        apiClient.updatePipelineSetting('auto_approve_score_max', autoApproveScoreMax),
-        apiClient.updatePipelineSetting('messagingRole', messagingRole),
-        apiClient.updatePipelineSetting('messagingSystemPrompt', messagingSystemPrompt),
-        apiClient.updatePipelineSetting('messagingInstructions', messagingInstructions),
-      );
+    const saveTargets = [
+      ...(Object.entries(settings) as [string, unknown][]).map(([key, value]) => ({
+        key,
+        value,
+        label: getSettingDisplayLabel(key),
+      })),
+      { key: 'auto_approve_enabled', value: autoApproveEnabled, label: getSettingDisplayLabel('auto_approve_enabled') },
+      { key: 'auto_approve_score_min', value: autoApproveScoreMin, label: getSettingDisplayLabel('auto_approve_score_min') },
+      { key: 'auto_approve_score_max', value: autoApproveScoreMax, label: getSettingDisplayLabel('auto_approve_score_max') },
+      { key: 'messagingRole', value: messagingRole, label: getSettingDisplayLabel('messagingRole') },
+      { key: 'messagingSystemPrompt', value: messagingSystemPrompt, label: getSettingDisplayLabel('messagingSystemPrompt') },
+      { key: 'messagingInstructions', value: messagingInstructions, label: getSettingDisplayLabel('messagingInstructions') },
+    ];
 
-      await Promise.all(promises);
-      toast.success('All settings saved to pipeline');
+    const results = await Promise.all(
+      saveTargets.map(async (target) => {
+        try {
+          await apiClient.updatePipelineSetting(target.key, target.value);
+          return { ...target, success: true as const };
+        } catch (error: unknown) {
+          return { ...target, success: false as const, errorMessage: getErrorMessage(error) };
+        }
+      }),
+    );
+
+    const failedSaves = results.filter((result) => !result.success);
+    const successfulSaveCount = results.length - failedSaves.length;
+
+    if (failedSaves.length === 0) {
+      toast.success(`Saved ${successfulSaveCount} settings.`);
       setHasChanges(false);
-    } catch {
-      toast.error('Failed to save some settings. Please try again.');
-    } finally {
       setIsSaving(false);
+      return;
     }
+
+    const failedSummary = failedSaves
+      .map((result) => `${result.label} (${result.errorMessage})`)
+      .join('; ');
+
+    if (successfulSaveCount > 0) {
+      toast.error(`Saved ${successfulSaveCount} settings. Failed to save: ${failedSummary}`);
+    } else {
+      toast.error(`Failed to save settings: ${failedSummary}`);
+    }
+    setHasChanges(true);
+    setIsSaving(false);
   }, [apiClient, settings, autoApproveEnabled, autoApproveScoreMin, autoApproveScoreMax, messagingRole, messagingSystemPrompt, messagingInstructions]);
 
   const handleReset = useCallback(() => {
@@ -626,9 +670,7 @@ export default function ControlsSettingsPage() {
     setAutoApproveScoreMin(0.5);
     setAutoApproveScoreMax(1.0);
     setMessagingRole('');
-    setMessagingRoleExpanded(false);
     setMessagingSystemPrompt('');
-    setMessagingSystemPromptExpanded(false);
     setMessagingInstructions('');
     setHasChanges(true);
     toast.info('Settings reset to defaults — click Save to persist');
@@ -788,7 +830,7 @@ export default function ControlsSettingsPage() {
             <Loader2 className="h-4 w-4 animate-spin" />
             Loading...
           </div>
-        ) : messagingRole ? (
+        ) : (
           <div className="space-y-3">
             <textarea
               value={messagingRole}
@@ -798,51 +840,33 @@ export default function ControlsSettingsPage() {
               }}
               rows={6}
               className="w-full resize-y rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none"
+              placeholder="Set a custom role. Leave empty to use the default role."
               aria-label="AI Role"
             />
-            <button
-              type="button"
-              onClick={() => {
-                setMessagingRole('');
-                setHasChanges(true);
-                toast.info('Role reset to default — click Save to persist');
-              }}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
-            >
-              <RotateCcw className="h-3 w-3" />
-              Reset to Default
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-[11px] font-medium text-zbooni-green/70">
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              Using default role
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setMessagingRole(DEFAULT_MESSAGING_ROLE);
+                  setHasChanges(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
+              >
+                Use Default Template
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMessagingRole('');
+                  setHasChanges(true);
+                  toast.info('Role reset to default — click Save to persist');
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
+              >
+                <RotateCcw className="h-3 w-3" />
+                Clear Custom Role
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setMessagingRoleExpanded(!messagingRoleExpanded)}
-              className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground/50 transition-colors hover:text-muted-foreground/80"
-            >
-              {messagingRoleExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              Preview default
-            </button>
-            {messagingRoleExpanded ? (
-              <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-xl border border-border/20 bg-muted/10 px-4 py-3 text-[11px] leading-relaxed text-muted-foreground/60">
-                {DEFAULT_MESSAGING_ROLE}
-              </pre>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => {
-                setMessagingRole(DEFAULT_MESSAGING_ROLE);
-                setHasChanges(true);
-              }}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
-            >
-              <Copy className="h-3 w-3" />
-              Customize
-            </button>
           </div>
         )}
       </div>
@@ -865,7 +889,7 @@ export default function ControlsSettingsPage() {
             <Loader2 className="h-4 w-4 animate-spin" />
             Loading...
           </div>
-        ) : messagingSystemPrompt ? (
+        ) : (
           <div className="space-y-3">
             <textarea
               value={messagingSystemPrompt}
@@ -875,51 +899,33 @@ export default function ControlsSettingsPage() {
               }}
               rows={12}
               className="w-full resize-y rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none font-mono text-[12px] leading-relaxed"
+              placeholder="Set a custom system prompt. Leave empty to use the default system prompt."
               aria-label="AI System Prompt"
             />
-            <button
-              type="button"
-              onClick={() => {
-                setMessagingSystemPrompt('');
-                setHasChanges(true);
-                toast.info('System prompt reset to default — click Save to persist');
-              }}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
-            >
-              <RotateCcw className="h-3 w-3" />
-              Reset to Default
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-[11px] font-medium text-zbooni-green/70">
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              Using default system prompt
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setMessagingSystemPrompt(DEFAULT_MESSAGING_SYSTEM_PROMPT);
+                  setHasChanges(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
+              >
+                Use Default Template
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMessagingSystemPrompt('');
+                  setHasChanges(true);
+                  toast.info('System prompt reset to default — click Save to persist');
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
+              >
+                <RotateCcw className="h-3 w-3" />
+                Clear Custom Prompt
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setMessagingSystemPromptExpanded(!messagingSystemPromptExpanded)}
-              className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground/50 transition-colors hover:text-muted-foreground/80"
-            >
-              {messagingSystemPromptExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              Preview default
-            </button>
-            {messagingSystemPromptExpanded ? (
-              <pre className="max-h-60 overflow-y-auto whitespace-pre-wrap rounded-xl border border-border/20 bg-muted/10 px-4 py-3 text-[11px] leading-relaxed text-muted-foreground/60 font-mono">
-                {DEFAULT_MESSAGING_SYSTEM_PROMPT}
-              </pre>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => {
-                setMessagingSystemPrompt(DEFAULT_MESSAGING_SYSTEM_PROMPT);
-                setHasChanges(true);
-              }}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
-            >
-              <Copy className="h-3 w-3" />
-              Customize
-            </button>
           </div>
         )}
       </div>

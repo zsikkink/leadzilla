@@ -1,0 +1,101 @@
+table_name,column_name,data_type,is_nullable
+AnalyticsDailyRollup,id,text,NO
+AnalyticsDailyRollup,day,timestamp without time zone,NO
+AnalyticsDailyRollup,icpProfileId,text,NO
+AnalyticsDailyRollup,discoveredCount,integer,NO
+AnalyticsDailyRollup,enrichedCount,integer,NO
+AnalyticsDailyRollup,scoredCount,integer,NO
+AnalyticsDailyRollup,validEmailCount,integer,NO
+AnalyticsDailyRollup,validDomainCount,integer,NO
+AnalyticsDailyRollup,industryMatchRate,double precision,NO
+AnalyticsDailyRollup,geoMatchRate,double precision,NO
+AnalyticsDailyRollup,createdAt,timestamp without time zone,NO
+AnalyticsDailyRollup,updatedAt,timestamp without time zone,NO
+FeedbackEvent,id,text,NO
+FeedbackEvent,leadId,text,NO
+FeedbackEvent,messageSendId,text,YES
+FeedbackEvent,eventType,USER-DEFINED,NO
+FeedbackEvent,source,USER-DEFINED,NO
+FeedbackEvent,providerEventId,text,YES
+FeedbackEvent,dedupeKey,text,NO
+FeedbackEvent,payloadJson,jsonb,YES
+FeedbackEvent,occurredAt,timestamp without time zone,NO
+FeedbackEvent,createdAt,timestamp without time zone,NO
+FeedbackEvent,replyClassification,USER-DEFINED,YES
+FeedbackEvent,replyText,text,YES
+IcpProfile,id,text,NO
+IcpProfile,name,text,NO
+IcpProfile,description,text,YES
+IcpProfile,targetIndustries,ARRAY,YES
+IcpProfile,targetCountries,ARRAY,YES
+IcpProfile,minCompanySize,integer,YES
+IcpProfile,maxCompanySize,integer,YES
+IcpProfile,requiredTechnologies,ARRAY,YES
+IcpProfile,excludedDomains,ARRAY,YES
+IcpProfile,isActive,boolean,NO
+IcpProfile,createdByUserId,text,YES
+IcpProfile,createdAt,timestamp without time zone,NO
+IcpProfile,updatedAt,timestamp without time zone,NO
+IcpProfile,metadataJson,jsonb,YES
+IcpProfile,qualificationLogic,USER-DEFINED,NO
+IcpProfile,featureList,jsonb,YES
+JobExecution,id,text,NO
+JobExecution,type,text,NO
+JobExecution,status,USER-DEFINED,NO
+JobExecution,attempts,integer,NO
+JobExecution,payload,jsonb,NO
+JobExecution,result,jsonb,YES
+JobExecution,error,text,YES
+JobExecution,leadId,text,YES
+JobExecution,createdAt,timestamp without time zone,NO
+JobExecution,startedAt,timestamp without time zone,YES
+JobExecution,finishedAt,timestamp without time zone,YES
+JobExecution,updatedAt,timestamp without time zone,NO
+Lead,id,text,NO
+Lead,firstName,text,NO
+Lead,lastName,text,NO
+Lead,email,text,NO
+Lead,source,text,NO
+Lead,status,USER-DEFINED,NO
+Lead,enrichmentData,jsonb,YES
+Lead,error,text,YES
+Lead,createdAt,timestamp without time zone,NO
+Lead,updatedAt,timestamp without time zone,NO
+Lead,phone,text,YES
+LeadDiscoveryRecord,id,text,NO
+LeadDiscoveryRecord,leadId,text,NO
+LeadDiscoveryRecord,icpProfileId,text,NO
+LeadDiscoveryRecord,provider,USER-DEFINED,NO
+LeadDiscoveryRecord,providerRecordId,text,NO
+LeadDiscoveryRecord,providerCursor,text,YES
+LeadDiscoveryRecord,queryHash,text,NO
+LeadDiscoveryRecord,status,USER-DEFINED,NO
+LeadDiscoveryRecord,rawPayload,jsonb,NO
+LeadDiscoveryRecord,errorMessage,text,YES
+LeadDiscoveryRecord,discoveredAt,timestamp without time zone,NO
+LeadDiscoveryRecord,createdAt,timestamp without time zone,NO
+LeadDiscoveryRecord,providerSource,text,YES
+LeadDiscoveryRecord,providerConfidence,double precision,YES
+LeadDiscoveryRecord,provenanceJson,jsonb,YES
+LeadEnrichmentRecord,id,text,NO
+LeadEnrichmentRecord,leadId,text,NO
+LeadEnrichmentRecord,provider,USER-DEFINED,NO
+LeadEnrichmentRecord,status,USER-DEFINED,NO
+LeadEnrichmentRecord,attempt,integer,NO
+LeadEnrichmentRecord,providerRecordId,text,YES
+LeadEnrichmentRecord,normalizedPayload,jsonb,YES
+LeadEnrichmentRecord,rawPayload,jsonb,YES
+LeadEnrichmentRecord,errorCode,text,YES
+LeadEnrichmentRecord,errorMessage,text,YES
+LeadEnrichmentRecord,enrichedAt,timestamp without time zone,YES
+LeadEnrichmentRecord,requestKey,text,NO
+LeadEnrichmentRecord,createdAt,timestamp without time zone,NO
+LeadEnrichmentRecord,updatedAt,timestamp without time zone,NO
+LeadFeatureSnapshot,id,text,NO
+LeadFeatureSnapshot,leadId,text,NO
+LeadFeatureSnapshot,icpProfileId,text,NO
+LeadFeatureSnapshot,discoveryRecordId,text,YES
+LeadFeatureSnapshot,enrichmentRecordId,text,YES
+LeadFeatureSnapshot,snapshotVersion,integer,NO
+LeadFeatureSnapshot,sourceVersion,text,NO
+LeadFeatureSnapshot,featureVectorHash,text,NO
