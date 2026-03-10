@@ -110,6 +110,11 @@ interface RejectedLeadRow {
   reasonDetails: string[];
   score: number | null;
   rejectedAt: string;
+  businessName: string | null;
+  websiteDomain: string | null;
+  category: string | null;
+  city: string | null;
+  country: string | null;
 }
 
 export default function LeadsPage() {
@@ -191,7 +196,7 @@ export default function LeadsPage() {
         const supabase = getSupabaseBrowserClient();
         const { data, error } = await supabase
           .from('lead_rejections')
-          .select('id, leadId:leadId, reason, score, rejectedAt:rejectedAt, metadata')
+          .select('id, leadId:leadId, reason, score, rejectedAt:rejectedAt, metadata, businessId:businessId, icpProfileId:icpProfileId')
           .order('rejectedAt', { ascending: false })
           .limit(100);
 
@@ -209,23 +214,50 @@ export default function LeadsPage() {
 
         const { data: leadRows } = await supabase
           .from('Lead')
-          .select('id, firstName, lastName, email, enrichmentData, icpProfileId')
+          .select('id, firstName, lastName, email, enrichmentData, icpProfileId, businessId')
           .in('id', leadIds);
 
         // Load ICP profile names for display
         const icpIds = [...new Set((leadRows ?? []).map((l) => l.icpProfileId as string | null).filter(Boolean))] as string[];
+        const rejectionIcpIds = [...new Set((data ?? []).map((r) => (r as Record<string, unknown>).icpProfileId as string | null).filter(Boolean))] as string[];
+        const allIcpIds = [...new Set([...icpIds, ...rejectionIcpIds])];
         const icpMap = new Map<string, string>();
-        if (icpIds.length > 0) {
+        if (allIcpIds.length > 0) {
           const { data: icpRows } = await supabase
             .from('IcpProfile')
             .select('id, name')
-            .in('id', icpIds);
+            .in('id', allIcpIds);
           for (const icp of icpRows ?? []) {
             icpMap.set(icp.id as string, icp.name as string);
           }
         }
 
-        const leadMap = new Map<string, { firstName: string | null; lastName: string | null; email: string; companyName: string | null; icpProfileName: string | null }>();
+        // Fetch business data for company names and other details
+        const businessIds = [
+          ...new Set([
+            ...(data ?? []).map((r) => (r as Record<string, unknown>).businessId as string | null).filter(Boolean),
+            ...(leadRows ?? []).map((l) => l.businessId as string | null).filter(Boolean),
+          ]),
+        ] as string[];
+        const bizMap = new Map<string, { name: string; websiteDomain: string | null; instagramHandle: string | null; category: string | null; city: string | null; country: string | null }>();
+        if (businessIds.length > 0) {
+          const { data: bizRows } = await supabase
+            .from('businesses')
+            .select('id, name, websiteDomain:websiteDomain, instagramHandle:instagramHandle, category, city, country')
+            .in('id', businessIds);
+          for (const b of bizRows ?? []) {
+            bizMap.set(b.id as string, {
+              name: b.name as string,
+              websiteDomain: b.websiteDomain as string | null,
+              instagramHandle: b.instagramHandle as string | null,
+              category: b.category as string | null,
+              city: b.city as string | null,
+              country: b.country as string | null,
+            });
+          }
+        }
+
+        const leadMap = new Map<string, { firstName: string | null; lastName: string | null; email: string; companyName: string | null; icpProfileName: string | null; businessId: string | null }>();
         for (const l of leadRows ?? []) {
           const enrichment = l.enrichmentData && typeof l.enrichmentData === 'object' && !Array.isArray(l.enrichmentData)
             ? l.enrichmentData as Record<string, unknown>
@@ -238,12 +270,13 @@ export default function LeadsPage() {
             email: l.email as string,
             companyName,
             icpProfileName: l.icpProfileId ? (icpMap.get(l.icpProfileId as string) ?? null) : null,
+            businessId: l.businessId as string | null,
           });
         }
 
         if (!cancelled) {
           setRejectedLeads(
-            (data ?? []).map((r: { id: string; leadId: string; reason: string; score: number | null; rejectedAt: string; metadata?: unknown }) => {
+            (data ?? []).map((r: { id: string; leadId: string; reason: string; score: number | null; rejectedAt: string; metadata?: unknown; businessId?: string | null }) => {
               const lead = leadMap.get(r.leadId);
               const metadata = r.metadata && typeof r.metadata === 'object' && !Array.isArray(r.metadata)
                 ? r.metadata as Record<string, unknown>
@@ -251,18 +284,26 @@ export default function LeadsPage() {
               const failedHardFilters = Array.isArray(metadata?.failedHardFilters)
                 ? metadata!.failedHardFilters.filter((x): x is string => typeof x === 'string')
                 : [];
+              // Get business data — try rejection's businessId first, then lead's businessId
+              const bizId = (r.businessId as string | null) ?? lead?.businessId ?? null;
+              const biz = bizId ? bizMap.get(bizId) : null;
               return {
                 id: r.id,
                 leadId: r.leadId,
                 firstName: lead?.firstName ?? null,
                 lastName: lead?.lastName ?? null,
                 email: lead?.email ?? '',
-                companyName: lead?.companyName ?? null,
+                companyName: lead?.companyName ?? biz?.name ?? null,
                 icpProfileName: lead?.icpProfileName ?? null,
                 reason: r.reason,
                 reasonDetails: failedHardFilters,
                 score: r.score,
                 rejectedAt: r.rejectedAt,
+                businessName: biz?.name ?? null,
+                websiteDomain: biz?.websiteDomain ?? null,
+                category: biz?.category ?? null,
+                city: biz?.city ?? null,
+                country: biz?.country ?? null,
               };
             }),
           );
@@ -638,14 +679,33 @@ export default function LeadsPage() {
                       className="cursor-pointer px-4 py-3 font-medium"
                       onClick={() => router.push(`/dashboard/leads/${rl.leadId}`)}
                     >
-                      {[rl.firstName, rl.lastName].filter(Boolean).join(' ') || 'Unknown'}
+                      <div>
+                        <p>{[rl.firstName, rl.lastName].filter(Boolean).join(' ') || rl.businessName || 'Unknown'}</p>
+                        {rl.category ? (
+                          <p className="mt-0.5 text-[10px] text-muted-foreground/60">{rl.category}</p>
+                        ) : null}
+                      </div>
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground">{rl.companyName || 'Unknown company'}</td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      <div>
+                        <p>{rl.companyName || rl.businessName || 'Unknown company'}</p>
+                        {rl.websiteDomain ? (
+                          <p className="mt-0.5 text-[10px] text-muted-foreground/60">{rl.websiteDomain}</p>
+                        ) : null}
+                      </div>
+                    </td>
                     <td className="px-4 py-3 text-muted-foreground">{rl.email || 'No email'}</td>
                     <td className="px-4 py-3">
-                      {rl.icpProfileName ? (
-                        <span className="truncate text-xs text-muted-foreground">{rl.icpProfileName}</span>
-                      ) : '\u2014'}
+                      <div>
+                        {rl.icpProfileName ? (
+                          <span className="truncate text-xs text-muted-foreground">{rl.icpProfileName}</span>
+                        ) : '\u2014'}
+                        {rl.city || rl.country ? (
+                          <p className="mt-0.5 text-[10px] text-muted-foreground/60">
+                            {[rl.city, rl.country].filter(Boolean).join(', ')}
+                          </p>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <span className={cn(

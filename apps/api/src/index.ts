@@ -896,6 +896,19 @@ async function main(): Promise<void> {
               ],
             }
           : {}),
+        // Exclude businesses whose leads were rejected (below threshold / hard filter)
+        // — those belong on the Rejected page, not Contact Recovery
+        NOT: {
+          business: {
+            businessConversions: {
+              some: {
+                lead: {
+                  rejection: { isNot: null },
+                },
+              },
+            },
+          },
+        },
       };
 
       const [total, rows] = await Promise.all([

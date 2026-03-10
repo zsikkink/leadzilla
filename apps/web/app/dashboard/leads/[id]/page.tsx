@@ -664,11 +664,20 @@ export default function LeadDetailPage() {
     }
   };
 
+  const l = lead.data;
+  const sortedTeamMembers = useMemo(
+    () => (l ? sortTeamMembers(teamMembers, l.email).ordered : []),
+    [teamMembers, l],
+  );
+  const primaryLinkedinUrl = sortedTeamMembers[0]?.linkedinUrl ?? sortedTeamMembers.find((member) => member.linkedinUrl)?.linkedinUrl ?? null;
+  const enrichmentFields = l ? extractEnrichmentFields(l.enrichmentData) : [];
+  const scoreInfo = l ? extractScoreInfo(l.enrichmentData) : null;
+
   if (lead.error) {
     return <p className="text-sm text-destructive">{lead.error}</p>;
   }
 
-  if (lead.isLoading || !lead.data) {
+  if (lead.isLoading || !l) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
@@ -676,15 +685,6 @@ export default function LeadDetailPage() {
       </div>
     );
   }
-
-  const l = lead.data;
-  const sortedTeamMembers = useMemo(
-    () => sortTeamMembers(teamMembers, l.email).ordered,
-    [teamMembers, l.email],
-  );
-  const primaryLinkedinUrl = sortedTeamMembers[0]?.linkedinUrl ?? sortedTeamMembers.find((member) => member.linkedinUrl)?.linkedinUrl ?? null;
-  const enrichmentFields = extractEnrichmentFields(l.enrichmentData);
-  const scoreInfo = extractScoreInfo(l.enrichmentData);
 
   const scorePercent = scoreInfo?.blendedScore ? Math.round(scoreInfo.blendedScore * 100) : null;
 

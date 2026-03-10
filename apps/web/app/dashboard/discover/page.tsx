@@ -74,13 +74,13 @@ function StatusIcon({ status }: { status: PipelineRunStatus }) {
   }
 }
 
-function ProgressBar({ processed, total }: { processed: number; total: number }) {
-  const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+function ProgressBar({ processed, total, label }: { processed: number; total: number; label: string }) {
+  const pct = total > 0 ? Math.min(Math.round((processed / total) * 100), 100) : 0;
   return (
     <div className="w-full">
       <div className="mb-1.5 flex items-center justify-between text-xs">
         <span className="font-medium text-muted-foreground">
-          {processed} / {total} leads
+          {processed} / {total} {label}
         </span>
         <span className="font-bold text-foreground">{pct}%</span>
       </div>
@@ -197,6 +197,7 @@ interface RunBatch {
     icpProfileIds?: string[] | undefined;
     countries: string[];
     limit: number;
+    totalItems: number;
     processedItems: number;
     failedItems: number;
     startedAt: string | null;
@@ -207,6 +208,7 @@ interface RunBatch {
   icpNames: string[];
   countries: string[];
   totalLimit: number;
+  totalItems: number;
   totalProcessed: number;
   totalFailed: number;
   overallStatus: PipelineRunStatus;
@@ -272,6 +274,7 @@ function buildBatch(
     icpNames,
     countries: uniqueCountries,
     totalLimit: runs.reduce((sum, r) => sum + r.limit, 0),
+    totalItems: runs.reduce((sum, r) => sum + r.totalItems, 0),
     totalProcessed: runs.reduce((sum, r) => sum + r.processedItems, 0),
     totalFailed: runs.reduce((sum, r) => sum + r.failedItems, 0),
     overallStatus,
@@ -841,11 +844,12 @@ export default function DiscoverPage() {
                     ) : null}
                   </div>
 
-                  {/* Progress bar */}
-                  {batch.totalLimit > 0 || batch.overallStatus === 'RUNNING' ? (
+                  {/* Progress bar — shows search task progress, not lead count */}
+                  {batch.totalItems > 0 || batch.overallStatus === 'RUNNING' ? (
                     <ProgressBar
                       processed={batch.totalProcessed}
-                      total={batch.totalLimit || 1}
+                      total={batch.totalItems || 1}
+                      label="tasks"
                     />
                   ) : null}
 
