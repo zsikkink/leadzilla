@@ -117,6 +117,7 @@ async function main(): Promise<void> {
   const boss = new PgBoss({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
+    max: 2,
   });
 
   await boss.start();
