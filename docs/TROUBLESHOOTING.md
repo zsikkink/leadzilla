@@ -1,245 +1,99 @@
-# Troubleshooting and Known Limitations
+# Troubleshooting
 
-This document lists common setup/runtime failures, expected warnings, and current repository limitations.
+Common errors and fixes for the cloud Supabase setup.
 
-## 1) Prerequisite Failures
+## Startup Errors
 
-### `pnpm install` warns about unsupported engine
+### `MaxClientsInSessionMode` — API or Worker crashes on boot
 
-Cause:
+**Cause:** Too many database connections. Cloud Supabase free tier allows ~15 concurrent connections. Without limits, Prisma + pg-boss can open 20+.
 
-- Node version is below `22`.
-
-Fix:
-
-```bash
-nvm install
-nvm use
-node -v
+**Fix:** Ensure `?connection_limit=3` is at the end of every `DATABASE_URL` and `DIRECT_URL`:
+```
+DATABASE_URL=postgresql://...pooler.supabase.com:5432/postgres?connection_limit=3
 ```
 
-Then re-run:
+### `Unable to reach API` on the web app
 
-```bash
-pnpm install --frozen-lockfile
+**Cause:** The API server hasn't finished starting yet.
+
+**Fix:** Check the terminal running `pnpm dev` — wait for `Server listening on 0.0.0.0:5050`. If it never appears, check the API logs for errors above it.
+
+### API fails with JWT/Supabase env errors
+
+**Cause:** Missing auth config.
+
+**Fix:** In `apps/api/.env.local`, set either:
+- `SUPABASE_JWT_ISSUER=https://<project-ref>.supabase.co/auth/v1`, or
+- `SUPABASE_PROJECT_REF=<project-ref>` (issuer is derived automatically)
+
+### Web login page shows nothing / blank screen
+
+**Cause:** Missing Supabase client config.
+
+**Fix:** In `apps/web/.env.local`, ensure both are set:
+```
+NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable-key>
 ```
 
-### `pnpm doctor` fails on Docker checks
+### `spawn sh ENOENT` from pnpm scripts
 
-Cause:
+**Cause:** System PATH is missing `/bin`.
 
-- Docker Desktop is not installed/running, or Compose plugin is unavailable.
-
-Fix:
-
-1. Start Docker Desktop.
-2. Verify:
-
+**Fix:**
 ```bash
-docker info
-docker compose version
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 ```
+Then retry the command.
 
-3. Re-run:
-
-```bash
-pnpm doctor
-```
-
-## 2) Database and Queue Failures
-
-### `pnpm db:migrate` / `pnpm db:seed` cannot connect
-
-Cause:
-
-- Postgres is not running on `localhost:5434`.
-- `DATABASE_URL` / `DIRECT_URL` mismatch.
-
-Fix:
-
-```bash
-pnpm dev:infra
-cat packages/db/.env
-```
-
-Expected local DB URLs:
-
-- `postgresql://postgres:postgres@localhost:5434/lead_flood`
-
-### Worker/API queue issues (jobs not processing)
-
-Cause:
-
-- `PG_BOSS_SCHEMA` mismatch between API and worker env.
-
-Fix:
-
-1. Check `apps/api/.env.local`.
-2. Check `apps/worker/.env.local`.
-3. Ensure both use the same `PG_BOSS_SCHEMA` (default `pgboss`).
-
-## 3) Environment Validation Errors
-
-### API fails to start with JWT env errors
-
-Cause:
-
-- `JWT_ACCESS_SECRET` or `JWT_REFRESH_SECRET` missing or too short.
-
-Fix:
-
-- Set both values in `apps/api/.env.local` with at least 32 characters.
-
-### API fails to start with Supabase JWT verifier errors
-
-Cause:
-
-- Neither `SUPABASE_JWT_ISSUER` nor `SUPABASE_PROJECT_REF` is set.
-
-Fix:
-
-- Set `SUPABASE_PROJECT_REF=<your-project-ref>` in `apps/api/.env.local`, or set `SUPABASE_JWT_ISSUER=https://<ref>.supabase.co/auth/v1`.
-- Optional: set `SUPABASE_JWT_AUDIENCE=authenticated` if you use a non-default audience.
-
-### Web login fails before submitting credentials
-
-Cause:
-
-- `NEXT_PUBLIC_SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` missing in `apps/web/.env.local`.
-
-Fix:
-
-- Set both vars and restart the web app.
+## Environment Validation Errors
 
 ### Provider-related runtime errors
 
-Cause:
+**Cause:** A provider is enabled but its API key is missing.
 
-- Provider enabled but corresponding API key missing.
+**Fix:** Either disable the provider (`*_ENABLED=false`) or supply its key. For basic dev work, leave all optional providers disabled.
 
-Fix:
+### Blank env values cause validation failures
 
-- Either disable the provider toggle (`*_ENABLED=false`) or supply its key.
-- For local default flow, keep optional providers disabled unless actively testing them.
+**Cause:** Some env validators treat `VAR=` (empty string) as invalid rather than undefined.
 
-## 4) Testing and Build Failures
+**Fix:** Delete the line entirely instead of leaving it blank. If you don't need `SUPABASE_JWT_ISSUER`, remove the line — don't set it to empty.
 
-### `pnpm test` fails in integration/e2e suites
+## Database Issues
 
-Cause:
+### Worker/API queue jobs not processing
 
-- Postgres dependency is unavailable.
+**Cause:** `PG_BOSS_SCHEMA` mismatch between API and Worker.
 
-Fix:
+**Fix:** Both `apps/api/.env.local` and `apps/worker/.env.local` must use `PG_BOSS_SCHEMA=pgboss`.
 
-```bash
-pnpm dev:infra
-pnpm db:migrate
-pnpm db:seed
-pnpm test
+### Discovery features not visible / admin access denied
+
+**Cause:** Your Supabase Auth user ID is not in the `app_admins` table.
+
+**Fix:** Ask the team lead to insert your user ID:
+```sql
+INSERT INTO public.app_admins (user_id) VALUES ('<your-auth-user-id>') ON CONFLICT DO NOTHING;
 ```
 
-### `pnpm test:e2e` hangs or times out
+## Build and Test
 
-Cause:
+### `pnpm typecheck` / `pnpm build` fails
 
-- API startup or DB readiness issue during test bootstrap.
-
-Fix:
-
-1. Run `pnpm db:migrate`.
-2. Verify DB connectivity.
-3. Re-run only API e2e for faster iteration:
-
+Run the full chain to isolate where it breaks:
 ```bash
-pnpm --filter @lead-flood/api test:e2e
+pnpm typecheck   # types first
+pnpm lint         # then style
+pnpm test         # then tests
+pnpm build        # then build
 ```
 
-## 5) Expected Warnings
+Fix errors in order — type errors often cause downstream build failures.
 
-### Next.js warning during `pnpm build`
+### Expected warnings (safe to ignore)
 
-Warning:
-
-- `The Next.js plugin was not detected in your ESLint configuration`
-
-Status:
-
-- Non-blocking build warning; does not fail CI/build.
-
-Current handling:
-
-- Documented as known limitation.
-- Lint/typecheck/test/build remain green.
-
-### Prisma update banner during generate/migrate/seed
-
-Warning:
-
-- Prisma CLI may print an update-available banner (for example, `Update available 6.x -> 7.x`).
-
-Status:
-
-- Informational only; does not indicate a failed migration/seed/build.
-
-Current handling:
-
-- Keep current pinned versions in `packages/db/package.json` unless a planned upgrade is scheduled.
-
-### pnpm warning about ignored build scripts
-
-Warning:
-
-- `Ignored build scripts: @prisma/client, @prisma/engines, esbuild, prisma, sharp`
-
-Status:
-
-- Non-blocking in current workflows; install/bootstrap/test/build still pass.
-
-When to act:
-
-- If dependency install behavior changes in your environment and build artifacts are missing, run:
-
-```bash
-pnpm approve-builds
-```
-
-- Then rerun:
-
-```bash
-pnpm install --frozen-lockfile
-pnpm bootstrap
-```
-
-## 6) Resolved Deprecations
-
-### Prisma `package.json#prisma` deprecation
-
-Status:
-
-- Deprecated `package.json#prisma` configuration has been removed from `packages/db/package.json`.
-
-Impact:
-
-- No functional change to existing `pnpm db:*` workflows.
-
-## 7) Known Limitations (Current State)
-
-1. API module scaffolds for learning/messaging/feedback/analytics exist but are not mounted in `apps/api/src/server.ts`.
-2. Several repository methods in those modules intentionally throw `NotImplemented` errors.
-3. Queue load and OLTP load share the same Postgres instance.
-4. Provider integrations are feature-flag driven and require manual API key setup per environment.
-
-## 8) Fast Recovery Path
-
-If local state is uncertain, run this sequence:
-
-```bash
-pnpm doctor
-pnpm dev:infra
-pnpm db:migrate
-pnpm db:seed
-pnpm icp:seed
-pnpm test
-pnpm build
-```
+- `The Next.js plugin was not detected in your ESLint configuration` — non-blocking
+- `Update available` from Prisma CLI — informational, keep pinned versions
+- `Ignored build scripts: @prisma/client, @prisma/engines, esbuild, prisma, sharp` — normal with pnpm

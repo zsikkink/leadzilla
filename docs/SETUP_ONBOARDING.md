@@ -1,140 +1,121 @@
-# Setup and Onboarding
+# Developer Setup Guide
 
-This guide is the canonical setup for a new contributor starting from zero context.
+Get running from a fresh clone. No Docker required.
 
-## 1) Clone
+## Prerequisites
 
-```bash
-git clone <repo-url>
-cd lead-flood
-```
-
-## 2) Install Node and pnpm
-
-The repo requires Node `22+` and pnpm `10.14.0`.
-
-```bash
-nvm install
-nvm use
-corepack enable
-```
+- **Node.js 22+** (use `nvm install` — the repo has `.nvmrc`)
+- **pnpm 10.14.0** (`corepack enable` activates it)
 
 Verify:
-
 ```bash
-node -v
-pnpm -v
+node -v    # should print v22.x
+pnpm -v    # should print 10.14.0
 ```
 
-## 3) Run Environment Preflight
+## 1) Clone and Install
 
 ```bash
-pnpm doctor
+git clone https://github.com/zsikkink/lead-flood.git
+cd lead-flood
+nvm use
+corepack enable
+pnpm install
 ```
 
-The preflight checks:
+## 2) Create Environment Files
 
-- Node version (`22+`)
-- `pnpm` availability
-- Docker + Docker Compose + daemon availability
-
-## 4) Install Workspace Dependencies
-
-```bash
-pnpm install --frozen-lockfile
-```
-
-Use pnpm only in this repository.
-
-## 5) Configure Environment Files
-
-Copy these templates once:
-
+Copy the templates:
 ```bash
 cp apps/api/.env.example apps/api/.env.local
 cp apps/worker/.env.example apps/worker/.env.local
 cp apps/web/.env.example apps/web/.env.local
-cp packages/db/.env.example packages/db/.env
 ```
 
-For local defaults, these values should stay aligned:
+## 3) Fill In Credentials
 
-- `DATABASE_URL=postgresql://postgres:postgres@localhost:5434/lead_flood`
-- `DIRECT_URL=postgresql://postgres:postgres@localhost:5434/lead_flood`
-- `PG_BOSS_SCHEMA=pgboss`
+You'll get these values from the team lead (shared securely, not in git).
 
-JWT secrets in `apps/api/.env.local` must be at least 32 characters.
-Supabase JWT verification requires either:
-- `SUPABASE_JWT_ISSUER`
-- or `SUPABASE_PROJECT_REF` (issuer is derived)
-
-Web login requires:
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
-
-Provider keys are optional in local development. Keep providers disabled unless keys are set.
-
-## 6) Start Local Infrastructure
-
-```bash
-pnpm dev:infra
+### apps/api/.env.local
 ```
-
-This starts:
-
-- Postgres on `5434`
-- Mailhog UI on `8025`
-
-## 7) Apply Migrations and Seed Data
-
-```bash
-pnpm db:migrate
-pnpm db:seed
-pnpm icp:seed
+DATABASE_URL=postgresql://postgres.<project-ref>:<PASSWORD>@aws-1-us-east-1.pooler.supabase.com:5432/postgres?connection_limit=3
+DIRECT_URL=postgresql://postgres.<project-ref>:<PASSWORD>@aws-1-us-east-1.pooler.supabase.com:5432/postgres?connection_limit=3
+SUPABASE_JWT_ISSUER=https://<project-ref>.supabase.co/auth/v1
 ```
+Keep the rest of the defaults from the example file.
 
-Login is handled by Supabase Auth users. Create users in Supabase Auth and sign in from `/login`.
+### apps/worker/.env.local
+```
+DATABASE_URL=postgresql://postgres.<project-ref>:<PASSWORD>@aws-1-us-east-1.pooler.supabase.com:5432/postgres?connection_limit=3
+```
+Discovery and enrichment API keys (SerpAPI, Hunter, OpenAI, etc.) are optional for basic dev work. Leave them blank unless you're working on the pipeline.
 
-## 8) Run Applications
+### apps/web/.env.local
+```
+NEXT_PUBLIC_API_BASE_URL=http://localhost:5050
+NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable-key>
+```
+The Supabase URL and publishable key are safe client-side values — ask the team lead.
+
+### Important env rules
+- **Never leave optional vars as empty strings** — some validators treat blank as invalid. Delete the line entirely if you don't need it.
+- **`?connection_limit=3`** is required on DATABASE_URL. The cloud DB has limited connections; without this cap the app crashes on startup.
+- **URL-encode special characters** in the DB password (e.g. `!` becomes `%21`).
+
+## 4) Start the App
 
 ```bash
 pnpm dev
 ```
 
-Services:
+This starts three services concurrently:
+- **Web** (Next.js): http://localhost:3000
+- **API** (Fastify): http://localhost:5050
+- **Worker** (pg-boss): runs in background
 
-- Web: `http://localhost:3000`
-- API: `http://localhost:5050`
-- Health: `http://localhost:5050/health`
-- Ready: `http://localhost:5050/ready`
+Wait for `Server listening on 0.0.0.0:5050` in the terminal — that means the API is ready and the web app will load.
 
-## 9) Run Tests and Quality Checks
+## 5) Log In
 
-Postgres must be running for integration/e2e tests.
+1. Go to http://localhost:3000
+2. Sign in with your Supabase Auth account (the team lead creates this for you in the Supabase dashboard)
+3. To access admin/discovery features, your user ID must be in the `app_admins` table — the team lead handles this
+
+## 6) Verify Everything Works
 
 ```bash
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm test:e2e
-pnpm build
+pnpm typecheck   # TypeScript compilation
+pnpm lint         # ESLint
+pnpm test         # Unit + integration tests
+pnpm build        # Full production build
 ```
 
-## 10) Common Scripts
+All four should pass with zero errors.
 
-- `pnpm bootstrap`
-  - Runs preflight checks
-  - Installs dependencies with lockfile
-  - Creates local env files (if missing)
-  - Starts infra
-  - Applies migrations
-  - Seeds demo data and ICP profiles
+## Architecture Overview
 
-- `pnpm learning:backfill-features -- --icpProfileId <icp_id> --batchSize 200`
-- `pnpm learning:backfill-features -- --dry-run`
-- `pnpm doctor`
-  - Runs prerequisite checks only
+```
+Frontend (Next.js :3000)  →  API (Fastify :5050)  →  Worker (pg-boss queues)
+         ↓                         ↓                         ↓
+    Supabase Auth           Supabase Postgres          Discovery pipeline
+    (login/session)         (all app data)             (SerpAPI → scoring → messaging)
+```
 
-## 11) Troubleshooting
+- **API** handles REST endpoints, auth verification, and enqueues jobs via pg-boss
+- **Worker** processes background jobs: discovery, enrichment, scoring, messaging
+- **Web** is the dashboard — displays leads, discovery runs, analytics, settings
+- **Database** is a shared cloud Supabase Postgres instance (no local DB needed)
 
-Use `docs/TROUBLESHOOTING.md` for common failure scenarios and known limitations.
+For a deep dive into each pipeline stage, read `lead-flood-system-walkthrough.md` in the repo root.
+
+## Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| `Unable to reach API` on web | API hasn't started yet — wait for "Server listening" in terminal |
+| `MaxClientsInSessionMode` crash | Missing `?connection_limit=3` on DATABASE_URL |
+| Blank page after login | Check `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` |
+| `spawn sh ENOENT` from pnpm | Your PATH is missing `/bin`. Run: `export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"` |
+| Discovery features hidden | Your user ID needs to be in `app_admins` table |
+| Worker crashes on start | Check DATABASE_URL is set in `apps/worker/.env.local` |
