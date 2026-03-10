@@ -31,6 +31,7 @@ import { LeadStatusBadge } from '../../../../src/components/lead-status-badge.js
 import { ScoreBandBadge } from '../../../../src/components/score-band-badge.js';
 import { ScoringBreakdown } from '../../../../src/components/scoring-breakdown.js';
 import {
+  getSocialPlatformLabel,
   normalizeSocialPlatform,
   SOCIAL_BRAND_COLORS,
   SocialLinkIcon,
@@ -460,10 +461,13 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
           <div className="flex flex-wrap gap-2">
             {mergedSocialLinks.map((sl, i) => {
               const platform = normalizeSocialPlatform(sl.platform);
-              const brandColor = SOCIAL_BRAND_COLORS[platform] ?? SOCIAL_BRAND_COLORS.website;
+              const brandColor = SOCIAL_BRAND_COLORS[platform] ?? '#6366F1';
+              const label = getSocialPlatformLabel(sl.platform);
+              const isGradient = brandColor.startsWith('linear-gradient');
               const hoverStyle = {
-                '--social-brand-color': brandColor,
-                '--social-brand-shadow': `${brandColor}40`,
+                '--social-brand-color': isGradient ? '#DD2A7B' : brandColor,
+                '--social-brand-shadow': isGradient ? '#DD2A7B40' : `${brandColor}40`,
+                '--social-brand-gradient': brandColor,
               } as CSSProperties;
 
               return (
@@ -473,10 +477,17 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
                   target="_blank"
                   rel="noopener noreferrer"
                   style={hoverStyle}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-border/30 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground transition-all duration-200 hover:text-[var(--social-brand-color)] hover:border-[var(--social-brand-color)] hover:shadow-[0_0_8px_var(--social-brand-shadow)]"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border/30 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground transition-all duration-200 hover:border-[var(--social-brand-color)] hover:shadow-[0_0_8px_var(--social-brand-shadow)] hover:text-[var(--social-brand-color)]"
                 >
-                  <SocialLinkIcon platform={sl.platform} className="h-3 w-3" />
-                  {sl.platform}
+                  <SocialLinkIcon
+                    platform={sl.platform}
+                    className={`h-3 w-3 ${isGradient ? 'text-[#DD2A7B]' : ''}`}
+                  />
+                  <span
+                    className={isGradient ? 'bg-[image:var(--social-brand-gradient)] bg-clip-text text-transparent' : undefined}
+                  >
+                    {label}
+                  </span>
                   <ExternalLink className="h-2.5 w-2.5" />
                 </a>
               );

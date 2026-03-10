@@ -18,6 +18,8 @@ import {
   ListContactRecoveryItemsResponseSchema,
   ListLeadsQuerySchema,
   ListLeadsResponseSchema,
+  ListRejectedLeadsQuerySchema,
+  ListRejectedLeadsResponseSchema,
   RejectContactRecoveryRequestSchema,
   RejectLeadRequestSchema,
   type RunDiscoverySeedRequest,
@@ -630,6 +632,103 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 
       reply.status(204);
       return;
+    });
+
+    api.get('/v1/leads/rejected', async (request, reply) => {
+      const parsedQuery = ListRejectedLeadsQuerySchema.safeParse(request.query);
+      if (!parsedQuery.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'Invalid rejected leads query',
+          requestId: request.id,
+        });
+      }
+
+      const where: Prisma.LeadRejectionWhereInput = {
+        ...(parsedQuery.data.reason ? { reason: parsedQuery.data.reason } : {}),
+      };
+
+      const [total, rows] = await Promise.all([
+        prisma.leadRejection.count({ where }),
+        prisma.leadRejection.findMany({
+          where,
+          orderBy: [{ rejectedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          skip: (parsedQuery.data.page - 1) * parsedQuery.data.pageSize,
+          take: parsedQuery.data.pageSize,
+          include: {
+            lead: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                email: true,
+                enrichmentData: true,
+                business: {
+                  select: {
+                    name: true,
+                    websiteDomain: true,
+                    category: true,
+                    city: true,
+                    countryCode: true,
+                  },
+                },
+              },
+            },
+          },
+        }),
+      ]);
+
+      const icpIds = Array.from(new Set(rows.map((row) => row.icpProfileId).filter(Boolean))) as string[];
+      const icps = icpIds.length > 0
+        ? await prisma.icpProfile.findMany({
+            where: { id: { in: icpIds } },
+            select: { id: true, name: true },
+          })
+        : [];
+      const icpNameMap = new Map(icps.map((icp) => [icp.id, icp.name]));
+
+      return ListRejectedLeadsResponseSchema.parse({
+        items: rows.map((row) => {
+          const enrichment =
+            row.lead.enrichmentData && typeof row.lead.enrichmentData === 'object' && !Array.isArray(row.lead.enrichmentData)
+              ? row.lead.enrichmentData as Record<string, unknown>
+              : null;
+          const metadata =
+            row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+              ? row.metadata as Record<string, unknown>
+              : null;
+          const reasonDetails = Array.isArray(metadata?.failedHardFilters)
+            ? metadata.failedHardFilters.filter((value): value is string => typeof value === 'string')
+            : [];
+
+          return {
+            id: row.id,
+            leadId: row.leadId,
+            firstName: row.lead.firstName,
+            lastName: row.lead.lastName,
+            email: row.lead.email,
+            companyName:
+              (typeof enrichment?.companyName === 'string' ? enrichment.companyName : null)
+              ?? (typeof enrichment?.company_name === 'string' ? enrichment.company_name : null)
+              ?? row.lead.business?.name
+              ?? null,
+            businessName: row.lead.business?.name ?? null,
+            websiteDomain: row.lead.business?.websiteDomain ?? null,
+            category: row.lead.business?.category ?? null,
+            city: row.lead.business?.city ?? null,
+            country: row.lead.business?.countryCode ?? null,
+            icpProfileId: row.icpProfileId ?? null,
+            icpProfileName: row.icpProfileId ? (icpNameMap.get(row.icpProfileId) ?? null) : null,
+            reason: row.reason,
+            reasonDetails,
+            score: row.score ?? null,
+            rejectedAt: row.rejectedAt.toISOString(),
+          };
+        }),
+        page: parsedQuery.data.page,
+        pageSize: parsedQuery.data.pageSize,
+        total,
+      });
     });
 
     api.get('/v1/jobs/:id', async (request, reply) => {

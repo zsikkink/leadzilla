@@ -185,4 +185,86 @@ describe('qualification rules integration', () => {
 
     await server.close();
   });
+
+  it('creates and updates ICP profiles with feature lists using JWT auth only', async () => {
+    const server = buildServer({
+      env,
+      logger: createLogger({ service: 'api-test', env: 'test', level: 'error' }),
+      verifyAccessToken: async () => ({ sub: 'user_1', email: null, firstName: null, lastName: null }),
+      checkDatabaseHealth: async () => true,
+      checkSchemaHealth: async () => ({ status: 'ok', missingTables: [], missingEnumValues: [] }),
+      authenticateUser: async () => null,
+      createLeadAndEnqueue: async () => ({ leadId: 'lead_1', jobId: 'job_1' }),
+      getLeadById: async () => null,
+      listLeads: async () => ({ items: [], page: 1, pageSize: 20, total: 0 }),
+      listContactRecoveryItems: async () => ({ items: [], page: 1, pageSize: 20, total: 0 }),
+      getContactRecoveryItem: async () => null,
+      rejectContactRecoveryItem: async () => null,
+      getJobById: async () => null,
+      adminApiKey: TEST_ADMIN_KEY,
+    });
+
+    const createResponse = await server.inject({
+      method: 'POST',
+      url: '/v1/icps',
+      headers: authHeaders(),
+      payload: {
+        name: `JWT ICP ${Date.now()}`,
+        description: 'jwt create test',
+        targetIndustries: ['SaaS'],
+        targetCountries: ['UAE'],
+        featureList: ['Search by category', 'Pitch feature A'],
+        isActive: true,
+      },
+    });
+
+    expect(createResponse.statusCode).toBe(200);
+    const created = createResponse.json() as {
+      id: string;
+      featureList: string[] | null;
+    };
+    createdIcpIds.push(created.id);
+    expect(created.featureList).toEqual(['Search by category', 'Pitch feature A']);
+
+    const updateResponse = await server.inject({
+      method: 'PATCH',
+      url: `/v1/icps/${created.id}`,
+      headers: authHeaders(),
+      payload: {
+        featureList: ['Updated feature'],
+        requiredTechnologies: ['HubSpot'],
+      },
+    });
+
+    expect(updateResponse.statusCode).toBe(200);
+    const updated = updateResponse.json() as {
+      featureList: string[] | null;
+      requiredTechnologies: string[];
+    };
+    expect(updated.featureList).toEqual(['Updated feature']);
+    expect(updated.requiredTechnologies).toEqual(['HubSpot']);
+
+    const replaceRulesResponse = await server.inject({
+      method: 'PUT',
+      url: `/v1/icps/${created.id}/rules`,
+      headers: authHeaders(),
+      payload: {
+        rules: [
+          {
+            name: 'Country in region',
+            fieldKey: 'country',
+            operator: 'IN',
+            valueJson: ['UAE'],
+            isRequired: true,
+            weight: 0,
+            orderIndex: 1,
+          },
+        ],
+      },
+    });
+
+    expect(replaceRulesResponse.statusCode).toBe(200);
+
+    await server.close();
+  });
 });

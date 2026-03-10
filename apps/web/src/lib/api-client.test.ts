@@ -175,4 +175,43 @@ describe('ApiClient', () => {
       }),
     );
   });
+
+  it('requests rejected leads with query params', async () => {
+    const mockResponse = { items: [], page: 1, pageSize: 20, total: 0 };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify(mockResponse), { status: 200 }),
+    );
+
+    await client.listRejectedLeads({ page: 1, pageSize: 20, reason: 'MANUAL' });
+
+    const calledUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
+    expect(calledUrl).toContain('/v1/leads/rejected');
+    expect(calledUrl).toContain('reason=MANUAL');
+  });
+
+  it('replaces ICP rules', async () => {
+    const mockResponse = { items: [] };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify(mockResponse), { status: 200 }),
+    );
+
+    await client.replaceIcpRules('icp_1', {
+      rules: [
+        {
+          name: 'Country in region',
+          fieldKey: 'country',
+          operator: 'IN',
+          valueJson: ['UAE'],
+          orderIndex: 1,
+        },
+      ],
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/v1/icps/icp_1/rules'),
+      expect.objectContaining({
+        method: 'PUT',
+      }),
+    );
+  });
 });

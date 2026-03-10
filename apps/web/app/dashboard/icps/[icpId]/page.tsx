@@ -1,5 +1,11 @@
 'use client';
 
+import type {
+  IcpProfileResponse,
+  QualificationOperator,
+  QualificationRuleResponse,
+  QualificationRuleType,
+} from '@lead-flood/contracts';
 import {
   ArrowLeft,
   BarChart3,
@@ -31,7 +37,7 @@ import { useAuth } from '../../../../src/hooks/use-auth.js';
 interface EditableFieldProps {
   label: string;
   value: string;
-  onSave: (val: string) => void;
+  onSave: (val: string) => Promise<boolean>;
   multiline?: boolean | undefined;
   textClassName?: string | undefined;
 }
@@ -39,8 +45,25 @@ interface EditableFieldProps {
 function EditableField({ label, value, onSave, multiline, textClassName }: EditableFieldProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
+  const [isSaving, setIsSaving] = useState(false);
 
-  const save = () => { onSave(draft); setEditing(false); };
+  useEffect(() => {
+    if (!editing) {
+      setDraft(value);
+    }
+  }, [editing, value]);
+
+  const save = async () => {
+    setIsSaving(true);
+    try {
+      const saved = await onSave(draft);
+      if (saved) {
+        setEditing(false);
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  };
   const cancel = () => { setDraft(value); setEditing(false); };
 
   if (editing) {
@@ -55,6 +78,7 @@ function EditableField({ label, value, onSave, multiline, textClassName }: Edita
               rows={5}
               className="flex-1 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 py-2 text-sm leading-relaxed focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
               autoFocus
+              disabled={isSaving}
               onKeyDown={(e) => { if (e.key === 'Escape') cancel(); }}
             />
           ) : (
@@ -63,13 +87,20 @@ function EditableField({ label, value, onSave, multiline, textClassName }: Edita
               onChange={(e) => setDraft(e.target.value)}
               className="h-8 flex-1 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
               autoFocus
-              onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel(); }}
+              disabled={isSaving}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  void save();
+                }
+                if (e.key === 'Escape') cancel();
+              }}
             />
           )}
-          <button type="button" onClick={save} className="rounded-lg p-1.5 text-zbooni-green hover:bg-zbooni-green/10">
-            <Check className="h-3.5 w-3.5" />
+          <button type="button" onClick={() => void save()} disabled={isSaving} className="rounded-lg p-1.5 text-zbooni-green hover:bg-zbooni-green/10 disabled:opacity-50">
+            {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
           </button>
-          <button type="button" onClick={cancel} className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent/50">
+          <button type="button" onClick={cancel} disabled={isSaving} className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent/50 disabled:opacity-50">
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -99,7 +130,7 @@ function EditableField({ label, value, onSave, multiline, textClassName }: Edita
 interface EditableTagsProps {
   label: string;
   tags: string[];
-  onSave: (tags: string[]) => void;
+  onSave: (tags: string[]) => Promise<boolean>;
   tagClassName?: string | undefined;
 }
 
@@ -107,6 +138,14 @@ function EditableTags({ label, tags, onSave, tagClassName }: EditableTagsProps) 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(tags);
   const [newTag, setNewTag] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (!editing) {
+      setDraft(tags);
+      setNewTag('');
+    }
+  }, [editing, tags]);
 
   const addTag = () => {
     const trimmed = newTag.trim();
@@ -116,7 +155,17 @@ function EditableTags({ label, tags, onSave, tagClassName }: EditableTagsProps) 
     }
   };
   const removeTag = (tag: string) => setDraft(draft.filter((t) => t !== tag));
-  const save = () => { onSave(draft); setEditing(false); };
+  const save = async () => {
+    setIsSaving(true);
+    try {
+      const saved = await onSave(draft);
+      if (saved) {
+        setEditing(false);
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  };
   const cancel = () => { setDraft(tags); setNewTag(''); setEditing(false); };
 
   return (
@@ -155,15 +204,21 @@ function EditableTags({ label, tags, onSave, tagClassName }: EditableTagsProps) 
             onChange={(e) => setNewTag(e.target.value)}
             placeholder="Add tag..."
             className="h-7 w-36 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-xs focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-            onKeyDown={(e) => e.key === 'Enter' && addTag()}
+            disabled={isSaving}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                addTag();
+              }
+            }}
           />
-          <button type="button" onClick={addTag} className="rounded-lg p-1 text-zbooni-teal hover:bg-zbooni-teal/10">
+          <button type="button" onClick={addTag} disabled={isSaving} className="rounded-lg p-1 text-zbooni-teal hover:bg-zbooni-teal/10 disabled:opacity-50">
             <Plus className="h-3.5 w-3.5" />
           </button>
-          <button type="button" onClick={save} className="rounded-lg p-1 text-zbooni-green hover:bg-zbooni-green/10">
-            <Check className="h-3.5 w-3.5" />
+          <button type="button" onClick={() => void save()} disabled={isSaving} className="rounded-lg p-1 text-zbooni-green hover:bg-zbooni-green/10 disabled:opacity-50">
+            {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
           </button>
-          <button type="button" onClick={cancel} className="rounded-lg p-1 text-muted-foreground hover:bg-accent/50">
+          <button type="button" onClick={cancel} disabled={isSaving} className="rounded-lg p-1 text-muted-foreground hover:bg-accent/50 disabled:opacity-50">
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -579,6 +634,269 @@ interface IcpMeta {
   angle?: string[] | undefined;
 }
 
+type EditableRule = {
+  id?: string | undefined;
+  name: string;
+  fieldKey: string;
+  operator: QualificationOperator;
+  valueText: string;
+  weight: string;
+  isRequired: boolean;
+  isActive: boolean;
+  ruleType: QualificationRuleType;
+};
+
+const RULE_OPERATORS: QualificationOperator[] = ['EQ', 'NEQ', 'GT', 'GTE', 'LT', 'LTE', 'IN', 'NOT_IN', 'CONTAINS'];
+
+function stringifyRuleValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '';
+  }
+}
+
+function parseRuleValue(valueText: string): unknown {
+  const trimmed = valueText.trim();
+  if (trimmed.length === 0) {
+    return '';
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+
+function toEditableRule(rule: QualificationRuleResponse): EditableRule {
+  return {
+    id: rule.id,
+    name: rule.name,
+    fieldKey: rule.fieldKey,
+    operator: rule.operator,
+    valueText: stringifyRuleValue(rule.valueJson),
+    weight: rule.weight !== null ? String(rule.weight) : '',
+    isRequired: rule.isRequired,
+    isActive: rule.isActive,
+    ruleType: rule.ruleType,
+  };
+}
+
+function createEmptyRule(orderIndex: number): EditableRule {
+  return {
+    name: `Rule ${orderIndex}`,
+    fieldKey: '',
+    operator: 'EQ',
+    valueText: '',
+    weight: '1',
+    isRequired: false,
+    isActive: true,
+    ruleType: 'WEIGHTED',
+  };
+}
+
+function RulesEditor({
+  rules,
+  onSave,
+}: {
+  rules: QualificationRuleResponse[];
+  onSave: (rules: EditableRule[]) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draftRules, setDraftRules] = useState<EditableRule[]>(rules.map(toEditableRule));
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (!editing) {
+      setDraftRules(rules.map(toEditableRule));
+    }
+  }, [editing, rules]);
+
+  const updateRule = (index: number, patch: Partial<EditableRule>) => {
+    setDraftRules((current) => current.map((rule, currentIndex) => (
+      currentIndex === index ? { ...rule, ...patch } : rule
+    )));
+  };
+
+  const removeRule = (index: number) => {
+    setDraftRules((current) => current.filter((_, currentIndex) => currentIndex !== index));
+  };
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      if (draftRules.some((rule) => rule.fieldKey.trim().length === 0)) {
+        toast.error('Every qualification rule needs a field key');
+        return;
+      }
+
+      if (draftRules.some((rule) => !rule.isRequired && rule.weight.trim().length > 0 && !Number.isFinite(Number(rule.weight)))) {
+        toast.error('Weighted rules need a valid numeric weight');
+        return;
+      }
+
+      const saved = await onSave(draftRules);
+      if (saved) {
+        setEditing(false);
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <Shield className="h-4 w-4 text-zbooni-teal" />
+          <h2 className="text-base font-bold tracking-tight">Qualification Rules</h2>
+          <span className="ml-auto text-xs text-muted-foreground">{rules.length} rules</span>
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="rounded-lg border border-border/50 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          >
+            Edit Rules
+          </button>
+        </div>
+        <div className="space-y-2">
+          {rules.map((rule) => (
+            <div key={rule.id} className="rounded-xl border border-border/30 bg-zbooni-dark/30 px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-semibold">{rule.name}</p>
+                <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                  {rule.ruleType}
+                </span>
+                {!rule.isActive ? (
+                  <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-300">
+                    Inactive
+                  </span>
+                ) : null}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                <span className="font-mono">{rule.fieldKey}</span> {rule.operator} <span className="font-mono">{stringifyRuleValue(rule.valueJson)}</span>
+              </p>
+            </div>
+          ))}
+          {rules.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No qualification rules configured.</p>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <Shield className="h-4 w-4 text-zbooni-teal" />
+        <h2 className="text-base font-bold tracking-tight">Qualification Rules</h2>
+      </div>
+      <div className="space-y-3">
+        {draftRules.map((rule, index) => (
+          <div key={rule.id ?? `new-${index}`} className="rounded-xl border border-border/30 bg-zbooni-dark/30 p-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <input
+                value={rule.name}
+                onChange={(e) => updateRule(index, { name: e.target.value })}
+                placeholder="Rule name"
+                className="h-9 rounded-lg border border-border/50 bg-zbooni-dark/60 px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              />
+              <input
+                value={rule.fieldKey}
+                onChange={(e) => updateRule(index, { fieldKey: e.target.value })}
+                placeholder="field_key"
+                className="h-9 rounded-lg border border-border/50 bg-zbooni-dark/60 px-3 text-sm font-mono focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              />
+              <select
+                value={rule.operator}
+                onChange={(e) => updateRule(index, { operator: e.target.value as QualificationOperator })}
+                className="h-9 rounded-lg border border-border/50 bg-zbooni-dark/60 px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              >
+                {RULE_OPERATORS.map((operator) => (
+                  <option key={operator} value={operator}>{operator}</option>
+                ))}
+              </select>
+              <input
+                value={rule.weight}
+                onChange={(e) => updateRule(index, { weight: e.target.value })}
+                placeholder="Weight"
+                disabled={rule.isRequired}
+                className="h-9 rounded-lg border border-border/50 bg-zbooni-dark/60 px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-40"
+              />
+            </div>
+            <textarea
+              value={rule.valueText}
+              onChange={(e) => updateRule(index, { valueText: e.target.value })}
+              placeholder='Value or JSON, e.g. "UAE" or ["UAE","KSA"]'
+              rows={2}
+              className="mt-3 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+            <div className="mt-3 flex flex-wrap items-center gap-4 text-xs">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={rule.isRequired}
+                  onChange={(e) => updateRule(index, {
+                    isRequired: e.target.checked,
+                    ruleType: e.target.checked ? 'HARD_FILTER' : 'WEIGHTED',
+                  })}
+                />
+                Hard filter
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={rule.isActive}
+                  onChange={(e) => updateRule(index, { isActive: e.target.checked })}
+                />
+                Active
+              </label>
+              <button
+                type="button"
+                onClick={() => removeRule(index)}
+                className="ml-auto rounded-lg px-2 py-1 text-red-300 transition-colors hover:bg-red-500/10"
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() => setDraftRules((current) => [...current, createEmptyRule(current.length + 1)])}
+          className="inline-flex items-center gap-2 rounded-lg border border-border/50 px-3 py-2 text-sm font-medium text-zbooni-teal transition-colors hover:bg-zbooni-teal/10"
+        >
+          <Plus className="h-4 w-4" />
+          Add Rule
+        </button>
+      </div>
+      <div className="mt-4 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setEditing(false)}
+          disabled={isSaving}
+          className="inline-flex h-10 items-center justify-center rounded-xl border border-input px-4 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleSave()}
+          disabled={isSaving}
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-zbooni-teal px-4 text-sm font-semibold text-zbooni-dark transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Save Rules
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function extractMeta(metadataJson: Record<string, unknown> | null | undefined): IcpMeta {
   if (!metadataJson) return {};
   const m = metadataJson as Record<string, unknown>;
@@ -602,6 +920,7 @@ export default function IcpDetailPage() {
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [profile, setProfile] = useState<IcpProfileResponse | null>(null);
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -634,13 +953,52 @@ export default function IcpDetailPage() {
     [icpId],
   );
 
-  const handleUpdate = async (field: string, value: unknown) => {
+  useEffect(() => {
+    if (icp.data) {
+      setProfile(icp.data);
+    }
+  }, [icp.data]);
+
+  const handleUpdate = async (payload: Record<string, unknown>) => {
     setSaving(true);
     try {
-      await apiClient.updateIcp(icpId, { [field]: value });
-      icp.refetch();
-    } catch {
-      // silently fail for now
+      const updated = await apiClient.updateIcp(icpId, payload);
+      setProfile(updated);
+      void icp.refetch();
+      toast.success('ICP saved');
+      return true;
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save ICP');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRulesSave = async (draftRules: EditableRule[]) => {
+    setSaving(true);
+    try {
+      const response = await apiClient.replaceIcpRules(icpId, {
+        rules: draftRules.map((rule, index) => ({
+          name: rule.name.trim() || `Rule ${index + 1}`,
+          fieldKey: rule.fieldKey.trim(),
+          operator: rule.operator,
+          valueJson: parseRuleValue(rule.valueText),
+          isRequired: rule.isRequired,
+          weight: rule.isRequired ? null : (rule.weight.trim().length > 0 ? Number(rule.weight) : null),
+          orderIndex: index + 1,
+          priority: index + 1,
+          ruleType: rule.isRequired ? 'HARD_FILTER' : rule.ruleType,
+          isActive: rule.isActive,
+        })),
+      });
+      setProfile((current) => current ? { ...current, qualificationRules: response.items } : current);
+      void icp.refetch();
+      toast.success('Qualification rules saved');
+      return true;
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save qualification rules');
+      return false;
     } finally {
       setSaving(false);
     }
@@ -650,7 +1008,7 @@ export default function IcpDetailPage() {
     return <p className="text-sm text-destructive">{icp.error}</p>;
   }
 
-  if (icp.isLoading || !icp.data) {
+  if (icp.isLoading || !profile) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
@@ -659,7 +1017,6 @@ export default function IcpDetailPage() {
     );
   }
 
-  const profile = icp.data;
   const meta = extractMeta(profile.metadataJson);
   const leadsDiscovered = icpFunnel.data?.discoveredCount ?? 0;
   const leadsQualified = icpFunnel.data?.qualifiedCount ?? 0;
@@ -705,7 +1062,7 @@ export default function IcpDetailPage() {
         <div className="flex items-start justify-between">
           <div className="flex-1">
             <div className="flex items-center gap-3">
-              <EditableField label="" value={profile.name} onSave={(val) => handleUpdate('name', val)} />
+              <EditableField label="" value={profile.name} onSave={(val) => handleUpdate({ name: val })} />
               {meta.priority ? (
                 <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-bold ${
                   meta.priority === 'P1' ? 'bg-zbooni-green/15 text-zbooni-green' : 'bg-zbooni-teal/15 text-zbooni-teal'
@@ -718,7 +1075,7 @@ export default function IcpDetailPage() {
               <EditableField
                 label="Description"
                 value={profile.description ?? ''}
-                onSave={(val) => handleUpdate('description', val)}
+                onSave={(val) => handleUpdate({ description: val })}
                 multiline
                 textClassName="text-sm font-normal text-muted-foreground whitespace-pre-line leading-relaxed"
               />
@@ -726,7 +1083,7 @@ export default function IcpDetailPage() {
           </div>
           <button
             type="button"
-            onClick={() => handleUpdate('isActive', !profile.isActive)}
+            onClick={() => { void handleUpdate({ isActive: !profile.isActive }); }}
             className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition-colors cursor-pointer ${
               profile.isActive
                 ? 'bg-zbooni-green/15 text-zbooni-green hover:bg-zbooni-green/25'
@@ -747,10 +1104,12 @@ export default function IcpDetailPage() {
                 value={meta.salesHook ?? meta.hook ?? ''}
                 multiline
                 onSave={(val) =>
-                  handleUpdate('metadataJson', {
+                  handleUpdate({
+                    metadataJson: {
                     ...meta,
                     salesHook: val || undefined,
                     hook: val || undefined,
+                    },
                   })}
                 textClassName="italic text-muted-foreground"
               />
@@ -760,7 +1119,7 @@ export default function IcpDetailPage() {
             <EditableTags
               label="Sales Angles"
               tags={meta.angle ?? []}
-              onSave={(val) => handleUpdate('metadataJson', { ...meta, angle: val.length > 0 ? val : undefined })}
+              onSave={(val) => handleUpdate({ metadataJson: { ...meta, angle: val.length > 0 ? val : undefined } })}
               tagClassName="bg-zbooni-teal/10 text-zbooni-teal"
             />
           </div>
@@ -771,8 +1130,8 @@ export default function IcpDetailPage() {
           <IndustryMappingEditor
             industries={profile.targetIndustries}
             metadataJson={profile.metadataJson}
-            onSaveIndustries={(val) => handleUpdate('targetIndustries', val)}
-            onSaveMetadata={(meta) => handleUpdate('metadataJson', meta)}
+            onSaveIndustries={(val) => { void handleUpdate({ targetIndustries: val }); }}
+            onSaveMetadata={(meta) => { void handleUpdate({ metadataJson: meta }); }}
             apiClient={apiClient}
           />
         </div>
@@ -782,7 +1141,7 @@ export default function IcpDetailPage() {
           <EditableTags
             label="Target Countries"
             tags={profile.targetCountries}
-            onSave={(val) => handleUpdate('targetCountries', val)}
+            onSave={(val) => handleUpdate({ targetCountries: val })}
             tagClassName="bg-zbooni-teal/10 text-zbooni-teal"
           />
           <div>
@@ -830,23 +1189,23 @@ export default function IcpDetailPage() {
           <EditableField
             label="Min Company Size"
             value={profile.minCompanySize !== null ? String(profile.minCompanySize) : ''}
-            onSave={(val) => handleUpdate('minCompanySize', val ? parseInt(val, 10) : null)}
+            onSave={(val) => handleUpdate({ minCompanySize: val ? parseInt(val, 10) : null })}
           />
           <EditableField
             label="Max Company Size"
             value={profile.maxCompanySize !== null ? String(profile.maxCompanySize) : ''}
-            onSave={(val) => handleUpdate('maxCompanySize', val ? parseInt(val, 10) : null)}
+            onSave={(val) => handleUpdate({ maxCompanySize: val ? parseInt(val, 10) : null })}
           />
           <EditableTags
             label="Required Tech"
             tags={profile.requiredTechnologies}
-            onSave={(val) => handleUpdate('requiredTechnologies', val)}
+            onSave={(val) => handleUpdate({ requiredTechnologies: val })}
             tagClassName="bg-purple-500/10 text-purple-400"
           />
           <EditableTags
             label="Excluded Domains"
             tags={profile.excludedDomains}
-            onSave={(val) => handleUpdate('excludedDomains', val)}
+            onSave={(val) => handleUpdate({ excludedDomains: val })}
             tagClassName="bg-red-500/10 text-red-400"
           />
         </div>
@@ -937,30 +1296,27 @@ export default function IcpDetailPage() {
       {/* Features to Pitch — from featureList stored on ICP profile */}
       {(() => {
         const features = profile.featureList ?? [];
-        if (features.length === 0) return null;
         return (
           <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-            <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
+            <div className="mb-4 flex items-center gap-2">
               <Lightbulb className="h-4 w-4 text-yellow-400" />
-              Features to Pitch
-              <span className="ml-auto text-xs font-normal text-muted-foreground">{features.length} features</span>
-            </h2>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {features.map((feature) => (
-                <div
-                  key={feature}
-                  className="flex items-center gap-3 rounded-xl border border-border/30 bg-slate-800 p-3"
-                >
-                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-yellow-400/10">
-                    <Zap className="h-3.5 w-3.5 text-yellow-400" />
-                  </div>
-                  <p className="text-sm font-medium">{feature}</p>
-                </div>
-              ))}
+              <h2 className="text-base font-bold tracking-tight">Search Items / Features to Pitch</h2>
+              <span className="ml-auto text-xs font-normal text-muted-foreground">{features.length} items</span>
             </div>
+            <EditableTags
+              label="Saved Items"
+              tags={features}
+              onSave={(val) => handleUpdate({ featureList: val.length > 0 ? val : null })}
+              tagClassName="bg-yellow-400/10 text-yellow-300"
+            />
           </div>
         );
       })()}
+
+      <RulesEditor
+        rules={profile.qualificationRules ?? []}
+        onSave={handleRulesSave}
+      />
 
       {/* Scoring Rules — mirrors actual UNIVERSAL_RULES from scoring engine */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">

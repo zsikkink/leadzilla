@@ -52,6 +52,7 @@ export const CreateIcpProfileRequestSchema = z
     maxCompanySize: z.number().int().positive().optional(),
     requiredTechnologies: z.array(z.string().min(1)).optional(),
     excludedDomains: z.array(z.string().min(1)).optional(),
+    featureList: z.array(z.string().min(1)).optional(),
     isActive: z.boolean().optional(),
   })
   .strict()
@@ -78,6 +79,7 @@ export const UpdateIcpProfileRequestSchema = z
     maxCompanySize: z.number().int().positive().nullable().optional(),
     requiredTechnologies: z.array(z.string().min(1)).optional(),
     excludedDomains: z.array(z.string().min(1)).optional(),
+    featureList: z.array(z.string().min(1)).nullable().optional(),
     isActive: z.boolean().optional(),
   })
   .strict();
