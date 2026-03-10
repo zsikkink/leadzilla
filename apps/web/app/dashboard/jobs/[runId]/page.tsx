@@ -141,6 +141,13 @@ interface RunDetailsResponse {
   costEvents: CostEventData[];
 }
 
+interface CancelRunResponse {
+  success: boolean;
+  outcome: 'cancelled' | 'already_cancelled' | 'already_terminal';
+  terminalStatus: 'cancelled' | 'completed' | 'failed';
+  cancelledPendingJobsCount: number;
+}
+
 // ── Metric card ──────────────────────────────────────────────────────────
 function MetricCard({
   label,
@@ -338,6 +345,7 @@ export default function DiscoveryRunDetailPage() {
   const [errorsExpanded, setErrorsExpanded] = useState(false);
   const [cancelPending, setCancelPending] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [cancelNotice, setCancelNotice] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   // Fetch run status
@@ -392,6 +400,7 @@ export default function DiscoveryRunDetailPage() {
   const handleCancelRun = async () => {
     setCancelPending(true);
     setCancelError(null);
+    setCancelNotice(null);
     try {
       const headers: Record<string, string> = { 'content-type': 'application/json' };
       if (token) headers.authorization = `Bearer ${token}`;
@@ -399,10 +408,44 @@ export default function DiscoveryRunDetailPage() {
         method: 'POST',
         headers,
       });
+
+      const responseBody = await res.json().catch(() => null) as CancelRunResponse | { error?: string; message?: string } | null;
+
       if (!res.ok) {
-        const body = await res.json().catch(() => null) as { error?: string; message?: string } | null;
-        throw new Error(body?.error ?? body?.message ?? `Cancel failed (${res.status})`);
+        // Guard against raw backend errors: if cancel actually succeeded, show success.
+        const latestRun = await apiClient.getDiscoveryRunStatus(runId).catch(() => null);
+        if (latestRun?.status === 'CANCELLED') {
+          setCancelNotice('Run Cancelled');
+          setShowCancelConfirm(false);
+          run.refetch();
+          details.refetch();
+          return;
+        }
+
+        const errorMessage =
+          responseBody && 'error' in responseBody
+            ? (responseBody.error ?? responseBody.message)
+            : undefined;
+        throw new Error(errorMessage ?? `Cancel failed (${res.status})`);
       }
+
+      const cancelResult =
+        responseBody && 'success' in responseBody
+          ? responseBody as CancelRunResponse
+          : null;
+
+      if (cancelResult?.outcome === 'already_terminal') {
+        setCancelNotice(
+          cancelResult.terminalStatus === 'completed'
+            ? 'Run already completed'
+            : cancelResult.terminalStatus === 'failed'
+              ? 'Run already failed'
+              : 'Run already cancelled',
+        );
+      } else {
+        setCancelNotice('Run Cancelled');
+      }
+
       run.refetch();
       details.refetch();
       setShowCancelConfirm(false);
@@ -581,7 +624,7 @@ export default function DiscoveryRunDetailPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setShowCancelConfirm(false); setCancelError(null); }}
+                  onClick={() => { setShowCancelConfirm(false); setCancelError(null); setCancelNotice(null); }}
                   className="text-[10px] font-medium text-muted-foreground hover:text-foreground"
                 >
                   No
@@ -595,6 +638,11 @@ export default function DiscoveryRunDetailPage() {
         {cancelError && (
           <div className="mt-3 rounded-lg bg-red-500/10 px-3 py-2 text-[11px] text-red-400">
             {cancelError}
+          </div>
+        )}
+        {cancelNotice && (
+          <div className="mt-3 rounded-lg bg-zbooni-green/10 px-3 py-2 text-[11px] text-zbooni-green">
+            {cancelNotice}
           </div>
         )}
 

@@ -5,6 +5,9 @@ const prismaMock = {
     findUnique: vi.fn(),
     update: vi.fn(),
   },
+  searchTask: {
+    updateMany: vi.fn(),
+  },
   discoveryCostEvent: {
     findMany: vi.fn(),
   },
@@ -25,6 +28,7 @@ describe('PrismaDiscoveryAdminRepository.cancelDiscoveryRun', () => {
   it('marks the run cancelled and removes pending pg-boss discovery jobs', async () => {
     prismaMock.jobExecution.findUnique.mockResolvedValue({ status: 'queued', result: null });
     prismaMock.$queryRawUnsafe.mockResolvedValue([{ deleted_count: 3 }]);
+    prismaMock.searchTask.updateMany.mockResolvedValue({ count: 2 });
 
     const { PrismaDiscoveryAdminRepository } = await import('./discovery-admin.repository.js');
     const repository = new PrismaDiscoveryAdminRepository();
@@ -56,7 +60,7 @@ describe('PrismaDiscoveryAdminRepository.cancelDiscoveryRun', () => {
       '%run_123%',
     );
     expect(prismaMock.$queryRawUnsafe).toHaveBeenCalledWith(
-      expect.stringContaining("state in ('created', 'retry')"),
+      expect.stringContaining("state in ('created', 'retry', 'active')"),
       'run_123',
       'run_123',
       '%run_123%',
@@ -73,6 +77,16 @@ describe('PrismaDiscoveryAdminRepository.cancelDiscoveryRun', () => {
       'run_123',
       '%run_123%',
     );
+    expect(prismaMock.searchTask.updateMany).toHaveBeenCalledWith({
+      where: {
+        discoveryRunId: 'run_123',
+        status: { in: ['PENDING', 'RUNNING'] },
+      },
+      data: {
+        status: 'FAILED',
+        error: 'Cancelled: discovery run was cancelled',
+      },
+    });
   });
 
   it('returns success when the run is already cancelled', async () => {

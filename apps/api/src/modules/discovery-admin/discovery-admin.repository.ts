@@ -631,14 +631,16 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
     const now = new Date();
     const schema = readPgBossSchema();
     let cancelledPendingJobsCount = 0;
+    let cancelledSearchTasksCount = 0;
     let queueCleanupError: string | null = null;
+    let searchTaskCleanupError: string | null = null;
 
     try {
       const cleanupRows = await prisma.$queryRawUnsafe<Array<{ deleted_count: number }>>(
         `
           with deleted as (
             delete from ${schema}.job
-            where state in ('created', 'retry')
+            where state in ('created', 'retry', 'active')
               and name in (
                 'discovery.seed',
                 'discovery.run_search_task',
@@ -668,6 +670,22 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
       queueCleanupError = error instanceof Error ? error.message : 'queue cleanup failed';
     }
 
+    try {
+      const searchTaskCleanup = await prisma.searchTask.updateMany({
+        where: {
+          discoveryRunId: id,
+          status: { in: ['PENDING', 'RUNNING'] },
+        },
+        data: {
+          status: 'FAILED',
+          error: 'Cancelled: discovery run was cancelled',
+        },
+      });
+      cancelledSearchTasksCount = searchTaskCleanup.count;
+    } catch (error: unknown) {
+      searchTaskCleanupError = error instanceof Error ? error.message : 'search task cleanup failed';
+    }
+
     const existingResult =
       run.result && typeof run.result === 'object' && !Array.isArray(run.result)
         ? run.result as Record<string, unknown>
@@ -685,7 +703,9 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
               outcome: 'cancelled',
               cancelledAt: now.toISOString(),
               cancelledPendingJobsCount,
+              cancelledSearchTasksCount,
               ...(queueCleanupError ? { queueCleanupError } : {}),
+              ...(searchTaskCleanupError ? { searchTaskCleanupError } : {}),
             },
           } as Prisma.InputJsonValue,
         },
