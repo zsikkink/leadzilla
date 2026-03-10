@@ -48,7 +48,7 @@ Keep the rest of the defaults from the example file.
 ```
 DATABASE_URL=postgresql://postgres.<project-ref>:<PASSWORD>@aws-1-us-east-1.pooler.supabase.com:5432/postgres?connection_limit=3
 ```
-Discovery and enrichment API keys (SerpAPI, Hunter, OpenAI, etc.) are optional for basic dev work. Leave them blank unless you're working on the pipeline.
+Discovery and enrichment API keys (Google Places, Hunter, OpenAI, etc.) are optional for basic dev work. Leave them blank unless you're working on the pipeline.
 
 ### apps/web/.env.local
 ```
@@ -99,7 +99,7 @@ All four should pass with zero errors.
 Frontend (Next.js :3000)  →  API (Fastify :5050)  →  Worker (pg-boss queues)
          ↓                         ↓                         ↓
     Supabase Auth           Supabase Postgres          Discovery pipeline
-    (login/session)         (all app data)             (SerpAPI → scoring → messaging)
+    (login/session)         (all app data)             (Google Places → scoring → messaging)
 ```
 
 - **API** handles REST endpoints, auth verification, and enqueues jobs via pg-boss
