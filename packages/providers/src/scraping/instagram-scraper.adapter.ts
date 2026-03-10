@@ -18,6 +18,7 @@ export interface InstagramRecentPost {
   likeCount: number;
   commentCount: number;
   postType: 'image' | 'video' | 'carousel';
+  thumbnailUrl?: string | undefined;
 }
 
 export interface InstagramScraperData {
@@ -89,6 +90,50 @@ function safeNumber(value: unknown): number {
 
 function safeString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function firstValidString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    const normalized = safeString(value);
+    if (normalized) return normalized;
+  }
+  return undefined;
+}
+
+function extractProfilePostThumbnail(node: Record<string, unknown>): string | undefined {
+  const imageVersions = node.image_versions2 as Record<string, unknown> | undefined;
+  const candidates = imageVersions?.candidates as Array<Record<string, unknown>> | undefined;
+  const firstCandidate = candidates?.[0] as Record<string, unknown> | undefined;
+
+  return firstValidString(
+    node.thumbnail_src,
+    node.display_url,
+    node.display_src,
+    node.thumbnail_url,
+    firstCandidate?.url,
+  );
+}
+
+function extractFeedPostThumbnail(item: Record<string, unknown>): string | undefined {
+  const imageVersions = item.image_versions2 as Record<string, unknown> | undefined;
+  const candidates = imageVersions?.candidates as Array<Record<string, unknown>> | undefined;
+  const firstCandidate = candidates?.[0] as Record<string, unknown> | undefined;
+
+  const carouselMedia = item.carousel_media as Array<Record<string, unknown>> | undefined;
+  const firstCarouselMedia = carouselMedia?.[0];
+  const carouselImageVersions = firstCarouselMedia?.image_versions2 as Record<string, unknown> | undefined;
+  const carouselCandidates = carouselImageVersions?.candidates as Array<Record<string, unknown>> | undefined;
+  const firstCarouselCandidate = carouselCandidates?.[0] as Record<string, unknown> | undefined;
+
+  return firstValidString(
+    item.thumbnail_url,
+    item.display_url,
+    item.display_src,
+    firstCandidate?.url,
+    firstCarouselMedia?.thumbnail_url,
+    firstCarouselMedia?.display_url,
+    firstCarouselCandidate?.url,
+  );
 }
 
 /**
@@ -898,6 +943,7 @@ export class InstagramScraperAdapter {
           likeCount: safeNumber((node.edge_liked_by as Record<string, unknown> | undefined)?.count ?? node.like_count),
           commentCount: safeNumber((node.edge_media_to_comment as Record<string, unknown> | undefined)?.count ?? node.comment_count),
           postType,
+          thumbnailUrl: extractProfilePostThumbnail(node),
         });
       }
 
@@ -999,6 +1045,7 @@ export class InstagramScraperAdapter {
           likeCount: safeNumber(item.like_count),
           commentCount: safeNumber(item.comment_count),
           postType,
+          thumbnailUrl: extractFeedPostThumbnail(item),
         });
       }
 
