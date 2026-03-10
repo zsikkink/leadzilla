@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   CreateIcpProfileRequestSchema,
@@ -36,40 +35,6 @@ function sendValidationError(reply: FastifyReply, requestId: string, message: st
   });
 }
 
-function requireAdminKey(
-  request: FastifyRequest,
-  reply: FastifyReply,
-  adminApiKey: string | undefined,
-): boolean {
-  if (!adminApiKey) {
-    reply.status(503).send(
-      ErrorResponseSchema.parse({
-        error: 'Admin API key not configured',
-        requestId: request.id,
-      }),
-    );
-    return false;
-  }
-
-  const provided = request.headers['x-admin-key'];
-  const candidate = Array.isArray(provided) ? (provided[0] ?? '') : (provided ?? '');
-
-  if (
-    candidate.length === adminApiKey.length &&
-    timingSafeEqual(Buffer.from(candidate, 'utf8'), Buffer.from(adminApiKey, 'utf8'))
-  ) {
-    return true;
-  }
-
-  reply.status(401).send(
-    ErrorResponseSchema.parse({
-      error: 'Unauthorized',
-      requestId: request.id,
-    }),
-  );
-  return false;
-}
-
 function handleModuleError(error: unknown, request: FastifyRequest, reply: FastifyReply): boolean {
   if (error instanceof IcpNotImplementedError) {
     reply.status(501).send(
@@ -94,15 +59,11 @@ function handleModuleError(error: unknown, request: FastifyRequest, reply: Fasti
   return false;
 }
 
-export function registerIcpRoutes(app: FastifyInstance, dependencies?: IcpRouteDependencies): void {
+export function registerIcpRoutes(app: FastifyInstance, _dependencies?: IcpRouteDependencies): void {
   const repository = new PrismaIcpRepository();
   const service = buildIcpService(repository);
 
   app.post('/v1/icps', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies?.adminApiKey)) {
-      return;
-    }
-
     const parsed = CreateIcpProfileRequestSchema.safeParse(request.body);
     if (!parsed.success) {
       return sendValidationError(reply, request.id, 'Invalid ICP create payload');
@@ -154,10 +115,6 @@ export function registerIcpRoutes(app: FastifyInstance, dependencies?: IcpRouteD
   });
 
   app.patch('/v1/icps/:icpId', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies?.adminApiKey)) {
-      return;
-    }
-
     const parsedParams = IcpIdParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid ICP id');
@@ -180,10 +137,6 @@ export function registerIcpRoutes(app: FastifyInstance, dependencies?: IcpRouteD
   });
 
   app.delete('/v1/icps/:icpId', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies?.adminApiKey)) {
-      return;
-    }
-
     const parsedParams = IcpIdParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid ICP id');
@@ -202,10 +155,6 @@ export function registerIcpRoutes(app: FastifyInstance, dependencies?: IcpRouteD
   });
 
   app.post('/v1/icps/:icpId/rules', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies?.adminApiKey)) {
-      return;
-    }
-
     const parsedParams = IcpIdParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid ICP id');
@@ -245,10 +194,6 @@ export function registerIcpRoutes(app: FastifyInstance, dependencies?: IcpRouteD
   });
 
   app.put('/v1/icps/:icpId/rules', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies?.adminApiKey)) {
-      return;
-    }
-
     const parsedParams = IcpIdParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid ICP id');
@@ -271,10 +216,6 @@ export function registerIcpRoutes(app: FastifyInstance, dependencies?: IcpRouteD
   });
 
   app.patch('/v1/icps/:icpId/rules/:ruleId', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies?.adminApiKey)) {
-      return;
-    }
-
     const parsedParams = IcpRuleParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid ICP rule params');
@@ -301,10 +242,6 @@ export function registerIcpRoutes(app: FastifyInstance, dependencies?: IcpRouteD
   });
 
   app.delete('/v1/icps/:icpId/rules/:ruleId', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies?.adminApiKey)) {
-      return;
-    }
-
     const parsedParams = IcpRuleParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid ICP rule params');

@@ -1,6 +1,6 @@
 'use client';
 
-import type { CreateIcpProfileRequest, QualificationLogic } from '@lead-flood/contracts';
+import type { CreateIcpProfileRequest, IcpProfileResponse, QualificationLogic } from '@lead-flood/contracts';
 import { ChevronDown, ChevronRight, Plus, X } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
@@ -22,6 +22,7 @@ export default function IcpsPage() {
   const icps = useApiQuery(
     useCallback(() => apiClient.listIcps({ page: 1, pageSize: 50 }), [apiClient]),
   );
+  const [icpItems, setIcpItems] = useState<IcpProfileResponse[]>([]);
 
   const [showModal, setShowModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -40,6 +41,12 @@ export default function IcpsPage() {
   const [qualificationLogic, setQualificationLogic] = useState('');
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
   const [isActive, setIsActive] = useState(true);
+
+  useEffect(() => {
+    if (icps.data) {
+      setIcpItems(icps.data.items);
+    }
+  }, [icps.data]);
 
   const nameInputRef = useRef<HTMLInputElement>(null);
 
@@ -158,10 +165,11 @@ export default function IcpsPage() {
         isActive,
       };
 
-      await apiClient.createIcp(data);
+      const created = await apiClient.createIcp(data);
+      setIcpItems((current) => [created, ...current.filter((item) => item.id !== created.id)]);
       toast.success('ICP profile created');
       closeModal();
-      icps.refetch();
+      void icps.refetch();
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         setFormError(err.message);
@@ -181,7 +189,7 @@ export default function IcpsPage() {
         <div>
           <h1 className="text-2xl font-extrabold tracking-tight">ICP Profiles</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            {icps.data ? `${icps.data.items.length} profiles configured` : 'Loading...'}
+            {icps.data ? `${icpItems.length} profiles configured` : 'Loading...'}
           </p>
         </div>
         <button
@@ -206,7 +214,7 @@ export default function IcpsPage() {
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        {icps.data?.items.map((icp) => (
+        {icpItems.map((icp) => (
           <Link
             key={icp.id}
             href={`/dashboard/icps/${icp.id}`}
@@ -257,7 +265,7 @@ export default function IcpsPage() {
         ))}
       </div>
 
-      {!icps.isLoading && icps.data?.items.length === 0 ? (
+      {!icps.isLoading && icpItems.length === 0 ? (
         <div className="rounded-2xl border border-border/50 bg-card p-8 text-center shadow-sm">
           <p className="text-muted-foreground/60">No ICP profiles configured.</p>
           <button
@@ -273,7 +281,7 @@ export default function IcpsPage() {
       {/* Create ICP Modal */}
       {showModal ? (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 px-4 py-8 backdrop-blur-sm"
           onClick={(e) => {
             if (e.target === e.currentTarget) closeModal();
           }}
@@ -281,8 +289,8 @@ export default function IcpsPage() {
           aria-modal="true"
           aria-labelledby="create-icp-title"
         >
-          <div className="w-full max-w-lg rounded-2xl border border-border/50 bg-card p-8 shadow-xl animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex items-center justify-between mb-6">
+          <div className="flex max-h-[calc(100vh-4rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-border/50 bg-card shadow-xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border/50 bg-card px-6 py-5">
               <h2 id="create-icp-title" className="text-xl font-extrabold tracking-tight">
                 Create ICP Profile
               </h2>
@@ -296,7 +304,8 @@ export default function IcpsPage() {
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-5">
+            <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
               {/* Name */}
               <div className="space-y-2">
                 <label htmlFor="icp-name" className="text-sm font-medium text-muted-foreground">
@@ -509,9 +518,10 @@ export default function IcpsPage() {
               {formError ? (
                 <p className="text-sm font-medium text-destructive">{formError}</p>
               ) : null}
+              </div>
 
               {/* Actions */}
-              <div className="flex items-center gap-3 pt-1">
+              <div className="sticky bottom-0 flex items-center gap-3 border-t border-border/50 bg-card px-6 py-4">
                 <button
                   type="button"
                   onClick={closeModal}

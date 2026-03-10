@@ -14,7 +14,6 @@ import { ScoreBandBadge } from '../../../src/components/score-band-badge.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 import { getWebEnv } from '../../../src/lib/env.js';
-import { getSupabaseBrowserClient } from '../../../src/lib/supabase-client.js';
 import { cn } from '../../../src/lib/utils.js';
 
 const STATUS_OPTIONS = [
@@ -135,7 +134,7 @@ export default function LeadsPage() {
   const [generatingForLead, setGeneratingForLead] = useState<string | null>(null);
   const [rejectingLead, setRejectingLead] = useState<string | null>(null);
 
-  // Rejected leads state (loaded via Supabase)
+  // Rejected leads state
   const [rejectedLeads, setRejectedLeads] = useState<RejectedLeadRow[]>([]);
   const [rejectedLoading, setRejectedLoading] = useState(false);
   const [unrejectingLead, setUnrejectingLead] = useState<string | null>(null);
@@ -187,7 +186,7 @@ export default function LeadsPage() {
 
   const totalPages = leads.data ? Math.ceil(leads.data.total / leads.data.pageSize) : 0;
 
-  // Load rejected leads via Supabase when tab is "rejected"
+  // Load rejected leads via API when tab is "rejected"
   useEffect(() => {
     if (activeTab !== 'rejected') return;
     let cancelled = false;
@@ -195,138 +194,10 @@ export default function LeadsPage() {
 
     async function loadRejected() {
       try {
-        const supabase = getSupabaseBrowserClient();
-        const { data, error } = await supabase
-          .from('lead_rejections')
-          .select('id, leadId, reason, score, rejectedAt, metadata, businessId, icpProfileId')
-          .order('rejectedAt', { ascending: false })
-          .limit(100);
-
-        if (cancelled) {
-          return;
-        }
-        if (error) {
-          toast.error('Failed to load rejected leads');
-          setRejectedLeads([]);
-          return;
-        }
-
-        // Now fetch lead details for each rejection
-        const leadIds = (data ?? [])
-          .map((r) => (typeof r.leadId === 'string' ? r.leadId : null))
-          .filter((leadId): leadId is string => leadId !== null);
-        if (leadIds.length === 0) {
-          setRejectedLeads([]);
-          return;
-        }
-
-        const { data: leadRows, error: leadError } = await supabase
-          .from('Lead')
-          .select('id, firstName, lastName, email, enrichmentData, icpProfileId, businessId')
-          .in('id', leadIds);
-        if (leadError) {
-          toast.error('Failed to load rejected lead details');
-          setRejectedLeads([]);
-          return;
-        }
-
-        // Load ICP profile names for display
-        const icpIds = [...new Set((leadRows ?? []).map((l) => l.icpProfileId as string | null).filter(Boolean))] as string[];
-        const rejectionIcpIds = [...new Set((data ?? []).map((r) => (r as Record<string, unknown>).icpProfileId as string | null).filter(Boolean))] as string[];
-        const allIcpIds = [...new Set([...icpIds, ...rejectionIcpIds])];
-        const icpMap = new Map<string, string>();
-        if (allIcpIds.length > 0) {
-          const { data: icpRows, error: icpError } = await supabase
-            .from('IcpProfile')
-            .select('id, name')
-            .in('id', allIcpIds);
-          if (icpError) {
-            toast.error('Failed to load ICP profile names');
-          }
-          for (const icp of icpRows ?? []) {
-            icpMap.set(icp.id as string, icp.name as string);
-          }
-        }
-
-        // Fetch business data for company names and other details
-        const businessIds = [
-          ...new Set([
-            ...(data ?? []).map((r) => (r as Record<string, unknown>).businessId as string | null).filter(Boolean),
-            ...(leadRows ?? []).map((l) => l.businessId as string | null).filter(Boolean),
-          ]),
-        ] as string[];
-        const bizMap = new Map<string, { name: string; websiteDomain: string | null; instagramHandle: string | null; category: string | null; city: string | null; country: string | null }>();
-        if (businessIds.length > 0) {
-          const { data: bizRows, error: bizError } = await supabase
-            .from('businesses')
-            .select('id, name, websiteDomain:website_domain, instagramHandle:instagram_handle, category, city, countryCode:country_code')
-            .in('id', businessIds);
-          if (bizError) {
-            toast.error('Failed to load business details for rejected leads');
-          }
-          for (const b of bizRows ?? []) {
-            bizMap.set(b.id as string, {
-              name: b.name as string,
-              websiteDomain: b.websiteDomain as string | null,
-              instagramHandle: b.instagramHandle as string | null,
-              category: b.category as string | null,
-              city: b.city as string | null,
-              country: b.countryCode as string | null,
-            });
-          }
-        }
-
-        const leadMap = new Map<string, { firstName: string | null; lastName: string | null; email: string; companyName: string | null; icpProfileName: string | null; businessId: string | null }>();
-        for (const l of leadRows ?? []) {
-          const enrichment = l.enrichmentData && typeof l.enrichmentData === 'object' && !Array.isArray(l.enrichmentData)
-            ? l.enrichmentData as Record<string, unknown>
-            : null;
-          const companyName = (typeof enrichment?.companyName === 'string' ? enrichment.companyName : null)
-            ?? (typeof enrichment?.company_name === 'string' ? enrichment.company_name : null);
-          leadMap.set(l.id as string, {
-            firstName: l.firstName as string | null,
-            lastName: l.lastName as string | null,
-            email: l.email as string,
-            companyName,
-            icpProfileName: l.icpProfileId ? (icpMap.get(l.icpProfileId as string) ?? null) : null,
-            businessId: l.businessId as string | null,
-          });
-        }
-
+        const result = await apiClient.listRejectedLeads({ page: 1, pageSize: 100 });
+        if (cancelled) return;
         if (!cancelled) {
-          setRejectedLeads(
-            (data ?? []).map((r: { id: string; leadId: string; reason: string; score: number | null; rejectedAt: string; metadata?: unknown; businessId?: string | null; icpProfileId?: string | null }) => {
-              const lead = leadMap.get(r.leadId);
-              const metadata = r.metadata && typeof r.metadata === 'object' && !Array.isArray(r.metadata)
-                ? r.metadata as Record<string, unknown>
-                : null;
-              const failedHardFilters = Array.isArray(metadata?.failedHardFilters)
-                ? metadata!.failedHardFilters.filter((x): x is string => typeof x === 'string')
-                : [];
-              // Get business data — try rejection's businessId first, then lead's businessId
-              const bizId = (r.businessId as string | null) ?? lead?.businessId ?? null;
-              const biz = bizId ? bizMap.get(bizId) : null;
-              const rejectionIcpProfileId = (r.icpProfileId as string | null) ?? null;
-              return {
-                id: r.id,
-                leadId: r.leadId,
-                firstName: lead?.firstName ?? null,
-                lastName: lead?.lastName ?? null,
-                email: lead?.email ?? '',
-                companyName: lead?.companyName ?? biz?.name ?? null,
-                icpProfileName: lead?.icpProfileName ?? (rejectionIcpProfileId ? (icpMap.get(rejectionIcpProfileId) ?? null) : null),
-                reason: r.reason,
-                reasonDetails: failedHardFilters,
-                score: r.score,
-                rejectedAt: r.rejectedAt,
-                businessName: biz?.name ?? null,
-                websiteDomain: biz?.websiteDomain ?? null,
-                category: biz?.category ?? null,
-                city: biz?.city ?? null,
-                country: biz?.country ?? null,
-              };
-            }),
-          );
+          setRejectedLeads(result.items);
         }
       } catch {
         if (!cancelled) toast.error('Failed to load rejected leads');
@@ -337,7 +208,7 @@ export default function LeadsPage() {
 
     void loadRejected();
     return () => { cancelled = true; };
-  }, [activeTab]);
+  }, [activeTab, apiClient]);
 
   const handleReject = async (leadId: string, firstName: string, lastName: string) => {
     const confirmed = window.confirm(`Reject lead "${firstName} ${lastName}"? They will be moved to the Rejected tab.`);

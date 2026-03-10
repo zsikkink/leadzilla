@@ -514,6 +514,10 @@ export class PrismaIcpRepository extends StubIcpRepository {
         maxCompanySize: input.maxCompanySize ?? null,
         requiredTechnologies: input.requiredTechnologies ?? [],
         excludedDomains: input.excludedDomains ?? [],
+        featureList:
+          input.featureList !== undefined
+            ? toInputJson(input.featureList)
+            : Prisma.JsonNull,
         isActive: input.isActive ?? true,
       },
       include: {
@@ -615,6 +619,14 @@ export class PrismaIcpRepository extends StubIcpRepository {
             : {}),
           ...(input.excludedDomains !== undefined
             ? { excludedDomains: input.excludedDomains }
+            : {}),
+          ...(input.featureList !== undefined
+            ? {
+                featureList:
+                  input.featureList === null
+                    ? Prisma.JsonNull
+                    : toInputJson(input.featureList),
+              }
             : {}),
           ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
         },

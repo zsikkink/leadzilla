@@ -27,6 +27,8 @@ import type {
   ListMessageDraftsResponse,
   ListMessageSendsQuery,
   ListMessageSendsResponse,
+  ListRejectedLeadsQuery,
+  ListRejectedLeadsResponse,
   MessageDraftResponse,
   ModelMetricsResponse,
   PipelineStatsResponse,
@@ -122,6 +124,11 @@ export class ApiClient {
     return this.request(`/v1/leads/${id}`);
   }
 
+  listRejectedLeads(query?: ListRejectedLeadsQuery): Promise<ListRejectedLeadsResponse> {
+    const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
+    return this.request(`/v1/leads/rejected${qs}`);
+  }
+
   listContactRecoveryItems(query: ListContactRecoveryItemsQuery): Promise<ListContactRecoveryItemsResponse> {
     return this.request(`/v1/leads/recovery?${toSearchParams(query as Record<string, unknown>)}`);
   }
@@ -159,6 +166,27 @@ export class ApiClient {
 
   getIcpRules(icpId: string): Promise<{ items: QualificationRuleResponse[] }> {
     return this.request(`/v1/icps/${icpId}/rules`);
+  }
+
+  replaceIcpRules(
+    icpId: string,
+    data: { rules: Array<{
+      name: string;
+      fieldKey: string;
+      operator: string;
+      valueJson: unknown;
+      isRequired?: boolean | undefined;
+      weight?: number | null | undefined;
+      orderIndex: number;
+      priority?: number | undefined;
+      ruleType?: 'WEIGHTED' | 'HARD_FILTER' | undefined;
+      isActive?: boolean | undefined;
+    }> },
+  ): Promise<{ items: QualificationRuleResponse[] }> {
+    return this.request(`/v1/icps/${icpId}/rules`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
   }
 
   createIcp(data: CreateIcpProfileRequest): Promise<IcpProfileResponse> {
