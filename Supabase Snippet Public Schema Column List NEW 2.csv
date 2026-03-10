@@ -1,0 +1,72 @@
+table_name,column_name,data_type,is_nullable
+AnalyticsDailyRollup,id,text,NO
+AnalyticsDailyRollup,day,timestamp without time zone,NO
+AnalyticsDailyRollup,icpProfileId,text,NO
+AnalyticsDailyRollup,discoveredCount,integer,NO
+AnalyticsDailyRollup,enrichedCount,integer,NO
+AnalyticsDailyRollup,scoredCount,integer,NO
+AnalyticsDailyRollup,validEmailCount,integer,NO
+AnalyticsDailyRollup,validDomainCount,integer,NO
+AnalyticsDailyRollup,industryMatchRate,double precision,NO
+AnalyticsDailyRollup,geoMatchRate,double precision,NO
+AnalyticsDailyRollup,createdAt,timestamp without time zone,NO
+AnalyticsDailyRollup,updatedAt,timestamp without time zone,NO
+business_evidence,id,text,NO
+business_evidence,business_id,text,NO
+business_evidence,source_url,text,NO
+business_evidence,source_type,text,NO
+business_evidence,serpapi_result_id,text,YES
+business_evidence,raw_json,jsonb,NO
+business_evidence,created_at,timestamp without time zone,NO
+business_evidence,search_task_id,text,YES
+businesses,id,text,NO
+businesses,name,text,NO
+businesses,country_code,text,NO
+businesses,city,text,YES
+businesses,address,text,YES
+businesses,phone_e164,text,YES
+businesses,website_domain,text,YES
+businesses,instagram_handle,text,YES
+businesses,category,text,YES
+businesses,rating,double precision,YES
+businesses,review_count,integer,YES
+businesses,lat,double precision,YES
+businesses,lng,double precision,YES
+businesses,confidence,double precision,NO
+businesses,created_at,timestamp without time zone,NO
+businesses,updated_at,timestamp without time zone,NO
+businesses,deterministic_score,double precision,NO
+businesses,score_band,USER-DEFINED,YES
+businesses,has_whatsapp,boolean,NO
+businesses,has_instagram,boolean,NO
+businesses,accepts_online_payments,boolean,NO
+businesses,follower_count,integer,YES
+businesses,physical_address_present,boolean,NO
+businesses,recent_activity,boolean,NO
+search_tasks,id,text,NO
+search_tasks,task_type,USER-DEFINED,NO
+search_tasks,country_code,text,NO
+search_tasks,city,text,YES
+search_tasks,language,text,NO
+search_tasks,query_text,text,NO
+search_tasks,normalized_query_key,text,NO
+search_tasks,query_hash,text,NO
+search_tasks,params_json,jsonb,NO
+search_tasks,page,integer,NO
+search_tasks,time_bucket,text,NO
+search_tasks,status,USER-DEFINED,NO
+search_tasks,attempts,integer,NO
+search_tasks,run_after,timestamp without time zone,NO
+search_tasks,last_result_hash,text,YES
+search_tasks,error,text,YES
+search_tasks,created_at,timestamp without time zone,NO
+search_tasks,updated_at,timestamp without time zone,NO
+sources,id,text,NO
+sources,type,USER-DEFINED,NO
+sources,root_domain,text,NO
+sources,url,text,NO
+sources,country_hint,text,YES
+sources,discovered_from_task_id,text,YES
+sources,score,double precision,NO
+sources,created_at,timestamp without time zone,NO
+sources,updated_at,timestamp without time zone,NO
