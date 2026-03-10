@@ -1,0 +1,63 @@
+{
+  "name": "lead-flood",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.14.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "turbo run dev --parallel --filter=@lead-flood/web --filter=@lead-flood/api --filter=@lead-flood/worker",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:unit": "turbo run test:unit",
+    "test:integration": "turbo run test:integration",
+    "test:e2e": "turbo run test:e2e",
+    "db:generate": "pnpm --filter @lead-flood/db prisma:generate",
+    "db:migrate": "pnpm --filter @lead-flood/db prisma:migrate",
+    "db:migrate:dev": "pnpm --filter @lead-flood/db prisma:migrate:dev",
+    "db:migrate:prod": "bash scripts/db/migrate-prod.sh",
+    "db:verify:prod": "bash scripts/db/verify-prod.sh",
+    "db:link": "bash scripts/db/supabase-link.sh",
+    "db:pull:drift": "bash scripts/db/pull-drift.sh",
+    "db:prisma:sync": "bash scripts/db/prisma-sync.sh",
+    "db:push:local-to-remote": "bash scripts/db/push-local-to-remote.sh",
+    "db:reset-data": "bash scripts/reset-data.sh",
+    "db:seed": "pnpm --filter @lead-flood/db prisma:seed",
+    "icp:seed": "pnpm --filter @lead-flood/db build && pnpm --filter @lead-flood/worker exec tsx ../../scripts/icp/seed-zbooni-icps.ts",
+    "discovery:seed": "pnpm --filter @lead-flood/discovery seed",
+    "discovery:backfill-phone-e164": "pnpm --filter @lead-flood/worker exec tsx ../../scripts/discovery/backfill-phone-e164.ts",
+    "db:studio": "pnpm --filter @lead-flood/db prisma:studio",
+    "learning:backfill-features": "pnpm --filter @lead-flood/db build && pnpm --filter @lead-flood/worker exec tsx ../../scripts/learning/backfill-features.ts",
+    "dev:infra": "docker compose -f infra/docker/docker-compose.local.yml up -d",
+    "dev:infra:down": "docker compose -f infra/docker/docker-compose.local.yml down",
+    "bootstrap": "bash scripts/bootstrap.sh",
+    "doctor": "bash scripts/preflight.sh --with-docker",
+    "contracts:check": "pnpm --filter @lead-flood/contracts build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.19.0",
+    "@types/node": "^22.12.0",
+    "eslint": "^9.19.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2",
+    "turbo": "2.6.0",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.22.0",
+    "vitest": "^3.0.4"
+  },
+  "pnpm": {
+    "overrides": {
+      "@eslint-community/eslint-utils": "4.4.0"
+    },
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "esbuild",
+      "sharp"
+    ]
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "@lead-flood/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bash ./scripts/dev.sh",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/index.js",
+    "lint": "eslint src test --ext .ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm test:unit && pnpm test:integration",
+    "test:unit": "vitest run src",
+    "test:integration": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5434/lead_flood} DIRECT_URL=${DIRECT_URL:-postgresql://postgres:postgres@localhost:5434/lead_flood} PG_BOSS_SCHEMA=${PG_BOSS_SCHEMA:-pgboss} vitest run test/integration",
+    "test:e2e": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5434/lead_flood} DIRECT_URL=${DIRECT_URL:-postgresql://postgres:postgres@localhost:5434/lead_flood} PG_BOSS_SCHEMA=${PG_BOSS_SCHEMA:-pgboss} vitest run test/e2e"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.1",
+    "@fastify/rate-limit": "^10.3.0",
+    "@lead-flood/contracts": "workspace:*",
+    "@lead-flood/db": "workspace:*",
+    "@lead-flood/observability": "workspace:*",
+    "fastify": "^5.2.1",
+    "jose": "^5.9.6",
+    "pg-boss": "^10.3.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  }
+}

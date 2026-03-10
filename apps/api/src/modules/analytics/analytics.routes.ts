@@ -1,0 +1,228 @@
+import { timingSafeEqual } from 'node:crypto';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import {
+  ErrorResponseSchema,
+  FunnelQuerySchema,
+  FunnelResponseSchema,
+  ManagerRecommendationsQuerySchema,
+  ManagerRecommendationsResponseSchema,
+  ModelMetricsQuerySchema,
+  ModelMetricsResponseSchema,
+  RecomputeRollupRequestSchema,
+  RetrainStatusQuerySchema,
+  RetrainStatusResponseSchema,
+  ScoreDistributionQuerySchema,
+  ScoreDistributionResponseSchema,
+  StoredRecommendationsQuerySchema,
+  StoredRecommendationsResponseSchema,
+  UpdateRecommendationStatusSchema,
+  StoredRecommendationSchema,
+} from '@lead-flood/contracts';
+
+import { AnalyticsNotImplementedError } from './analytics.errors.js';
+import { PrismaAnalyticsRepository } from './analytics.repository.js';
+import { buildAnalyticsService, type AnalyticsRollupJobPayload } from './analytics.service.js';
+
+export interface AnalyticsRouteDependencies {
+  enqueueAnalyticsRollup?: ((payload: AnalyticsRollupJobPayload) => Promise<void>) | undefined;
+  adminApiKey?: string | undefined;
+}
+
+function sendValidationError(reply: FastifyReply, requestId: string, message: string) {
+  reply.status(400);
+  return ErrorResponseSchema.parse({
+    error: message,
+    requestId,
+  });
+}
+
+function handleModuleError(error: unknown, request: FastifyRequest, reply: FastifyReply): boolean {
+  if (error instanceof AnalyticsNotImplementedError) {
+    reply.status(501).send(
+      ErrorResponseSchema.parse({
+        error: error.message,
+        requestId: request.id,
+      }),
+    );
+    return true;
+  }
+
+  return false;
+}
+
+export function registerAnalyticsRoutes(
+  app: FastifyInstance,
+  dependencies?: AnalyticsRouteDependencies,
+): void {
+  const repository = new PrismaAnalyticsRepository();
+  const service = buildAnalyticsService(repository, {
+    enqueueAnalyticsRollup: dependencies?.enqueueAnalyticsRollup,
+  });
+
+  app.get('/v1/analytics/funnel', async (request, reply) => {
+    const parsedQuery = FunnelQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid funnel query');
+    }
+
+    try {
+      const result = await service.getFunnel(parsedQuery.data);
+      return FunnelResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.get('/v1/analytics/score-distribution', async (request, reply) => {
+    const parsedQuery = ScoreDistributionQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid score distribution query');
+    }
+
+    try {
+      const result = await service.getScoreDistribution(parsedQuery.data);
+      return ScoreDistributionResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.get('/v1/analytics/model-metrics', async (request, reply) => {
+    const parsedQuery = ModelMetricsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid model metrics query');
+    }
+
+    try {
+      const result = await service.getModelMetrics(parsedQuery.data);
+      return ModelMetricsResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.get('/v1/analytics/retrain-status', async (request, reply) => {
+    const parsedQuery = RetrainStatusQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid retrain status query');
+    }
+
+    try {
+      const result = await service.getRetrainStatus(parsedQuery.data);
+      return RetrainStatusResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  // ── Manager analysis history ────────────────────────────────
+  app.get('/v1/analytics/manager-recommendations', async (request, reply) => {
+    const parsedQuery = ManagerRecommendationsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid manager recommendations query');
+    }
+
+    try {
+      const result = await service.getManagerRecommendations(parsedQuery.data);
+      return ManagerRecommendationsResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  // ── Stored recommendations (individual, with status) ────────
+  app.get('/v1/analytics/recommendations', async (request, reply) => {
+    const parsedQuery = StoredRecommendationsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid recommendations query');
+    }
+
+    try {
+      const result = await service.getStoredRecommendations(parsedQuery.data);
+      return StoredRecommendationsResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.patch('/v1/analytics/recommendations/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsedBody = UpdateRecommendationStatusSchema.safeParse(request.body);
+    if (!parsedBody.success) {
+      return sendValidationError(reply, request.id, 'Invalid recommendation update payload');
+    }
+
+    try {
+      const result = await service.updateRecommendationStatus(id, parsedBody.data);
+      return StoredRecommendationSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.post('/v1/analytics/rollups/recompute', async (request, reply) => {
+    // Admin-only: verify x-admin-key header
+    const adminKey = dependencies?.adminApiKey;
+    if (!adminKey) {
+      reply.status(503).send(
+        ErrorResponseSchema.parse({
+          error: 'Admin API key not configured',
+          requestId: request.id,
+        }),
+      );
+      return;
+    }
+
+    const provided = request.headers['x-admin-key'];
+    const candidate = Array.isArray(provided) ? (provided[0] ?? '') : (provided ?? '');
+    if (
+      candidate.length !== adminKey.length ||
+      !timingSafeEqual(Buffer.from(candidate, 'utf8'), Buffer.from(adminKey, 'utf8'))
+    ) {
+      reply.status(401).send(
+        ErrorResponseSchema.parse({
+          error: 'Unauthorized',
+          requestId: request.id,
+        }),
+      );
+      return;
+    }
+
+    const parsedBody = RecomputeRollupRequestSchema.safeParse(request.body);
+    if (!parsedBody.success) {
+      return sendValidationError(reply, request.id, 'Invalid rollup recompute payload');
+    }
+
+    try {
+      await service.recomputeRollup(parsedBody.data);
+      reply.status(202).send();
+      return;
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+}
