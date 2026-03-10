@@ -2100,6 +2100,25 @@ export async function handleBusinessConvertJob(
       snapshot: recoverySnapshot,
     });
 
+    // Persist discovered decision-makers even without a sendable email so
+    // lead detail/business detail pages can render full team context.
+    if (allCandidates.length > 0) {
+      await prisma.businessContact.createMany({
+        data: allCandidates.slice(0, 5).map((c) => ({
+          businessId,
+          name: c.name,
+          title: c.title,
+          email: c.email,
+          phone: c.phone,
+          linkedinUrl: c.linkedinUrl,
+          seniority: c.seniority,
+          positionRank: c.positionRank,
+          source: c.source,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
     gateStats.outcome = 'recovery';
     logger.warn(
       {
