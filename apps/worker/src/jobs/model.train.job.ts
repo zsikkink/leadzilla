@@ -76,6 +76,32 @@ function deterministicChecksum(input: string): string {
   return createHash('sha256').update(input).digest('hex');
 }
 
+function extractDraftHookMetadata(
+  groundingContextJson: unknown,
+): { hookUsed: string | null; icpSegment: string | null } {
+  if (!groundingContextJson || typeof groundingContextJson !== 'object' || Array.isArray(groundingContextJson)) {
+    return { hookUsed: null, icpSegment: null };
+  }
+
+  const context = groundingContextJson as Record<string, unknown>;
+  const metadata =
+    context.metadata && typeof context.metadata === 'object' && !Array.isArray(context.metadata)
+      ? (context.metadata as Record<string, unknown>)
+      : null;
+
+  const hookUsed = typeof metadata?.hookUsed === 'string' && metadata.hookUsed.trim().length > 0
+    ? metadata.hookUsed.trim()
+    : typeof context.icpHook === 'string' && context.icpHook.trim().length > 0
+      ? context.icpHook.trim()
+      : null;
+
+  const icpSegment = typeof metadata?.icpSegment === 'string' && metadata.icpSegment.trim().length > 0
+    ? metadata.icpSegment.trim()
+    : null;
+
+  return { hookUsed, icpSegment };
+}
+
 export async function handleModelTrainJob(
   logger: ModelTrainLogger,
   job: Job<ModelTrainJobPayload>,
@@ -126,8 +152,84 @@ export async function handleModelTrainJob(
             },
           },
         },
+        feedbackEvent: {
+          select: {
+            messageSend: {
+              select: {
+                messageDraft: {
+                  select: {
+                    groundingContextJson: true,
+                    icpProfile: { select: { name: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     });
+
+    const hookSummaryBySegment = new Map<
+      string,
+      { positive: number; negative: number; hooks: Map<string, { total: number; positive: number; negative: number }> }
+    >();
+
+    for (const entry of labels) {
+      const draft = entry.feedbackEvent?.messageSend?.messageDraft;
+      const metadata = extractDraftHookMetadata(draft?.groundingContextJson);
+
+      const icpSegment = metadata.icpSegment ?? draft?.icpProfile?.name ?? 'UNKNOWN';
+      const hookUsed = metadata.hookUsed ?? 'UNKNOWN';
+
+      const segmentSummary = hookSummaryBySegment.get(icpSegment) ?? {
+        positive: 0,
+        negative: 0,
+        hooks: new Map<string, { total: number; positive: number; negative: number }>(),
+      };
+
+      if (entry.label === 1) {
+        segmentSummary.positive += 1;
+      } else {
+        segmentSummary.negative += 1;
+      }
+
+      const hookSummary = segmentSummary.hooks.get(hookUsed) ?? { total: 0, positive: 0, negative: 0 };
+      hookSummary.total += 1;
+      if (entry.label === 1) {
+        hookSummary.positive += 1;
+      } else {
+        hookSummary.negative += 1;
+      }
+
+      segmentSummary.hooks.set(hookUsed, hookSummary);
+      hookSummaryBySegment.set(icpSegment, segmentSummary);
+    }
+
+    const hookEffectivenessSummary = [...hookSummaryBySegment.entries()]
+      .map(([icpSegment, summary]) => ({
+        icpSegment,
+        positiveCount: summary.positive,
+        negativeCount: summary.negative,
+        hooks: [...summary.hooks.entries()]
+          .map(([hookUsed, hookSummary]) => ({
+            hookUsed,
+            total: hookSummary.total,
+            positiveCount: hookSummary.positive,
+            negativeCount: hookSummary.negative,
+          }))
+          .sort((a, b) => b.total - a.total),
+      }))
+      .sort((a, b) => b.positiveCount + b.negativeCount - (a.positiveCount + a.negativeCount));
+
+    logger.info(
+      {
+        jobId: job.id,
+        trainingRunId,
+        segments: hookEffectivenessSummary.length,
+        hookEffectivenessSummary,
+      },
+      'Hook effectiveness summary by ICP segment',
+    );
 
     // 4. Build dataset: filter to labels with valid features
     const dataset: { features: number[]; label: number }[] = [];

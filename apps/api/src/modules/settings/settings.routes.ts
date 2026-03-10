@@ -105,17 +105,17 @@ export function registerSettingsRoutes(app: FastifyInstance) {
     }
 
     if (key === 'auto_approve_score_min' || key === 'auto_approve_score_max') {
-      if (typeof value !== 'number') {
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
         reply.status(400);
         return ErrorResponseSchema.parse({
-          error: 'Score values must be numbers',
+          error: `${key} must be a number`,
           requestId: request.id,
         });
       }
-      if (value >= 1 || value < 0) {
+      if (value > 1 || value < 0) {
         reply.status(400);
         return ErrorResponseSchema.parse({
-          error: 'Score values must be decimals between 0 and 1',
+          error: `${key} must be between 0 and 1 (inclusive)`,
           requestId: request.id,
         });
       }
@@ -134,7 +134,10 @@ export function registerSettingsRoutes(app: FastifyInstance) {
         if (min > max) {
           reply.status(400);
           return ErrorResponseSchema.parse({
-            error: 'auto_approve_score_min must be <= auto_approve_score_max',
+            error:
+              key === 'auto_approve_score_min'
+                ? 'auto_approve_score_min cannot be greater than auto_approve_score_max'
+                : 'auto_approve_score_max cannot be less than auto_approve_score_min',
             requestId: request.id,
           });
         }

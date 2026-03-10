@@ -204,6 +204,26 @@ export async function loadSearchEfficiency(icpProfileId: string): Promise<number
 // so the pipeline works even if the setting was never explicitly saved.
 
 /**
+ * Lead qualification threshold after score blending. Default: 0.4.
+ * Used by scoring jobs to decide if a lead is qualified for messaging.
+ */
+export async function getScoreQualificationThreshold(): Promise<number> {
+  try {
+    const row = await prisma.pipelineSetting.findUnique({
+      where: { key: 'scoreQualificationThreshold' },
+      select: { valueJson: true },
+    });
+    if (row?.valueJson !== null && row?.valueJson !== undefined) {
+      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
+      if (Number.isFinite(val) && val >= 0 && val <= 1) {
+        return val;
+      }
+    }
+  } catch { /* fall through */ }
+  return 0.4;
+}
+
+/**
  * Deterministic/AI blend weight override (saved as 0–100 = percent deterministic).
  * Returns as a 0–1 fraction, or null if not set (meaning: use dynamic auto-blending).
  */
@@ -241,6 +261,26 @@ export async function getEnrichmentThreshold(): Promise<number> {
     }
   } catch { /* fall through */ }
   return 0.3;
+}
+
+/**
+ * Minimum Google review count required to keep a business in discovery.
+ * Default: 15.
+ */
+export async function getMinReviewCount(): Promise<number> {
+  try {
+    const row = await prisma.pipelineSetting.findUnique({
+      where: { key: 'min_review_count' },
+      select: { valueJson: true },
+    });
+    if (row?.valueJson !== null && row?.valueJson !== undefined) {
+      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
+      if (Number.isFinite(val) && val >= 0) {
+        return val;
+      }
+    }
+  } catch { /* fall through */ }
+  return 15;
 }
 
 /**
@@ -321,6 +361,60 @@ export async function getEmailDailyLimit(): Promise<number> {
     }
   } catch { /* fall through */ }
   return 100;
+}
+
+/**
+ * Messaging role/persona override for AI generation.
+ * Returns null when unset to allow adapter defaults.
+ */
+export async function getMessagingRole(): Promise<string | null> {
+  try {
+    const row = await prisma.pipelineSetting.findUnique({
+      where: { key: 'messagingRole' },
+      select: { valueJson: true },
+    });
+    if (typeof row?.valueJson === 'string') {
+      const value = row.valueJson.trim();
+      return value.length > 0 ? value : null;
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+
+/**
+ * Messaging system prompt override for AI generation.
+ * Returns null when unset to allow adapter defaults.
+ */
+export async function getMessagingSystemPrompt(): Promise<string | null> {
+  try {
+    const row = await prisma.pipelineSetting.findUnique({
+      where: { key: 'messagingSystemPrompt' },
+      select: { valueJson: true },
+    });
+    if (typeof row?.valueJson === 'string') {
+      const value = row.valueJson.trim();
+      return value.length > 0 ? value : null;
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+
+/**
+ * Additional user-defined messaging constraints.
+ * Returns null when unset.
+ */
+export async function getMessagingInstructions(): Promise<string | null> {
+  try {
+    const row = await prisma.pipelineSetting.findUnique({
+      where: { key: 'messagingInstructions' },
+      select: { valueJson: true },
+    });
+    if (typeof row?.valueJson === 'string') {
+      const value = row.valueJson.trim();
+      return value.length > 0 ? value : null;
+    }
+  } catch { /* fall through */ }
+  return null;
 }
 
 /**
