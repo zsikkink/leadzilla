@@ -86,6 +86,74 @@ describe('OpenAiAdapter integration', () => {
       expect(result.data.message.subject).toBe('Boost your fintech payments');
     });
 
+    it('sends icpHook as a mandatory system instruction when provided', async () => {
+      const fetchMock = vi.fn(async () => {
+        return new Response(
+          makeOpenAiResponse(JSON.stringify(VALID_GENERATION_RESPONSE)),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      });
+
+      const adapter = new OpenAiAdapter({
+        apiKey: 'sk-test',
+        fetchImpl: fetchMock as unknown as typeof fetch,
+      });
+
+      const result = await adapter.generateMessageVariants({
+        ...GENERATION_CONTEXT,
+        icpHook: 'Zbooni helps luxury hotels increase repeat bookings through WhatsApp-based ordering',
+      });
+
+      expect(result.status).toBe('success');
+
+      const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+      const payload = JSON.parse(String(requestInit?.body ?? '{}')) as {
+        messages?: Array<{ role: string; content: string }>;
+      };
+      const systemPrompt = payload.messages?.find((msg) => msg.role === 'system')?.content ?? '';
+      const userPrompt = payload.messages?.find((msg) => msg.role === 'user')?.content ?? '';
+
+      expect(systemPrompt).toContain('MANDATORY ICP HOOK INSTRUCTION');
+      expect(systemPrompt).toContain('You MUST incorporate the following sales hook as the core angle of your message');
+      expect(systemPrompt).toContain('Zbooni helps luxury hotels increase repeat bookings through WhatsApp-based ordering');
+      expect(userPrompt).not.toContain('ICP hook (use as opening line)');
+    });
+
+    it('uses custom role, replaces default system prompt, and appends user instructions', async () => {
+      const fetchMock = vi.fn(async () => {
+        return new Response(
+          makeOpenAiResponse(JSON.stringify(VALID_GENERATION_RESPONSE)),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      });
+
+      const adapter = new OpenAiAdapter({
+        apiKey: 'sk-test',
+        fetchImpl: fetchMock as unknown as typeof fetch,
+      });
+
+      const result = await adapter.generateMessageVariants({
+        ...GENERATION_CONTEXT,
+        customRole: 'Senior Enterprise Account Executive at Zbooni',
+        customSystemPrompt: 'Write one concise line and sign off as an enterprise AE.',
+        messagingInstructions: "Never use the word 'leverage'.",
+      });
+
+      expect(result.status).toBe('success');
+
+      const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+      const payload = JSON.parse(String(requestInit?.body ?? '{}')) as {
+        messages?: Array<{ role: string; content: string }>;
+      };
+      const systemPrompt = payload.messages?.find((msg) => msg.role === 'system')?.content ?? '';
+
+      expect(systemPrompt).toContain('Senior Enterprise Account Executive at Zbooni');
+      expect(systemPrompt).toContain('Write one concise line and sign off as an enterprise AE.');
+      expect(systemPrompt).toContain("Additional instructions from the user: Never use the word 'leverage'.");
+      expect(systemPrompt).not.toContain('## ZBOONI POSITIONING');
+      expect(systemPrompt).not.toContain('You are a senior sales development representative at Zbooni');
+    });
+
     it('returns terminal_error when API key is missing', async () => {
       const adapter = new OpenAiAdapter({
         apiKey: undefined,

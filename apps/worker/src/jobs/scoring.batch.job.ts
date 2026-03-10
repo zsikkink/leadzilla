@@ -14,9 +14,12 @@ import {
   ensureBaselineModelVersion,
   extractFeatureVectorForModel,
   findActiveTrainedModel,
-  getQualificationThreshold,
 } from '../scoring/shared.js';
-import { getDeterministicAiBlend, getScoreTierBands } from '../utils/pipeline-settings.js';
+import {
+  getDeterministicAiBlend,
+  getScoreQualificationThreshold,
+  getScoreTierBands,
+} from '../utils/pipeline-settings.js';
 
 export const SCORING_BATCH_JOB_NAME = 'scoring.batch';
 
@@ -147,7 +150,7 @@ export async function handleScoringBatchJob(
     // Ensure baseline model version exists and find active trained model
     const effectiveModelVersionId = await ensureBaselineModelVersion();
     const trainedModel = await findActiveTrainedModel();
-    const qualificationThreshold = await getQualificationThreshold();
+    const qualificationThreshold = await getScoreQualificationThreshold();
 
     // Read UI-configured blend override and tier bands
     const deterministicAiBlend = await getDeterministicAiBlend();

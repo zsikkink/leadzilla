@@ -7,6 +7,9 @@ import type { Job, SendOptions } from 'pg-boss';
 import { classifyError } from '../errors.js';
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
 import {
+  getMessagingInstructions,
+  getMessagingRole,
+  getMessagingSystemPrompt,
   isManualApprovalOnlyEnabled,
   loadAutoApproveConfig,
   shouldAutoApprove,
@@ -320,7 +323,7 @@ export async function handleMessageGenerateJob(
 
     const icpProfile = await prisma.icpProfile.findUnique({
       where: { id: icpProfileId },
-      select: { description: true, featureList: true, metadataJson: true },
+      select: { name: true, description: true, featureList: true, metadataJson: true },
     });
 
     const latestSnapshot = await prisma.leadFeatureSnapshot.findFirst({
@@ -395,13 +398,13 @@ export async function handleMessageGenerateJob(
 
     // Load custom messaging settings from PipelineSetting (role, system prompt, instructions)
     const [roleSetting, systemPromptSetting, instrSetting] = await Promise.all([
-      prisma.pipelineSetting.findUnique({ where: { key: 'messagingRole' } }),
-      prisma.pipelineSetting.findUnique({ where: { key: 'messagingSystemPrompt' } }),
-      prisma.pipelineSetting.findUnique({ where: { key: 'messagingInstructions' } }),
+      getMessagingRole(),
+      getMessagingSystemPrompt(),
+      getMessagingInstructions(),
     ]);
-    const customRole = typeof roleSetting?.valueJson === 'string' ? roleSetting.valueJson : null;
-    const customSystemPrompt = typeof systemPromptSetting?.valueJson === 'string' ? systemPromptSetting.valueJson : null;
-    const messagingInstructions = typeof instrSetting?.valueJson === 'string' ? instrSetting.valueJson : null;
+    const customRole = roleSetting;
+    const customSystemPrompt = systemPromptSetting;
+    const messagingInstructions = instrSetting;
 
     // Extract ICP sales hook + angle from metadataJson
     const icpMetadata = icpProfile?.metadataJson && typeof icpProfile.metadataJson === 'object'
@@ -421,6 +424,7 @@ export async function handleMessageGenerateJob(
       : (icpAngle && icpAngle.trim().length > 0
         ? icpAngle.trim()
         : (icpProfile?.description ? `Hook: ${icpProfile.description.split('.').at(0)?.trim()}` : null));
+    const icpSegment = icpProfile?.name ?? null;
     if (!requiredIcpHook) {
       logger.warn({ jobId: job.id, leadId, icpProfileId }, 'ICP sales hook missing; message quality may degrade');
     }
@@ -441,6 +445,10 @@ export async function handleMessageGenerateJob(
       customRole,
       customSystemPrompt,
       messagingInstructions,
+      metadata: {
+        hookUsed: requiredIcpHook ?? null,
+        icpSegment,
+      },
     };
 
     const previouslyPitchedFeatures = job.data.previouslyPitchedFeatures ?? [];
