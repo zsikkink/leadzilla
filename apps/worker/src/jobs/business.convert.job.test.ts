@@ -7,6 +7,7 @@ import {
   hasMaterialRecoveryEvidenceImprovement,
   isJunkPersonalEmail,
   isValidPersonName,
+  resolveRecoveryReasonWhenNoPersonalEmail,
 } from './business.convert.job.js';
 
 describe('contact recovery evidence helpers', () => {
@@ -98,5 +99,29 @@ describe('contact recovery evidence helpers', () => {
     expect(classifySeniorityLocal('Legal Director')).toBe('director');
     expect(classifySeniorityLocal('Marketing Manager')).toBe('manager');
     expect(classifySeniorityLocal('Marketing Coordinator')).toBe('other');
+  });
+
+  it('sets DECISION_MAKER_IDENTIFIED when top candidate is c-suite without email', () => {
+    expect(
+      resolveRecoveryReasonWhenNoPersonalEmail({
+        resolvedContact: { positionRank: 1 },
+      }),
+    ).toBe('DECISION_MAKER_IDENTIFIED');
+  });
+
+  it('keeps NO_EMAIL for non-c-suite contacts without email', () => {
+    expect(
+      resolveRecoveryReasonWhenNoPersonalEmail({
+        resolvedContact: { positionRank: 3 },
+      }),
+    ).toBe('NO_EMAIL');
+  });
+
+  it('uses NO_CONTACTS_FOUND when no contact is resolved', () => {
+    expect(
+      resolveRecoveryReasonWhenNoPersonalEmail({
+        resolvedContact: null,
+      }),
+    ).toBe('NO_CONTACTS_FOUND');
   });
 });

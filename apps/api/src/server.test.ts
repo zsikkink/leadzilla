@@ -71,6 +71,67 @@ function authHeaders(): Record<string, string> {
   return { authorization: 'Bearer test-token' };
 }
 
+function buildContactRecoveryItem(reason: 'NO_CONTACTS_FOUND' | 'NO_EMAIL' | 'DECISION_MAKER_IDENTIFIED') {
+  return {
+    id: 'recovery_1',
+    businessId: 'business_1',
+    icpProfileId: 'icp_1',
+    icpProfileName: 'Clinics',
+    discoveryRunId: 'run_1',
+    status: 'OPEN' as const,
+    reason,
+    evidenceScore: 0.72,
+    candidateCount: 2,
+    rejectedBy: null,
+    rejectedAt: null,
+    createdAt: '2026-03-08T00:00:00.000Z',
+    updatedAt: '2026-03-08T00:00:00.000Z',
+    business: {
+      id: 'business_1',
+      name: 'Atlas Clinic',
+      city: 'Amman',
+      country: 'Jordan',
+      countryCode: 'JO',
+      websiteDomain: 'atlas.example',
+      instagramHandle: 'atlas',
+      category: 'Dental Clinic',
+      deterministicScore: 0.81,
+      scoreBand: 'HIGH' as const,
+      preQualified: false,
+      disqualificationReason: reason,
+    },
+    snapshot: {
+      businessId: 'business_1',
+      domain: 'atlas.example',
+      locality: 'Amman, JO',
+      generatedAt: '2026-03-08T00:00:00.000Z',
+      businessInsights: null,
+      genericBusinessEmail: null,
+      telemetry: {
+        cseVerifyAttempted: true,
+        cseVerifySucceeded: true,
+        cseDiscoverAttempted: true,
+        cseDiscoverSucceeded: false,
+        cseRawResults: 4,
+        cseValidProfiles: 2,
+        cseCandidatesAdded: 1,
+        cseCandidatesValidated: 1,
+        cseEmailsInferred: 0,
+        topSourceFamily: 'linkedin' as const,
+        finalOutcome: 'recovery_opened' as const,
+        verificationVerdict: 'verified' as const,
+        supportingUrls: ['https://linkedin.com/in/atlas-founder'],
+        diagnostics: [],
+        topQueryFamily: 'DISCOVER_ROLES' as const,
+      },
+      attempts: [],
+      topCandidates: [],
+      websiteIntelligence: null,
+      instagramIntelligence: null,
+    },
+  };
+}
+
 describe('buildServer', () => {
   const servers: Array<ReturnType<typeof buildServer>> = [];
 
@@ -241,7 +302,15 @@ describe('buildServer', () => {
   });
 
   it('returns paginated contact recovery list', async () => {
-    const server = buildServer(makeDefaultOptions());
+    const server = buildServer({
+      ...makeDefaultOptions(),
+      listContactRecoveryItems: async () => ({
+        items: [buildContactRecoveryItem('DECISION_MAKER_IDENTIFIED')],
+        page: 1,
+        pageSize: 20,
+        total: 1,
+      }),
+    });
     servers.push(server);
 
     const response = await server.inject({
@@ -252,74 +321,17 @@ describe('buildServer', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
-      items: [],
+      items: [expect.objectContaining({ reason: 'DECISION_MAKER_IDENTIFIED' })],
       page: 1,
       pageSize: 20,
-      total: 0,
+      total: 1,
     });
   });
 
   it('returns contact recovery detail when found', async () => {
     const server = buildServer({
       ...makeDefaultOptions(),
-      getContactRecoveryItem: async () => ({
-        id: 'recovery_1',
-        businessId: 'business_1',
-        icpProfileId: 'icp_1',
-        icpProfileName: 'Clinics',
-        discoveryRunId: 'run_1',
-        status: 'OPEN',
-        reason: 'NO_CONTACTS_FOUND',
-        evidenceScore: 0.72,
-        candidateCount: 2,
-        rejectedBy: null,
-        rejectedAt: null,
-        createdAt: '2026-03-08T00:00:00.000Z',
-        updatedAt: '2026-03-08T00:00:00.000Z',
-        business: {
-          id: 'business_1',
-          name: 'Atlas Clinic',
-          city: 'Amman',
-          country: 'Jordan',
-          countryCode: 'JO',
-          websiteDomain: 'atlas.example',
-          instagramHandle: 'atlas',
-          category: 'Dental Clinic',
-          deterministicScore: 0.81,
-          scoreBand: 'HIGH',
-          preQualified: false,
-          disqualificationReason: 'NO_CONTACTS_FOUND',
-        },
-        snapshot: {
-          businessId: 'business_1',
-          domain: 'atlas.example',
-          locality: 'Amman, JO',
-          generatedAt: '2026-03-08T00:00:00.000Z',
-          businessInsights: null,
-          genericBusinessEmail: null,
-          telemetry: {
-            cseVerifyAttempted: true,
-            cseVerifySucceeded: true,
-            cseDiscoverAttempted: true,
-            cseDiscoverSucceeded: false,
-            cseRawResults: 4,
-            cseValidProfiles: 2,
-            cseCandidatesAdded: 1,
-            cseCandidatesValidated: 1,
-            cseEmailsInferred: 0,
-            topSourceFamily: 'linkedin',
-            finalOutcome: 'recovery_opened',
-            verificationVerdict: 'verified',
-            supportingUrls: ['https://linkedin.com/in/atlas-founder'],
-            diagnostics: [],
-            topQueryFamily: 'DISCOVER_ROLES',
-          },
-          attempts: [],
-          topCandidates: [],
-          websiteIntelligence: null,
-          instagramIntelligence: null,
-        },
-      }),
+      getContactRecoveryItem: async () => buildContactRecoveryItem('DECISION_MAKER_IDENTIFIED'),
     });
     servers.push(server);
 
@@ -332,7 +344,7 @@ describe('buildServer', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       id: 'recovery_1',
-      reason: 'NO_CONTACTS_FOUND',
+      reason: 'DECISION_MAKER_IDENTIFIED',
     });
   });
 
