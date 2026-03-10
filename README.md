@@ -1,12 +1,12 @@
 # LEAD-FLOOD
 
-Monorepo for a lead discovery, enrichment, and scoring pipeline.
+AI-powered lead discovery, enrichment, and scoring pipeline for B2B sales.
 
 ## Stack
 
 - Next.js App Router (`apps/web`)
 - Fastify (`apps/api`)
-- Postgres + Prisma (`packages/db`)
+- Cloud Supabase Postgres + Prisma (`packages/db`)
 - pg-boss workers (`apps/worker`)
 - Zod contracts (`packages/contracts`)
 - TypeScript + pnpm workspace + turborepo
@@ -15,60 +15,30 @@ Monorepo for a lead discovery, enrichment, and scoring pipeline.
 
 - Node.js `22+` (repo pin: `.nvmrc`)
 - pnpm `10.14.0` (from `packageManager`)
-- Docker Desktop (or local Postgres on `localhost:5434`)
+
+No Docker required — the database is a shared cloud Supabase instance.
 
 ## Quick Start
 
-1. Clone and enter the repo.
+For the full setup guide with credentials and env configuration, see `docs/SETUP_ONBOARDING.md`.
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/zsikkink/lead-flood.git
 cd lead-flood
-```
-
-2. Use Node 22.
-
-```bash
 nvm use
-```
-
-3. Run preflight checks.
-
-```bash
-pnpm doctor
-```
-
-4. Install dependencies with pnpm.
-
-```bash
 corepack enable
-pnpm install --frozen-lockfile
+pnpm install
 ```
 
-5. Create local env files.
+Create env files from templates:
 
 ```bash
 cp apps/api/.env.example apps/api/.env.local
 cp apps/worker/.env.example apps/worker/.env.local
 cp apps/web/.env.example apps/web/.env.local
-cp packages/db/.env.example packages/db/.env
 ```
 
-6. Start local infrastructure.
-
-```bash
-pnpm dev:infra
-```
-
-7. Apply migrations and seed.
-
-```bash
-pnpm db:migrate
-pnpm db:seed
-pnpm icp:seed
-```
-
-8. Start all apps.
+Fill in credentials (get these from the team lead), then start:
 
 ```bash
 pnpm dev
@@ -81,90 +51,54 @@ pnpm dev
 - Discovery console: `http://localhost:3000/discovery`
 - API health: `http://localhost:5050/health`
 - API ready: `http://localhost:5050/ready`
-- Mailhog UI: `http://localhost:8025`
-- Postgres: `localhost:5434`
 
-## Discovery Console (Read-Only Supabase Mode)
+## Discovery Pipeline
 
-`/discovery` can run without API dependency when web is configured with Supabase browser keys and worker is running against the same DB.
+The discovery system uses Google Places to find businesses matching your Ideal Customer Profile (ICP). The pipeline runs as background jobs through pg-boss:
 
-Required web env:
+1. **Discovery seed** — generates search tasks from ICP categories and target cities
+2. **Run search tasks** — queries Google Places for matching businesses
+3. **Pre-qualify** — filters results against minimum criteria (reviews, country)
+4. **Convert** — enriches qualified businesses into leads (website scraping, contact discovery)
+5. **Score** — ML + rule-based scoring against ICP fit
+6. **Message** — generates personalized outreach for qualified leads
 
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+Required worker env for discovery:
 
-Required worker env:
+- `DATABASE_URL` (cloud Supabase Postgres with `?connection_limit=3`)
+- `GOOGLE_PLACES_API_KEY`
 
-- `DATABASE_URL` (Supabase Postgres, `sslmode=require`)
-- `SERPAPI_DISCOVERY_ENABLED=true`
-- `SERPAPI_API_KEY`
-
-Promote an auth user to discovery admin:
+Admin access requires your Supabase Auth user ID in the `app_admins` table:
 
 ```sql
-insert into public.app_admins (user_id)
-values ('<auth.users.id>')
-on conflict (user_id) do nothing;
+INSERT INTO public.app_admins (user_id)
+VALUES ('<auth.users.id>')
+ON CONFLICT (user_id) DO NOTHING;
 ```
-
-Job flow:
-
-1. UI inserts `public.job_requests`.
-2. Worker dispatcher claims `PENDING` rows and executes seed/run.
-3. Worker writes telemetry into `public.job_runs` and updates `job_requests.status`.
 
 ## Test and Quality Commands
 
 ```bash
-pnpm lint
 pnpm typecheck
+pnpm lint
 pnpm test
-pnpm test:e2e
 pnpm build
 ```
 
 ## Useful Scripts
 
-- `pnpm doctor` validates Node/pnpm/Docker prerequisites
-- `pnpm bootstrap` runs preflight, installs deps, creates env files, starts infra, migrates, and seeds
-- `pnpm db:link` links Supabase CLI to the configured project (default: `cbcgrzvqidtrtrtnzlso`)
-- `pnpm db:migrate:prod` applies SQL migrations from `supabase/migrations` to linked prod DB
-- `pnpm db:verify:prod` verifies remote DB migration metadata and readiness
-- `pnpm db:prisma:sync` introspects DB into Prisma schema and regenerates client
-- `pnpm db:pull:drift -- --confirm` captures remote schema drift into a SQL migration (review required)
-- `pnpm discovery:seed` seeds SerpAPI discovery frontier tasks (`search_tasks`)
-- `pnpm learning:backfill-features -- --icpProfileId <id> --batchSize 200`
-- `pnpm learning:backfill-features -- --dry-run`
-
-## Production DB
-
-Primary provider strategy is documented in `docs/PROD_REMOTE_DB_STRATEGY.md`.
-Canonical production migration files live in `supabase/migrations/*.sql`.
-
-Canonical production schema flow:
-
-```bash
-pnpm db:link
-pnpm db:migrate:prod
-pnpm db:verify:prod
-pnpm db:prisma:sync
-```
-
-> Do not do this:
-> - Do not run `prisma migrate deploy` for production rollout.
-> - Do not edit production schema manually without capturing a SQL migration.
-> - Do not commit `SUPABASE_SERVICE_ROLE_KEY`, DB passwords, or access tokens.
+- `pnpm doctor` — validates Node/pnpm prerequisites
+- `pnpm db:link` — links Supabase CLI to the configured project
+- `pnpm db:migrate:prod` — applies SQL migrations to cloud DB
+- `pnpm db:verify:prod` — verifies remote DB migration metadata
+- `pnpm db:prisma:sync` — introspects DB into Prisma schema and regenerates client
 
 ## Documentation
 
 - Entry point: `docs/README.md`
 - Setup and onboarding: `docs/SETUP_ONBOARDING.md`
-- Deployment: `docs/DEPLOYMENT.md`
-- Production remote DB strategy: `docs/PROD_REMOTE_DB_STRATEGY.md`
-- Vercel production setup: `docs/VERCEL_PROD_SETUP.md`
+- System walkthrough: `lead-flood-system-walkthrough.md`
 - Troubleshooting: `docs/TROUBLESHOOTING.md`
-- Discovery providers: `docs/DISCOVERY_PROVIDER_STACK.md`
-- API gotchas: `docs/api-gotchas.md`
 
 ## Package Manager Policy
 
