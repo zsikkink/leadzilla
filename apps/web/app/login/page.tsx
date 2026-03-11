@@ -24,7 +24,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (isAuthenticated) {
-      router.replace('/');
+      router.replace('/dashboard');
     }
   }, [isAuthenticated, router]);
 
@@ -52,7 +52,7 @@ export default function LoginPage() {
 
     try {
       await login(email, password);
-      router.replace('/');
+      router.replace('/dashboard');
     } catch (submitError: unknown) {
       if (submitError instanceof Error) {
         setError(submitError.message);

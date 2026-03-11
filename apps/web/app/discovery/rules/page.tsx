@@ -289,6 +289,16 @@ function evaluateRule(rule: QualificationRuleResponse, form: SimFormState): bool
   }
 }
 
+interface CategoryDetail {
+  name: string;
+  displayName: string;
+  rules: Array<{ fieldKey: string; matched: boolean }>;
+  matched: number;
+  total: number;
+  matchRate: number;
+  passed: boolean;
+}
+
 interface SimulationResult {
   score: number;
   deterministicScore: number;
@@ -298,6 +308,8 @@ interface SimulationResult {
   equation: string;
   qualificationPath: 'PROCEED' | 'SELECTIVE' | 'DISQUALIFY' | 'HARD_FILTERED';
   categoryBonus: number;
+  categoryDetails: CategoryDetail[];
+  passedCategoryCount: number;
 }
 
 function simulateScore(
@@ -354,6 +366,8 @@ function simulateScore(
       equation: 'hard filters failed => score = 0',
       qualificationPath: 'HARD_FILTERED',
       categoryBonus: 0,
+      categoryDetails: [],
+      passedCategoryCount: 0,
     };
   }
 
@@ -426,6 +440,38 @@ function simulateScore(
     ? Math.max(0.2, Math.min(1, 1 - (weightedNegativeMatched / weightedNegativeTotal) * 0.8)).toFixed(3)
     : '1.000';
 
+  // Build per-category breakdown details
+  const CATEGORY_DISPLAY_NAMES: Record<string, string> = {
+    SALES_MOTION_FIT: 'Sales Motion Fit',
+    PAYMENT_COMPLEXITY: 'Payment Complexity',
+    RISK_URGENCY: 'Risk & Urgency',
+    SWITCHING_WILLINGNESS: 'Switching Willingness',
+  };
+
+  const categoryRuleMap = new Map<string, Array<{ fieldKey: string; matched: boolean }>>();
+  for (const evaluation of ruleEvals) {
+    if (evaluation.ruleType === 'HARD_FILTER') continue;
+    const cat = FIELD_KEY_CATEGORY_MAP[evaluation.fieldKey] ?? 'GENERAL';
+    if (cat === 'GENERAL') continue;
+    const existing = categoryRuleMap.get(cat) ?? [];
+    existing.push({ fieldKey: evaluation.fieldKey, matched: evaluation.matched });
+    categoryRuleMap.set(cat, existing);
+  }
+
+  const categoryDetails: CategoryDetail[] = ['SALES_MOTION_FIT', 'PAYMENT_COMPLEXITY', 'RISK_URGENCY', 'SWITCHING_WILLINGNESS'].map((catKey) => {
+    const bucket = categoryBuckets.get(catKey) ?? { matched: 0, total: 0 };
+    const matchRate = bucket.total > 0 ? bucket.matched / bucket.total : 0;
+    return {
+      name: catKey,
+      displayName: CATEGORY_DISPLAY_NAMES[catKey] ?? catKey,
+      rules: categoryRuleMap.get(catKey) ?? [],
+      matched: bucket.matched,
+      total: bucket.total,
+      matchRate,
+      passed: matchRate >= 0.5 && bucket.matched >= 1,
+    };
+  });
+
   return {
     score: finalScore,
     deterministicScore,
@@ -435,6 +481,8 @@ function simulateScore(
     equation: `det = 0.10 + ${matchRatioDisplay} * ${penaltyDisplay} * 0.90 + (${categoryBonus >= 0 ? '+' : ''}${categoryBonus.toFixed(2)}) = ${deterministicScore.toFixed(3)} | final = ${blendWeights.deterministic.toFixed(2)} * ${deterministicScore.toFixed(3)} + ${blendWeights.ai.toFixed(2)} * ${aiScore.toFixed(3)} = ${finalScore.toFixed(3)}`,
     qualificationPath,
     categoryBonus,
+    categoryDetails,
+    passedCategoryCount: passedCategories.size,
   };
 }
 
@@ -1176,6 +1224,65 @@ export default function ICPRulesPage() {
                         <span className="text-[10px] text-muted-foreground/50">
                           Category bonus: {simResult.categoryBonus >= 0 ? '+' : ''}{simResult.categoryBonus.toFixed(2)}
                         </span>
+                      </div>
+                    ) : null}
+
+                    {/* Per-category breakdown */}
+                    {simResult.passedHard && simResult.categoryDetails.length > 0 ? (
+                      <div className="mt-3 rounded-lg border border-border/30 bg-slate-800/60 p-3">
+                        <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/60">
+                          Category Breakdown ({simResult.passedCategoryCount}/4 passed)
+                        </p>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {simResult.categoryDetails.map((cat) => (
+                            <div
+                              key={cat.name}
+                              className={cn(
+                                'rounded-lg border px-3 py-2',
+                                cat.passed
+                                  ? 'border-emerald-500/30 bg-emerald-500/5'
+                                  : 'border-border/20 bg-slate-800/40',
+                              )}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-semibold">{cat.displayName}</span>
+                                <span className={cn(
+                                  'rounded px-1.5 py-0.5 text-[9px] font-bold uppercase',
+                                  cat.passed
+                                    ? 'bg-emerald-500/15 text-emerald-400'
+                                    : 'bg-red-500/10 text-red-400/70',
+                                )}>
+                                  {cat.passed ? 'PASS' : 'FAIL'}
+                                </span>
+                              </div>
+                              <div className="mt-1 flex items-center gap-2">
+                                <span className="font-mono text-[10px] text-muted-foreground/60">
+                                  {cat.matched}/{cat.total} matched
+                                </span>
+                                <span className="font-mono text-[10px] text-muted-foreground/40">
+                                  ({cat.total > 0 ? Math.round(cat.matchRate * 100) : 0}%)
+                                </span>
+                              </div>
+                              {cat.rules.length > 0 ? (
+                                <div className="mt-1.5 flex flex-wrap gap-1">
+                                  {cat.rules.map((r) => (
+                                    <span
+                                      key={r.fieldKey}
+                                      className={cn(
+                                        'rounded px-1.5 py-0.5 text-[9px]',
+                                        r.matched
+                                          ? 'bg-emerald-500/10 text-emerald-400/80'
+                                          : 'bg-slate-700/50 text-muted-foreground/40',
+                                      )}
+                                    >
+                                      {r.fieldKey}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     ) : null}
 
