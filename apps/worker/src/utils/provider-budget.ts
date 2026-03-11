@@ -160,7 +160,22 @@ export class ProviderBudgetTracker {
 
 /**
  * Estimated cost per provider call in cents.
- * These are approximations based on published pricing tiers.
+ *
+ * Research basis (last verified March 2026):
+ *
+ * - APOLLO: Basic plan $49/mo for ~900 export credits. Domain search uses 1 credit.
+ *   Effective cost ~$0.05/credit at low volume, ~$0.02/call at scale. Using 2c.
+ *
+ * - HUNTER: Starter plan $49/mo includes 500 domain searches.
+ *   $49/500 = ~$0.098/call ≈ 3 cents (conservative, accounts for bundled finder credits).
+ *
+ * - GOOGLE_PLACES: Text Search (New) Basic SKU = $0.032/call.
+ *   With Google's $200/mo free credit, effective cost is ~$0.02/call. Using 2c.
+ *
+ * - GOOGLE_CUSTOM_SEARCH: First 100 queries/day free, then $5/1K queries = $0.005/call.
+ *   Most usage falls within free tier. Using 1c as conservative estimate.
+ *
+ * - Others are legacy/unused but kept for completeness.
  */
 export const PROVIDER_COST_CENTS: Record<string, number> = {
   APOLLO: 2,
@@ -169,6 +184,7 @@ export const PROVIDER_COST_CENTS: Record<string, number> = {
   APIFY: 1,
   BRAVE_SEARCH: 1,
   GOOGLE_PLACES: 2,
+  GOOGLE_CUSTOM_SEARCH: 1,
   LINKEDIN_SCRAPE: 1,
   COMPANY_SEARCH_FREE: 0,
   CLEARBIT: 5,
