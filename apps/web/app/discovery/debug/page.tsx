@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -12,6 +12,7 @@ import {
   ChevronUp,
   Clock,
   Cpu,
+  Database,
   Gauge,
   GitBranch,
   Globe,
@@ -32,6 +33,10 @@ import {
 import { cn } from '@/lib/utils.js';
 import { useAuth } from '@/hooks/use-auth.js';
 import { useApiQuery } from '@/hooks/use-api-query.js';
+import { getSupabaseBrowserClient } from '@/lib/supabase-client.js';
+import { EnrichedStageContent } from '@/components/debug/stage-renderers.js';
+import { fetchLeadLifecycleData } from '@/components/debug/lifecycle-data.js';
+import type { LeadLifecycleData } from '@/components/debug/lifecycle-data.js';
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  TAB NAVIGATION
@@ -62,6 +67,7 @@ interface PipelineStage {
   status: StageStatus;
   timestamp: string | null;
   details: StageDetail[];
+  hasEnrichedContent?: boolean | undefined;
 }
 
 interface PipelineCategory {
@@ -86,15 +92,6 @@ interface LeadRecord {
   categories: PipelineCategory[];
 }
 
-function extractFeatureDetails(payload: Record<string, unknown>): StageDetail[] {
-  const details: StageDetail[] = [];
-  if (payload.hasWhatsApp != null) details.push({ label: 'Has WhatsApp', value: payload.hasWhatsApp ? 'Yes' : 'No' });
-  if (payload.instagramFollowers) details.push({ label: 'Instagram Followers', value: String(payload.instagramFollowers) });
-  if (payload.acceptsOnlinePayments != null) details.push({ label: 'Online Payments', value: payload.acceptsOnlinePayments ? 'Yes' : 'No' });
-  if (payload.recentlyActive != null) details.push({ label: 'Recently Active', value: payload.recentlyActive ? 'Yes' : 'No' });
-  return details;
-}
-
 const STATUS_PROGRESSION: Record<string, number> = {
   new: 0,
   processing: 1,
@@ -104,6 +101,7 @@ const STATUS_PROGRESSION: Record<string, number> = {
   rejected: -2,
   failed: -1,
   messaged: 4,
+  drafted: 4,
   replied: 5,
   cold: 6,
 };
@@ -132,7 +130,6 @@ interface LeadItem {
 function buildPipelineStages(lead: LeadItem): PipelineStage[] {
   const enrichment = lead.latestEnrichmentNormalizedPayload as Record<string, unknown> | null;
   const rawEnrichment = lead.latestEnrichmentRawPayload as Record<string, unknown> | null;
-  const discovery = lead.latestDiscoveryRawPayload as Record<string, unknown> | null;
   const hasEnrichment = enrichment !== null || rawEnrichment !== null;
   const hasScore = lead.latestBlendedScore !== null && lead.latestBlendedScore !== undefined;
   const statusLevel = STATUS_PROGRESSION[lead.status] ?? 0;
@@ -144,152 +141,63 @@ function buildPipelineStages(lead: LeadItem): PipelineStage[] {
   const isLowScore = lead.latestScoreBand === 'LOW';
   const isBelowThreshold = isLowScore || isRejected;
   const enrichmentFailed = isFailed && !hasEnrichment;
-  // EN-1: If scored LOW and no enrichment data, enrichment was intentionally skipped
   const enrichmentSkipped = !hasEnrichment && hasScore && isLowScore;
 
-  // C10: Derive qualification status from actual pipeline progress, not just enrichment JSON
   const qualificationCompleted = hasScore || hasEnrichment || statusLevel >= 2;
   const qualificationStatus: StageStatus = enrichmentFailed ? 'failed' : qualificationCompleted ? 'completed' : 'pending';
 
-  // C5: Discovery details — include search query from discovery payload if available
+  // Discovery details — basic info; enriched content loaded via EnrichedStageContent
   const discoveryDetails: StageDetail[] = [
     { label: 'Source', value: lead.source },
     { label: 'Lead ID', value: lead.id },
   ];
-  // TODO: Search query needs an API field (SearchTask.queryText via Lead -> BusinessConversion -> Business -> SearchTask)
-  const searchQuery = (discovery?.queryText as string) ?? (discovery?.searchQuery as string) ?? null;
-  if (searchQuery) {
-    discoveryDetails.push({ label: 'Search Query', value: searchQuery });
-  }
 
-  // C11: Country/industry from Business record fallback
+  // Country/industry from Business record fallback
   const country = extractField(lead, 'country') || extractField(lead, 'countryCode');
   const industry = extractField(lead, 'industry') || extractField(lead, 'category');
 
-  // C6: Pre-qualification hard filter results (all leads shown have passed)
+  // Pre-qualification hard filter results
   const prequalDetails: StageDetail[] = [];
-  if (country) prequalDetails.push({ label: 'Country in supported regions', value: `${country} — Passed` });
+  if (country) prequalDetails.push({ label: 'Country in supported regions', value: `${country} -- Passed` });
   const hasEmail = lead.email && lead.email.includes('@');
-  prequalDetails.push({ label: 'Has email contact', value: hasEmail ? 'Yes — Passed' : 'No data' });
+  prequalDetails.push({ label: 'Has email contact', value: hasEmail ? 'Yes -- Passed' : 'No data' });
   const alignmentScore = enrichment?.data_alignment_score as number | undefined;
   if (alignmentScore !== undefined) {
-    prequalDetails.push({ label: 'Data alignment score', value: `${alignmentScore.toFixed(2)} — ${alignmentScore >= 0.3 ? 'Passed' : 'Below threshold'}` });
+    prequalDetails.push({ label: 'Data alignment score', value: `${alignmentScore.toFixed(2)} -- ${alignmentScore >= 0.3 ? 'Passed' : 'Below threshold'}` });
   }
-  if (industry) prequalDetails.push({ label: 'Industry match', value: `${industry} — Passed` });
+  if (industry) prequalDetails.push({ label: 'Industry match', value: `${industry} -- Passed` });
 
-  // C7: Enrichment data per source
+  // Enrichment — now loaded via EnrichedStageContent, summary details only
   const enrichmentDetails: StageDetail[] = [];
   if (enrichmentFailed && lead.error) {
     enrichmentDetails.push({ label: 'Error', value: lead.error });
   }
-  if (enrichment) {
-    // Website scrape data
-    const socialLinks = enrichment.socialLinks as unknown;
-    const decisionMakers = enrichment.decisionMakers as unknown;
-    const techStack = enrichment.techStack as unknown;
-    if (socialLinks || decisionMakers || techStack) {
-      const webParts: string[] = [];
-      if (Array.isArray(socialLinks) && socialLinks.length > 0) webParts.push(`${socialLinks.length} social links`);
-      if (Array.isArray(decisionMakers) && decisionMakers.length > 0) webParts.push(`${decisionMakers.length} decision makers`);
-      if (Array.isArray(techStack) && techStack.length > 0) webParts.push(`${techStack.length} technologies`);
-      if (webParts.length > 0) enrichmentDetails.push({ label: 'Website Scrape', value: webParts.join(', ') });
-    }
-    // Instagram data
-    const igFollowers = enrichment.instagramFollowers as number | undefined;
-    const igCategory = enrichment.instagramBusinessCategory as string | undefined;
-    const igVerified = enrichment.instagramIsVerified as boolean | undefined;
-    if (igFollowers || igCategory || igVerified !== undefined) {
-      const igParts: string[] = [];
-      if (igFollowers) igParts.push(`${igFollowers.toLocaleString()} followers`);
-      if (igCategory) igParts.push(igCategory);
-      if (igVerified) igParts.push('verified');
-      if (igParts.length > 0) enrichmentDetails.push({ label: 'Instagram', value: igParts.join(', ') });
-    }
-    // Hunter/contact data
-    if (enrichment.companyName) enrichmentDetails.push({ label: 'Company', value: String(enrichment.companyName) });
-    if (enrichment.employeeCount) enrichmentDetails.push({ label: 'Employees', value: String(enrichment.employeeCount) });
-    if (enrichment.linkedinUrl) enrichmentDetails.push({ label: 'LinkedIn', value: String(enrichment.linkedinUrl) });
-    if (enrichment.websiteUrl) enrichmentDetails.push({ label: 'Website', value: String(enrichment.websiteUrl) });
-  }
 
-  // C8: Feature/scoring details grouped by category
-  const scoringDetails: StageDetail[] = [];
-  if (hasScore) {
-    scoringDetails.push({ label: 'Blended Score', value: lead.latestBlendedScore!.toFixed(3) });
-    scoringDetails.push({ label: 'Score Band', value: lead.latestScoreBand ?? 'N/A' });
-  }
-  if (enrichment) {
-    // Group features by scoring category
-    const featureGroups: Record<string, StageDetail[]> = {};
-    const CATEGORY_MAP: Record<string, string> = {
-      hasWhatsApp: 'Sales Motion Fit',
-      acceptsOnlinePayments: 'Payment Complexity',
-      instagramFollowers: 'Social Presence',
-      recentlyActive: 'Risk/Urgency',
-      googleRating: 'Social Proof',
-      googleReviewCount: 'Social Proof',
-      social_link_count: 'Social Presence',
-      has_linkedin: 'Social Presence',
-      tech_stack_size: 'Tech Readiness',
-      decision_maker_count: 'Contact Quality',
-      website_email_count: 'Contact Quality',
-      website_phone_count: 'Contact Quality',
-      estimated_employees: 'Business Size',
-      certification_count: 'Business Quality',
-    };
-
-    for (const [key, catName] of Object.entries(CATEGORY_MAP)) {
-      const val = enrichment[key];
-      if (val !== undefined && val !== null) {
-        if (!featureGroups[catName]) featureGroups[catName] = [];
-        const displayVal = typeof val === 'boolean' ? (val ? 'Yes' : 'No') : String(val);
-        featureGroups[catName].push({ label: key.replace(/_/g, ' '), value: displayVal });
-      }
-    }
-    for (const [group, features] of Object.entries(featureGroups)) {
-      scoringDetails.push({ label: `[${group}]`, value: features.map((f) => `${f.label}: ${f.value}`).join(' | ') });
-    }
-  }
-
-  // C9: Feedback / Learning Loops details
-  const feedbackDetails: StageDetail[] = [];
-  if (isReplied) {
-    feedbackDetails.push({ label: 'Status', value: 'Reply classified' });
-    feedbackDetails.push({ label: 'Training Label', value: 'Positive (replied)' });
-    feedbackDetails.push({ label: 'Score Adjustment', value: 'Upward — reinforces current scoring' });
-  } else if (isCold) {
-    feedbackDetails.push({ label: 'Status', value: 'Cold — no reply' });
-    feedbackDetails.push({ label: 'Training Label', value: 'Negative (no reply after follow-ups)' });
-    feedbackDetails.push({ label: 'Score Adjustment', value: 'Downward — penalizes similar profiles' });
-  } else {
-    // TODO: Show actual training label data when API exposes classification results
-    feedbackDetails.push({ label: 'Status', value: 'Awaiting outcome' });
-  }
-
-  // EN-1: Enrichment status — skipped if below threshold and no data
+  // Enrichment status
   const enrichmentStatus: StageStatus = enrichmentFailed ? 'failed'
     : hasEnrichment ? 'completed'
     : enrichmentSkipped ? 'skipped'
     : qualificationCompleted ? 'completed'
     : 'pending';
   const enrichmentSkippedDetails: StageDetail[] = enrichmentSkipped
-    ? [{ label: 'Reason', value: 'Skipped — score below threshold' }]
+    ? [{ label: 'Reason', value: 'Skipped -- score below threshold' }]
     : enrichmentDetails;
 
-  // EN-4/EN-5 + rejected: downstream stages after scoring show "Skipped" for below-threshold / rejected leads
-  const skipReason = isRejected ? 'Skipped — lead rejected' : 'Skipped — score below threshold';
+  // Downstream skipping for below-threshold / rejected leads
+  const skipReason = isRejected ? 'Skipped -- lead rejected' : 'Skipped -- score below threshold';
   const downstreamSkipped = isBelowThreshold && !isMessaged && !isReplied && !isCold;
 
   return [
-    { id: 'discovery', title: 'Discovery', icon: Radar, status: 'completed', timestamp: lead.createdAt, details: discoveryDetails },
+    { id: 'discovery', title: 'Discovery', icon: Radar, status: 'completed', timestamp: lead.createdAt, details: discoveryDetails, hasEnrichedContent: true },
     { id: 'prequalification', title: 'Pre-qualification', icon: Layers, status: qualificationStatus, timestamp: qualificationCompleted ? lead.updatedAt : null, details: prequalDetails },
-    { id: 'enrichment', title: 'Enrichment', icon: Globe, status: enrichmentStatus, timestamp: hasEnrichment ? lead.updatedAt : null, details: enrichmentSkippedDetails },
-    { id: 'features', title: 'Feature Computation', icon: Sparkles, status: hasScore ? 'completed' : enrichmentFailed ? 'skipped' : 'pending', timestamp: hasScore ? lead.updatedAt : null, details: enrichment ? extractFeatureDetails(enrichment) : [] },
-    { id: 'scoring', title: 'Scoring', icon: Target, status: hasScore ? 'completed' : enrichmentFailed ? 'skipped' : 'pending', timestamp: hasScore ? lead.updatedAt : null, details: isRejected ? [...scoringDetails, { label: 'Outcome', value: 'Lead rejected' }] : scoringDetails },
-    { id: 'message-gen', title: 'Message Generation', icon: Mail, status: isMessaged || isReplied || isCold ? 'completed' : downstreamSkipped ? 'skipped' : 'pending', timestamp: null, details: downstreamSkipped ? [{ label: 'Reason', value: skipReason }] : [] },
-    { id: 'message-send', title: 'Message Send', icon: MessageSquare, status: isMessaged || isReplied || isCold ? 'completed' : downstreamSkipped ? 'skipped' : 'pending', timestamp: null, details: downstreamSkipped ? [{ label: 'Reason', value: skipReason }] : [] },
-    { id: 'followups', title: 'Follow-ups', icon: Clock, status: isReplied || isCold ? 'completed' : downstreamSkipped ? 'skipped' : isMessaged ? 'pending' : 'pending', timestamp: null, details: downstreamSkipped ? [{ label: 'Reason', value: skipReason }] : isCold ? [{ label: 'Outcome', value: 'No reply received' }] : isReplied ? [{ label: 'Outcome', value: 'Reply received' }] : [] },
-    { id: 'feedback', title: 'Feedback / Learning', icon: TrendingUp, status: isReplied ? 'completed' : downstreamSkipped ? 'skipped' : isCold ? 'pending' : isMessaged ? 'pending' : 'pending', timestamp: null, details: downstreamSkipped ? [{ label: 'Reason', value: skipReason }] : feedbackDetails },
+    { id: 'enrichment', title: 'Enrichment', icon: Globe, status: enrichmentStatus, timestamp: hasEnrichment ? lead.updatedAt : null, details: enrichmentSkippedDetails, hasEnrichedContent: true },
+    { id: 'conversion', title: 'Business Conversion', icon: Database, status: hasEnrichment || statusLevel >= 2 ? 'completed' : enrichmentFailed ? 'failed' : 'pending', timestamp: hasEnrichment ? lead.updatedAt : null, details: [], hasEnrichedContent: true },
+    { id: 'features', title: 'Feature Computation', icon: Sparkles, status: hasScore ? 'completed' : enrichmentFailed ? 'skipped' : 'pending', timestamp: hasScore ? lead.updatedAt : null, details: [], hasEnrichedContent: true },
+    { id: 'scoring', title: 'Scoring', icon: Target, status: hasScore ? 'completed' : enrichmentFailed ? 'skipped' : 'pending', timestamp: hasScore ? lead.updatedAt : null, details: isRejected ? [{ label: 'Outcome', value: 'Lead rejected' }] : [], hasEnrichedContent: true },
+    { id: 'message-gen', title: 'Message Generation', icon: Mail, status: isMessaged || isReplied || isCold ? 'completed' : downstreamSkipped ? 'skipped' : 'pending', timestamp: null, details: downstreamSkipped ? [{ label: 'Reason', value: skipReason }] : [], hasEnrichedContent: true },
+    { id: 'message-send', title: 'Message Send', icon: MessageSquare, status: isMessaged || isReplied || isCold ? 'completed' : downstreamSkipped ? 'skipped' : 'pending', timestamp: null, details: downstreamSkipped ? [{ label: 'Reason', value: skipReason }] : [], hasEnrichedContent: true },
+    { id: 'followups', title: 'Follow-ups', icon: Clock, status: isReplied || isCold ? 'completed' : downstreamSkipped ? 'skipped' : isMessaged ? 'pending' : 'pending', timestamp: null, details: downstreamSkipped ? [{ label: 'Reason', value: skipReason }] : isCold ? [{ label: 'Outcome', value: 'No reply received' }] : isReplied ? [{ label: 'Outcome', value: 'Reply received' }] : [], hasEnrichedContent: true },
+    { id: 'feedback', title: 'Feedback / Learning', icon: TrendingUp, status: isReplied ? 'completed' : downstreamSkipped ? 'skipped' : isCold ? 'pending' : isMessaged ? 'pending' : 'pending', timestamp: null, details: downstreamSkipped ? [{ label: 'Reason', value: skipReason }] : [], hasEnrichedContent: true },
   ];
 }
 
@@ -306,7 +214,7 @@ function buildPipelineCategories(stages: PipelineStage[]): PipelineCategory[] {
   const groups: { id: string; title: string; icon: React.ComponentType<{ className?: string | undefined }>; stageIds: string[] }[] = [
     { id: 'discovery', title: 'Discovery', icon: Radar, stageIds: ['discovery'] },
     { id: 'qualification', title: 'Pre-qualification', icon: Layers, stageIds: ['prequalification'] },
-    { id: 'enrichment', title: 'Enrichment', icon: Globe, stageIds: ['enrichment'] },
+    { id: 'enrichment', title: 'Enrichment & Conversion', icon: Globe, stageIds: ['enrichment', 'conversion'] },
     { id: 'intelligence', title: 'Intelligence / Scoring', icon: Sparkles, stageIds: ['features', 'scoring'] },
     { id: 'outreach', title: 'Outreach', icon: MessageSquare, stageIds: ['message-gen', 'message-send', 'followups'] },
     { id: 'learning', title: 'Learning Loops', icon: TrendingUp, stageIds: ['feedback'] },
@@ -360,10 +268,21 @@ function StatusIcon({ status, className }: { status: StageStatus; className?: st
   }
 }
 
-function TimelineStage({ stage, isLast, index }: { stage: PipelineStage; isLast: boolean; index: number }) {
+function TimelineStage({
+  stage,
+  isLast,
+  index,
+  enrichedData,
+}: {
+  stage: PipelineStage;
+  isLast: boolean;
+  index: number;
+  enrichedData: LeadLifecycleData | null;
+}) {
   const [expanded, setExpanded] = useState(stage.status === 'failed');
   const config = STATUS_CONFIG[stage.status];
   const Icon = stage.icon;
+  const hasContent = stage.details.length > 0 || stage.hasEnrichedContent;
 
   return (
     <div className="timeline-entry group relative flex gap-4" style={{ animationDelay: `${index * 60}ms` }}>
@@ -386,20 +305,29 @@ function TimelineStage({ stage, isLast, index }: { stage: PipelineStage; isLast:
               <p className="mt-0.5 text-[11px] text-muted-foreground/30 italic">Not started</p>
             )}
           </div>
-          {stage.details.length > 0 && (
+          {hasContent && (
             <span className="text-muted-foreground/30 transition-colors group-hover/btn:text-muted-foreground/60">
               {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
             </span>
           )}
         </button>
-        {expanded && stage.details.length > 0 && (
-          <div className="mt-3 space-y-1.5 rounded-xl border border-border/30 bg-slate-800 p-4">
-            {stage.details.map((detail) => (
-              <div key={detail.label} className="flex items-start gap-3 text-sm">
-                <span className="w-40 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-400">{detail.label}</span>
-                <span className={cn('font-mono text-xs', stage.status === 'failed' && detail.label === 'Error' ? 'text-red-400' : 'text-foreground/80')}>{detail.value}</span>
+        {expanded && hasContent && (
+          <div className="mt-3 space-y-3 rounded-xl border border-border/30 bg-slate-800 p-4">
+            {/* Static details from pipeline stage */}
+            {stage.details.length > 0 && (
+              <div className="space-y-1.5">
+                {stage.details.map((detail) => (
+                  <div key={detail.label} className="flex items-start gap-3 text-sm">
+                    <span className="w-44 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-400">{detail.label}</span>
+                    <span className={cn('font-mono text-xs', stage.status === 'failed' && detail.label === 'Error' ? 'text-red-400' : 'text-foreground/80')}>{detail.value}</span>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
+            {/* Enriched content from Supabase */}
+            {stage.hasEnrichedContent && (
+              <EnrichedStageContent stageId={stage.id} data={enrichedData} />
+            )}
           </div>
         )}
       </div>
@@ -407,7 +335,15 @@ function TimelineStage({ stage, isLast, index }: { stage: PipelineStage; isLast:
   );
 }
 
-function CategorySection({ category, index }: { category: PipelineCategory; index: number }) {
+function CategorySection({
+  category,
+  index,
+  enrichedData,
+}: {
+  category: PipelineCategory;
+  index: number;
+  enrichedData: LeadLifecycleData | null;
+}) {
   const [expanded, setExpanded] = useState(category.status === 'failed');
   const config = STATUS_CONFIG[category.status];
   const Icon = category.icon;
@@ -449,7 +385,13 @@ function CategorySection({ category, index }: { category: PipelineCategory; inde
       {expanded && (
         <div className="border-t border-border/20 px-4 py-3 space-y-0">
           {category.stages.map((stage, i) => (
-            <TimelineStage key={stage.id} stage={stage} isLast={i === category.stages.length - 1} index={i} />
+            <TimelineStage
+              key={stage.id}
+              stage={stage}
+              isLast={i === category.stages.length - 1}
+              index={i}
+              enrichedData={enrichedData}
+            />
           ))}
         </div>
       )}
@@ -489,6 +431,52 @@ function LeadSearchResult({ lead, isSelected, onSelect }: { lead: LeadRecord; is
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  LIFECYCLE TAB — hook for enriched data loading
+// ══════════════════════════════════════════════════════════════════════════════
+
+function useLeadLifecycleData(leadId: string | null): {
+  data: LeadLifecycleData | null;
+  isLoading: boolean;
+  error: string | null;
+} {
+  const [data, setData] = useState<LeadLifecycleData | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!leadId) {
+      setData(null);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoading(true);
+    setError(null);
+
+    const supabase = getSupabaseBrowserClient();
+    fetchLeadLifecycleData(supabase, leadId)
+      .then((result) => {
+        if (!cancelled) {
+          setData(result);
+          setIsLoading(false);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Failed to load lifecycle data');
+          setIsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [leadId]);
+
+  return { data, isLoading, error };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  LIFECYCLE TAB CONTENT
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -519,7 +507,6 @@ function LifecycleTab() {
     return filteredLeads.slice(start, start + pageSize);
   }, [filteredLeads, currentPage, pageSize]);
 
-  // Reset to page 1 when search query or page size changes
   const handleSearchChange = useCallback((value: string) => {
     setSearchQuery(value);
     setCurrentPage(1);
@@ -531,6 +518,9 @@ function LifecycleTab() {
   }, []);
 
   const selectedLead = selectedLeadId ? allLeads.find((l) => l.id === selectedLeadId) ?? null : null;
+
+  // Fetch enriched lifecycle data for selected lead
+  const lifecycleData = useLeadLifecycleData(selectedLeadId);
 
   return (
     <div className="space-y-4">
@@ -667,9 +657,27 @@ function LifecycleTab() {
                 </div>
               </div>
 
+              {/* Loading indicator for enriched data */}
+              {lifecycleData.isLoading && (
+                <div className="mb-4 flex items-center gap-2 rounded-lg border border-zbooni-teal/20 bg-zbooni-teal/[0.03] px-4 py-2.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-zbooni-teal" />
+                  <span className="text-[11px] text-zbooni-teal/80">Loading enriched pipeline data...</span>
+                </div>
+              )}
+              {lifecycleData.error && (
+                <div className="mb-4 rounded-lg border border-red-400/20 bg-red-400/[0.03] px-4 py-2.5">
+                  <span className="text-[11px] text-red-400/80">Enriched data unavailable: {lifecycleData.error}</span>
+                </div>
+              )}
+
               <div className="space-y-3">
                 {selectedLead.categories.map((category, i) => (
-                  <CategorySection key={category.id} category={category} index={i} />
+                  <CategorySection
+                    key={category.id}
+                    category={category}
+                    index={i}
+                    enrichedData={lifecycleData.data}
+                  />
                 ))}
               </div>
             </>
@@ -985,8 +993,6 @@ function ModelInspectorTab() {
   );
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  FEEDBACK TAB — helpers
 // ══════════════════════════════════════════════════════════════════════════════
 //  MAIN PAGE — Pipeline Debug with tabs
 // ══════════════════════════════════════════════════════════════════════════════
