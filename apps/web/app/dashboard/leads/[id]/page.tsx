@@ -481,11 +481,9 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
                 >
                   <SocialLinkIcon
                     platform={sl.platform}
-                    className={`h-3 w-3 ${isGradient ? 'text-[#DD2A7B]' : ''}`}
+                    className="h-3 w-3"
                   />
-                  <span
-                    className={isGradient ? 'bg-[image:var(--social-brand-gradient)] bg-clip-text text-transparent' : undefined}
-                  >
+                  <span>
                     {label}
                   </span>
                   <ExternalLink className="h-2.5 w-2.5" />

@@ -2,9 +2,6 @@
 
 import type {
   IcpProfileResponse,
-  QualificationOperator,
-  QualificationRuleResponse,
-  QualificationRuleType,
 } from '@lead-flood/contracts';
 import {
   ArrowLeft,
@@ -31,6 +28,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
+import { MENA_COUNTRIES } from '../../../../src/lib/countries.js';
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
 
@@ -221,6 +219,238 @@ function EditableTags({ label, tags, onSave, tagClassName }: EditableTagsProps) 
           <button type="button" onClick={cancel} disabled={isSaving} className="rounded-lg p-1 text-muted-foreground hover:bg-accent/50 disabled:opacity-50">
             <X className="h-3.5 w-3.5" />
           </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function CountrySelector({
+  countries,
+  onSave,
+}: {
+  countries: string[];
+  onSave: (countries: string[]) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(countries);
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (!editing) {
+      setDraft(countries);
+    }
+  }, [editing, countries]);
+
+  const available = MENA_COUNTRIES.filter((c) => !draft.includes(c));
+
+  const remove = (country: string) => setDraft(draft.filter((c) => c !== country));
+
+  const add = (country: string) => {
+    if (country && !draft.includes(country)) {
+      setDraft([...draft, country]);
+    }
+  };
+
+  const save = async () => {
+    setIsSaving(true);
+    try {
+      const saved = await onSave(draft);
+      if (saved) setEditing(false);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const cancel = () => { setDraft(countries); setEditing(false); };
+
+  return (
+    <div className="group">
+      <div className="flex items-center gap-1.5">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Target Countries</p>
+        {!editing ? (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="rounded p-0.5 text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+        ) : null}
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-1">
+        {(editing ? draft : countries).map((c) => (
+          <span key={c} className="rounded-full bg-zbooni-teal/10 px-2 py-0.5 text-xs text-zbooni-teal">
+            {c}
+            {editing ? (
+              <button type="button" onClick={() => remove(c)} className="ml-1 hover:text-red-400">
+                <X className="inline h-2.5 w-2.5" />
+              </button>
+            ) : null}
+          </span>
+        ))}
+        {countries.length === 0 && !editing ? (
+          <span className="text-xs text-muted-foreground/40 italic">None</span>
+        ) : null}
+      </div>
+      {editing ? (
+        <div className="mt-2 space-y-2">
+          {available.length > 0 ? (
+            <select
+              value=""
+              onChange={(e) => { add(e.target.value); e.target.value = ''; }}
+              className="h-7 w-48 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-xs focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              disabled={isSaving}
+            >
+              <option value="" disabled>Add country...</option>
+              {available.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          ) : null}
+          <div className="flex items-center gap-1.5">
+            <button type="button" onClick={() => void save()} disabled={isSaving} className="rounded-lg p-1 text-zbooni-green hover:bg-zbooni-green/10 disabled:opacity-50">
+              {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            </button>
+            <button type="button" onClick={cancel} disabled={isSaving} className="rounded-lg p-1 text-muted-foreground hover:bg-accent/50 disabled:opacity-50">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function FeaturePitchEditor({
+  features,
+  onSave,
+}: {
+  features: string[];
+  onSave: (features: string[]) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(features);
+  const [newFeature, setNewFeature] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (!editing) {
+      setDraft(features);
+      setNewFeature('');
+    }
+  }, [editing, features]);
+
+  const add = () => {
+    const trimmed = newFeature.trim();
+    if (trimmed && !draft.includes(trimmed)) {
+      setDraft([...draft, trimmed]);
+      setNewFeature('');
+    }
+  };
+
+  const remove = (feature: string) => setDraft(draft.filter((f) => f !== feature));
+
+  const save = async () => {
+    setIsSaving(true);
+    try {
+      const saved = await onSave(draft);
+      if (saved) setEditing(false);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const cancel = () => { setDraft(features); setNewFeature(''); setEditing(false); };
+  const items = editing ? draft : features;
+
+  return (
+    <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <Lightbulb className="h-4 w-4 text-yellow-400" />
+        <h2 className="text-base font-bold tracking-tight">Features to Pitch</h2>
+        <span className="ml-auto text-xs font-normal text-muted-foreground">{items.length} items</span>
+        {!editing ? (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="rounded-lg border border-border/50 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          >
+            <Pencil className="inline h-3 w-3" />
+          </button>
+        ) : null}
+      </div>
+
+      {items.length > 0 ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {items.map((feature) => (
+            <div
+              key={feature}
+              className="flex items-start gap-2.5 rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-3.5 py-2.5"
+            >
+              <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0 text-yellow-400" />
+              <span className="text-sm leading-snug">{feature}</span>
+              {editing ? (
+                <button
+                  type="button"
+                  onClick={() => remove(feature)}
+                  className="ml-auto shrink-0 rounded p-0.5 text-muted-foreground/50 hover:text-red-400"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground/40 italic">No features added yet.</p>
+      )}
+
+      {editing ? (
+        <div className="mt-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <input
+              value={newFeature}
+              onChange={(e) => setNewFeature(e.target.value)}
+              placeholder="Add a feature..."
+              className="h-8 flex-1 rounded-lg border border-border/50 bg-zbooni-dark/60 px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              disabled={isSaving}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  add();
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={add}
+              disabled={isSaving || !newFeature.trim()}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border/50 px-3 text-xs font-medium text-zbooni-teal transition-colors hover:bg-zbooni-teal/10 disabled:opacity-50"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={isSaving}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-zbooni-teal px-4 text-xs font-semibold text-zbooni-dark transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={cancel}
+              disabled={isSaving}
+              className="inline-flex h-8 items-center rounded-lg border border-border/50 px-4 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       ) : null}
     </div>
@@ -634,269 +864,6 @@ interface IcpMeta {
   angle?: string[] | undefined;
 }
 
-type EditableRule = {
-  id?: string | undefined;
-  name: string;
-  fieldKey: string;
-  operator: QualificationOperator;
-  valueText: string;
-  weight: string;
-  isRequired: boolean;
-  isActive: boolean;
-  ruleType: QualificationRuleType;
-};
-
-const RULE_OPERATORS: QualificationOperator[] = ['EQ', 'NEQ', 'GT', 'GTE', 'LT', 'LTE', 'IN', 'NOT_IN', 'CONTAINS'];
-
-function stringifyRuleValue(value: unknown): string {
-  if (typeof value === 'string') {
-    return value;
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return '';
-  }
-}
-
-function parseRuleValue(valueText: string): unknown {
-  const trimmed = valueText.trim();
-  if (trimmed.length === 0) {
-    return '';
-  }
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return trimmed;
-  }
-}
-
-function toEditableRule(rule: QualificationRuleResponse): EditableRule {
-  return {
-    id: rule.id,
-    name: rule.name,
-    fieldKey: rule.fieldKey,
-    operator: rule.operator,
-    valueText: stringifyRuleValue(rule.valueJson),
-    weight: rule.weight !== null ? String(rule.weight) : '',
-    isRequired: rule.isRequired,
-    isActive: rule.isActive,
-    ruleType: rule.ruleType,
-  };
-}
-
-function createEmptyRule(orderIndex: number): EditableRule {
-  return {
-    name: `Rule ${orderIndex}`,
-    fieldKey: '',
-    operator: 'EQ',
-    valueText: '',
-    weight: '1',
-    isRequired: false,
-    isActive: true,
-    ruleType: 'WEIGHTED',
-  };
-}
-
-function RulesEditor({
-  rules,
-  onSave,
-}: {
-  rules: QualificationRuleResponse[];
-  onSave: (rules: EditableRule[]) => Promise<boolean>;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draftRules, setDraftRules] = useState<EditableRule[]>(rules.map(toEditableRule));
-  const [isSaving, setIsSaving] = useState(false);
-
-  useEffect(() => {
-    if (!editing) {
-      setDraftRules(rules.map(toEditableRule));
-    }
-  }, [editing, rules]);
-
-  const updateRule = (index: number, patch: Partial<EditableRule>) => {
-    setDraftRules((current) => current.map((rule, currentIndex) => (
-      currentIndex === index ? { ...rule, ...patch } : rule
-    )));
-  };
-
-  const removeRule = (index: number) => {
-    setDraftRules((current) => current.filter((_, currentIndex) => currentIndex !== index));
-  };
-
-  const handleSave = async () => {
-    setIsSaving(true);
-    try {
-      if (draftRules.some((rule) => rule.fieldKey.trim().length === 0)) {
-        toast.error('Every qualification rule needs a field key');
-        return;
-      }
-
-      if (draftRules.some((rule) => !rule.isRequired && rule.weight.trim().length > 0 && !Number.isFinite(Number(rule.weight)))) {
-        toast.error('Weighted rules need a valid numeric weight');
-        return;
-      }
-
-      const saved = await onSave(draftRules);
-      if (saved) {
-        setEditing(false);
-      }
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  if (!editing) {
-    return (
-      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
-          <Shield className="h-4 w-4 text-zbooni-teal" />
-          <h2 className="text-base font-bold tracking-tight">Qualification Rules</h2>
-          <span className="ml-auto text-xs text-muted-foreground">{rules.length} rules</span>
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            className="rounded-lg border border-border/50 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
-          >
-            Edit Rules
-          </button>
-        </div>
-        <div className="space-y-2">
-          {rules.map((rule) => (
-            <div key={rule.id} className="rounded-xl border border-border/30 bg-zbooni-dark/30 px-3 py-2.5">
-              <div className="flex items-center gap-2">
-                <p className="text-sm font-semibold">{rule.name}</p>
-                <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
-                  {rule.ruleType}
-                </span>
-                {!rule.isActive ? (
-                  <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-300">
-                    Inactive
-                  </span>
-                ) : null}
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">
-                <span className="font-mono">{rule.fieldKey}</span> {rule.operator} <span className="font-mono">{stringifyRuleValue(rule.valueJson)}</span>
-              </p>
-            </div>
-          ))}
-          {rules.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No qualification rules configured.</p>
-          ) : null}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-      <div className="mb-4 flex items-center gap-2">
-        <Shield className="h-4 w-4 text-zbooni-teal" />
-        <h2 className="text-base font-bold tracking-tight">Qualification Rules</h2>
-      </div>
-      <div className="space-y-3">
-        {draftRules.map((rule, index) => (
-          <div key={rule.id ?? `new-${index}`} className="rounded-xl border border-border/30 bg-zbooni-dark/30 p-4">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <input
-                value={rule.name}
-                onChange={(e) => updateRule(index, { name: e.target.value })}
-                placeholder="Rule name"
-                className="h-9 rounded-lg border border-border/50 bg-zbooni-dark/60 px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-              />
-              <input
-                value={rule.fieldKey}
-                onChange={(e) => updateRule(index, { fieldKey: e.target.value })}
-                placeholder="field_key"
-                className="h-9 rounded-lg border border-border/50 bg-zbooni-dark/60 px-3 text-sm font-mono focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-              />
-              <select
-                value={rule.operator}
-                onChange={(e) => updateRule(index, { operator: e.target.value as QualificationOperator })}
-                className="h-9 rounded-lg border border-border/50 bg-zbooni-dark/60 px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-              >
-                {RULE_OPERATORS.map((operator) => (
-                  <option key={operator} value={operator}>{operator}</option>
-                ))}
-              </select>
-              <input
-                value={rule.weight}
-                onChange={(e) => updateRule(index, { weight: e.target.value })}
-                placeholder="Weight"
-                disabled={rule.isRequired}
-                className="h-9 rounded-lg border border-border/50 bg-zbooni-dark/60 px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-40"
-              />
-            </div>
-            <textarea
-              value={rule.valueText}
-              onChange={(e) => updateRule(index, { valueText: e.target.value })}
-              placeholder='Value or JSON, e.g. "UAE" or ["UAE","KSA"]'
-              rows={2}
-              className="mt-3 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-            />
-            <div className="mt-3 flex flex-wrap items-center gap-4 text-xs">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={rule.isRequired}
-                  onChange={(e) => updateRule(index, {
-                    isRequired: e.target.checked,
-                    ruleType: e.target.checked ? 'HARD_FILTER' : 'WEIGHTED',
-                  })}
-                />
-                Hard filter
-              </label>
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={rule.isActive}
-                  onChange={(e) => updateRule(index, { isActive: e.target.checked })}
-                />
-                Active
-              </label>
-              <button
-                type="button"
-                onClick={() => removeRule(index)}
-                className="ml-auto rounded-lg px-2 py-1 text-red-300 transition-colors hover:bg-red-500/10"
-              >
-                Remove
-              </button>
-            </div>
-          </div>
-        ))}
-        <button
-          type="button"
-          onClick={() => setDraftRules((current) => [...current, createEmptyRule(current.length + 1)])}
-          className="inline-flex items-center gap-2 rounded-lg border border-border/50 px-3 py-2 text-sm font-medium text-zbooni-teal transition-colors hover:bg-zbooni-teal/10"
-        >
-          <Plus className="h-4 w-4" />
-          Add Rule
-        </button>
-      </div>
-      <div className="mt-4 flex items-center gap-3">
-        <button
-          type="button"
-          onClick={() => setEditing(false)}
-          disabled={isSaving}
-          className="inline-flex h-10 items-center justify-center rounded-xl border border-input px-4 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground disabled:opacity-50"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleSave()}
-          disabled={isSaving}
-          className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-zbooni-teal px-4 text-sm font-semibold text-zbooni-dark transition-opacity hover:opacity-90 disabled:opacity-50"
-        >
-          {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-          Save Rules
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function extractMeta(metadataJson: Record<string, unknown> | null | undefined): IcpMeta {
   if (!metadataJson) return {};
   const m = metadataJson as Record<string, unknown>;
@@ -969,35 +936,6 @@ export default function IcpDetailPage() {
       return true;
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Failed to save ICP');
-      return false;
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleRulesSave = async (draftRules: EditableRule[]) => {
-    setSaving(true);
-    try {
-      const response = await apiClient.replaceIcpRules(icpId, {
-        rules: draftRules.map((rule, index) => ({
-          name: rule.name.trim() || `Rule ${index + 1}`,
-          fieldKey: rule.fieldKey.trim(),
-          operator: rule.operator,
-          valueJson: parseRuleValue(rule.valueText),
-          isRequired: rule.isRequired,
-          weight: rule.isRequired ? null : (rule.weight.trim().length > 0 ? Number(rule.weight) : null),
-          orderIndex: index + 1,
-          priority: index + 1,
-          ruleType: rule.isRequired ? 'HARD_FILTER' : rule.ruleType,
-          isActive: rule.isActive,
-        })),
-      });
-      setProfile((current) => current ? { ...current, qualificationRules: response.items } : current);
-      void icp.refetch();
-      toast.success('Qualification rules saved');
-      return true;
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save qualification rules');
       return false;
     } finally {
       setSaving(false);
@@ -1138,11 +1076,9 @@ export default function IcpDetailPage() {
 
         {/* Target Countries + Logic */}
         <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
-          <EditableTags
-            label="Target Countries"
-            tags={profile.targetCountries}
+          <CountrySelector
+            countries={profile.targetCountries}
             onSave={(val) => handleUpdate({ targetCountries: val })}
-            tagClassName="bg-zbooni-teal/10 text-zbooni-teal"
           />
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Logic</p>
@@ -1294,28 +1230,9 @@ export default function IcpDetailPage() {
       </div>
 
       {/* Features to Pitch — from featureList stored on ICP profile */}
-      {(() => {
-        const features = profile.featureList ?? [];
-        return (
-          <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-            <div className="mb-4 flex items-center gap-2">
-              <Lightbulb className="h-4 w-4 text-yellow-400" />
-              <h2 className="text-base font-bold tracking-tight">Search Items / Features to Pitch</h2>
-              <span className="ml-auto text-xs font-normal text-muted-foreground">{features.length} items</span>
-            </div>
-            <EditableTags
-              label="Saved Items"
-              tags={features}
-              onSave={(val) => handleUpdate({ featureList: val.length > 0 ? val : null })}
-              tagClassName="bg-yellow-400/10 text-yellow-300"
-            />
-          </div>
-        );
-      })()}
-
-      <RulesEditor
-        rules={profile.qualificationRules ?? []}
-        onSave={handleRulesSave}
+      <FeaturePitchEditor
+        features={profile.featureList ?? []}
+        onSave={(val) => handleUpdate({ featureList: val.length > 0 ? val : null })}
       />
 
       {/* Scoring Rules — mirrors actual UNIVERSAL_RULES from scoring engine */}

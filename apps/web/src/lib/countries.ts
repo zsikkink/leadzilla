@@ -60,3 +60,9 @@ export function toDiscoveryCountryCodes(
 ): DiscoveryCountryCodeContract[] {
   return normalizeDiscoveryCountryCodes(values);
 }
+
+export const MENA_COUNTRIES = [
+  'UAE', 'KSA', 'Egypt', 'Jordan', 'Bahrain', 'Kuwait', 'Oman', 'Qatar',
+  'Lebanon', 'Iraq', 'Morocco', 'Tunisia', 'Algeria', 'Libya', 'Yemen',
+  'Syria', 'Palestine', 'Sudan',
+] as const;

@@ -7,14 +7,9 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { toast } from 'sonner';
 
 import { ApiError } from '../../../src/lib/api-client.js';
+import { MENA_COUNTRIES } from '../../../src/lib/countries.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
-
-const MENA_COUNTRIES = [
-  'UAE', 'KSA', 'Egypt', 'Jordan', 'Bahrain', 'Kuwait', 'Oman', 'Qatar',
-  'Lebanon', 'Iraq', 'Morocco', 'Tunisia', 'Algeria', 'Libya', 'Yemen',
-  'Syria', 'Palestine', 'Sudan',
-];
 
 export default function IcpsPage() {
   const { apiClient } = useAuth();
