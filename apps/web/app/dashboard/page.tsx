@@ -178,8 +178,8 @@ export default function DashboardPage() {
         </div>
       ) : null}
 
-      {/* Funnel Chart */}
-      {funnel.data ? <FunnelChart data={funnel.data} /> : null}
+      {/* Pipeline Time-Series Chart */}
+      <FunnelChart />
 
       {/* Feedback Summary */}
       {feedback.data ? (
