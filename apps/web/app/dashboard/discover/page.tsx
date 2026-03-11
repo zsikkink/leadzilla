@@ -348,30 +348,40 @@ export default function DiscoverPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Discovery yield rates for cost estimate
+  // Discovery rates for cost estimate: yield rate (businesses/task) + conversion rate (leads/business)
   const [yieldRates, setYieldRates] = useState<Map<string, number>>(new Map());
+  const [conversionRates, setConversionRates] = useState<Map<string, number>>(new Map());
   useEffect(() => {
     let cancelled = false;
-    async function fetchYieldRates() {
+    async function fetchDiscoveryRates() {
       try {
         const supabase = getSupabaseBrowserClient();
         const { data } = await supabase
           .from('pipeline_settings')
           .select('key, valueJson')
-          .like('key', 'discovery_yield_rate:%');
+          .or('key.like.discovery_yield_rate:%,key.like.discovery_conversion_rate:%');
         if (!data || cancelled) return;
-        const map = new Map<string, number>();
+        const yieldMap = new Map<string, number>();
+        const convMap = new Map<string, number>();
         for (const row of data) {
-          const icpId = (row.key as string).replace('discovery_yield_rate:', '');
+          const key = row.key as string;
           const rate = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
-          if (!isNaN(rate) && rate > 0) map.set(icpId, rate);
+          if (isNaN(rate) || rate <= 0) continue;
+          if (key.startsWith('discovery_yield_rate:')) {
+            const icpId = key.replace('discovery_yield_rate:', '');
+            yieldMap.set(icpId, rate);
+          } else if (key.startsWith('discovery_conversion_rate:')) {
+            const icpId = key.replace('discovery_conversion_rate:', '');
+            convMap.set(icpId, rate);
+          }
         }
-        setYieldRates(map);
+        setYieldRates(yieldMap);
+        setConversionRates(convMap);
       } catch {
         // Non-critical
       }
     }
-    void fetchYieldRates();
+    void fetchDiscoveryRates();
     return () => { cancelled = true; };
   }, []);
 
@@ -716,15 +726,26 @@ export default function DiscoverPage() {
           {/* Cost Estimate */}
           {selectedIcpIds.size > 0 && parseInt(limit, 10) > 0 ? (() => {
             const desiredLeads = parseInt(limit, 10);
-            // Compute blended yield rate from selected ICPs
-            const selectedRates = Array.from(selectedIcpIds)
-              .map((id) => yieldRates.get(id))
+            // Compute effective lead-per-task rate from yield (businesses/task) * conversion (leads/business)
+            const selectedLeadRates = Array.from(selectedIcpIds)
+              .map((id) => {
+                const yieldRate = yieldRates.get(id);
+                const convRate = conversionRates.get(id);
+                if (yieldRate !== undefined && convRate !== undefined) {
+                  return yieldRate * convRate;
+                }
+                if (yieldRate !== undefined) {
+                  // Have yield but no conversion data -- assume 10% conversion (conservative)
+                  return yieldRate * 0.10;
+                }
+                return undefined;
+              })
               .filter((r): r is number => r !== undefined);
-            const avgYieldRate = selectedRates.length > 0
-              ? selectedRates.reduce((a, b) => a + b, 0) / selectedRates.length
-              : 0.15; // default 15%
-            const hasHistoricalData = selectedRates.length > 0;
-            const searchBudget = Math.ceil(desiredLeads / avgYieldRate * 1.5);
+            const avgLeadRate = selectedLeadRates.length > 0
+              ? selectedLeadRates.reduce((a, b) => a + b, 0) / selectedLeadRates.length
+              : 0.015; // default fallback: ~1.5% leads per search task
+            const hasHistoricalData = selectedLeadRates.length > 0;
+            const searchBudget = Math.ceil(desiredLeads / avgLeadRate * 1.5);
             // ~50% of discovered businesses pass prequalification and reach Hunter
             const hunterLookups = Math.ceil(searchBudget * 0.5);
             const estLeads = desiredLeads;
@@ -738,7 +759,7 @@ export default function DiscoverPage() {
                   <TrendingUp className="h-3.5 w-3.5 text-zbooni-teal" />
                   <span className="text-xs font-semibold text-zbooni-teal">Cost Estimate</span>
                   {!hasHistoricalData ? (
-                    <span className="text-[10px] text-muted-foreground/50">(using default 15% yield)</span>
+                    <span className="text-[10px] text-muted-foreground/50">(using default estimate)</span>
                   ) : null}
                 </div>
                 <div className="space-y-1.5">
@@ -748,7 +769,7 @@ export default function DiscoverPage() {
                     {' → est. '}<strong className="text-zbooni-green">{estLeads}</strong> leads
                     {hasHistoricalData ? (
                       <span className="text-muted-foreground/60">
-                        {' '}(based on {Math.round(avgYieldRate * 100)}% yield)
+                        {' '}(based on {(avgLeadRate * 100).toFixed(1)}% lead rate)
                       </span>
                     ) : null}
                   </p>

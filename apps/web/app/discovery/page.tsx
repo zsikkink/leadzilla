@@ -1048,14 +1048,14 @@ export default function ControlsSettingsPage() {
                       setHasChanges(true);
                     }}
                     className={cn(
-                      'relative mt-1 inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors',
+                      'relative inline-flex h-6 w-12 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors',
                       autoApproveEnabled ? 'bg-zbooni-green' : 'bg-muted/40',
                     )}
                   >
                     <span
                       className={cn(
-                        'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg transition-transform',
-                        autoApproveEnabled ? 'translate-x-5' : 'translate-x-0',
+                        'pointer-events-none absolute h-5 w-5 rounded-full bg-white shadow-lg transition-transform',
+                        autoApproveEnabled ? 'translate-x-[26px]' : 'translate-x-[2px]',
                       )}
                     />
                   </button>

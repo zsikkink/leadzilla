@@ -468,20 +468,6 @@ export default function IcpsPage() {
                       <p className="text-xs text-muted-foreground/60">Comma-separated list</p>
                     </div>
 
-                    <div className="space-y-2">
-                      <label htmlFor="icp-qualification-logic" className="text-sm font-medium text-muted-foreground">
-                        Qualification Logic
-                      </label>
-                      <textarea
-                        id="icp-qualification-logic"
-                        rows={3}
-                        value={qualificationLogic}
-                        onChange={(e) => setQualificationLogic(e.target.value)}
-                        className="flex w-full rounded-xl border border-input bg-background px-4 py-3 text-sm transition-colors placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
-                        placeholder="WEIGHTED"
-                      />
-                      <p className="text-xs text-muted-foreground/60">Currently supported value: WEIGHTED</p>
-                    </div>
                   </div>
                 ) : null}
               </div>
