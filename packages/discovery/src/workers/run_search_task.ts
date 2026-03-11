@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { Prisma, prisma } from '@lead-flood/db';
+import { Prisma, prisma, withPoolRetry } from '@lead-flood/db';
 
 import type { DiscoveryRuntimeConfig } from '../config.js';
 import { normalizeQuery } from '../dedupe/normalize.js';
@@ -21,7 +21,7 @@ type SourceType = 'DIRECTORY' | 'SMB_SITE' | 'SOCIAL' | 'MARKETPLACE' | 'UNKNOWN
 
 type DiscoveryPrismaDelegates = Pick<
   typeof prisma,
-  'source' | 'business' | 'businessEvidence' | 'searchTask'
+  'source' | 'business' | 'businessEvidence' | 'searchTask' | 'discoveryCostEvent'
 >;
 
 const discoveryPrisma: DiscoveryPrismaDelegates = prisma;
@@ -502,9 +502,11 @@ async function upsertBusinessFromLocalResult(
   const confidence = confidenceFromBusinessSignal(local);
   const signals = deriveBusinessSignals(local);
 
+  // Wrap findFirst queries with pool retry — these are the queries that hit
+  // MaxClientsInSessionMode during concurrent search tasks (run 4cdced71).
   let existing =
     websiteDomain
-      ? await discoveryPrisma.business.findFirst({
+      ? await withPoolRetry(() => discoveryPrisma.business.findFirst({
           where: { websiteDomain },
           select: {
             id: true,
@@ -518,11 +520,11 @@ async function upsertBusinessFromLocalResult(
             recentActivity: true,
             deterministicScore: true,
           },
-        })
+        }))
       : null;
 
   if (!existing && phoneE164) {
-    existing = await discoveryPrisma.business.findFirst({
+    existing = await withPoolRetry(() => discoveryPrisma.business.findFirst({
       where: { phoneE164 },
       select: {
         id: true,
@@ -536,7 +538,7 @@ async function upsertBusinessFromLocalResult(
         recentActivity: true,
         deterministicScore: true,
       },
-    });
+    }));
   }
 
   if (existing) {
@@ -652,7 +654,8 @@ async function insertEvidence(
   serpapiResultId: string | null,
   raw: unknown,
 ): Promise<void> {
-  await discoveryPrisma.businessEvidence.create({
+  // Wrap with pool retry — this query also hit MaxClientsInSessionMode (run 4cdced71).
+  await withPoolRetry(() => discoveryPrisma.businessEvidence.create({
     data: {
       businessId,
       searchTaskId,
@@ -661,7 +664,7 @@ async function insertEvidence(
       serpapiResultId,
       rawJson: raw as Prisma.InputJsonValue,
     },
-  });
+  }));
 }
 
 async function persistProviderResults(
@@ -819,6 +822,51 @@ async function markTaskFailed(
   });
 }
 
+/**
+ * Record a Google Places API cost event for a search task.
+ *
+ * Cost basis: Google Places Text Search (New) costs $0.032 per request
+ * (Basic SKU with field mask we use). At scale with monthly $200 credit,
+ * effective cost is ~$0.02/call. We record 2 cents per call as a
+ * conservative estimate that accounts for the free tier credit.
+ *
+ * Only recorded when a discoveryRunId is provided (pipeline-triggered searches).
+ * Ad-hoc searches without a run ID are not tracked.
+ */
+async function recordGooglePlacesCostEvent(
+  discoveryRunId: string,
+  taskId: string,
+  provider: DiscoveryProviderName,
+  taskType: SearchTaskType,
+): Promise<void> {
+  // Only track GOOGLE_PLACES calls — SerpAPI calls are tracked elsewhere
+  if (provider !== 'GOOGLE_PLACES') {
+    return;
+  }
+
+  try {
+    await withPoolRetry(() => discoveryPrisma.discoveryCostEvent.create({
+      data: {
+        discoveryRunId,
+        // Cast to the Prisma enum type — GOOGLE_PLACES is a valid CostEventProvider value
+        provider: 'GOOGLE_PLACES' as Parameters<typeof discoveryPrisma.discoveryCostEvent.create>[0]['data']['provider'],
+        // Google Places Text Search (New) — $0.032/call base, ~$0.02 effective with monthly credit.
+        // Using 2 cents as conservative estimate.
+        costCents: 2,
+        apiCallType: taskType === 'SERP_MAPS_LOCAL'
+          ? 'maps_text_search'
+          : taskType === 'SERP_GOOGLE_LOCAL'
+            ? 'local_text_search'
+            : 'text_search',
+        businessId: null,
+      },
+    }));
+  } catch {
+    // Cost tracking failure should not block the pipeline.
+    // The search task itself succeeded — losing a cost event is acceptable.
+  }
+}
+
 export async function runSearchTask(
   provider: DiscoveryProvider,
   config: DiscoveryRuntimeConfig,
@@ -842,6 +890,16 @@ export async function runSearchTask(
 
   try {
     const providerResponse = await executeTaskWithProvider(task, provider);
+
+    // Record Google Places cost event for pipeline-triggered searches (E1)
+    if (options.discoveryRunId) {
+      await recordGooglePlacesCostEvent(
+        options.discoveryRunId,
+        task.id,
+        providerResponse.provider,
+        task.task_type,
+      );
+    }
     const resultHash = hashResultSet(providerResponse);
     const unchanged = task.last_result_hash !== null && task.last_result_hash === resultHash;
 

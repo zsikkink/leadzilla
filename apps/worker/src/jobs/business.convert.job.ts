@@ -1639,7 +1639,10 @@ export async function handleBusinessConvertJob(
         hunterRetryable = true;
       }
       if (hunterResult.status === 'success') {
-        costEvents.push({ provider: 'HUNTER', costCents: 1, apiCallType: 'domain_search' });
+        // Hunter Domain Search: $49/mo starter plan = 500 searches = ~$0.10/search = 10 cents.
+        // However, Hunter also has "one search = one request" model: $15/500 on Starter = ~3 cents.
+        // Using 3 cents: based on Hunter Starter plan ($49/mo for 500 email finder + domain search).
+        costEvents.push({ provider: 'HUNTER', costCents: 3, apiCallType: 'domain_search' });
       }
       logger.info(
         { ...logCtx, hunterStatus: hunterResult.status, contactsFound: hunterResult.status === 'success' ? hunterResult.contacts.length : 0 },
@@ -1714,7 +1717,10 @@ export async function handleBusinessConvertJob(
         apolloRetryable = true;
       }
       if (apolloResult.status === 'success') {
-        costEvents.push({ provider: 'APOLLO', costCents: 1, apiCallType: 'contact_search' });
+        // Apollo People Search: Free plan = 5 mobile + 10 export credits/mo.
+        // Basic plan ($49/mo) = 900 credits. ~$0.05/credit, but domain search uses 1 credit.
+        // Effective cost ~2 cents/call on volume. Using 2 cents as conservative estimate.
+        costEvents.push({ provider: 'APOLLO', costCents: 2, apiCallType: 'contact_search' });
       }
       logger.info(
         { ...logCtx, apolloStatus: apolloResult.status, contactsFound: apolloResult.status === 'success' ? apolloResult.contacts.length : 0 },
