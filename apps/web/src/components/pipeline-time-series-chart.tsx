@@ -26,7 +26,7 @@ interface DailyBucket {
 }
 
 interface LeadRow {
-  created_at: string;
+  createdAt: string;
   status: string;
 }
 
@@ -81,7 +81,7 @@ function bucketByDay(rows: LeadRow[], range: DateRange): DailyBucket[] {
 
   // Pre-fill every day in the range so we get continuous lines
   const end = new Date();
-  const start = startDate ?? (rows.length > 0 ? new Date(rows[rows.length - 1]!.created_at) : end);
+  const start = startDate ?? (rows.length > 0 ? new Date(rows[rows.length - 1]!.createdAt) : end);
   const cursor = new Date(start);
   cursor.setHours(0, 0, 0, 0);
 
@@ -92,7 +92,7 @@ function bucketByDay(rows: LeadRow[], range: DateRange): DailyBucket[] {
   }
 
   for (const row of rows) {
-    const day = toDateKey(new Date(row.created_at));
+    const day = toDateKey(new Date(row.createdAt));
     let bucket = buckets.get(day);
     if (!bucket) {
       bucket = { date: day, Discovered: 0, Qualified: 0, Rejected: 0, Messaged: 0, Replied: 0 };
@@ -187,13 +187,13 @@ export function PipelineTimeSeriesChart() {
         const supabase = getSupabaseBrowserClient();
         let query = supabase
           .from('Lead')
-          .select('created_at, status')
+          .select('createdAt, status')
           .is('deletedAt', null)
-          .order('created_at', { ascending: true });
+          .order('createdAt', { ascending: true });
 
         const startDate = getStartDate(range);
         if (startDate) {
-          query = query.gte('created_at', startDate.toISOString());
+          query = query.gte('createdAt', startDate.toISOString());
         }
 
         const { data, error: sbError } = await query;

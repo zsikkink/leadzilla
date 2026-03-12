@@ -514,7 +514,22 @@ function useIcpPerformance(): { data: IcpLeadRow[] | null; isLoading: boolean } 
           .from('lead_rejections')
           .select('icpProfileId');
 
+        // Get lead statuses to accurately count qualified leads
+        const { data: leadRecords } = await supabase
+          .from('Lead')
+          .select('id, status')
+          .is('deletedAt', null);
+
         if (cancelled) return;
+
+        const leadStatusMap = new Map<string, string>();
+        if (leadRecords) {
+          for (const l of leadRecords as Array<{ id: string; status: string }>) {
+            leadStatusMap.set(l.id, l.status);
+          }
+        }
+
+        const QUALIFIED_STATUSES = new Set(['qualified', 'drafted', 'messaged', 'replied', 'cold']);
 
         // Group predictions by ICP
         const icpMap = new Map<
@@ -558,7 +573,7 @@ function useIcpPerformance(): { data: IcpLeadRow[] | null; isLoading: boolean } 
               icpProfileId,
               leadCount: leadIds.size,
               avgScore,
-              qualifiedCount: leadIds.size, // all leads with scores passed qualification
+              qualifiedCount: Array.from(leadIds).filter(id => QUALIFIED_STATUSES.has(leadStatusMap.get(id) ?? '')).length,
               rejectedCount: rejPerIcp.get(icpProfileId) ?? 0,
             };
           },

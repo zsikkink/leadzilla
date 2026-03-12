@@ -445,6 +445,7 @@ function simulateScore(
     SALES_MOTION_FIT: 'Sales Motion Fit',
     PAYMENT_COMPLEXITY: 'Payment Complexity',
     RISK_URGENCY: 'Risk & Urgency',
+    OPERATIONAL_PAIN: 'Operational Pain',
     SWITCHING_WILLINGNESS: 'Switching Willingness',
   };
 

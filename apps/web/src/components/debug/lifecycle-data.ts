@@ -264,7 +264,7 @@ export async function fetchLeadLifecycleData(
   // Step 1: Find business conversion for this lead
   const { data: conversions } = await supabase
     .from('business_conversions')
-    .select('businessId, method, businessInsights, apolloContactJson, hunterContactJson')
+    .select('businessId, businessInsights, apolloContactJson, hunterContactJson')
     .eq('leadId', leadId)
     .limit(1);
 
@@ -272,7 +272,7 @@ export async function fetchLeadLifecycleData(
 
   if (conversion) {
     result.businessConversion = {
-      method: conversion.method ?? null,
+      method: null,
       businessInsights: typeof conversion.businessInsights === 'string' ? conversion.businessInsights : null,
       apolloContacts: parseApolloContacts(conversion.apolloContactJson),
       hunterContacts: parseHunterContacts(conversion.hunterContactJson),
@@ -281,10 +281,10 @@ export async function fetchLeadLifecycleData(
     const bizId = conversion.businessId;
 
     if (bizId) {
-      // Step 2: Get business record for scrape data + search task link
+      // Step 2: Get business record for scrape data
       const { data: business } = await supabase
         .from('businesses')
-        .select('apify_website_scrape_json, apify_instagram_scrape_json, searchTaskId')
+        .select('apify_website_scrape_json, apify_instagram_scrape_json')
         .eq('id', bizId)
         .single();
 
@@ -292,20 +292,28 @@ export async function fetchLeadLifecycleData(
         result.websiteScrape = parseWebsiteScrape(business.apify_website_scrape_json);
         result.instagramScrape = parseInstagramScrape(business.apify_instagram_scrape_json);
 
-        // Step 3: Get search task for this business
-        if (business.searchTaskId) {
+        // Step 3: Get search task via business_evidence (search_task_id lives there, not on businesses)
+        const { data: evidence } = await supabase
+          .from('business_evidence')
+          .select('search_task_id')
+          .eq('business_id', bizId)
+          .not('search_task_id', 'is', null)
+          .limit(1);
+
+        const searchTaskId = evidence?.[0]?.search_task_id;
+        if (searchTaskId) {
           const { data: searchTask } = await supabase
             .from('search_tasks')
-            .select('queryText, provider, city, category, status')
-            .eq('id', business.searchTaskId)
+            .select('query_text, city, status')
+            .eq('id', searchTaskId)
             .single();
 
           if (searchTask) {
             result.searchTask = {
-              queryText: searchTask.queryText ?? '',
-              provider: searchTask.provider ?? 'UNKNOWN',
+              queryText: searchTask.query_text ?? '',
+              provider: 'UNKNOWN',
               city: searchTask.city ?? null,
-              category: searchTask.category ?? null,
+              category: null,
               status: searchTask.status ?? 'UNKNOWN',
             };
           }
