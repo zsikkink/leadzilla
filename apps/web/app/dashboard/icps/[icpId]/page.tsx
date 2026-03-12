@@ -1080,10 +1080,7 @@ export default function IcpDetailPage() {
             countries={profile.targetCountries}
             onSave={(val) => handleUpdate({ targetCountries: val })}
           />
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Logic</p>
-            <p className="mt-1.5 font-medium">{profile.qualificationLogic}</p>
-          </div>
+          <div />
         </div>
 
         {/* ICP Scoring from metadata */}

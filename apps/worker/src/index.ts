@@ -232,6 +232,22 @@ async function main(): Promise<void> {
     );
   }
 
+  // ── Connection Budget Documentation ────────────────────────────────────
+  // Cloud Supabase free tier has ~15 max connections. This worker process uses:
+  //   - Prisma connection pool: 3 connections (connection_limit=3 in DATABASE_URL)
+  //   - pg-boss pool: 2 connections (max: 2 below)
+  //   - Total per worker: ~5 connections
+  //
+  // During peak demand (e.g., 3 concurrent search tasks via batchSize=3),
+  // all 3 Prisma pool connections may be in use simultaneously. Additional
+  // Prisma queries will queue internally, but under heavy load the pool can
+  // be temporarily exhausted, causing "MaxClientsInSessionMode: max clients
+  // reached" errors. This is handled by the withPoolRetry() wrapper from
+  // @lead-flood/db which retries with exponential backoff (500ms, 1s, 2s).
+  //
+  // Concurrency is kept at 3 for speed — the retry wrapper handles
+  // occasional pool exhaustion gracefully.
+  // ──────────────────────────────────────────────────────────────────────
   const boss = new PgBoss({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,

@@ -250,12 +250,12 @@ export async function handleApolloEnrichJob(
   // Call Apollo to reveal contact data (1 export credit)
   const apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
 
-  // Track Apollo cost event (1 credit per API call regardless of result)
+  // Track Apollo cost event — ~$0.02/call based on Apollo pricing audit
   await prisma.discoveryCostEvent.create({
     data: {
       discoveryRunId: runId,
       provider: 'APOLLO',
-      costCents: 1,
+      costCents: 2,
       apiCallType: 'post_score_enrich',
       leadId,
     },
