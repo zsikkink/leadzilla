@@ -46,14 +46,21 @@ Artifacts preserved in the repo for review:
 - Review notes:
   - `docs/schema-capture/2026-03-14/REVIEW_NOTES.md`
 
+Repo-side history repair performed:
+- Archived old pre-reconciliation chain:
+  - `supabase/migrations-archived/pre-reconciliation/`
+- Replaced active `supabase/migrations` with a single canonical baseline:
+  - `supabase/migrations/20260314210837_lead_flood_dev_baseline.sql`
+- Left remote untouched after the earlier `db pull --yes` metadata side effect.
+
 Immediate rules:
 - Do not run `supabase db push`.
 - Do not run `scripts/db/migrate-prod.sh`.
 - Do not run `supabase migration repair` until the pulled artifacts are reviewed.
 - Do not resume runtime Prisma-to-Postgres migration slices until schema provenance is repaired.
 
-Next reconciliation step:
-1. Review the pulled live baseline and separate real application schema from noisy/generated objects.
-2. Review the curated candidate in `docs/schema-capture/2026-03-14/20260314210837_remote_schema.reviewed.sql`.
-3. Decide whether to adopt a reviewed baseline reset or a curated superseding reconciliation set.
-4. Only after review, bring the chosen reconciliation artifact(s) into `supabase/migrations`.
+Current canonical structure:
+1. The old chain is historical-only in `supabase/migrations-archived/pre-reconciliation/`.
+2. The active canonical chain is now the single baseline file in `supabase/migrations/`.
+3. The refined reviewed candidate remains review/supporting material in `docs/schema-capture/2026-03-14/`; it is not the active migration file.
+4. Runtime migration work remains paused until the repo-side reset is reviewed and a later remote reconciliation step is explicitly approved.

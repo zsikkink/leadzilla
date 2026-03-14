@@ -1,5 +1,22 @@
 # Production Remote DB Strategy
 
+## Current History Status
+
+As of 2026-03-14, the pre-reconciliation local migration chain was archived.
+
+- Historical archive:
+  - `supabase/migrations-archived/pre-reconciliation/`
+- Active canonical chain:
+  - `supabase/migrations/`
+- Active baseline file:
+  - `supabase/migrations/20260314210837_lead_flood_dev_baseline.sql`
+
+Important:
+- This repo-side history repair did not perform any remote write.
+- Do not run `supabase db push`, `scripts/db/migrate-prod.sh`, or
+  `supabase migration repair` until the repaired active chain is reviewed.
+- Runtime Prisma-to-Postgres migration work remains paused until that review is complete.
+
 ## Canonical Schema Workflow
 
 Supabase SQL-first migrations are the canonical source of truth.
@@ -8,6 +25,9 @@ Supabase SQL-first migrations are the canonical source of truth.
 - Production migration driver: Supabase CLI (`supabase db push`)
 - Prisma is DB-derived only (`prisma db pull` + `prisma generate`)
 - `prisma migrate deploy` is forbidden in production workflows
+
+The archived pre-reconciliation chain is historical-only and should not be
+treated as the active source of schema truth.
 
 ## Primary Provider (Recommended): Supabase Postgres (Free Tier)
 
@@ -121,6 +141,30 @@ Notes:
 - `db pull` can produce noisy diffs.
 - Review generated SQL carefully before commit.
 - Re-run `pnpm db:verify:prod` after capturing drift.
+
+## App Admin Bootstrap
+
+The old local-only migration
+`20260226000000_seed_default_app_admin.sql` was archived with the
+pre-reconciliation chain instead of being kept in the active canonical schema
+history.
+
+Reason:
+- Seeding the first app admin is an operational bootstrap step, not core schema
+  definition.
+
+If a fresh environment needs the first admin after the schema baseline is
+applied, use:
+
+```sql
+INSERT INTO public.app_admins (user_id)
+SELECT id
+FROM auth.users
+WHERE email_confirmed_at IS NOT NULL
+ORDER BY created_at ASC
+LIMIT 1
+ON CONFLICT DO NOTHING;
+```
 
 ## Day-2 Operations
 

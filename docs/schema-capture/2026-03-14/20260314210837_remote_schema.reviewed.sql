@@ -11,6 +11,10 @@
 -- - Avoid duplicating schema already represented by repo-local migrations
 --   20260225180000_enable_rls_all_tables_and_sync_schema.sql and
 --   20260226000000_seed_default_app_admin.sql.
+-- - Keep 20260225180000 as the canonical home for ManagerAnalysis table
+--   creation, Lead.costCents, Lead.deletedAt, and broad older-table RLS.
+-- - Capture only the residual live delta that still is not represented
+--   anywhere in committed repo migration history.
 --
 -- This file is review-oriented. It is not yet the canonical migration chain.
 
@@ -93,6 +97,9 @@ ALTER TABLE "Lead" ADD COLUMN IF NOT EXISTS "businessId" TEXT;
 ALTER TABLE "Lead" ADD COLUMN IF NOT EXISTS "decisionMakerPhone" TEXT;
 ALTER TABLE "Lead" ADD COLUMN IF NOT EXISTS "decisionMakerTitle" TEXT;
 ALTER TABLE "Lead" ADD COLUMN IF NOT EXISTS "phoneSource" TEXT;
+
+CREATE INDEX IF NOT EXISTS "Lead_businessId_idx" ON "Lead"("businessId");
+CREATE INDEX IF NOT EXISTS "Lead_deletedAt_idx" ON "Lead"("deletedAt");
 
 ALTER TABLE "businesses" ADD COLUMN IF NOT EXISTS "apify_instagram_scrape_json" JSONB;
 ALTER TABLE "businesses" ADD COLUMN IF NOT EXISTS "apify_website_scrape_json" JSONB;
@@ -357,6 +364,14 @@ CREATE POLICY "lead_pipeline_events_admin_select" ON "lead_pipeline_events"
 DROP POLICY IF EXISTS "lead_rejections_admin_select" ON "lead_rejections";
 CREATE POLICY "lead_rejections_admin_select" ON "lead_rejections"
   FOR SELECT TO authenticated USING (public.is_app_admin());
+
+DROP POLICY IF EXISTS "manager_analysis_admin_select" ON "ManagerAnalysis";
+CREATE POLICY "manager_analysis_admin_select" ON "ManagerAnalysis"
+  FOR SELECT
+  USING (((auth.uid())::text IN (
+    SELECT (app_admins.user_id)::text AS user_id
+    FROM public.app_admins
+  )));
 
 DROP POLICY IF EXISTS "manager_recommendation_records_admin_select" ON "manager_recommendation_records";
 CREATE POLICY "manager_recommendation_records_admin_select" ON "manager_recommendation_records"
