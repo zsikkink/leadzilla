@@ -29,6 +29,12 @@ Runtime in CI:
 - Node 22
 - Postgres service on port `5434`
 
+Important:
+
+- `pnpm db:migrate` in CI is local test-database setup only.
+- Production schema authority is the SQL chain in `supabase/migrations/`.
+- Remote schema operations should follow `docs/PROD_REMOTE_DB_STRATEGY.md`.
+
 ## Deploy Workflow
 
 File: `.github/workflows/deploy.yml`
@@ -91,12 +97,19 @@ pnpm build
 
 ## Production DB Migration Steps
 
-Production migrations are SQL-first via Supabase CLI.
+Production migrations are SQL-first via Supabase CLI and the active canonical
+chain in `supabase/migrations/`.
 
 ```bash
 pnpm db:link
-pnpm db:migrate:prod
-pnpm db:verify:prod
+ENV_FILE=/tmp/leadflood-reconcile.env pnpm db:verify:prod
+ENV_FILE=/tmp/leadflood-reconcile.env pnpm db:migrate:prod
+ENV_FILE=/tmp/leadflood-reconcile.env pnpm db:verify:prod
+```
+
+Then sync Prisma locally so the DB-derived client matches the applied schema:
+
+```bash
 pnpm db:prisma:sync
 ```
 
@@ -107,7 +120,7 @@ Discovery console pages (`/discovery`) read directly from Supabase via RLS and c
 Web env (Vercel):
 
 - `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 
 Worker env:
 
@@ -152,6 +165,9 @@ limit 20;
 ## Data Migration: Local -> Remote
 
 Use `pnpm db:push:local-to-remote` to move existing local development data into the remote Supabase database.
+
+This is an exceptional/manual data move, not part of the normal canonical
+schema workflow.
 
 Required env:
 

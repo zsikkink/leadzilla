@@ -13,6 +13,7 @@ The web app runs on Vercel and calls the API. Do not run Postgres on Vercel.
 ## 2) Vercel Environment Variables
 
 Set for both Preview and Production (with environment-specific values):
+
 - `NEXT_PUBLIC_API_BASE_URL`
 - `ADMIN_API_KEY` (server-only; used by `apps/web` route handlers for `/api/admin/*`)
 - `NEXT_PUBLIC_SUPABASE_URL`
@@ -23,11 +24,13 @@ Do not put database credentials in the Vercel web project.
 ## 3) API/Worker Environment Variables (non-Vercel runtime)
 
 Set on API + worker deployment:
+
 - `DATABASE_URL`
 - `DIRECT_URL`
 - `PG_BOSS_SCHEMA`
 
 Set for migration/ops workflows:
+
 - `SUPABASE_PROJECT_REF=cbcgrzvqidtrtrtnzlso`
 - `SUPABASE_ACCESS_TOKEN` (or use `supabase login` where scripts run)
 - `SUPABASE_DB_PASSWORD` (when CLI cannot prompt)
@@ -35,20 +38,32 @@ Set for migration/ops workflows:
 
 ## 4) Production Migration Flow
 
+Canonical schema workflow lives in `docs/PROD_REMOTE_DB_STRATEGY.md`.
+Use a dedicated temporary env file for DB ops instead of assuming a committed
+or app-local env file.
+
 ```bash
 pnpm db:link
-pnpm db:migrate:prod
-pnpm db:verify:prod
+ENV_FILE=/tmp/leadflood-reconcile.env pnpm db:verify:prod
+ENV_FILE=/tmp/leadflood-reconcile.env pnpm db:migrate:prod
+ENV_FILE=/tmp/leadflood-reconcile.env pnpm db:verify:prod
+```
+
+After SQL changes are applied, sync Prisma locally:
+
+```bash
 pnpm db:prisma:sync
 ```
 
-With env file:
+Example temporary env file contents:
 
 ```bash
-ENV_FILE=.env.production.local pnpm db:link
-ENV_FILE=.env.production.local pnpm db:migrate:prod
-ENV_FILE=.env.production.local pnpm db:verify:prod
-ENV_FILE=.env.production.local pnpm db:prisma:sync
+cat >/tmp/leadflood-reconcile.env <<'EOF'
+DATABASE_URL='...'
+SUPABASE_PROJECT_REF='cbcgrzvqidtrtrtnzlso'
+SUPABASE_ACCESS_TOKEN='...'
+SUPABASE_DB_PASSWORD='...'
+EOF
 ```
 
 ## 5) DB Readiness Verification
@@ -61,6 +76,7 @@ curl -sS https://<api-domain>/ready
 ```
 
 Expected:
+
 - `/health` returns status ok
 - `/ready` returns ready + db ok
 

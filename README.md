@@ -6,10 +6,25 @@ AI-powered lead discovery, enrichment, and scoring pipeline for B2B sales.
 
 - Next.js App Router (`apps/web`)
 - Fastify (`apps/api`)
-- Cloud Supabase Postgres + Prisma (`packages/db`)
+- Supabase Postgres with SQL-first migrations (`supabase/migrations`)
+- `@lead-flood/db` dual-stack runtime layer (`pg` helpers + Prisma during migration)
 - pg-boss workers (`apps/worker`)
 - Zod contracts (`packages/contracts`)
 - TypeScript + pnpm workspace + turborepo
+
+## Current DB Architecture
+
+- Supabase is the only schema and data source of truth.
+- The active canonical migration chain is:
+  - `supabase/migrations/20260314210837_lead_flood_dev_baseline.sql`
+- The old pre-reconciliation migration chain is archived for auditability in:
+  - `supabase/migrations-archived/pre-reconciliation/`
+- Runtime DB access is intentionally dual-stack during the Prisma-to-Postgres transition:
+  - new isolated slices use the `pg` foundation in `@lead-flood/db`
+  - many broader business flows still use Prisma
+- Current workflow and migration status live in:
+  - `docs/PROD_REMOTE_DB_STRATEGY.md`
+  - `docs/RUNTIME_DB_ACCESS_STATUS.md`
 
 ## Prerequisites
 
@@ -89,13 +104,17 @@ pnpm build
 
 - `pnpm doctor` — validates Node/pnpm prerequisites
 - `pnpm db:link` — links Supabase CLI to the configured project
-- `pnpm db:migrate:prod` — applies SQL migrations to cloud DB
-- `pnpm db:verify:prod` — verifies remote DB migration metadata
+- `pnpm db:migrate:prod` — applies the active Supabase SQL migration chain to the linked remote
+- `pnpm db:verify:prod` — verifies remote migration metadata and checks for pending SQL drift
+- `pnpm db:pull:drift -- --confirm` — captures remote drift into SQL for review
+- `pnpm db:migrate` — local/CI Prisma migration setup only, not production schema authority
 - `pnpm db:prisma:sync` — introspects DB into Prisma schema and regenerates client
 
 ## Documentation
 
-- Entry point: `docs/README.md`
+- Canonical docs index: `docs/README.md`
+- Current DB/schema workflow: `docs/PROD_REMOTE_DB_STRATEGY.md`
+- Current runtime DB migration status: `docs/RUNTIME_DB_ACCESS_STATUS.md`
 - Setup and onboarding: `docs/SETUP_ONBOARDING.md`
 - System walkthrough: `lead-flood-system-walkthrough.md`
 - Troubleshooting: `docs/TROUBLESHOOTING.md`

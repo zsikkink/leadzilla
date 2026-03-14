@@ -1,18 +1,27 @@
 # LEAD-FLOOD Documentation
 
-## Start Here
+## Current Canonical Docs
 
-1. `docs/SETUP_ONBOARDING.md` — Get running from a fresh clone
-2. `lead-flood-system-walkthrough.md` (repo root) — Deep dive into each pipeline stage
-3. `docs/TROUBLESHOOTING.md` — Common errors and fixes
-4. `docs/api-gotchas.md` — Provider-specific API quirks
+1. `docs/PROD_REMOTE_DB_STRATEGY.md` — Canonical DB/schema workflow and operator commands
+2. `docs/RUNTIME_DB_ACCESS_STATUS.md` — Current Prisma-to-Postgres runtime migration status
+3. `docs/SETUP_ONBOARDING.md` — Fresh-clone setup and local runtime expectations
+4. `docs/DEPLOYMENT.md` — CI/deploy flow and how DB ops fit into it
+5. `docs/TROUBLESHOOTING.md` — Common errors and fixes
 
-## Other References
+## Supporting References
 
-- `docs/DEPLOYMENT.md` — CI/CD and deployment workflow
+- `lead-flood-system-walkthrough.md` (repo root) — Pipeline walkthrough
+- `docs/api-gotchas.md` — Provider-specific API quirks
 - `docs/DISCOVERY_PROVIDER_STACK.md` — Discovery/enrichment provider toggles
-- `docs/PROD_REMOTE_DB_STRATEGY.md` — Remote DB connection strategy
 - `docs/VERCEL_PROD_SETUP.md` — Vercel deployment settings
+
+## Historical / Audit Material
+
+- `docs/SCHEMA_RECONCILIATION_20260314.md` — Historical reconciliation log
+- `docs/SCHEMA_HISTORY_REPAIR_PLAN_20260314.md` — Historical repair planning note
+- `docs/REMOTE_RECONCILIATION_PLAN_20260314.md` — Historical remote-reconciliation plan
+- `docs/schema-capture/2026-03-14/` — Captured live-schema artifacts and review notes
+- `supabase/migrations-archived/pre-reconciliation/` — Historical-only migration archive
 
 ## Core Paths
 
@@ -21,5 +30,7 @@
 - Worker entrypoint: `apps/worker/src/index.ts`
 - Web app: `apps/web/app/`
 - Contracts: `packages/contracts/src/`
-- Prisma schema: `packages/db/prisma/schema.prisma`
+- Runtime DB exports: `packages/db/src/index.ts`
+- Prisma schema (DB-derived, not canonical): `packages/db/prisma/schema.prisma`
+- Active Supabase migrations: `supabase/migrations/`
 - CI workflow: `.github/workflows/ci.yml`
