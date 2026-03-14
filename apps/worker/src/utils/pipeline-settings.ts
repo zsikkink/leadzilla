@@ -1,4 +1,8 @@
-import { prisma } from '@lead-flood/db';
+import {
+  getPipelineSetting,
+  listPipelineSettingsByKeys,
+  prisma,
+} from '@lead-flood/db';
 
 /**
  * Runtime-configurable pipeline settings loaded from the PipelineSetting table.
@@ -46,6 +50,25 @@ const KEY_MAP: Record<string, keyof PipelineSettings> = {
   'health.stale_job_minutes': 'healthStaleJobMinutes',
 };
 
+async function loadPipelineSettingMap(keys: readonly string[]): Promise<Map<string, unknown>> {
+  try {
+    const rows = await listPipelineSettingsByKeys(keys);
+    return new Map(
+      rows.map((row: { key: string; valueJson: unknown }) => [row.key, row.valueJson]),
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+async function loadPipelineSettingValue(key: string): Promise<unknown | null> {
+  try {
+    return (await getPipelineSetting(key))?.valueJson ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Batch-loads all PipelineSetting rows and merges with defaults.
  * Call once at the start of a job handler for runtime-configurable behavior.
@@ -53,29 +76,23 @@ const KEY_MAP: Record<string, keyof PipelineSettings> = {
  * Never throws — returns defaults if the DB query fails.
  */
 export async function getPipelineSettings(): Promise<PipelineSettings> {
-  try {
-    const rows = await prisma.pipelineSetting.findMany({
-      where: { key: { in: Object.keys(KEY_MAP) } },
-      select: { key: true, valueJson: true },
-    });
-
-    const settings = { ...DEFAULTS };
-
-    for (const row of rows) {
-      const prop = KEY_MAP[row.key];
-      if (!prop) continue;
-
-      const value = row.valueJson;
-      if (typeof value === 'number' && Number.isFinite(value)) {
-        (settings as Record<string, number>)[prop] = value;
-      }
-    }
-
-    return settings;
-  } catch {
-    // DB failure is non-fatal — use defaults
+  const rows = await loadPipelineSettingMap(Object.keys(KEY_MAP));
+  if (rows.size === 0) {
     return { ...DEFAULTS };
   }
+
+  const settings = { ...DEFAULTS };
+
+  for (const [key, value] of rows.entries()) {
+    const prop = KEY_MAP[key];
+    if (!prop) continue;
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      (settings as Record<string, number>)[prop] = value;
+    }
+  }
+
+  return settings;
 }
 
 // ── Auto-approve configuration ────────────────────────────────────────
@@ -104,28 +121,29 @@ const AUTO_APPROVE_KEYS = [
  * Never throws.
  */
 export async function loadAutoApproveConfig(): Promise<AutoApproveConfig> {
-  try {
-    const rows = await prisma.pipelineSetting.findMany({
-      where: { key: { in: [...AUTO_APPROVE_KEYS] } },
-      select: { key: true, valueJson: true },
-    });
-
-    const config = { ...AUTO_APPROVE_DEFAULTS };
-
-    for (const row of rows) {
-      if (row.key === 'auto_approve_enabled' && typeof row.valueJson === 'boolean') {
-        config.enabled = row.valueJson;
-      } else if (row.key === 'auto_approve_score_min' && typeof row.valueJson === 'number') {
-        config.scoreMin = row.valueJson;
-      } else if (row.key === 'auto_approve_score_max' && typeof row.valueJson === 'number') {
-        config.scoreMax = row.valueJson;
-      }
-    }
-
-    return config;
-  } catch {
+  const rows = await loadPipelineSettingMap(AUTO_APPROVE_KEYS);
+  if (rows.size === 0) {
     return { ...AUTO_APPROVE_DEFAULTS };
   }
+
+  const config = { ...AUTO_APPROVE_DEFAULTS };
+
+  const enabled = rows.get('auto_approve_enabled');
+  if (typeof enabled === 'boolean') {
+    config.enabled = enabled;
+  }
+
+  const scoreMin = rows.get('auto_approve_score_min');
+  if (typeof scoreMin === 'number') {
+    config.scoreMin = scoreMin;
+  }
+
+  const scoreMax = rows.get('auto_approve_score_max');
+  if (typeof scoreMax === 'number') {
+    config.scoreMax = scoreMax;
+  }
+
+  return config;
 }
 
 /**
@@ -142,16 +160,9 @@ export function shouldAutoApprove(config: AutoApproveConfig, blendedScore: numbe
  * Default: false (opt-in until explicitly enabled).
  */
 export async function isManualApprovalOnlyEnabled(): Promise<boolean> {
-  try {
-    const row = await prisma.pipelineSetting.findUnique({
-      where: { key: 'messaging_manual_approval_only' },
-      select: { valueJson: true },
-    });
-    if (typeof row?.valueJson === 'boolean') {
-      return row.valueJson;
-    }
-  } catch {
-    // Fall through to default
+  const value = await loadPipelineSettingValue('messaging_manual_approval_only');
+  if (typeof value === 'boolean') {
+    return value;
   }
   return false;
 }
@@ -163,19 +174,12 @@ export async function isManualApprovalOnlyEnabled(): Promise<boolean> {
  * for an ICP. Returns null if no historical data exists.
  */
 export async function loadConversionRate(icpProfileId: string): Promise<number | null> {
-  try {
-    const setting = await prisma.pipelineSetting.findUnique({
-      where: { key: `discovery_conversion_rate:${icpProfileId}` },
-      select: { valueJson: true },
-    });
-    if (setting?.valueJson === null || setting?.valueJson === undefined) return null;
-    const value = typeof setting.valueJson === 'number'
-      ? setting.valueJson
-      : Number(setting.valueJson);
-    return Number.isFinite(value) && value > 0 && value <= 1 ? value : null;
-  } catch {
-    return null;
-  }
+  const valueJson = await loadPipelineSettingValue(`discovery_conversion_rate:${icpProfileId}`);
+  if (valueJson === null || valueJson === undefined) return null;
+  const value = typeof valueJson === 'number'
+    ? valueJson
+    : Number(valueJson);
+  return Number.isFinite(value) && value > 0 && value <= 1 ? value : null;
 }
 
 /**
@@ -183,19 +187,12 @@ export async function loadConversionRate(icpProfileId: string): Promise<number |
  * for an ICP. Returns null if no historical data exists.
  */
 export async function loadSearchEfficiency(icpProfileId: string): Promise<number | null> {
-  try {
-    const setting = await prisma.pipelineSetting.findUnique({
-      where: { key: `discovery_search_efficiency:${icpProfileId}` },
-      select: { valueJson: true },
-    });
-    if (setting?.valueJson === null || setting?.valueJson === undefined) return null;
-    const value = typeof setting.valueJson === 'number'
-      ? setting.valueJson
-      : Number(setting.valueJson);
-    return Number.isFinite(value) && value > 0 ? value : null;
-  } catch {
-    return null;
-  }
+  const valueJson = await loadPipelineSettingValue(`discovery_search_efficiency:${icpProfileId}`);
+  if (valueJson === null || valueJson === undefined) return null;
+  const value = typeof valueJson === 'number'
+    ? valueJson
+    : Number(valueJson);
+  return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 // ── UI-configured pipeline settings ──────────────────────────────────────
@@ -208,18 +205,13 @@ export async function loadSearchEfficiency(icpProfileId: string): Promise<number
  * Used by scoring jobs to decide if a lead is qualified for messaging.
  */
 export async function getScoreQualificationThreshold(): Promise<number> {
-  try {
-    const row = await prisma.pipelineSetting.findUnique({
-      where: { key: 'scoreQualificationThreshold' },
-      select: { valueJson: true },
-    });
-    if (row?.valueJson !== null && row?.valueJson !== undefined) {
-      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
-      if (Number.isFinite(val) && val >= 0 && val <= 1) {
-        return val;
-      }
+  const valueJson = await loadPipelineSettingValue('scoreQualificationThreshold');
+  if (valueJson !== null && valueJson !== undefined) {
+    const val = typeof valueJson === 'number' ? valueJson : Number(valueJson);
+    if (Number.isFinite(val) && val >= 0 && val <= 1) {
+      return val;
     }
-  } catch { /* fall through */ }
+  }
   return 0.4;
 }
 
@@ -228,18 +220,13 @@ export async function getScoreQualificationThreshold(): Promise<number> {
  * Returns as a 0–1 fraction, or null if not set (meaning: use dynamic auto-blending).
  */
 export async function getDeterministicAiBlend(): Promise<number | null> {
-  try {
-    const row = await prisma.pipelineSetting.findUnique({
-      where: { key: 'deterministicAiBlend' },
-      select: { valueJson: true },
-    });
-    if (row?.valueJson !== null && row?.valueJson !== undefined) {
-      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
-      if (Number.isFinite(val) && val >= 0 && val <= 100) {
-        return val / 100;
-      }
+  const valueJson = await loadPipelineSettingValue('deterministicAiBlend');
+  if (valueJson !== null && valueJson !== undefined) {
+    const val = typeof valueJson === 'number' ? valueJson : Number(valueJson);
+    if (Number.isFinite(val) && val >= 0 && val <= 100) {
+      return val / 100;
     }
-  } catch { /* DB failure — use dynamic blending */ }
+  }
   return null;
 }
 
@@ -248,18 +235,13 @@ export async function getDeterministicAiBlend(): Promise<number | null> {
  * Leads scoring below this skip paid API calls. Default: 0.3.
  */
 export async function getEnrichmentThreshold(): Promise<number> {
-  try {
-    const row = await prisma.pipelineSetting.findUnique({
-      where: { key: 'enrichmentThreshold' },
-      select: { valueJson: true },
-    });
-    if (row?.valueJson !== null && row?.valueJson !== undefined) {
-      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
-      if (Number.isFinite(val) && val >= 0 && val <= 1) {
-        return val;
-      }
+  const valueJson = await loadPipelineSettingValue('enrichmentThreshold');
+  if (valueJson !== null && valueJson !== undefined) {
+    const val = typeof valueJson === 'number' ? valueJson : Number(valueJson);
+    if (Number.isFinite(val) && val >= 0 && val <= 1) {
+      return val;
     }
-  } catch { /* fall through */ }
+  }
   return 0.3;
 }
 
@@ -268,18 +250,13 @@ export async function getEnrichmentThreshold(): Promise<number> {
  * Default: 15.
  */
 export async function getMinReviewCount(): Promise<number> {
-  try {
-    const row = await prisma.pipelineSetting.findUnique({
-      where: { key: 'min_review_count' },
-      select: { valueJson: true },
-    });
-    if (row?.valueJson !== null && row?.valueJson !== undefined) {
-      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
-      if (Number.isFinite(val) && val >= 0) {
-        return val;
-      }
+  const valueJson = await loadPipelineSettingValue('min_review_count');
+  if (valueJson !== null && valueJson !== undefined) {
+    const val = typeof valueJson === 'number' ? valueJson : Number(valueJson);
+    if (Number.isFinite(val) && val >= 0) {
+      return val;
     }
-  } catch { /* fall through */ }
+  }
   return 15;
 }
 
@@ -289,20 +266,15 @@ export async function getMinReviewCount(): Promise<number> {
  * Default: { low: 0.34, high: 0.67 }.
  */
 export async function getScoreTierBands(): Promise<{ low: number; high: number }> {
-  try {
-    const row = await prisma.pipelineSetting.findUnique({
-      where: { key: 'scoreTierBands' },
-      select: { valueJson: true },
-    });
-    if (row?.valueJson && typeof row.valueJson === 'object') {
-      const val = row.valueJson as Record<string, unknown>;
-      const low = typeof val.low === 'number' ? val.low : 0.34;
-      const high = typeof val.high === 'number' ? val.high : 0.67;
-      if (Number.isFinite(low) && Number.isFinite(high) && low >= 0 && high >= low && high <= 1) {
-        return { low, high };
-      }
+  const valueJson = await loadPipelineSettingValue('scoreTierBands');
+  if (valueJson && typeof valueJson === 'object') {
+    const val = valueJson as Record<string, unknown>;
+    const low = typeof val.low === 'number' ? val.low : 0.34;
+    const high = typeof val.high === 'number' ? val.high : 0.67;
+    if (Number.isFinite(low) && Number.isFinite(high) && low >= 0 && high >= low && high <= 1) {
+      return { low, high };
     }
-  } catch { /* fall through */ }
+  }
   return { low: 0.34, high: 0.67 };
 }
 
@@ -310,18 +282,13 @@ export async function getScoreTierBands(): Promise<{ low: number; high: number }
  * Maximum follow-ups per lead before stopping outreach. Default: 3.
  */
 export async function getFollowUpMaxCount(): Promise<number> {
-  try {
-    const row = await prisma.pipelineSetting.findUnique({
-      where: { key: 'followUpMaxCount' },
-      select: { valueJson: true },
-    });
-    if (row?.valueJson !== null && row?.valueJson !== undefined) {
-      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
-      if (Number.isFinite(val) && val >= 0 && val <= 100) {
-        return val;
-      }
+  const valueJson = await loadPipelineSettingValue('followUpMaxCount');
+  if (valueJson !== null && valueJson !== undefined) {
+    const val = typeof valueJson === 'number' ? valueJson : Number(valueJson);
+    if (Number.isFinite(val) && val >= 0 && val <= 100) {
+      return val;
     }
-  } catch { /* fall through */ }
+  }
   return 3;
 }
 
@@ -329,18 +296,13 @@ export async function getFollowUpMaxCount(): Promise<number> {
  * WhatsApp daily send limit. Default: 50.
  */
 export async function getWhatsappDailyLimit(): Promise<number> {
-  try {
-    const row = await prisma.pipelineSetting.findUnique({
-      where: { key: 'whatsappDailyLimit' },
-      select: { valueJson: true },
-    });
-    if (row?.valueJson !== null && row?.valueJson !== undefined) {
-      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
-      if (Number.isFinite(val) && val >= 1) {
-        return val;
-      }
+  const valueJson = await loadPipelineSettingValue('whatsappDailyLimit');
+  if (valueJson !== null && valueJson !== undefined) {
+    const val = typeof valueJson === 'number' ? valueJson : Number(valueJson);
+    if (Number.isFinite(val) && val >= 1) {
+      return val;
     }
-  } catch { /* fall through */ }
+  }
   return 50;
 }
 
@@ -348,18 +310,13 @@ export async function getWhatsappDailyLimit(): Promise<number> {
  * Email daily send cap (overrides warmup maxDaily). Default: 100.
  */
 export async function getEmailDailyLimit(): Promise<number> {
-  try {
-    const row = await prisma.pipelineSetting.findUnique({
-      where: { key: 'emailDailyLimit' },
-      select: { valueJson: true },
-    });
-    if (row?.valueJson !== null && row?.valueJson !== undefined) {
-      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
-      if (Number.isFinite(val) && val >= 1) {
-        return val;
-      }
+  const valueJson = await loadPipelineSettingValue('emailDailyLimit');
+  if (valueJson !== null && valueJson !== undefined) {
+    const val = typeof valueJson === 'number' ? valueJson : Number(valueJson);
+    if (Number.isFinite(val) && val >= 1) {
+      return val;
     }
-  } catch { /* fall through */ }
+  }
   return 100;
 }
 
@@ -368,16 +325,11 @@ export async function getEmailDailyLimit(): Promise<number> {
  * Returns null when unset to allow adapter defaults.
  */
 export async function getMessagingRole(): Promise<string | null> {
-  try {
-    const row = await prisma.pipelineSetting.findUnique({
-      where: { key: 'messagingRole' },
-      select: { valueJson: true },
-    });
-    if (typeof row?.valueJson === 'string') {
-      const value = row.valueJson.trim();
-      return value.length > 0 ? value : null;
-    }
-  } catch { /* fall through */ }
+  const valueJson = await loadPipelineSettingValue('messagingRole');
+  if (typeof valueJson === 'string') {
+    const value = valueJson.trim();
+    return value.length > 0 ? value : null;
+  }
   return null;
 }
 
@@ -386,16 +338,11 @@ export async function getMessagingRole(): Promise<string | null> {
  * Returns null when unset to allow adapter defaults.
  */
 export async function getMessagingSystemPrompt(): Promise<string | null> {
-  try {
-    const row = await prisma.pipelineSetting.findUnique({
-      where: { key: 'messagingSystemPrompt' },
-      select: { valueJson: true },
-    });
-    if (typeof row?.valueJson === 'string') {
-      const value = row.valueJson.trim();
-      return value.length > 0 ? value : null;
-    }
-  } catch { /* fall through */ }
+  const valueJson = await loadPipelineSettingValue('messagingSystemPrompt');
+  if (typeof valueJson === 'string') {
+    const value = valueJson.trim();
+    return value.length > 0 ? value : null;
+  }
   return null;
 }
 
@@ -404,16 +351,11 @@ export async function getMessagingSystemPrompt(): Promise<string | null> {
  * Returns null when unset.
  */
 export async function getMessagingInstructions(): Promise<string | null> {
-  try {
-    const row = await prisma.pipelineSetting.findUnique({
-      where: { key: 'messagingInstructions' },
-      select: { valueJson: true },
-    });
-    if (typeof row?.valueJson === 'string') {
-      const value = row.valueJson.trim();
-      return value.length > 0 ? value : null;
-    }
-  } catch { /* fall through */ }
+  const valueJson = await loadPipelineSettingValue('messagingInstructions');
+  if (typeof valueJson === 'string') {
+    const value = valueJson.trim();
+    return value.length > 0 ? value : null;
+  }
   return null;
 }
 
@@ -421,18 +363,13 @@ export async function getMessagingInstructions(): Promise<string | null> {
  * Minimum AUC required to activate a newly trained ML model. Default: 0.60.
  */
 export async function getModelActivationAuc(): Promise<number> {
-  try {
-    const row = await prisma.pipelineSetting.findUnique({
-      where: { key: 'modelActivationAuc' },
-      select: { valueJson: true },
-    });
-    if (row?.valueJson !== null && row?.valueJson !== undefined) {
-      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
-      if (Number.isFinite(val) && val >= 0 && val <= 1) {
-        return val;
-      }
+  const valueJson = await loadPipelineSettingValue('modelActivationAuc');
+  if (valueJson !== null && valueJson !== undefined) {
+    const val = typeof valueJson === 'number' ? valueJson : Number(valueJson);
+    if (Number.isFinite(val) && val >= 0 && val <= 1) {
+      return val;
     }
-  } catch { /* fall through */ }
+  }
   return 0.60;
 }
 
@@ -441,18 +378,13 @@ export async function getModelActivationAuc(): Promise<number> {
  * Returns ceiling in cents for comparison with DiscoveryCostEvent.costCents.
  */
 export async function getProviderBudgetCeiling(): Promise<number | null> {
-  try {
-    const row = await prisma.pipelineSetting.findUnique({
-      where: { key: 'providerBudgetCeiling' },
-      select: { valueJson: true },
-    });
-    if (row?.valueJson !== null && row?.valueJson !== undefined) {
-      const val = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
-      if (Number.isFinite(val) && val > 0) {
-        return val * 100; // dollars → cents
-      }
+  const valueJson = await loadPipelineSettingValue('providerBudgetCeiling');
+  if (valueJson !== null && valueJson !== undefined) {
+    const val = typeof valueJson === 'number' ? valueJson : Number(valueJson);
+    if (Number.isFinite(val) && val > 0) {
+      return val * 100; // dollars → cents
     }
-  } catch { /* fall through */ }
+  }
   return null;
 }
 

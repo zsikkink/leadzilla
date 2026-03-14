@@ -1,6 +1,30 @@
-import type { prisma as prismaInstance } from '@lead-flood/db';
+import { query, type prisma as prismaInstance } from '@lead-flood/db';
 
 type PrismaInstance = typeof prismaInstance;
+
+interface CountRow {
+  count: number | string;
+}
+
+function parseCount(value: number | string): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+async function countWhatsAppSendsSince(since: Date): Promise<number> {
+  const result = await query<CountRow>(
+    `
+      select count(*)::integer as count
+      from public."MessageSend"
+      where "channel" = 'WHATSAPP'
+        and "status" = 'SENT'
+        and "createdAt" >= $1
+    `,
+    [since],
+  );
+
+  return parseCount(result.rows[0]?.count ?? 0);
+}
 
 export interface WhatsAppRateLimiterConfig {
   dailySendLimit: number;
@@ -61,10 +85,9 @@ export class WhatsAppRateLimiter {
   private readonly offsetHours: number;
   private readonly bizStart: number;
   private readonly bizEnd: number;
-  private readonly prisma: PrismaInstance;
 
   constructor(prisma: PrismaInstance, config: WhatsAppRateLimiterConfig) {
-    this.prisma = prisma;
+    void prisma;
     this.dailySendLimit = config.dailySendLimit;
     this.offsetHours = config.timezoneOffsetHours ?? UAE_OFFSET_HOURS;
     this.bizStart = config.businessHoursStart ?? DEFAULT_BIZ_START;
@@ -87,13 +110,7 @@ export class WhatsAppRateLimiter {
 
     // Count today's WhatsApp sends
     const dayStartUtc = getStartOfDayUtc(uaeNow, this.offsetHours);
-    const count = await this.prisma.messageSend.count({
-      where: {
-        channel: 'WHATSAPP',
-        status: 'SENT',
-        createdAt: { gte: dayStartUtc },
-      },
-    });
+    const count = await countWhatsAppSendsSince(dayStartUtc);
 
     if (count >= effectiveLimit) {
       return {

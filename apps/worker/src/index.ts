@@ -224,7 +224,7 @@ async function main(): Promise<void> {
     level: env.LOG_LEVEL,
   });
 
-  const schemaHealth = await checkPipelineSchemaHealth(prisma);
+  const schemaHealth = await checkPipelineSchemaHealth();
   if (schemaHealth.status !== 'ok') {
     logger.error({ schemaHealth }, 'Worker schema guard failed');
     throw new Error(

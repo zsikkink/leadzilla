@@ -29,9 +29,11 @@
     "prisma:seed": "prisma generate --schema prisma/schema.prisma && node --env-file-if-exists=.env --import tsx prisma/seed.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.2.1"
+    "@prisma/client": "^6.2.1",
+    "pg": "^8.18.0"
   },
   "devDependencies": {
+    "@types/pg": "^8.18.0",
     "prisma": "^6.2.1",
     "tsx": "^4.19.2"
   }

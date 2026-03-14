@@ -1,6 +1,12 @@
 import PgBoss from 'pg-boss';
 
-import { Prisma, checkPipelineSchemaHealth, prisma, toInputJson } from '@lead-flood/db';
+import {
+  Prisma,
+  assertDatabaseConnection,
+  checkPipelineSchemaHealth,
+  prisma,
+  toInputJson,
+} from '@lead-flood/db';
 import { createLogger } from '@lead-flood/observability';
 import type {
   ContactRecoveryDetailResponse,
@@ -294,7 +300,7 @@ async function main(): Promise<void> {
     },
     checkDatabaseHealth: async () => {
       try {
-        await prisma.$queryRaw`SELECT 1`;
+        await assertDatabaseConnection();
         return true;
       } catch (error: unknown) {
         logger.error({ error }, 'Database readiness check failed');
@@ -303,7 +309,7 @@ async function main(): Promise<void> {
     },
     checkSchemaHealth: async () => {
       try {
-        return await checkPipelineSchemaHealth(prisma);
+        return await checkPipelineSchemaHealth();
       } catch (error: unknown) {
         logger.error({ error }, 'Schema readiness check failed');
         return {

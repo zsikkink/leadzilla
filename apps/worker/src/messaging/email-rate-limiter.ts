@@ -1,4 +1,4 @@
-import type { prisma as prismaInstance } from '@lead-flood/db';
+import { getPipelineSetting, query, type prisma as prismaInstance } from '@lead-flood/db';
 
 import type { RateLimitResult } from './rate-limiter.js';
 
@@ -19,6 +19,44 @@ const DEFAULT_BASE_DAILY = 5;
 const DEFAULT_WEEKLY_INCREMENT = 5;
 const DEFAULT_MAX_DAILY = 100;
 const DEFAULT_BOUNCE_RATE_THRESHOLD = 0.02;
+
+interface CountRow {
+  count: number | string;
+}
+
+function parseCount(value: number | string): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+async function countEmailSendsSince(since: Date): Promise<number> {
+  const result = await query<CountRow>(
+    `
+      select count(*)::integer as count
+      from public."MessageSend"
+      where "channel" = 'EMAIL'
+        and "status" in ('SENT', 'DELIVERED', 'REPLIED', 'BOUNCED')
+        and "createdAt" >= $1
+    `,
+    [since],
+  );
+
+  return parseCount(result.rows[0]?.count ?? 0);
+}
+
+async function countBouncedFeedbackSince(since: Date): Promise<number> {
+  const result = await query<CountRow>(
+    `
+      select count(*)::integer as count
+      from public."FeedbackEvent"
+      where "eventType" = 'BOUNCED'
+        and "occurredAt" >= $1
+    `,
+    [since],
+  );
+
+  return parseCount(result.rows[0]?.count ?? 0);
+}
 
 function getStartOfDayUtc(): Date {
   const now = new Date();
@@ -44,14 +82,13 @@ function computeWarmupWeek(warmupStart: Date, now: Date = new Date()): number {
 }
 
 export class EmailRateLimiter {
-  private readonly prisma: PrismaInstance;
   private readonly baseDaily: number;
   private readonly weeklyIncrement: number;
   private readonly maxDaily: number;
   private readonly bounceRateThreshold: number;
 
   constructor(prisma: PrismaInstance, config?: EmailRateLimiterConfig) {
-    this.prisma = prisma;
+    void prisma;
     this.baseDaily = config?.baseDaily ?? DEFAULT_BASE_DAILY;
     this.weeklyIncrement = config?.weeklyIncrement ?? DEFAULT_WEEKLY_INCREMENT;
     this.maxDaily = config?.maxDaily ?? DEFAULT_MAX_DAILY;
@@ -64,7 +101,7 @@ export class EmailRateLimiter {
    */
   async computeDailyLimit(overrideMaxDaily?: number | undefined): Promise<{ limit: number; week: number; throttled: boolean }> {
     const effectiveMax = overrideMaxDaily ?? this.maxDaily;
-    const warmupStartDate = await EmailRateLimiter.loadWarmupStartDate(this.prisma);
+    const warmupStartDate = await EmailRateLimiter.loadWarmupStartDate();
     const week = computeWarmupWeek(warmupStartDate);
     // Progressive ramp: week 1 = base, week 2 = base + increment, etc.
     let limit = Math.min(
@@ -76,19 +113,8 @@ export class EmailRateLimiter {
     let throttled = false;
     const since24h = get24hAgo();
     const [sentCount, bounceCount] = await Promise.all([
-      this.prisma.messageSend.count({
-        where: {
-          channel: 'EMAIL',
-          status: { in: ['SENT', 'DELIVERED', 'REPLIED', 'BOUNCED'] },
-          createdAt: { gte: since24h },
-        },
-      }),
-      this.prisma.feedbackEvent.count({
-        where: {
-          eventType: 'BOUNCED',
-          occurredAt: { gte: since24h },
-        },
-      }),
+      countEmailSendsSince(since24h),
+      countBouncedFeedbackSince(since24h),
     ]);
 
     if (sentCount > 0) {
@@ -107,13 +133,7 @@ export class EmailRateLimiter {
 
     // Count today's email sends (UTC day boundary, all terminal statuses)
     const dayStartUtc = getStartOfDayUtc();
-    const todayCount = await this.prisma.messageSend.count({
-      where: {
-        channel: 'EMAIL',
-        status: { in: ['SENT', 'DELIVERED', 'REPLIED', 'BOUNCED'] },
-        createdAt: { gte: dayStartUtc },
-      },
-    });
+    const todayCount = await countEmailSendsSince(dayStartUtc);
 
     if (todayCount >= limit) {
       return {
@@ -132,12 +152,10 @@ export class EmailRateLimiter {
    * Read warmup start date from PipelineSetting table.
    * Falls back to current date if not set (starts warmup from today).
    */
-  static async loadWarmupStartDate(prisma: PrismaInstance): Promise<Date> {
+  static async loadWarmupStartDate(prisma?: PrismaInstance): Promise<Date> {
+    void prisma;
     try {
-      const setting = await prisma.pipelineSetting.findUnique({
-        where: { key: 'email_warmup_start_date' },
-        select: { valueJson: true },
-      });
+      const setting = await getPipelineSetting('email_warmup_start_date');
       if (setting?.valueJson && typeof setting.valueJson === 'string') {
         const parsed = new Date(setting.valueJson);
         if (!isNaN(parsed.getTime())) return parsed;

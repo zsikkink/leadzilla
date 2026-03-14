@@ -1,8 +1,8 @@
 /**
- * Retry wrapper for Prisma queries that fail due to connection pool exhaustion.
+ * Retry wrapper for database operations that fail due to connection pool exhaustion.
  *
  * Cloud Supabase free tier has ~15 max connections. Our worker uses:
- *   - Prisma connection pool: 3 connections (connection_limit=3 in DATABASE_URL)
+ *   - App DB pool: 3 connections (historically Prisma, now dual-stack during migration)
  *   - pg-boss: 2 connections (max: 2 in pg-boss config)
  *   - Total: ~5 connections per worker process
  *
@@ -10,7 +10,7 @@
  * batchSize=3), all 3 Prisma pool connections may be in use. Additional queries
  * hit the "FATAL: MaxClientsInSessionMode: max clients reached" error.
  *
- * This wrapper catches that specific error and retries with exponential backoff
+ * This wrapper catches those pool-pressure failures and retries with exponential backoff
  * (500ms, 1000ms, 2000ms) rather than failing the entire job.
  */
 
@@ -20,9 +20,7 @@ const MAX_RETRY_ATTEMPTS = 3;
 const BACKOFF_BASE_MS = 500;
 
 /**
- * Check if an error is a Prisma pool exhaustion / max clients error.
- * Matches both PrismaClientUnknownRequestError and PrismaClientKnownRequestError
- * that contain the "MaxClientsInSessionMode" message from Supabase.
+ * Check if an error looks like a pool exhaustion / max clients failure from Postgres/Supabase.
  */
 function isPoolExhaustedError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -39,7 +37,7 @@ function isPoolExhaustedError(error: unknown): boolean {
 }
 
 /**
- * Execute a Prisma query with automatic retry on connection pool exhaustion.
+ * Execute a database operation with automatic retry on connection pool exhaustion.
  *
  * Uses exponential backoff: attempt 1 waits 500ms, attempt 2 waits 1000ms,
  * attempt 3 waits 2000ms. Non-pool errors are re-thrown immediately.
@@ -47,7 +45,7 @@ function isPoolExhaustedError(error: unknown): boolean {
  * @example
  * ```ts
  * const business = await withPoolRetry(() =>
- *   prisma.business.findFirst({ where: { websiteDomain } })
+ *   db.query('select 1')
  * );
  * ```
  */

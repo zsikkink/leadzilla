@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Prisma, prisma } from '@lead-flood/db';
+import { Prisma, getScoreQualificationThresholdSetting, prisma } from '@lead-flood/db';
 import type { DeterministicRule } from './deterministic.js';
 import type { LogisticModel } from './logistic.js';
 
@@ -9,22 +9,11 @@ const DEFAULT_QUALIFICATION_THRESHOLD = 0.4;
 
 /**
  * Read the qualification threshold from PipelineSetting table.
- * Falls back to DEFAULT_QUALIFICATION_THRESHOLD (0.5) if not set.
+ * Falls back to DEFAULT_QUALIFICATION_THRESHOLD (0.4) if not set.
  */
 export async function getQualificationThreshold(): Promise<number> {
   try {
-    const setting = await prisma.pipelineSetting.findUnique({
-      where: { key: 'scoreQualificationThreshold' },
-      select: { valueJson: true },
-    });
-    if (setting?.valueJson !== null && setting?.valueJson !== undefined) {
-      const value = typeof setting.valueJson === 'number'
-        ? setting.valueJson
-        : Number(setting.valueJson);
-      if (Number.isFinite(value) && value >= 0 && value <= 1) {
-        return value;
-      }
-    }
+    return await getScoreQualificationThresholdSetting(DEFAULT_QUALIFICATION_THRESHOLD);
   } catch {
     // DB failure — fall back to default
   }

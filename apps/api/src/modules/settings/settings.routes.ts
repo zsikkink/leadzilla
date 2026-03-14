@@ -1,6 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { prisma } from '@lead-flood/db';
+import {
+  getPipelineSetting,
+  listPipelineSettings,
+  upsertPipelineSetting,
+} from '@lead-flood/db';
 
 const ErrorResponseSchema = z.object({
   error: z.string(),
@@ -25,12 +29,10 @@ export function registerSettingsRoutes(app: FastifyInstance) {
   // GET /v1/settings/pipeline — list all pipeline settings
   app.get('/v1/settings/pipeline', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const settings = await prisma.pipelineSetting.findMany({
-        orderBy: { key: 'asc' },
-      });
+      const settings = await listPipelineSettings();
 
       return PipelineSettingsListResponseSchema.parse({
-        items: settings.map((s) => ({
+        items: settings.map((s: { key: string; valueJson: unknown; updatedAt: Date }) => ({
           key: s.key,
           value: s.valueJson,
           updatedAt: s.updatedAt.toISOString(),
@@ -51,9 +53,7 @@ export function registerSettingsRoutes(app: FastifyInstance) {
     const { key } = request.params as { key: string };
 
     try {
-      const setting = await prisma.pipelineSetting.findUnique({
-        where: { key },
-      });
+      const setting = await getPipelineSetting(key);
 
       if (!setting) {
         reply.status(404);
@@ -125,7 +125,7 @@ export function registerSettingsRoutes(app: FastifyInstance) {
     if (key === 'auto_approve_score_min' || key === 'auto_approve_score_max') {
       const numValue = value as number;
       const otherKey = key === 'auto_approve_score_min' ? 'auto_approve_score_max' : 'auto_approve_score_min';
-      const otherSetting = await prisma.pipelineSetting.findUnique({ where: { key: otherKey } });
+      const otherSetting = await getPipelineSetting(otherKey);
       const otherValue = otherSetting ? (otherSetting.valueJson as number) : null;
 
       if (otherValue !== null && typeof otherValue === 'number') {
@@ -145,16 +145,7 @@ export function registerSettingsRoutes(app: FastifyInstance) {
     }
 
     try {
-      const setting = await prisma.pipelineSetting.upsert({
-        where: { key },
-        create: {
-          key,
-          valueJson: parseResult.data.value as never,
-        },
-        update: {
-          valueJson: parseResult.data.value as never,
-        },
-      });
+      const setting = await upsertPipelineSetting(key, parseResult.data.value);
 
       return PipelineSettingResponseSchema.parse({
         key: setting.key,

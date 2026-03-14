@@ -39,7 +39,7 @@ import {
   ReadyResponseSchema,
   type ReadySchemaHealth,
 } from '@lead-flood/contracts';
-import { Prisma, prisma } from '@lead-flood/db';
+import { Prisma, getScoreQualificationThresholdSetting, prisma } from '@lead-flood/db';
 
 import { buildAuthGuard, type AuthGuardOptions, type VerifyAccessToken } from './auth/guard.js';
 import type { ApiEnv } from './env.js';
@@ -607,19 +607,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         select: { blendedScore: true },
       });
 
-      let qualificationThreshold = 0.5;
-      const thresholdSetting = await prisma.pipelineSetting.findUnique({
-        where: { key: 'scoreQualificationThreshold' },
-        select: { valueJson: true },
-      });
-      if (thresholdSetting?.valueJson !== null && thresholdSetting?.valueJson !== undefined) {
-        const parsed = typeof thresholdSetting.valueJson === 'number'
-          ? thresholdSetting.valueJson
-          : Number(thresholdSetting.valueJson);
-        if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) {
-          qualificationThreshold = parsed;
-        }
-      }
+      const qualificationThreshold = await getScoreQualificationThresholdSetting(0.5);
 
       const restoredStatus: LeadStatus = latestScore
         ? (latestScore.blendedScore >= qualificationThreshold ? 'qualified' : 'scored')
