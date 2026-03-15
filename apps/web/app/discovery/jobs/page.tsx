@@ -334,7 +334,8 @@ export default function JobsPage() {
   const [requestsData, setRequestsData] = useState<JobRequestListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [lastTriggeredRequestId, setLastTriggeredRequestId] = useState<number | null>(null);
+  const [requestsError, setRequestsError] = useState<string | null>(null);
+  const [lastTriggeredRunId, setLastTriggeredRunId] = useState<string | null>(null);
 
   const [seedProfile, setSeedProfile] = useState<'default' | 'small'>('small');
   const [seedMaxTasks, setSeedMaxTasks] = useState(40);
@@ -355,12 +356,28 @@ export default function JobsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [runsResult, requestsResult] = await Promise.all([
+      const [runsResult, requestsResult] = await Promise.allSettled([
         fetchJobRuns(queryFromJobRunFilters(jobsQuery)),
         fetchJobRequests(queryFromJobRequestFilters(DEFAULT_REQUESTS_QUERY)),
       ]);
-      setJobsData(runsResult);
-      setRequestsData(requestsResult);
+
+      if (requestsResult.status === 'fulfilled') {
+        setRequestsData(requestsResult.value);
+        setRequestsError(null);
+      } else {
+        setRequestsData(null);
+        setRequestsError(
+          requestsResult.reason instanceof Error
+            ? requestsResult.reason.message
+            : 'Failed to load job requests',
+        );
+      }
+
+      if (runsResult.status === 'rejected') {
+        throw runsResult.reason;
+      }
+
+      setJobsData(runsResult.value);
     } catch (loadError: unknown) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to load jobs');
     } finally {
@@ -425,7 +442,7 @@ export default function JobsPage() {
       const countries = seedCountries.split(',').map((v) => v.trim()).filter(Boolean);
       const languages = seedLanguages.split(',').map((v) => v.trim()).filter(Boolean);
       const result = await triggerDiscoverySeed({ profile: seedProfile, maxTasks: seedMaxTasks, maxPages: seedMaxPages, bucket: seedBucket || undefined, taskTypes, countries, languages });
-      setLastTriggeredRequestId(result.jobRequestId);
+      setLastTriggeredRunId(result.jobRunId);
       await loadData();
     } catch (runError: unknown) {
       setError(runError instanceof Error ? runError.message : 'Failed to request seed job');
@@ -436,7 +453,7 @@ export default function JobsPage() {
     setError(null);
     try {
       const result = await triggerDiscoveryRun({ maxTasks: runMaxTasks, concurrency: runConcurrency, timeBucket: runTimeBucket || undefined });
-      setLastTriggeredRequestId(result.jobRequestId);
+      setLastTriggeredRunId(result.jobRunId);
       await loadData();
     } catch (runError: unknown) {
       setError(runError instanceof Error ? runError.message : 'Failed to request discovery run');
@@ -636,9 +653,12 @@ export default function JobsPage() {
             Request Run
           </button>
 
-          {lastTriggeredRequestId !== null && (
+          {lastTriggeredRunId !== null && (
             <p className="mt-2 text-[11px] text-muted-foreground/50">
-              Last request: <span className="font-mono font-medium">{lastTriggeredRequestId}</span>
+              Last run:{' '}
+              <Link href={`/discovery/jobs/${lastTriggeredRunId}`} className="font-mono font-medium text-zbooni-teal hover:underline">
+                {lastTriggeredRunId}
+              </Link>
             </p>
           )}
         </div>
@@ -652,11 +672,18 @@ export default function JobsPage() {
           className="flex w-full items-center gap-2 px-5 py-4 text-left transition-colors hover:bg-white/[0.02]"
         >
           <h2 className="text-sm font-bold tracking-tight">Job Requests</h2>
-          <span className="text-[11px] text-muted-foreground/40">({requestsData?.total ?? 0} total)</span>
+          <span className="text-[11px] text-muted-foreground/40">
+            {requestsError ? '(unavailable)' : `(${requestsData?.total ?? 0} total)`}
+          </span>
           <span className="ml-auto text-muted-foreground/30">
             {showRequests ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
           </span>
         </button>
+        {requestsError && (
+          <div className="border-t border-amber-500/20 bg-amber-500/5 px-5 py-3 text-xs text-amber-300/90">
+            Job request history is unavailable: {requestsError}
+          </div>
+        )}
         {showRequests && (
           <div className="border-t border-border/20 overflow-x-auto">
             <table className="w-full text-sm">
@@ -696,6 +723,8 @@ export default function JobsPage() {
                       <td className="px-4 py-2.5 max-w-[200px] truncate font-mono text-xs text-red-400/70">{request.errorText ?? '-'}</td>
                     </tr>
                   ))
+                ) : requestsError ? (
+                  <tr><td colSpan={7} className="px-4 py-6 text-center text-amber-300/90">Job request history is unavailable.</td></tr>
                 ) : (
                   <tr><td colSpan={7} className="px-4 py-6 text-center text-muted-foreground/40">No job requests found</td></tr>
                 )}

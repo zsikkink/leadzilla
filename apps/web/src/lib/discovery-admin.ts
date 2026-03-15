@@ -8,6 +8,9 @@ import {
   JobRunDetailResponseSchema,
   JobRunListQuerySchema,
   ListJobRunsResponseSchema,
+  RunDiscoverySeedRequestSchema,
+  RunDiscoveryTasksRequestSchema,
+  TriggerJobRunResponseSchema,
   type AdminLeadDetailResponse,
   type AdminLeadRow,
   type AdminListLeadsQuery,
@@ -20,8 +23,10 @@ import {
   type ListJobRunsResponse,
   type RunDiscoverySeedRequest,
   type RunDiscoveryTasksRequest,
+  type TriggerJobRunResponse,
 } from '@lead-flood/contracts';
 
+import { getWebEnv } from './env.js';
 import { getSupabaseBrowserClient } from './supabase-client.js';
 
 export type JobRequestType = 'DISCOVERY_SEED' | 'DISCOVERY_RUN';
@@ -58,12 +63,7 @@ export interface JobRequestListResponse {
   total: number;
 }
 
-export interface TriggerJobRequestResponse {
-  jobRequestId: number;
-  status: JobRequestStatus;
-  requestType: JobRequestType;
-  jobRunId: string | null;
-}
+const AUTH_TOKEN_STORAGE_KEY = 'lf_access_token';
 
 const SCORE_WEIGHTS = {
   hasWhatsapp: 0.2,
@@ -117,6 +117,75 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function toIsoString(value: string | Date): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function readStoredAccessToken(): string | null {
+  if (typeof globalThis.localStorage === 'undefined') {
+    return null;
+  }
+
+  const token = globalThis.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+  return typeof token === 'string' && token.trim().length > 0 ? token.trim() : null;
+}
+
+async function getAdminProxyAccessToken(): Promise<string | null> {
+  try {
+    const supabase = getSupabaseBrowserClient();
+    const { data, error } = await supabase.auth.getSession();
+    const accessToken = error ? null : data.session?.access_token?.trim();
+    if (accessToken) {
+      return accessToken;
+    }
+  } catch {
+    // Fall through to stored and dev-only fallback.
+  }
+
+  const storedToken = readStoredAccessToken();
+  if (storedToken) {
+    return storedToken;
+  }
+
+  const env = getWebEnv();
+  if (
+    process.env.NODE_ENV !== 'production' &&
+    env.NEXT_PUBLIC_SUPABASE_URL === 'https://example.supabase.co'
+  ) {
+    return null;
+  }
+
+  throw new Error('Not authenticated');
+}
+
+async function requestAdminProxy<T>(
+  path: string,
+  schema: { parse: (value: unknown) => T },
+  init?: RequestInit,
+): Promise<T> {
+  const accessToken = await getAdminProxyAccessToken();
+  const headers = new Headers(init?.headers);
+  if (accessToken) {
+    headers.set('authorization', `Bearer ${accessToken}`);
+  }
+  if (init?.body !== undefined && !headers.has('content-type')) {
+    headers.set('content-type', 'application/json');
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`/api/admin/${path}`, {
+      ...init,
+      headers,
+    });
+  } catch {
+    throw new Error('Unable to reach admin API');
+  }
+
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error((body as { error?: string } | null)?.error ?? 'Admin request failed');
+  }
+
+  return schema.parse(body);
 }
 
 function mapLeadRow(row: {
@@ -236,33 +305,6 @@ function computeBusinessScore(row: {
     tier: toTier(total),
     contributions,
   };
-}
-
-function toStableJsonString(value: unknown): string {
-  if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => toStableJsonString(entry)).join(',')}]`;
-  }
-
-  const entries = Object.entries(value as Record<string, unknown>)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, entry]) => `${JSON.stringify(key)}:${toStableJsonString(entry)}`);
-
-  return `{${entries.join(',')}}`;
-}
-
-function hashString(input: string): string {
-  let hash = 5381;
-  for (let index = 0; index < input.length; index += 1) {
-    hash = (hash * 33) ^ input.charCodeAt(index);
-  }
-  return Math.abs(hash >>> 0).toString(16);
-}
-
-function buildIdempotencyKey(requestType: JobRequestType, params: unknown): string {
-  return `web:${requestType}:${hashString(toStableJsonString(params))}`;
 }
 
 export function queryFromLeadFilters(query: AdminListLeadsQuery): string {
@@ -788,119 +830,19 @@ export async function fetchAdminSearchTaskDetail(id: string): Promise<AdminSearc
 }
 
 export async function fetchJobRuns(query: string): Promise<ListJobRunsResponse> {
-  const supabase = getSupabaseBrowserClient();
   const parsed = JobRunListQuerySchema.parse(parseQueryString(query));
-  const fromIndex = (parsed.page - 1) * parsed.pageSize;
-  const toIndex = fromIndex + parsed.pageSize - 1;
-
-  let builder = supabase
-    .from('job_runs')
-    .select(
-      'id,job_name,started_at,finished_at,duration_ms,status,params_json,counters_json,resource_json,error_text,created_at,updated_at',
-      { count: 'exact' },
-    )
-    .range(fromIndex, toIndex)
-    .order('started_at', { ascending: false });
-
-  if (parsed.status) {
-    builder = builder.eq('status', parsed.status);
-  }
-  if (parsed.jobName) {
-    builder = builder.ilike('job_name', `%${parsed.jobName}%`);
-  }
-
-  const { data, error, count } = await builder;
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  return ListJobRunsResponseSchema.parse({
-    items: (data ?? []).map((row) => {
-      const item = row as {
-        id: string;
-        job_name: string;
-        started_at: string;
-        finished_at: string | null;
-        duration_ms: number | null;
-        status: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELED';
-        params_json: unknown;
-        counters_json: unknown;
-        resource_json: unknown;
-        error_text: string | null;
-        created_at: string;
-        updated_at: string;
-      };
-
-      return {
-        id: item.id,
-        jobName: item.job_name,
-        startedAt: toIsoString(item.started_at),
-        finishedAt: item.finished_at ? toIsoString(item.finished_at) : null,
-        durationMs: item.duration_ms,
-        status: item.status,
-        paramsJson: item.params_json,
-        countersJson: item.counters_json,
-        resourceJson: item.resource_json,
-        errorText: item.error_text,
-        createdAt: toIsoString(item.created_at),
-        updatedAt: toIsoString(item.updated_at),
-      };
-    }),
-    page: parsed.page,
-    pageSize: parsed.pageSize,
-    total: count ?? 0,
-  });
+  return requestAdminProxy(
+    `jobs/runs${queryFromJobRunFilters(parsed)}`,
+    ListJobRunsResponseSchema,
+  );
 }
 
 export async function fetchJobRunDetail(id: string): Promise<JobRunDetailResponse> {
-  const supabase = getSupabaseBrowserClient();
-
-  const { data, error } = await supabase
-    .from('job_runs')
-    .select(
-      'id,job_name,started_at,finished_at,duration_ms,status,params_json,counters_json,resource_json,error_text,created_at,updated_at',
-    )
-    .eq('id', id)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error(error.message);
-  }
-  if (!data) {
+  const runId = id.trim();
+  if (!runId) {
     throw new Error('Job run not found');
   }
-
-  const run = data as {
-    id: string;
-    job_name: string;
-    started_at: string;
-    finished_at: string | null;
-    duration_ms: number | null;
-    status: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELED';
-    params_json: unknown;
-    counters_json: unknown;
-    resource_json: unknown;
-    error_text: string | null;
-    created_at: string;
-    updated_at: string;
-  };
-
-  return JobRunDetailResponseSchema.parse({
-    run: {
-      id: run.id,
-      jobName: run.job_name,
-      startedAt: toIsoString(run.started_at),
-      finishedAt: run.finished_at ? toIsoString(run.finished_at) : null,
-      durationMs: run.duration_ms,
-      status: run.status,
-      paramsJson: run.params_json,
-      countersJson: run.counters_json,
-      resourceJson: run.resource_json,
-      errorText: run.error_text,
-      createdAt: toIsoString(run.created_at),
-      updatedAt: toIsoString(run.updated_at),
-    },
-  });
+  return requestAdminProxy(`jobs/runs/${encodeURIComponent(runId)}`, JobRunDetailResponseSchema);
 }
 
 export async function fetchJobRequests(query: string): Promise<JobRequestListResponse> {
@@ -977,76 +919,24 @@ export async function fetchJobRequests(query: string): Promise<JobRequestListRes
   };
 }
 
-async function createJobRequest(
-  requestType: JobRequestType,
-  paramsJson: unknown,
-): Promise<TriggerJobRequestResponse> {
-  const supabase = getSupabaseBrowserClient();
-  const { data: userData, error: userError } = await supabase.auth.getUser();
-
-  if (userError) {
-    throw new Error(userError.message);
-  }
-  if (!userData.user) {
-    throw new Error('Not authenticated');
-  }
-
-  const idempotencyKey = buildIdempotencyKey(requestType, paramsJson);
-
-  const { data, error } = await supabase
-    .from('job_requests')
-    .insert({
-      request_type: requestType,
-      requested_by: userData.user.id,
-      params_json: paramsJson,
-      idempotency_key: idempotencyKey,
-    })
-    .select('id,status,request_type,job_run_id')
-    .single();
-
-  if (error && error.code === '23505') {
-    const { data: existing, error: existingError } = await supabase
-      .from('job_requests')
-      .select('id,status,request_type,job_run_id')
-      .eq('idempotency_key', idempotencyKey)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
-
-    if (existingError) {
-      throw new Error(existingError.message);
-    }
-
-    return {
-      jobRequestId: existing.id as number,
-      status: existing.status as JobRequestStatus,
-      requestType: existing.request_type as JobRequestType,
-      jobRunId: (existing.job_run_id as string | null) ?? null,
-    };
-  }
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  return {
-    jobRequestId: data.id as number,
-    status: data.status as JobRequestStatus,
-    requestType: data.request_type as JobRequestType,
-    jobRunId: (data.job_run_id as string | null) ?? null,
-  };
-}
-
 export async function triggerDiscoverySeed(
   payload: RunDiscoverySeedRequest,
-): Promise<TriggerJobRequestResponse> {
-  return createJobRequest('DISCOVERY_SEED', payload);
+): Promise<TriggerJobRunResponse> {
+  const parsed = RunDiscoverySeedRequestSchema.parse(payload);
+  return requestAdminProxy('jobs/discovery/seed', TriggerJobRunResponseSchema, {
+    method: 'POST',
+    body: JSON.stringify(parsed),
+  });
 }
 
 export async function triggerDiscoveryRun(
   payload: RunDiscoveryTasksRequest,
-): Promise<TriggerJobRequestResponse> {
-  return createJobRequest('DISCOVERY_RUN', payload);
+): Promise<TriggerJobRunResponse> {
+  const parsed = RunDiscoveryTasksRequestSchema.parse(payload);
+  return requestAdminProxy('jobs/discovery/run', TriggerJobRunResponseSchema, {
+    method: 'POST',
+    body: JSON.stringify(parsed),
+  });
 }
 
 // ── Scoring Rules ─────────────────────────────────────────────────────────
