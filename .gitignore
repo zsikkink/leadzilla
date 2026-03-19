@@ -27,6 +27,7 @@ pnpm-debug.log*
 
 # OS/IDE
 .DS_Store
+.Rhistory
 .vscode/
 .idea/
 

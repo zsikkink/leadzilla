@@ -112,6 +112,7 @@ pnpm build
 
 ## Documentation
 
+- Current repo-state / handoff: `docs/CURRENT_STATE.md`
 - Canonical docs index: `docs/README.md`
 - Current DB/schema workflow: `docs/PROD_REMOTE_DB_STRATEGY.md`
 - Current runtime DB migration status: `docs/RUNTIME_DB_ACCESS_STATUS.md`

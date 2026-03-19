@@ -2,6 +2,12 @@
 
 Deployment is controlled by GitHub Actions.
 
+> Note
+> This doc still contains a partially historical discovery-console section that
+> describes browser-direct Supabase reads and UI-created `job_requests` as if
+> they were the current flow. For the current discovery/admin boundary and the
+> recommended next sequence, read `docs/CURRENT_STATE.md` first.
+
 For remote Postgres provider setup and SQL-first migration strategy, see `docs/PROD_REMOTE_DB_STRATEGY.md`.
 
 ## CI Workflow
