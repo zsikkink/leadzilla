@@ -4,7 +4,7 @@ import type { OpenAiAdapter } from '@lead-flood/providers';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
-import { classifyError } from '../errors.js';
+import { RetryableError, classifyError } from '../errors.js';
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
 import {
   getMessagingInstructions,
@@ -12,6 +12,7 @@ import {
   getMessagingSystemPrompt,
   isManualApprovalOnlyEnabled,
   loadAutoApproveConfig,
+  loadVerifiedScoreQualificationThreshold,
   shouldAutoApprove,
 } from '../utils/pipeline-settings.js';
 
@@ -26,7 +27,7 @@ import { MESSAGE_SEND_JOB_NAME, MESSAGE_SEND_RETRY_OPTIONS, type MessageSendJobP
 
 export const MESSAGE_GENERATE_JOB_NAME = 'message.generate';
 export const MESSAGE_GENERATE_IDEMPOTENCY_KEY_PATTERN =
-  'message.generate:${leadId}:${scorePredictionId}';
+  'message.generate:${leadId}:${icpProfileId}';
 
 export const MESSAGE_GENERATE_RETRY_OPTIONS: Pick<
   SendOptions,
@@ -38,10 +39,12 @@ export const MESSAGE_GENERATE_RETRY_OPTIONS: Pick<
   deadLetter: 'message.generate.dead_letter',
 };
 
+// Worker execution reloads the current score before eligibility checks,
+// approval, and persistence, so queued jobs do not carry scorePredictionId.
 export interface MessageGenerateJobPayload
   extends Pick<
     GenerateMessageDraftRequest,
-    'leadId' | 'icpProfileId' | 'scorePredictionId' | 'knowledgeEntryIds' | 'promptVersion'
+    'leadId' | 'icpProfileId' | 'knowledgeEntryIds' | 'promptVersion'
   >,
     Partial<Pick<GenerateMessageDraftRequest, 'channel'>> {
   runId: string;
@@ -49,7 +52,6 @@ export interface MessageGenerateJobPayload
   followUpNumber?: number | undefined;
   parentMessageSendId?: string | undefined;
   previouslyPitchedFeatures?: string[] | undefined;
-  autoApprove?: boolean | undefined;
 }
 
 export interface MessageGenerateLogger {
@@ -242,7 +244,7 @@ export async function handleMessageGenerateJob(
   job: Job<MessageGenerateJobPayload>,
   deps?: MessageGenerateJobDependencies,
 ): Promise<void> {
-  const { runId, correlationId, leadId, icpProfileId, scorePredictionId, channel, promptVersion, knowledgeEntryIds } = job.data;
+  const { runId, correlationId, leadId, icpProfileId, channel, promptVersion, knowledgeEntryIds } = job.data;
 
   logger.info(
     {
@@ -252,7 +254,6 @@ export async function handleMessageGenerateJob(
       correlationId: correlationId ?? job.id,
       leadId,
       icpProfileId,
-      scorePredictionId,
     },
     'Started message.generate job',
   );
@@ -260,7 +261,17 @@ export async function handleMessageGenerateJob(
   try {
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
-      select: { id: true, firstName: true, lastName: true, email: true, phone: true, decisionMakerPhone: true, businessId: true, deletedAt: true },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        decisionMakerPhone: true,
+        businessId: true,
+        deletedAt: true,
+        status: true,
+      },
     });
 
     if (!lead) {
@@ -321,6 +332,48 @@ export async function handleMessageGenerateJob(
       }
     }
 
+    const latestScore = await prisma.leadScorePrediction.findFirst({
+      where: { leadId, icpProfileId },
+      orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }],
+      select: { id: true, scoreBand: true, blendedScore: true },
+    });
+
+    if (!latestScore) {
+      logger.warn(
+        { jobId: job.id, leadId, icpProfileId },
+        'No current score is available for the requested ICP profile, skipping message.generate',
+      );
+      await tryFinalizeDiscoveryRun(runId, logger);
+      return;
+    }
+
+    let qualificationThreshold: number;
+    try {
+      qualificationThreshold = await loadVerifiedScoreQualificationThreshold();
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new RetryableError(
+        `Draft generation eligibility could not be verified: ${message}`,
+        error,
+      );
+    }
+
+    if (latestScore.blendedScore < qualificationThreshold) {
+      logger.info(
+        {
+          jobId: job.id,
+          leadId,
+          icpProfileId,
+          latestScoreId: latestScore.id,
+          blendedScore: latestScore.blendedScore,
+          qualificationThreshold,
+        },
+        'Lead is no longer eligible for draft generation, skipping message.generate',
+      );
+      await tryFinalizeDiscoveryRun(runId, logger);
+      return;
+    }
+
     const icpProfile = await prisma.icpProfile.findUnique({
       where: { id: icpProfileId },
       select: { name: true, description: true, featureList: true, metadataJson: true },
@@ -354,15 +407,6 @@ export async function handleMessageGenerateJob(
         })
       : null;
     const preComputedInsights = businessConversion?.businessInsights ?? null;
-
-    const latestScore = scorePredictionId
-      ? await prisma.leadScorePrediction.findUnique({
-          where: { id: scorePredictionId },
-        })
-      : await prisma.leadScorePrediction.findFirst({
-          where: { leadId, icpProfileId },
-          orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }],
-        });
 
     const featuresJson =
       latestSnapshot?.featuresJson && typeof latestSnapshot.featuresJson === 'object'
@@ -453,15 +497,12 @@ export async function handleMessageGenerateJob(
 
     const previouslyPitchedFeatures = job.data.previouslyPitchedFeatures ?? [];
 
-    // Auto-approve: if payload has explicit value, use it; otherwise compute from PipelineSetting
-    let autoApprove: boolean;
-    if (job.data.autoApprove !== undefined) {
-      autoApprove = job.data.autoApprove;
-    } else {
-      const autoApproveConfig = await loadAutoApproveConfig();
-      const blendedScore = latestScore?.blendedScore ?? 0;
-      autoApprove = shouldAutoApprove(autoApproveConfig, blendedScore);
-    }
+    // Final approval state must come from current settings + current score, not
+    // stale queued intent. If auto-approve settings cannot be loaded, the helper
+    // safely defaults to disabled so the draft remains pending.
+    const autoApproveConfig = await loadAutoApproveConfig();
+    const blendedScore = latestScore?.blendedScore ?? 0;
+    let autoApprove = shouldAutoApprove(autoApproveConfig, blendedScore);
     const manualApprovalOnly = await isManualApprovalOnlyEnabled();
     if (manualApprovalOnly) {
       autoApprove = false;
@@ -681,7 +722,7 @@ export async function handleMessageGenerateJob(
       data: {
         leadId,
         icpProfileId,
-        scorePredictionId: scorePredictionId ?? latestScore?.id ?? null,
+        scorePredictionId: latestScore.id,
         promptVersion: promptVersion ?? 'v1',
         generatedByModel,
         groundingKnowledgeIds: knowledgeEntryIds ?? [],
@@ -707,10 +748,15 @@ export async function handleMessageGenerateJob(
       include: { variants: true },
     });
 
-    // Set lead status to 'drafted' if this is the initial message (not a follow-up)
-    if (followUpNumber === 0 && !existingDraftForRetry) {
-      await prisma.lead.update({
-        where: { id: leadId },
+    // If a retry reuses an existing initial draft after draft creation already
+    // succeeded, restore the canonical drafted state without downgrading later
+    // lifecycle states such as messaged/replied/cold.
+    if (followUpNumber === 0 && lead.status === 'qualified') {
+      await prisma.lead.updateMany({
+        where: {
+          id: leadId,
+          status: 'qualified',
+        },
         data: { status: 'drafted' },
       });
     }

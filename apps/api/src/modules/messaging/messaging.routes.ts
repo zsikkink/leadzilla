@@ -18,7 +18,13 @@ import {
   ConversationResponseSchema,
 } from '@lead-flood/contracts';
 
-import { MessagingNotImplementedError } from './messaging.errors.js';
+import {
+  MessagingDraftGenerationIneligibleError,
+  MessagingDraftGenerationUnavailableError,
+  MessagingNotFoundError,
+  MessagingNotImplementedError,
+  MessagingSendIneligibleError,
+} from './messaging.errors.js';
 import { PrismaMessagingRepository } from './messaging.repository.js';
 import {
   buildMessagingService,
@@ -40,6 +46,46 @@ function sendValidationError(reply: FastifyReply, requestId: string, message: st
 }
 
 function handleModuleError(error: unknown, request: FastifyRequest, reply: FastifyReply): boolean {
+  if (error instanceof MessagingNotFoundError) {
+    reply.status(404).send(
+      ErrorResponseSchema.parse({
+        error: error.message,
+        requestId: request.id,
+      }),
+    );
+    return true;
+  }
+
+  if (error instanceof MessagingDraftGenerationIneligibleError) {
+    reply.status(422).send(
+      ErrorResponseSchema.parse({
+        error: error.message,
+        requestId: request.id,
+      }),
+    );
+    return true;
+  }
+
+  if (error instanceof MessagingDraftGenerationUnavailableError) {
+    reply.status(503).send(
+      ErrorResponseSchema.parse({
+        error: error.message,
+        requestId: request.id,
+      }),
+    );
+    return true;
+  }
+
+  if (error instanceof MessagingSendIneligibleError) {
+    reply.status(422).send(
+      ErrorResponseSchema.parse({
+        error: error.message,
+        requestId: request.id,
+      }),
+    );
+    return true;
+  }
+
   if (error instanceof MessagingNotImplementedError) {
     reply.status(501).send(
       ErrorResponseSchema.parse({

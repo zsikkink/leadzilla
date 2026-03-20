@@ -10,6 +10,7 @@ import type {
   FeedbackSummaryResponse,
   FunnelQuery,
   FunnelResponse,
+  GenerateMessageDraftResponse,
   GetLeadResponse,
   IcpProfileResponse,
   ListContactRecoveryItemsQuery,
@@ -239,7 +240,7 @@ export class ApiClient {
     scorePredictionId?: string | undefined;
     channel?: string | undefined;
     promptVersion: string;
-  }): Promise<unknown> {
+  }): Promise<GenerateMessageDraftResponse> {
     return this.request('/v1/messaging/drafts/generate', {
       method: 'POST',
       body: JSON.stringify(data),

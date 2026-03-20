@@ -43,9 +43,12 @@ export const GenerateMessageDraftRequestSchema = z
   })
   .strict();
 
+export const GenerateMessageDraftStatusSchema = z.enum(['QUEUED', 'CREATED', 'EXISTS']);
+
 export const GenerateMessageDraftResponseSchema = z
   .object({
-    draftId: z.string(),
+    status: GenerateMessageDraftStatusSchema,
+    draftId: z.string().min(1).nullable(),
     variantIds: z.array(z.string()),
   })
   .strict();
@@ -207,6 +210,9 @@ export type MessageChannel = z.infer<typeof MessageChannelSchema>;
 export type MessageApprovalStatus = z.infer<typeof MessageApprovalStatusSchema>;
 export type MessageSendStatus = z.infer<typeof MessageSendStatusSchema>;
 export type SendProvider = z.infer<typeof SendProviderSchema>;
+export type GenerateMessageDraftStatus = z.infer<
+  typeof GenerateMessageDraftStatusSchema
+>;
 export type GenerateMessageDraftRequest = z.infer<
   typeof GenerateMessageDraftRequestSchema
 >;
