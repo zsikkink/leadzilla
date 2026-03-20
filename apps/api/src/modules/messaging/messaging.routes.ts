@@ -45,6 +45,24 @@ function sendValidationError(reply: FastifyReply, requestId: string, message: st
   });
 }
 
+function requireAuthenticatedUserId(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): string | null {
+  const userId = request.user?.sub;
+  if (userId) {
+    return userId;
+  }
+
+  reply.status(401).send(
+    ErrorResponseSchema.parse({
+      error: 'Authentication required',
+      requestId: request.id,
+    }),
+  );
+  return null;
+}
+
 function handleModuleError(error: unknown, request: FastifyRequest, reply: FastifyReply): boolean {
   if (error instanceof MessagingNotFoundError) {
     reply.status(404).send(
@@ -176,8 +194,16 @@ export function registerMessagingRoutes(
       return sendValidationError(reply, request.id, 'Invalid approve draft payload');
     }
 
+    const userId = requireAuthenticatedUserId(request, reply);
+    if (!userId) {
+      return;
+    }
+
     try {
-      const result = await service.approveMessageDraft(parsedParams.data.draftId, parsedBody.data);
+      const result = await service.approveMessageDraft(parsedParams.data.draftId, {
+        ...parsedBody.data,
+        approvedByUserId: userId,
+      });
       return MessageDraftResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
@@ -198,8 +224,16 @@ export function registerMessagingRoutes(
       return sendValidationError(reply, request.id, 'Invalid reject draft payload');
     }
 
+    const userId = requireAuthenticatedUserId(request, reply);
+    if (!userId) {
+      return;
+    }
+
     try {
-      const result = await service.rejectMessageDraft(parsedParams.data.draftId, parsedBody.data);
+      const result = await service.rejectMessageDraft(parsedParams.data.draftId, {
+        ...parsedBody.data,
+        rejectedByUserId: userId,
+      });
       return MessageDraftResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {

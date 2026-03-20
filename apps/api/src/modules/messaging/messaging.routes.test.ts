@@ -35,13 +35,62 @@ import {
 } from './messaging.errors.js';
 import { registerMessagingRoutes } from './messaging.routes.js';
 
+function buildDraftResponse(overrides?: Partial<Record<string, unknown>>) {
+  return {
+    id: 'draft_1',
+    leadId: 'lead_1',
+    icpProfileId: 'icp_1',
+    scorePredictionId: 'score_1',
+    promptVersion: 'v2',
+    generatedByModel: 'stub',
+    groundingKnowledgeIds: [],
+    groundingContextJson: null,
+    approvalStatus: 'APPROVED',
+    approvedByUserId: 'user_auth',
+    approvedAt: '2026-03-20T00:00:00.000Z',
+    rejectedReason: null,
+    variants: [
+      {
+        id: 'variant_1',
+        messageDraftId: 'draft_1',
+        variantKey: 'variant_a',
+        channel: 'EMAIL',
+        subject: 'Subject',
+        bodyText: 'Hello',
+        bodyHtml: null,
+        ctaText: null,
+        qualityScore: null,
+        isSelected: true,
+        createdAt: '2026-03-20T00:00:00.000Z',
+        updatedAt: '2026-03-20T00:00:00.000Z',
+      },
+    ],
+    createdAt: '2026-03-20T00:00:00.000Z',
+    updatedAt: '2026-03-20T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
 describe('messaging.routes generate draft rejection handling', () => {
   let app: FastifyInstance;
+  let currentUserId: string | null;
 
   beforeEach(async () => {
     vi.clearAllMocks();
     routeMocks.buildMessagingService.mockReturnValue(routeMocks.service);
+    currentUserId = 'user_auth';
     app = Fastify();
+    app.decorateRequest('user', null);
+    app.addHook('onRequest', async (request) => {
+      request.user = currentUserId
+        ? {
+            sub: currentUserId,
+            email: null,
+            firstName: null,
+            lastName: null,
+          }
+        : null;
+    });
     registerMessagingRoutes(app);
     await app.ready();
   });
@@ -170,6 +219,71 @@ describe('messaging.routes generate draft rejection handling', () => {
       draftId: 'draft_1',
       variantIds: ['variant_1'],
     });
+  });
+
+  it('uses the authenticated user for approval attribution even when the client supplies another id', async () => {
+    routeMocks.service.approveMessageDraft.mockResolvedValue(buildDraftResponse());
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/messaging/drafts/draft_1/approve',
+      payload: {
+        approvedByUserId: 'spoofed_user',
+        selectedVariantId: 'variant_1',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(routeMocks.service.approveMessageDraft).toHaveBeenCalledWith('draft_1', {
+      approvedByUserId: 'user_auth',
+      selectedVariantId: 'variant_1',
+    });
+  });
+
+  it('uses the authenticated user for rejection attribution even when the client supplies another id', async () => {
+    routeMocks.service.rejectMessageDraft.mockResolvedValue(
+      buildDraftResponse({
+        approvalStatus: 'REJECTED',
+        approvedByUserId: null,
+        approvedAt: null,
+        rejectedReason: 'Not a fit',
+      }),
+    );
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/messaging/drafts/draft_1/reject',
+      payload: {
+        rejectedByUserId: 'spoofed_user',
+        rejectedReason: 'Not a fit',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(routeMocks.service.rejectMessageDraft).toHaveBeenCalledWith('draft_1', {
+      rejectedByUserId: 'user_auth',
+      rejectedReason: 'Not a fit',
+    });
+  });
+
+  it('returns 401 for approval when no authenticated user is present', async () => {
+    currentUserId = null;
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/messaging/drafts/draft_1/approve',
+      payload: {
+        approvedByUserId: 'spoofed_user',
+        selectedVariantId: 'variant_1',
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({
+      error: 'Authentication required',
+      requestId: expect.any(String),
+    });
+    expect(routeMocks.service.approveMessageDraft).not.toHaveBeenCalled();
   });
 
   it('returns 422 when the selected variant does not belong to the approved draft', async () => {
