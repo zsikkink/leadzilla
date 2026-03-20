@@ -45,6 +45,8 @@ export interface MessageSendJobDependencies {
   boss?: Pick<PgBoss, 'send'> | undefined;
 }
 
+const LEAD_STATUSES_BEFORE_FIRST_SEND = ['qualified', 'drafted'] as const;
+
 export async function handleMessageSendJob(
   logger: MessageSendLogger,
   job: Job<MessageSendJobPayload>,
@@ -82,7 +84,7 @@ export async function handleMessageSendJob(
     }
 
     if (send.lead.deletedAt) {
-      await markFailed(sendId, 'LEAD_DELETED', 'Lead has been soft-deleted');
+      await markFailedIfQueued(sendId, 'LEAD_DELETED', 'Lead has been soft-deleted');
       logger.warn({ jobId: job.id, sendId, leadId: send.lead.id }, 'Skipping soft-deleted lead');
       return;
     }
@@ -104,7 +106,7 @@ export async function handleMessageSendJob(
 
     if (suppressionEvent) {
       const reason = `Lead suppressed: ${suppressionEvent.eventType} event on ${suppressionEvent.occurredAt.toISOString()}`;
-      await markFailed(sendId, 'SUPPRESSED', reason);
+      await markFailedIfQueued(sendId, 'SUPPRESSED', reason);
       logger.info(
         {
           jobId: job.id,
@@ -134,7 +136,7 @@ export async function handleMessageSendJob(
 
     if (effectiveChannel === 'EMAIL') {
       if (!deps?.resendAdapter || !deps.resendAdapter.isConfigured) {
-        await markFailed(sendId, 'PROVIDER_NOT_CONFIGURED', 'Resend adapter not available or not configured');
+        await markFailedIfQueued(sendId, 'PROVIDER_NOT_CONFIGURED', 'Resend adapter not available or not configured');
         logger.error({ jobId: job.id, sendId }, 'Resend adapter not configured');
         return;
       }
@@ -188,24 +190,25 @@ export async function handleMessageSendJob(
       });
 
       if (result.status === 'success') {
-        const followUpNumber = job.data.followUpNumber ?? 0;
+        const followUpNumber = send.followUpNumber;
         const nextFollowUpAfter = computeNextFollowUpAfter(followUpNumber);
 
-        await prisma.$transaction([
-          prisma.messageSend.update({
-            where: { id: sendId },
-            data: {
-              status: 'SENT',
-              providerMessageId: result.providerMessageId,
-              sentAt: new Date(),
-              followUpNumber,
-              nextFollowUpAfter,
-            },
-          }),
-          ...(followUpNumber === 0
-            ? [prisma.lead.update({ where: { id: send.lead.id }, data: { status: 'messaged' } })]
-            : []),
-        ]);
+        const markedSent = await markSentIfQueued(sendId, {
+          providerMessageId: result.providerMessageId,
+          followUpNumber,
+          nextFollowUpAfter,
+        });
+        if (!markedSent) {
+          logger.warn(
+            { jobId: job.id, sendId, status: send.status },
+            'MessageSend state advanced before success write; skipping stale send update',
+          );
+          return;
+        }
+
+        if (followUpNumber === 0) {
+          await markLeadMessagedIfNotAdvanced(send.lead.id);
+        }
 
         logger.info(
           { jobId: job.id, sendId, providerMessageId: result.providerMessageId, variantKey },
@@ -214,19 +217,30 @@ export async function handleMessageSendJob(
       } else if (result.status === 'retryable_error') {
         throw new RetryableError(`Resend retryable error: ${result.failure.message}`);
       } else {
-        await markFailed(sendId, result.failure.statusCode?.toString() ?? 'TERMINAL', result.failure.message);
+        const markedFailed = await markFailedIfQueued(
+          sendId,
+          result.failure.statusCode?.toString() ?? 'TERMINAL',
+          result.failure.message,
+        );
+        if (!markedFailed) {
+          logger.warn(
+            { jobId: job.id, sendId, status: send.status },
+            'MessageSend state advanced before failure write; skipping stale failure update',
+          );
+          return;
+        }
         logger.error({ jobId: job.id, sendId, failure: result.failure }, 'Email send failed permanently');
       }
     } else if (effectiveChannel === 'WHATSAPP') {
       if (!deps?.trengoAdapter || !deps.trengoAdapter.isConfigured) {
-        await markFailed(sendId, 'PROVIDER_NOT_CONFIGURED', 'Trengo adapter not available or not configured');
+        await markFailedIfQueued(sendId, 'PROVIDER_NOT_CONFIGURED', 'Trengo adapter not available or not configured');
         logger.error({ jobId: job.id, sendId }, 'Trengo adapter not configured');
         return;
       }
 
       // Guard: phone number required for WhatsApp
       if (!send.lead.phone) {
-        await markFailed(sendId, 'MISSING_PHONE', 'Lead has no phone number for WhatsApp delivery');
+        await markFailedIfQueued(sendId, 'MISSING_PHONE', 'Lead has no phone number for WhatsApp delivery');
         logger.error({ jobId: job.id, sendId, leadId: send.leadId }, 'Lead missing phone for WhatsApp');
         return;
       }
@@ -295,26 +309,27 @@ export async function handleMessageSendJob(
           });
 
       if (result.status === 'success') {
-        const followUpNumber = job.data.followUpNumber ?? 0;
+        const followUpNumber = send.followUpNumber;
         const nextFollowUpAfter = computeNextFollowUpAfter(followUpNumber);
         const ticketId = result.ticketId ?? existingTicketId;
 
-        await prisma.$transaction([
-          prisma.messageSend.update({
-            where: { id: sendId },
-            data: {
-              status: 'SENT',
-              providerMessageId: result.providerMessageId,
-              providerConversationId: ticketId,
-              sentAt: new Date(),
-              followUpNumber,
-              nextFollowUpAfter,
-            },
-          }),
-          ...(followUpNumber === 0
-            ? [prisma.lead.update({ where: { id: send.lead.id }, data: { status: 'messaged' } })]
-            : []),
-        ]);
+        const markedSent = await markSentIfQueued(sendId, {
+          providerMessageId: result.providerMessageId,
+          providerConversationId: ticketId,
+          followUpNumber,
+          nextFollowUpAfter,
+        });
+        if (!markedSent) {
+          logger.warn(
+            { jobId: job.id, sendId, status: send.status },
+            'MessageSend state advanced before success write; skipping stale send update',
+          );
+          return;
+        }
+
+        if (followUpNumber === 0) {
+          await markLeadMessagedIfNotAdvanced(send.lead.id);
+        }
 
         logger.info(
           { jobId: job.id, sendId, providerMessageId: result.providerMessageId, variantKey },
@@ -323,11 +338,33 @@ export async function handleMessageSendJob(
       } else if (result.status === 'retryable_error') {
         throw new RetryableError(`Trengo retryable error: ${result.failure.message}`);
       } else {
-        await markFailed(sendId, result.failure.statusCode?.toString() ?? 'TERMINAL', result.failure.message);
+        const markedFailed = await markFailedIfQueued(
+          sendId,
+          result.failure.statusCode?.toString() ?? 'TERMINAL',
+          result.failure.message,
+        );
+        if (!markedFailed) {
+          logger.warn(
+            { jobId: job.id, sendId, status: send.status },
+            'MessageSend state advanced before failure write; skipping stale failure update',
+          );
+          return;
+        }
         logger.error({ jobId: job.id, sendId, failure: result.failure }, 'WhatsApp send failed permanently');
       }
     } else {
-      await markFailed(sendId, 'UNSUPPORTED_CHANNEL', `Unsupported channel: ${effectiveChannel}`);
+      const markedFailed = await markFailedIfQueued(
+        sendId,
+        'UNSUPPORTED_CHANNEL',
+        `Unsupported channel: ${effectiveChannel}`,
+      );
+      if (!markedFailed) {
+        logger.warn(
+          { jobId: job.id, sendId, status: send.status },
+          'MessageSend state advanced before failure write; skipping stale failure update',
+        );
+        return;
+      }
       logger.error({ jobId: job.id, sendId, channel: effectiveChannel }, 'Unsupported message channel');
     }
 
@@ -362,13 +399,63 @@ export async function handleMessageSendJob(
   }
 }
 
-async function markFailed(sendId: string, failureCode: string, failureReason: string): Promise<void> {
-  await prisma.messageSend.update({
-    where: { id: sendId },
+async function markLeadMessagedIfNotAdvanced(leadId: string): Promise<void> {
+  await prisma.lead.updateMany({
+    where: {
+      id: leadId,
+      status: { in: [...LEAD_STATUSES_BEFORE_FIRST_SEND] },
+    },
+    data: {
+      status: 'messaged',
+    },
+  });
+}
+
+async function markSentIfQueued(
+  sendId: string,
+  data: {
+    providerMessageId: string;
+    providerConversationId?: string | null | undefined;
+    followUpNumber: number;
+    nextFollowUpAfter: Date | null;
+  },
+): Promise<boolean> {
+  const result = await prisma.messageSend.updateMany({
+    where: {
+      id: sendId,
+      status: 'QUEUED',
+    },
+    data: {
+      status: 'SENT',
+      providerMessageId: data.providerMessageId,
+      ...(data.providerConversationId !== undefined
+        ? { providerConversationId: data.providerConversationId }
+        : {}),
+      sentAt: new Date(),
+      followUpNumber: data.followUpNumber,
+      nextFollowUpAfter: data.nextFollowUpAfter,
+    },
+  });
+
+  return result.count > 0;
+}
+
+async function markFailedIfQueued(
+  sendId: string,
+  failureCode: string,
+  failureReason: string,
+): Promise<boolean> {
+  const result = await prisma.messageSend.updateMany({
+    where: {
+      id: sendId,
+      status: 'QUEUED',
+    },
     data: {
       status: 'FAILED',
       failureCode,
       failureReason,
     },
   });
+
+  return result.count > 0;
 }
