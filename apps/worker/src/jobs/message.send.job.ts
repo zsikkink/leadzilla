@@ -4,7 +4,7 @@ import type { ResendAdapter, TrengoAdapter } from '@lead-flood/providers';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
-import { RetryableError, classifyError } from '../errors.js';
+import { classifyError } from '../errors.js';
 import type { EmailRateLimiter } from '../messaging/email-rate-limiter.js';
 import type { WhatsAppRateLimiter } from '../messaging/rate-limiter.js';
 import { computeNextFollowUpAfter } from '../utils/jitter.js';
@@ -95,6 +95,11 @@ export async function handleMessageSendJob(
     if (send.lead.deletedAt) {
       await markFailedIfQueued(sendId, 'LEAD_DELETED', 'Lead has been soft-deleted');
       logger.warn({ jobId: job.id, sendId, leadId: send.lead.id }, 'Skipping soft-deleted lead');
+      return;
+    }
+
+    if (send.status === 'SENDING') {
+      logger.info({ jobId: job.id, sendId, status: send.status }, 'MessageSend already claimed for provider send');
       return;
     }
 
@@ -190,6 +195,12 @@ export async function handleMessageSendJob(
         return;
       }
 
+      const claimed = await claimSendIfQueued(sendId);
+      if (!claimed) {
+        logger.info({ jobId: job.id, sendId }, 'MessageSend no longer queued at claim time; skipping provider call');
+        return;
+      }
+
       const result = await deps.resendAdapter.sendEmail({
         to: send.lead.email,
         subject: send.messageVariant.subject ?? `Message from Lead Flood`,
@@ -202,7 +213,7 @@ export async function handleMessageSendJob(
         const followUpNumber = send.followUpNumber;
         const nextFollowUpAfter = computeNextFollowUpAfter(followUpNumber);
 
-        const markedSent = await markSentIfQueued(sendId, {
+        const markedSent = await markSentIfSending(sendId, {
           providerMessageId: result.providerMessageId,
           followUpNumber,
           nextFollowUpAfter,
@@ -241,9 +252,13 @@ export async function handleMessageSendJob(
           `Email sent successfully via Resend (variant=${variantKey})`,
         );
       } else if (result.status === 'retryable_error') {
-        throw new RetryableError(`Resend retryable error: ${result.failure.message}`);
+        logger.warn(
+          { jobId: job.id, sendId, failure: result.failure },
+          'Email send returned retryable error after claim; leaving send in SENDING to avoid duplicate replay',
+        );
+        return;
       } else {
-        const markedFailed = await markFailedIfQueued(
+        const markedFailed = await markFailedIfSending(
           sendId,
           result.failure.statusCode?.toString() ?? 'TERMINAL',
           result.failure.message,
@@ -324,6 +339,12 @@ export async function handleMessageSendJob(
 
       const existingTicketId = previousSend?.providerConversationId ?? null;
 
+      const claimed = await claimSendIfQueued(sendId);
+      if (!claimed) {
+        logger.info({ jobId: job.id, sendId }, 'MessageSend no longer queued at claim time; skipping provider call');
+        return;
+      }
+
       const result = existingTicketId
         ? await deps.trengoAdapter.sendMessage({
             ticketId: existingTicketId,
@@ -339,7 +360,7 @@ export async function handleMessageSendJob(
         const nextFollowUpAfter = computeNextFollowUpAfter(followUpNumber);
         const ticketId = result.ticketId ?? existingTicketId;
 
-        const markedSent = await markSentIfQueued(sendId, {
+        const markedSent = await markSentIfSending(sendId, {
           providerMessageId: result.providerMessageId,
           providerConversationId: ticketId,
           followUpNumber,
@@ -380,9 +401,13 @@ export async function handleMessageSendJob(
           `WhatsApp message sent via Trengo (variant=${variantKey})`,
         );
       } else if (result.status === 'retryable_error') {
-        throw new RetryableError(`Trengo retryable error: ${result.failure.message}`);
+        logger.warn(
+          { jobId: job.id, sendId, failure: result.failure },
+          'WhatsApp send returned retryable error after claim; leaving send in SENDING to avoid duplicate replay',
+        );
+        return;
       } else {
-        const markedFailed = await markFailedIfQueued(
+        const markedFailed = await markFailedIfSending(
           sendId,
           result.failure.statusCode?.toString() ?? 'TERMINAL',
           result.failure.message,
@@ -455,6 +480,40 @@ async function markLeadMessagedIfNotAdvanced(leadId: string): Promise<void> {
   });
 }
 
+async function claimSendIfQueued(sendId: string): Promise<boolean> {
+  const result = await prisma.messageSend.updateMany({
+    where: {
+      id: sendId,
+      status: 'QUEUED',
+    },
+    data: {
+      status: 'SENDING',
+    },
+  });
+
+  return result.count > 0;
+}
+
+async function markFailedIfQueued(
+  sendId: string,
+  failureCode: string,
+  failureReason: string,
+): Promise<boolean> {
+  const result = await prisma.messageSend.updateMany({
+    where: {
+      id: sendId,
+      status: 'QUEUED',
+    },
+    data: {
+      status: 'FAILED',
+      failureCode,
+      failureReason,
+    },
+  });
+
+  return result.count > 0;
+}
+
 async function reconcileSuccessfulSendAfterStateAdvance(
   sendId: string,
   data: {
@@ -515,7 +574,7 @@ async function reconcileSuccessfulSendAfterStateAdvance(
   return send.status;
 }
 
-async function markSentIfQueued(
+async function markSentIfSending(
   sendId: string,
   data: {
     providerMessageId: string;
@@ -527,7 +586,7 @@ async function markSentIfQueued(
   const result = await prisma.messageSend.updateMany({
     where: {
       id: sendId,
-      status: 'QUEUED',
+      status: 'SENDING',
     },
     data: {
       status: 'SENT',
@@ -544,7 +603,7 @@ async function markSentIfQueued(
   return result.count > 0;
 }
 
-async function markFailedIfQueued(
+async function markFailedIfSending(
   sendId: string,
   failureCode: string,
   failureReason: string,
@@ -552,7 +611,7 @@ async function markFailedIfQueued(
   const result = await prisma.messageSend.updateMany({
     where: {
       id: sendId,
-      status: 'QUEUED',
+      status: 'SENDING',
     },
     data: {
       status: 'FAILED',

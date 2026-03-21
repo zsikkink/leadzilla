@@ -128,7 +128,9 @@ describe('handleMessageSendJob stale retry safety', () => {
       } as unknown as MessageSendJobDependencies['trengoAdapter'],
     };
 
-    dbMock.prisma.messageSend.updateMany.mockResolvedValueOnce({ count: 0 });
+    dbMock.prisma.messageSend.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
 
     await handleMessageSendJob(
       logger,
@@ -150,10 +152,19 @@ describe('handleMessageSendJob stale retry safety', () => {
       bodyHtml: null,
       idempotencyKey: 'idem_1',
     });
-    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenCalledWith({
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenNthCalledWith(1, {
       where: {
         id: 'send_1',
         status: 'QUEUED',
+      },
+      data: {
+        status: 'SENDING',
+      },
+    });
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenNthCalledWith(2, {
+      where: {
+        id: 'send_1',
+        status: 'SENDING',
       },
       data: expect.objectContaining({
         status: 'SENT',
@@ -206,6 +217,7 @@ describe('handleMessageSendJob stale retry safety', () => {
     }));
 
     dbMock.prisma.messageSend.updateMany
+      .mockResolvedValueOnce({ count: 1 })
       .mockResolvedValueOnce({ count: 0 })
       .mockResolvedValueOnce({ count: 1 });
 
@@ -223,6 +235,18 @@ describe('handleMessageSendJob stale retry safety', () => {
     );
 
     expect(dbMock.prisma.messageSend.updateMany).toHaveBeenNthCalledWith(2, {
+      where: {
+        id: 'send_1',
+        status: 'SENDING',
+      },
+      data: expect.objectContaining({
+        status: 'SENT',
+        providerMessageId: 'provider_msg_1',
+        sentAt: expect.any(Date),
+        nextFollowUpAfter: expect.any(Date),
+      }),
+    });
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenNthCalledWith(3, {
       where: {
         id: 'send_1',
         status: 'DELIVERED',
@@ -266,8 +290,6 @@ describe('handleMessageSendJob stale retry safety', () => {
       } as unknown as MessageSendJobDependencies['trengoAdapter'],
     };
 
-    dbMock.prisma.messageSend.updateMany.mockResolvedValueOnce({ count: 0 });
-
     await handleMessageSendJob(
       logger,
       makeJob({
@@ -287,6 +309,25 @@ describe('handleMessageSendJob stale retry safety', () => {
       bodyText: 'Body copy',
       bodyHtml: null,
       idempotencyKey: 'idem_1',
+    });
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        id: 'send_1',
+        status: 'QUEUED',
+      },
+      data: {
+        status: 'SENDING',
+      },
+    });
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenNthCalledWith(2, {
+      where: {
+        id: 'send_1',
+        status: 'SENDING',
+      },
+      data: expect.objectContaining({
+        status: 'SENT',
+        providerMessageId: 'provider_msg_1',
+      }),
     });
   });
 
@@ -326,6 +367,7 @@ describe('handleMessageSendJob stale retry safety', () => {
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(null);
     dbMock.prisma.messageSend.updateMany
+      .mockResolvedValueOnce({ count: 1 })
       .mockResolvedValueOnce({ count: 0 })
       .mockResolvedValueOnce({ count: 1 });
 
@@ -368,6 +410,20 @@ describe('handleMessageSendJob stale retry safety', () => {
     expect(dbMock.prisma.messageSend.updateMany).toHaveBeenNthCalledWith(2, {
       where: {
         id: 'send_1',
+        status: 'SENDING',
+      },
+      data: {
+        status: 'SENT',
+        providerMessageId: 'provider_msg_wa_1',
+        providerConversationId: 'ticket_42',
+        sentAt: expect.any(Date),
+        followUpNumber: 0,
+        nextFollowUpAfter: expect.any(Date),
+      },
+    });
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenNthCalledWith(3, {
+      where: {
+        id: 'send_1',
         status: 'REPLIED',
       },
       data: {
@@ -402,7 +458,9 @@ describe('handleMessageSendJob stale retry safety', () => {
       },
     });
 
-    dbMock.prisma.messageSend.updateMany.mockResolvedValueOnce({ count: 0 });
+    dbMock.prisma.messageSend.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
 
     await handleMessageSendJob(
       logger,
@@ -417,10 +475,10 @@ describe('handleMessageSendJob stale retry safety', () => {
       makeDeps(sendEmail),
     );
 
-    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenCalledWith({
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenNthCalledWith(2, {
       where: {
         id: 'send_1',
-        status: 'QUEUED',
+        status: 'SENDING',
       },
       data: {
         status: 'FAILED',
@@ -431,6 +489,111 @@ describe('handleMessageSendJob stale retry safety', () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ sendId: 'send_1' }),
       'MessageSend state advanced before failure write; skipping stale failure update',
+    );
+  });
+
+  it('no-ops without calling the provider when a retry sees SENDING', async () => {
+    dbMock.prisma.messageSend.findUnique.mockResolvedValueOnce({
+      id: 'send_1',
+      leadId: 'lead_1',
+      status: 'SENDING',
+      channel: 'EMAIL',
+      followUpNumber: 0,
+      idempotencyKey: 'idem_1',
+      messageVariant: {
+        variantKey: 'variant_a',
+        subject: 'Hello',
+        bodyText: 'Body copy',
+        bodyHtml: null,
+      },
+      lead: {
+        id: 'lead_1',
+        email: 'ada@example.com',
+        phone: null,
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+        deletedAt: null,
+      },
+    });
+
+    const sendEmail = vi.fn(async () => ({
+      status: 'success' as const,
+      providerMessageId: 'provider_msg_1',
+    }));
+
+    await handleMessageSendJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        sendId: 'send_1',
+        messageDraftId: 'draft_1',
+        messageVariantId: 'variant_1',
+        idempotencyKey: 'idem_1',
+        channel: 'EMAIL',
+      }),
+      makeDeps(sendEmail),
+    );
+
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(dbMock.prisma.messageSend.updateMany).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ sendId: 'send_1', status: 'SENDING' }),
+      'MessageSend already claimed for provider send',
+    );
+  });
+
+  it('leaves the send in SENDING on retryable provider errors after claim', async () => {
+    const sendEmail = vi.fn(async () => ({
+      status: 'retryable_error' as const,
+      failure: {
+        classification: 'retryable' as const,
+        statusCode: 503,
+        message: 'temporary outage',
+        raw: null,
+      },
+    }));
+
+    const deps = {
+      resendAdapter: {
+        isConfigured: true,
+        sendEmail,
+      } as unknown as MessageSendJobDependencies['resendAdapter'],
+      trengoAdapter: {
+        isConfigured: true,
+        sendMessage: vi.fn(),
+        sendTemplateMessage: vi.fn(),
+      } as unknown as MessageSendJobDependencies['trengoAdapter'],
+    };
+
+    dbMock.prisma.messageSend.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    await handleMessageSendJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        sendId: 'send_1',
+        messageDraftId: 'draft_1',
+        messageVariantId: 'variant_1',
+        idempotencyKey: 'idem_1',
+        channel: 'EMAIL',
+      }),
+      deps,
+    );
+
+    expect(sendEmail).toHaveBeenCalled();
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenCalledTimes(1);
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'send_1',
+        status: 'QUEUED',
+      },
+      data: {
+        status: 'SENDING',
+      },
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ sendId: 'send_1' }),
+      'Email send returned retryable error after claim; leaving send in SENDING to avoid duplicate replay',
     );
   });
 });

@@ -1,0 +1,2 @@
+ALTER TYPE "public"."MessageSendStatus"
+ADD VALUE IF NOT EXISTS 'SENDING';

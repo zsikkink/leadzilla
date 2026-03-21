@@ -11,6 +11,7 @@ export const MessageApprovalStatusSchema = z.enum([
 
 export const MessageSendStatusSchema = z.enum([
   'QUEUED',
+  'SENDING',
   'SENT',
   'DELIVERED',
   'REPLIED',
