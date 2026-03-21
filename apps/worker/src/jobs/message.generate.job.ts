@@ -245,6 +245,7 @@ export async function handleMessageGenerateJob(
   deps?: MessageGenerateJobDependencies,
 ): Promise<void> {
   const { runId, correlationId, leadId, icpProfileId, channel, promptVersion, knowledgeEntryIds } = job.data;
+  const followUpNumber = job.data.followUpNumber ?? 0;
 
   logger.info(
     {
@@ -276,17 +277,32 @@ export async function handleMessageGenerateJob(
 
     if (!lead) {
       logger.error({ jobId: job.id, leadId }, 'Lead not found for message generation');
+      await tryFinalizeDiscoveryRun(runId, logger);
       return;
     }
 
     if (lead.deletedAt) {
       logger.warn({ jobId: job.id, leadId }, 'Skipping soft-deleted lead');
+      await tryFinalizeDiscoveryRun(runId, logger);
+      return;
+    }
+
+    const leadStatusEligibleForGeneration =
+      followUpNumber === 0
+        ? lead.status === 'qualified' || lead.status === 'drafted'
+        : lead.status === 'messaged' || lead.status === 'replied';
+
+    if (!leadStatusEligibleForGeneration) {
+      logger.info(
+        { jobId: job.id, leadId, leadStatus: lead.status, followUpNumber },
+        'Lead is no longer in an eligible lifecycle state for message generation, skipping message.generate',
+      );
+      await tryFinalizeDiscoveryRun(runId, logger);
       return;
     }
 
     // Cross-ICP dedup: skip if this lead already has an active message from a DIFFERENT ICP.
     // Follow-ups (followUpNumber > 0) are explicitly chained from the parent — skip dedup for them.
-    const followUpNumber = job.data.followUpNumber ?? 0;
     if (followUpNumber === 0) {
       const existingDraft = await prisma.messageDraft.findFirst({
         where: {
@@ -347,6 +363,75 @@ export async function handleMessageGenerateJob(
       return;
     }
 
+    const maybeEnqueueSendForAutoApprovedDraft = async (
+      draft: {
+        id: string;
+        approvalStatus: 'PENDING' | 'APPROVED' | 'REJECTED' | 'AUTO_APPROVED';
+        variants: Array<{
+          id: string;
+          channel: 'EMAIL' | 'WHATSAPP';
+          isSelected: boolean;
+        }>;
+      },
+    ): Promise<void> => {
+      if (draft.approvalStatus !== 'AUTO_APPROVED' || !deps?.boss) {
+        return;
+      }
+
+      const selectedVariant = draft.variants.find((variant) => variant.isSelected) ?? draft.variants[0];
+      if (!selectedVariant) {
+        return;
+      }
+
+      const existingSendForDraft = await prisma.messageSend.findFirst({
+        where: { messageDraftId: draft.id },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      if (existingSendForDraft) {
+        logger.info(
+          { jobId: job.id, sendId: existingSendForDraft.id, draftId: draft.id },
+          'MessageSend already exists for draft, skipping',
+        );
+        return;
+      }
+
+      const sendRecord = await prisma.messageSend.create({
+        data: {
+          leadId,
+          messageDraftId: draft.id,
+          messageVariantId: selectedVariant.id,
+          channel: selectedVariant.channel,
+          provider: selectedVariant.channel === 'WHATSAPP' ? 'TRENGO' : 'RESEND',
+          status: 'QUEUED',
+          idempotencyKey: `followup:${leadId}:${draft.id}:${selectedVariant.id}`,
+          followUpNumber,
+        },
+      });
+
+      await deps.boss.send(
+        MESSAGE_SEND_JOB_NAME,
+        {
+          runId: `message.send:${sendRecord.id}`,
+          sendId: sendRecord.id,
+          messageDraftId: draft.id,
+          messageVariantId: selectedVariant.id,
+          idempotencyKey: sendRecord.idempotencyKey,
+          channel: selectedVariant.channel,
+          followUpNumber,
+          correlationId: correlationId ?? job.id,
+        } satisfies MessageSendJobPayload,
+        {
+          singletonKey: `message.send:${sendRecord.id}`,
+          ...MESSAGE_SEND_RETRY_OPTIONS,
+        },
+      );
+
+      logger.info(
+        { jobId: job.id, draftId: draft.id, sendId: sendRecord.id, followUpNumber },
+        'Auto-approved draft, enqueued message.send',
+      );
+    };
+
     let qualificationThreshold: number;
     try {
       qualificationThreshold = await loadVerifiedScoreQualificationThreshold();
@@ -369,6 +454,39 @@ export async function handleMessageGenerateJob(
           qualificationThreshold,
         },
         'Lead is no longer eligible for draft generation, skipping message.generate',
+      );
+      await tryFinalizeDiscoveryRun(runId, logger);
+      return;
+    }
+
+    const existingDraftForRetry = await prisma.messageDraft.findFirst({
+      where: { leadId, icpProfileId, followUpNumber },
+      include: { variants: true },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+
+    if (existingDraftForRetry) {
+      if (followUpNumber === 0 && lead.status === 'qualified') {
+        await prisma.lead.updateMany({
+          where: {
+            id: leadId,
+            status: 'qualified',
+          },
+          data: { status: 'drafted' },
+        });
+      }
+
+      await maybeEnqueueSendForAutoApprovedDraft(existingDraftForRetry);
+
+      logger.info(
+        {
+          jobId: job.id,
+          leadId,
+          draftId: existingDraftForRetry.id,
+          followUpNumber,
+          approvalStatus: existingDraftForRetry.approvalStatus,
+        },
+        'Existing message draft already present, skipping regeneration',
       );
       await tryFinalizeDiscoveryRun(runId, logger);
       return;
@@ -713,15 +831,7 @@ export async function handleMessageGenerateJob(
       generatedByModel = 'fallback-template';
     }
 
-    // Idempotent draft creation: if a draft already exists for this lead+ICP+followUp
-    // combination (e.g. from a retry), reuse it instead of creating a duplicate.
-    const existingDraftForRetry = await prisma.messageDraft.findFirst({
-      where: { leadId, icpProfileId, followUpNumber },
-      include: { variants: true },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    const draft = existingDraftForRetry ?? await prisma.messageDraft.create({
+    const draft = await prisma.messageDraft.create({
       data: {
         leadId,
         icpProfileId,
@@ -764,59 +874,7 @@ export async function handleMessageGenerateJob(
       });
     }
 
-    // Auto-send for follow-ups
-    if (autoApprove && deps?.boss) {
-      const selectedVariant = draft.variants[0];
-      if (selectedVariant) {
-        // Idempotent: skip if MessageSend already exists for this draft (crash-retry safety)
-        const existingSendForDraft = await prisma.messageSend.findFirst({
-          where: { messageDraftId: draft.id },
-        });
-        if (existingSendForDraft) {
-          logger.info(
-            { jobId: job.id, sendId: existingSendForDraft.id, draftId: draft.id },
-            'MessageSend already exists for draft, skipping',
-          );
-          return;
-        }
-
-        const sendRecord = await prisma.messageSend.create({
-          data: {
-            leadId,
-            messageDraftId: draft.id,
-            messageVariantId: selectedVariant.id,
-            channel: selectedVariant.channel,
-            provider: selectedVariant.channel === 'WHATSAPP' ? 'TRENGO' : 'RESEND',
-            status: 'QUEUED',
-            idempotencyKey: `followup:${leadId}:${draft.id}:${selectedVariant.id}`,
-            followUpNumber,
-          },
-        });
-
-        await deps.boss.send(
-          MESSAGE_SEND_JOB_NAME,
-          {
-            runId: `message.send:${sendRecord.id}`,
-            sendId: sendRecord.id,
-            messageDraftId: draft.id,
-            messageVariantId: selectedVariant.id,
-            idempotencyKey: sendRecord.idempotencyKey,
-            channel: selectedVariant.channel,
-            followUpNumber,
-            correlationId: correlationId ?? job.id,
-          } satisfies MessageSendJobPayload,
-          {
-            singletonKey: `message.send:${sendRecord.id}`,
-            ...MESSAGE_SEND_RETRY_OPTIONS,
-          },
-        );
-
-        logger.info(
-          { jobId: job.id, draftId: draft.id, sendId: sendRecord.id, followUpNumber },
-          'Auto-approved follow-up, enqueued message.send',
-        );
-      }
-    }
+    await maybeEnqueueSendForAutoApprovedDraft(draft);
 
     logger.info(
       {

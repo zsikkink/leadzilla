@@ -132,11 +132,13 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
     dbMock.prisma.leadEnrichmentRecord.findFirst.mockResolvedValue(null);
     dbMock.prisma.messageDraft.create.mockResolvedValue({
       id: 'draft_1',
+      approvalStatus: 'PENDING',
       variants: [
         {
           id: 'variant_1',
           channel: 'EMAIL',
           variantKey: 'variant_a',
+          isSelected: false,
         },
       ],
     });
@@ -358,6 +360,179 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
     );
   });
 
+  it('skips stale follow-up generation when the lead is no longer in a follow-up-eligible state', async () => {
+    dbMock.prisma.lead.findUnique.mockResolvedValue({
+      id: 'lead_1',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@example.com',
+      phone: null,
+      decisionMakerPhone: null,
+      businessId: null,
+      deletedAt: null,
+      status: 'cold',
+    });
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        followUpNumber: 1,
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+      }),
+    );
+
+    expect(dbMock.prisma.leadScorePrediction.findFirst).not.toHaveBeenCalled();
+    expect(dbMock.prisma.messageDraft.create).not.toHaveBeenCalled();
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
+  });
+
+  it('does not auto-send a reused pending draft on retry', async () => {
+    dbMock.prisma.lead.findUnique.mockResolvedValue({
+      id: 'lead_1',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@example.com',
+      phone: '+15555550123',
+      decisionMakerPhone: '+15555550123',
+      businessId: null,
+      deletedAt: null,
+      status: 'messaged',
+    });
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
+      id: 'score_current',
+      scoreBand: 'HIGH',
+      blendedScore: 0.91,
+    });
+    dbMock.prisma.messageDraft.findFirst.mockResolvedValue({
+      id: 'draft_existing',
+      approvalStatus: 'PENDING',
+      variants: [
+        {
+          id: 'variant_existing',
+          channel: 'WHATSAPP',
+          variantKey: 'variant_a',
+          isSelected: false,
+        },
+      ],
+    });
+
+    const openAiAdapter = {
+      isConfigured: true,
+      generateMessageVariants: vi.fn(),
+    };
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        followUpNumber: 1,
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+      }),
+      {
+        openAiAdapter: openAiAdapter as never,
+        boss: { send: vi.fn() },
+      },
+    );
+
+    expect(openAiAdapter.generateMessageVariants).not.toHaveBeenCalled();
+    expect(pipelineSettingsMock.loadAutoApproveConfig).not.toHaveBeenCalled();
+    expect(dbMock.prisma.messageSend.create).not.toHaveBeenCalled();
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
+  });
+
+  it('heals a missing send for a reused auto-approved draft without regenerating content', async () => {
+    dbMock.prisma.lead.findUnique.mockResolvedValue({
+      id: 'lead_1',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@example.com',
+      phone: '+15555550123',
+      decisionMakerPhone: '+15555550123',
+      businessId: null,
+      deletedAt: null,
+      status: 'messaged',
+    });
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
+      id: 'score_current',
+      scoreBand: 'HIGH',
+      blendedScore: 0.91,
+    });
+    dbMock.prisma.messageDraft.findFirst.mockResolvedValue({
+      id: 'draft_existing',
+      approvalStatus: 'AUTO_APPROVED',
+      variants: [
+        {
+          id: 'variant_existing',
+          channel: 'WHATSAPP',
+          variantKey: 'variant_a',
+          isSelected: true,
+        },
+      ],
+    });
+    dbMock.prisma.messageSend.create.mockResolvedValue({
+      id: 'send_existing',
+      idempotencyKey: 'followup:lead_1:draft_existing:variant_existing',
+    });
+
+    const openAiAdapter = {
+      isConfigured: true,
+      generateMessageVariants: vi.fn(),
+    };
+    const boss = { send: vi.fn().mockResolvedValue(undefined) };
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        followUpNumber: 1,
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+      }),
+      {
+        openAiAdapter: openAiAdapter as never,
+        boss,
+      },
+    );
+
+    expect(openAiAdapter.generateMessageVariants).not.toHaveBeenCalled();
+    expect(pipelineSettingsMock.loadAutoApproveConfig).not.toHaveBeenCalled();
+    expect(dbMock.prisma.messageSend.create).toHaveBeenCalledWith({
+      data: {
+        leadId: 'lead_1',
+        messageDraftId: 'draft_existing',
+        messageVariantId: 'variant_existing',
+        channel: 'WHATSAPP',
+        provider: 'TRENGO',
+        status: 'QUEUED',
+        idempotencyKey: 'followup:lead_1:draft_existing:variant_existing',
+        followUpNumber: 1,
+      },
+    });
+    expect(boss.send).toHaveBeenCalledWith(
+      'message.send',
+      expect.objectContaining({
+        sendId: 'send_existing',
+        messageDraftId: 'draft_existing',
+        messageVariantId: 'variant_existing',
+        channel: 'WHATSAPP',
+        followUpNumber: 1,
+      }),
+      expect.objectContaining({
+        singletonKey: 'message.send:send_existing',
+      }),
+    );
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
+  });
+
   it('restores drafted status when retry reuses an existing initial draft', async () => {
     dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
       id: 'score_current',
@@ -368,11 +543,13 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({
         id: 'draft_existing',
+        approvalStatus: 'PENDING',
         variants: [
           {
             id: 'variant_existing',
             channel: 'EMAIL',
             variantKey: 'variant_a',
+            isSelected: false,
           },
         ],
       });
