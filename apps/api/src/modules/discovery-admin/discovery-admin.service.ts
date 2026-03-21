@@ -16,6 +16,8 @@ import type {
 import { DiscoveryAdminNotImplementedError } from './discovery-admin.errors.js';
 import type {
   CancelDiscoveryRunResult,
+  DiscoveryAdminListJobRequestsQuery,
+  DiscoveryAdminListJobRequestsResponse,
   DiscoveryAdminRepository,
 } from './discovery-admin.repository.js';
 
@@ -31,9 +33,13 @@ export interface DiscoveryAdminService {
   getSearchTaskById(id: string): Promise<AdminSearchTaskDetailResponse>;
   triggerDiscoverySeed(input: RunDiscoverySeedRequest): Promise<TriggerJobRunResponse>;
   triggerDiscoveryTaskRun(input: RunDiscoveryTasksRequest): Promise<TriggerJobRunResponse>;
+  listJobRequests(query: DiscoveryAdminListJobRequestsQuery): Promise<DiscoveryAdminListJobRequestsResponse>;
   listJobRuns(query: JobRunListQuery): Promise<ListJobRunsResponse>;
   getJobRunById(id: string): Promise<JobRunDetailResponse>;
-  cancelDiscoveryRun(id: string): Promise<CancelDiscoveryRunResult>;
+  cancelDiscoveryRun(
+    id: string,
+    requestedByUserId?: string | undefined,
+  ): Promise<CancelDiscoveryRunResult>;
   getDiscoveryRunDetail(id: string): Promise<Awaited<ReturnType<DiscoveryAdminRepository['getDiscoveryRunDetail']>>>;
 }
 
@@ -66,14 +72,17 @@ export function buildDiscoveryAdminService(
       }
       return dependencies.triggerDiscoveryTaskRun(input);
     },
+    async listJobRequests(query) {
+      return repository.listJobRequests(query);
+    },
     async listJobRuns(query) {
       return repository.listJobRuns(query);
     },
     async getJobRunById(id) {
       return repository.getJobRunById(id);
     },
-    async cancelDiscoveryRun(id) {
-      return repository.cancelDiscoveryRun(id);
+    async cancelDiscoveryRun(id, requestedByUserId) {
+      return repository.cancelDiscoveryRun(id, requestedByUserId);
     },
     async getDiscoveryRunDetail(id) {
       return repository.getDiscoveryRunDetail(id);

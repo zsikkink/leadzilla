@@ -336,14 +336,60 @@ export interface CancelDiscoveryRunResult {
   cancelledPendingJobsCount: number;
 }
 
+export type DiscoveryAdminJobRequestType = 'DISCOVERY_SEED' | 'DISCOVERY_RUN';
+export type DiscoveryAdminJobRequestStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELED';
+
+export interface DiscoveryAdminJobRequestRow {
+  id: number;
+  requestType: DiscoveryAdminJobRequestType;
+  status: DiscoveryAdminJobRequestStatus;
+  paramsJson: unknown;
+  requestedBy: string;
+  claimedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  claimedAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  errorText: string | null;
+  jobRunId: string | null;
+  idempotencyKey: string | null;
+}
+
+export interface DiscoveryAdminListJobRequestsQuery {
+  page: number;
+  pageSize: number;
+  status?: DiscoveryAdminJobRequestStatus | undefined;
+  requestType?: DiscoveryAdminJobRequestType | undefined;
+}
+
+export interface DiscoveryAdminListJobRequestsResponse {
+  items: DiscoveryAdminJobRequestRow[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+function toIsoString(value: Date | string | null): string | null {
+  if (value === null) {
+    return null;
+  }
+
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
 export interface DiscoveryAdminRepository {
   listLeads(query: AdminListLeadsQuery): Promise<AdminListLeadsResponse>;
   getLeadById(id: string): Promise<AdminLeadDetailResponse>;
   listSearchTasks(query: AdminListSearchTasksQuery): Promise<AdminListSearchTasksResponse>;
   getSearchTaskById(id: string): Promise<AdminSearchTaskDetailResponse>;
+  listJobRequests(query: DiscoveryAdminListJobRequestsQuery): Promise<DiscoveryAdminListJobRequestsResponse>;
   listJobRuns(query: JobRunListQuery): Promise<ListJobRunsResponse>;
   getJobRunById(id: string): Promise<JobRunDetailResponse>;
-  cancelDiscoveryRun(id: string): Promise<CancelDiscoveryRunResult>;
+  cancelDiscoveryRun(
+    id: string,
+    requestedByUserId?: string | undefined,
+  ): Promise<CancelDiscoveryRunResult>;
   getDiscoveryRunDetail(id: string): Promise<{
     run: {
       id: string;
@@ -536,6 +582,103 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
     };
   }
 
+  async listJobRequests(
+    query: DiscoveryAdminListJobRequestsQuery,
+  ): Promise<DiscoveryAdminListJobRequestsResponse> {
+    const filters: string[] = [];
+    const params: Array<string | number> = [];
+
+    if (query.status) {
+      params.push(query.status);
+      filters.push(`status = $${params.length}`);
+    }
+
+    if (query.requestType) {
+      params.push(query.requestType);
+      filters.push(`request_type = $${params.length}`);
+    }
+
+    const whereClause = filters.length > 0 ? `where ${filters.join(' and ')}` : '';
+    const offset = (query.page - 1) * query.pageSize;
+
+    const countRows = await prisma.$queryRawUnsafe<Array<{ total: number }>>(
+      `
+        select count(*)::int as total
+        from public.job_requests
+        ${whereClause}
+      `,
+      ...params,
+    );
+
+    const rows = await prisma.$queryRawUnsafe<
+      Array<{
+        id: number;
+        request_type: DiscoveryAdminJobRequestType;
+        status: DiscoveryAdminJobRequestStatus;
+        params_json: unknown;
+        requested_by: string;
+        claimed_by: string | null;
+        created_at: Date | string;
+        updated_at: Date | string;
+        claimed_at: Date | string | null;
+        started_at: Date | string | null;
+        finished_at: Date | string | null;
+        error_text: string | null;
+        job_run_id: string | null;
+        idempotency_key: string | null;
+      }>
+    >(
+      `
+        select
+          id,
+          request_type,
+          status,
+          params_json,
+          requested_by,
+          claimed_by,
+          created_at,
+          updated_at,
+          claimed_at,
+          started_at,
+          finished_at,
+          error_text,
+          job_run_id,
+          idempotency_key
+        from public.job_requests
+        ${whereClause}
+        order by created_at desc, id desc
+        limit $${params.length + 1}
+        offset $${params.length + 2}
+      `,
+      ...params,
+      query.pageSize,
+      offset,
+    );
+
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        requestType: row.request_type,
+        status: row.status,
+        paramsJson: row.params_json,
+        requestedBy: row.requested_by,
+        claimedBy: row.claimed_by,
+        createdAt: toIsoString(row.created_at)!,
+        updatedAt: toIsoString(row.updated_at)!,
+        claimedAt: toIsoString(row.claimed_at),
+        startedAt: toIsoString(row.started_at),
+        finishedAt: toIsoString(row.finished_at),
+        errorText: row.error_text,
+        jobRunId: row.job_run_id,
+        idempotencyKey: row.idempotency_key,
+      })),
+      page: query.page,
+      pageSize: query.pageSize,
+      total: countRows[0]?.total ?? 0,
+    };
+  }
+
+
   async listJobRuns(query: JobRunListQuery): Promise<ListJobRunsResponse> {
     const where: Prisma.JobRunWhereInput = {
       ...(query.jobName ? { jobName: query.jobName } : {}),
@@ -599,9 +742,22 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
     };
   }
 
-  async cancelDiscoveryRun(id: string): Promise<CancelDiscoveryRunResult> {
-    const run = await prisma.jobExecution.findUnique({
-      where: { id },
+  async cancelDiscoveryRun(
+    id: string,
+    requestedByUserId?: string | undefined,
+  ): Promise<CancelDiscoveryRunResult> {
+    const run = await prisma.jobExecution.findFirst({
+      where: {
+        id,
+        ...(requestedByUserId
+          ? {
+              payload: {
+                path: ['requestedByUserId'],
+                equals: requestedByUserId,
+              },
+            }
+          : {}),
+      },
       select: { status: true, result: true },
     });
 
@@ -713,8 +869,18 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
     } catch {
       // Race-safe fallback: if another worker finalized the run concurrently,
       // return a deterministic non-500 cancel outcome.
-      const latest = await prisma.jobExecution.findUnique({
-        where: { id },
+      const latest = await prisma.jobExecution.findFirst({
+        where: {
+          id,
+          ...(requestedByUserId
+            ? {
+                payload: {
+                  path: ['requestedByUserId'],
+                  equals: requestedByUserId,
+                },
+              }
+            : {}),
+        },
         select: { status: true },
       });
       if (latest?.status === 'cancelled') {

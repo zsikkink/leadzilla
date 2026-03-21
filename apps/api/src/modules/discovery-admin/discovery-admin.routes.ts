@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   AdminLeadDetailResponseSchema,
@@ -28,6 +27,7 @@ import {
   DiscoveryAdminNotFoundError,
   DiscoveryAdminNotImplementedError,
 } from './discovery-admin.errors.js';
+import { requireDiscoveryAdminAccess } from './discovery-admin.auth.js';
 import { PrismaDiscoveryAdminRepository } from './discovery-admin.repository.js';
 import { buildDiscoveryAdminService } from './discovery-admin.service.js';
 
@@ -35,6 +35,24 @@ export interface DiscoveryAdminRouteDependencies {
   adminApiKey?: string;
   triggerDiscoverySeedJob?: (input: RunDiscoverySeedRequest) => Promise<TriggerJobRunResponse>;
   triggerDiscoveryTaskRun?: (input: RunDiscoveryTasksRequest) => Promise<TriggerJobRunResponse>;
+}
+
+function requireAuthenticatedUserId(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): string | null {
+  const userId = request.user?.sub;
+  if (userId) {
+    return userId;
+  }
+
+  reply.status(401).send(
+    ErrorResponseSchema.parse({
+      error: 'Authentication required',
+      requestId: request.id,
+    }),
+  );
+  return null;
 }
 
 function sendValidationError(reply: FastifyReply, requestId: string, message: string) {
@@ -45,42 +63,43 @@ function sendValidationError(reply: FastifyReply, requestId: string, message: st
   });
 }
 
-function requireAdminKey(
-  request: FastifyRequest,
-  reply: FastifyReply,
-  adminApiKey: string | undefined,
-): boolean {
-  if (!adminApiKey) {
-    reply.status(503).send(
-      ErrorResponseSchema.parse({
-        error: 'Admin API key not configured',
-        requestId: request.id,
-      }),
-    );
-    return false;
-  }
-
-  const provided = request.headers['x-admin-key'];
-  const candidate = Array.isArray(provided) ? (provided[0] ?? '') : (provided ?? '');
-
-  if (
-    candidate.length === adminApiKey.length &&
-    timingSafeEqual(Buffer.from(candidate, 'utf8'), Buffer.from(adminApiKey, 'utf8'))
-  ) {
-    return true;
-  }
-
-  reply.status(401).send(
-    ErrorResponseSchema.parse({
-      error: 'Unauthorized',
-      requestId: request.id,
-    }),
-  );
-  return false;
-}
-
 const DiscoveryRunIdParamsSchema = z.object({ id: z.string().min(1) }).strict();
-
+const JobRequestTypeSchema = z.enum(['DISCOVERY_SEED', 'DISCOVERY_RUN']);
+const JobRequestStatusSchema = z.enum(['PENDING', 'RUNNING', 'SUCCESS', 'FAILED', 'CANCELED']);
+const JobRequestListQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(20),
+    status: JobRequestStatusSchema.optional(),
+    requestType: JobRequestTypeSchema.optional(),
+  })
+  .strict();
+const JobRequestRowSchema = z
+  .object({
+    id: z.number().int().nonnegative(),
+    requestType: JobRequestTypeSchema,
+    status: JobRequestStatusSchema,
+    paramsJson: z.any(),
+    requestedBy: z.string(),
+    claimedBy: z.string().nullable(),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+    claimedAt: z.string().datetime().nullable(),
+    startedAt: z.string().datetime().nullable(),
+    finishedAt: z.string().datetime().nullable(),
+    errorText: z.string().nullable(),
+    jobRunId: z.string().nullable(),
+    idempotencyKey: z.string().nullable(),
+  })
+  .strict();
+const JobRequestListResponseSchema = z
+  .object({
+    items: z.array(JobRequestRowSchema),
+    page: z.number().int().min(1),
+    pageSize: z.number().int().min(1).max(100),
+    total: z.number().int().min(0),
+  })
+  .strict();
 function handleModuleError(error: unknown, request: FastifyRequest, reply: FastifyReply): boolean {
   if (error instanceof DiscoveryAdminNotFoundError) {
     reply.status(404).send(
@@ -130,7 +149,7 @@ export function registerDiscoveryAdminRoutes(
   });
 
   app.get('/v1/admin/leads', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies.adminApiKey)) {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
       return;
     }
 
@@ -151,7 +170,7 @@ export function registerDiscoveryAdminRoutes(
   });
 
   app.get('/v1/admin/leads/:id', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies.adminApiKey)) {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
       return;
     }
 
@@ -172,7 +191,7 @@ export function registerDiscoveryAdminRoutes(
   });
 
   app.get('/v1/admin/search-tasks', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies.adminApiKey)) {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
       return;
     }
 
@@ -193,7 +212,7 @@ export function registerDiscoveryAdminRoutes(
   });
 
   app.get('/v1/admin/search-tasks/:id', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies.adminApiKey)) {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
       return;
     }
 
@@ -214,7 +233,7 @@ export function registerDiscoveryAdminRoutes(
   });
 
   app.post('/v1/admin/jobs/discovery/seed', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies.adminApiKey)) {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
       return;
     }
 
@@ -236,7 +255,7 @@ export function registerDiscoveryAdminRoutes(
   });
 
   app.post('/v1/admin/jobs/discovery/run', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies.adminApiKey)) {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
       return;
     }
 
@@ -257,8 +276,30 @@ export function registerDiscoveryAdminRoutes(
     }
   });
 
+  app.get('/v1/admin/jobs/requests', async (request, reply) => {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
+      return;
+    }
+
+    const parsedQuery = JobRequestListQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid job requests query');
+    }
+
+    try {
+      const result = await service.listJobRequests(parsedQuery.data);
+      return JobRequestListResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+
   app.get('/v1/admin/jobs/runs', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies.adminApiKey)) {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
       return;
     }
 
@@ -279,7 +320,7 @@ export function registerDiscoveryAdminRoutes(
   });
 
   app.get('/v1/admin/jobs/runs/:id', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies.adminApiKey)) {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
       return;
     }
 
@@ -302,13 +343,18 @@ export function registerDiscoveryAdminRoutes(
   // ── B1: Cancel a discovery run (JobExecution) ──
   app.post('/v1/discovery-admin/runs/:id/cancel', async (request, reply) => {
     // Auth is handled by the protectedRoutes plugin (JWT guard)
+    const userId = requireAuthenticatedUserId(request, reply);
+    if (!userId) {
+      return;
+    }
+
     const parsedParams = DiscoveryRunIdParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid run id');
     }
 
     try {
-      const result = await service.cancelDiscoveryRun(parsedParams.data.id);
+      const result = await service.cancelDiscoveryRun(parsedParams.data.id, userId);
       return result;
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
@@ -320,7 +366,7 @@ export function registerDiscoveryAdminRoutes(
 
   // ── B5: Get discovery run detail with converted leads ──
   app.get('/v1/discovery-admin/runs/:id', async (request, reply) => {
-    if (!requireAdminKey(request, reply, dependencies.adminApiKey)) {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
       return;
     }
 

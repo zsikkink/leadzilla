@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const prismaMock = {
   jobExecution: {
+    findFirst: vi.fn(),
     findUnique: vi.fn(),
     update: vi.fn(),
   },
@@ -26,7 +27,7 @@ describe('PrismaDiscoveryAdminRepository.cancelDiscoveryRun', () => {
   });
 
   it('marks the run cancelled and removes pending pg-boss discovery jobs', async () => {
-    prismaMock.jobExecution.findUnique.mockResolvedValue({ status: 'queued', result: null });
+    prismaMock.jobExecution.findFirst.mockResolvedValue({ status: 'queued', result: null });
     prismaMock.$queryRawUnsafe.mockResolvedValue([{ deleted_count: 3 }]);
     prismaMock.searchTask.updateMany.mockResolvedValue({ count: 2 });
 
@@ -90,7 +91,7 @@ describe('PrismaDiscoveryAdminRepository.cancelDiscoveryRun', () => {
   });
 
   it('returns success when the run is already cancelled', async () => {
-    prismaMock.jobExecution.findUnique.mockResolvedValue({ status: 'cancelled' });
+    prismaMock.jobExecution.findFirst.mockResolvedValue({ status: 'cancelled' });
 
     const { PrismaDiscoveryAdminRepository } = await import('./discovery-admin.repository.js');
     const repository = new PrismaDiscoveryAdminRepository();
@@ -106,7 +107,7 @@ describe('PrismaDiscoveryAdminRepository.cancelDiscoveryRun', () => {
   });
 
   it('returns outcome already_terminal for completed/failed runs', async () => {
-    prismaMock.jobExecution.findUnique.mockResolvedValue({ status: 'completed' });
+    prismaMock.jobExecution.findFirst.mockResolvedValue({ status: 'completed' });
 
     const { PrismaDiscoveryAdminRepository } = await import('./discovery-admin.repository.js');
     const repository = new PrismaDiscoveryAdminRepository();
@@ -121,7 +122,7 @@ describe('PrismaDiscoveryAdminRepository.cancelDiscoveryRun', () => {
   });
 
   it('returns already_terminal instead of throwing when cancellation races with terminal finalization', async () => {
-    prismaMock.jobExecution.findUnique
+    prismaMock.jobExecution.findFirst
       .mockResolvedValueOnce({ status: 'running', result: null })
       .mockResolvedValueOnce({ status: 'completed' });
     prismaMock.$queryRawUnsafe.mockResolvedValue([{ deleted_count: 1 }]);
@@ -136,6 +137,30 @@ describe('PrismaDiscoveryAdminRepository.cancelDiscoveryRun', () => {
       terminalStatus: 'completed',
       cancelledPendingJobsCount: 1,
     });
+  });
+
+  it('treats non-owned discovery runs as not found', async () => {
+    prismaMock.jobExecution.findFirst.mockResolvedValue(null);
+
+    const { PrismaDiscoveryAdminRepository } = await import('./discovery-admin.repository.js');
+    const repository = new PrismaDiscoveryAdminRepository();
+
+    await expect(
+      repository.cancelDiscoveryRun('run_123', '11111111-1111-4111-8111-111111111111'),
+    ).rejects.toThrow('Discovery run not found');
+
+    expect(prismaMock.jobExecution.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'run_123',
+        payload: {
+          path: ['requestedByUserId'],
+          equals: '11111111-1111-4111-8111-111111111111',
+        },
+      },
+      select: { status: true, result: true },
+    });
+    expect(prismaMock.jobExecution.update).not.toHaveBeenCalled();
+    expect(prismaMock.$queryRawUnsafe).not.toHaveBeenCalled();
   });
 });
 
@@ -201,6 +226,116 @@ describe('PrismaDiscoveryAdminRepository.getDiscoveryRunDetail', () => {
           },
         ],
       }),
+    );
+  });
+});
+
+describe('PrismaDiscoveryAdminRepository.listJobRequests', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns paginated job requests with optional filters', async () => {
+    prismaMock.$queryRawUnsafe
+      .mockResolvedValueOnce([{ total: 2 }])
+      .mockResolvedValueOnce([
+        {
+          id: 21,
+          request_type: 'DISCOVERY_RUN',
+          status: 'PENDING',
+          params_json: { maxTasks: 40 },
+          requested_by: 'user_1',
+          claimed_by: null,
+          created_at: new Date('2026-03-14T12:00:00.000Z'),
+          updated_at: new Date('2026-03-14T12:01:00.000Z'),
+          claimed_at: null,
+          started_at: null,
+          finished_at: null,
+          error_text: null,
+          job_run_id: null,
+          idempotency_key: 'idem_1',
+        },
+        {
+          id: 20,
+          request_type: 'DISCOVERY_RUN',
+          status: 'PENDING',
+          params_json: { maxTasks: 20 },
+          requested_by: 'user_2',
+          claimed_by: 'worker_1',
+          created_at: new Date('2026-03-14T11:00:00.000Z'),
+          updated_at: new Date('2026-03-14T11:05:00.000Z'),
+          claimed_at: new Date('2026-03-14T11:01:00.000Z'),
+          started_at: new Date('2026-03-14T11:02:00.000Z'),
+          finished_at: null,
+          error_text: null,
+          job_run_id: 'run_20',
+          idempotency_key: 'idem_2',
+        },
+      ]);
+
+    const { PrismaDiscoveryAdminRepository } = await import('./discovery-admin.repository.js');
+    const repository = new PrismaDiscoveryAdminRepository();
+
+    await expect(
+      repository.listJobRequests({
+        page: 1,
+        pageSize: 20,
+        status: 'PENDING',
+        requestType: 'DISCOVERY_RUN',
+      }),
+    ).resolves.toEqual({
+      items: [
+        {
+          id: 21,
+          requestType: 'DISCOVERY_RUN',
+          status: 'PENDING',
+          paramsJson: { maxTasks: 40 },
+          requestedBy: 'user_1',
+          claimedBy: null,
+          createdAt: '2026-03-14T12:00:00.000Z',
+          updatedAt: '2026-03-14T12:01:00.000Z',
+          claimedAt: null,
+          startedAt: null,
+          finishedAt: null,
+          errorText: null,
+          jobRunId: null,
+          idempotencyKey: 'idem_1',
+        },
+        {
+          id: 20,
+          requestType: 'DISCOVERY_RUN',
+          status: 'PENDING',
+          paramsJson: { maxTasks: 20 },
+          requestedBy: 'user_2',
+          claimedBy: 'worker_1',
+          createdAt: '2026-03-14T11:00:00.000Z',
+          updatedAt: '2026-03-14T11:05:00.000Z',
+          claimedAt: '2026-03-14T11:01:00.000Z',
+          startedAt: '2026-03-14T11:02:00.000Z',
+          finishedAt: null,
+          errorText: null,
+          jobRunId: 'run_20',
+          idempotencyKey: 'idem_2',
+        },
+      ],
+      page: 1,
+      pageSize: 20,
+      total: 2,
+    });
+
+    expect(prismaMock.$queryRawUnsafe).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('from public.job_requests'),
+      'PENDING',
+      'DISCOVERY_RUN',
+    );
+    expect(prismaMock.$queryRawUnsafe).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('order by created_at desc, id desc'),
+      'PENDING',
+      'DISCOVERY_RUN',
+      20,
+      0,
     );
   });
 });
