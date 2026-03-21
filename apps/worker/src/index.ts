@@ -1,5 +1,7 @@
 import PgBoss, { type Job } from 'pg-boss';
 
+import { buildFeaturesComputeSingletonKey } from '@lead-flood/contracts';
+
 import { checkPipelineSchemaHealth, prisma } from '@lead-flood/db';
 import {
   GooglePlacesDiscoveryProvider,
@@ -622,7 +624,11 @@ async function main(): Promise<void> {
             FEATURES_COMPUTE_JOB_NAME,
             featuresPayload,
             {
-              singletonKey: `features.compute:${payload.leadId}:${payload.snapshotVersion}`,
+              singletonKey: buildFeaturesComputeSingletonKey({
+                leadId: payload.leadId,
+                icpProfileId: payload.icpProfileId,
+                snapshotVersion: payload.snapshotVersion,
+              }),
               ...FEATURES_COMPUTE_RETRY_OPTIONS,
             },
           );

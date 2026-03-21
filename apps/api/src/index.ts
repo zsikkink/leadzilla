@@ -17,7 +17,10 @@ import type {
   RunDiscoveryTasksRequest,
   TriggerJobRunResponse,
 } from '@lead-flood/contracts';
-import { ContactRecoverySnapshotSchema } from '@lead-flood/contracts';
+import {
+  ContactRecoverySnapshotSchema,
+  buildFeaturesComputeSingletonKey,
+} from '@lead-flood/contracts';
 
 import { buildSupabaseAccessTokenVerifier } from './auth/supabase.js';
 import { loadApiEnv } from './env.js';
@@ -383,7 +386,11 @@ async function main(): Promise<void> {
               runId: jobExecution.id,
             },
             {
-              singletonKey: `features.compute:${lead.id}`,
+              singletonKey: buildFeaturesComputeSingletonKey({
+                leadId: lead.id,
+                icpProfileId: icpProfileId!,
+                snapshotVersion: 1,
+              }),
               retryLimit: 3,
               retryDelay: 5,
               retryBackoff: true,

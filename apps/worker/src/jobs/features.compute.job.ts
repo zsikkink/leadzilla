@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { FEATURES_COMPUTE_IDEMPOTENCY_KEY_PATTERN as FEATURES_COMPUTE_QUEUE_KEY_PATTERN } from '@lead-flood/contracts';
 import { prisma, toInputJson } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
@@ -15,7 +16,7 @@ import { asDeterministicRules } from '../scoring/shared.js';
 import { computePopulationRates, detectFeatureDrift } from '../utils/feature-drift.js';
 
 export const FEATURES_COMPUTE_JOB_NAME = 'features.compute';
-export const FEATURES_COMPUTE_IDEMPOTENCY_KEY_PATTERN = 'features.compute:${leadId}:${snapshotVersion}';
+export const FEATURES_COMPUTE_IDEMPOTENCY_KEY_PATTERN = FEATURES_COMPUTE_QUEUE_KEY_PATTERN;
 
 export const FEATURES_COMPUTE_RETRY_OPTIONS: Pick<
   SendOptions,

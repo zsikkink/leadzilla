@@ -1,11 +1,25 @@
 import type PgBoss from 'pg-boss';
 
+import { buildFeaturesComputeSingletonKey } from '@lead-flood/contracts';
 import { type Prisma, prisma } from '@lead-flood/db';
 
-interface OutboxPayload {
+import {
+  FEATURES_COMPUTE_JOB_NAME,
+  type FeaturesComputeJobPayload,
+} from './jobs/features.compute.job.js';
+
+interface LegacyOutboxPayload {
   leadId: string;
   jobExecutionId: string;
   source: string;
+}
+
+type SupportedOutboxPayload = LegacyOutboxPayload | FeaturesComputeJobPayload;
+
+export interface OutboxDispatchPlan {
+  jobExecutionId: string;
+  bossPayload: SupportedOutboxPayload;
+  singletonKey?: string;
 }
 
 const MAX_OUTBOX_ATTEMPTS = 5;
@@ -22,7 +36,7 @@ export interface OutboxDispatchLogger {
   error: (object: Record<string, unknown>, message: string) => void;
 }
 
-function isOutboxPayload(payload: unknown): payload is OutboxPayload {
+function isLegacyOutboxPayload(payload: unknown): payload is LegacyOutboxPayload {
   if (!payload || typeof payload !== 'object') {
     return false;
   }
@@ -33,6 +47,53 @@ function isOutboxPayload(payload: unknown): payload is OutboxPayload {
     typeof value.jobExecutionId === 'string' &&
     typeof value.source === 'string'
   );
+}
+
+function isFeaturesComputeOutboxPayload(payload: unknown): payload is FeaturesComputeJobPayload {
+  if (!payload || typeof payload !== 'object') {
+    return false;
+  }
+
+  const value = payload as Record<string, unknown>;
+  return (
+    typeof value.runId === 'string' &&
+    typeof value.leadId === 'string' &&
+    typeof value.icpProfileId === 'string' &&
+    typeof value.snapshotVersion === 'number' &&
+    Number.isInteger(value.snapshotVersion) &&
+    value.snapshotVersion >= 1
+  );
+}
+
+export function resolveOutboxDispatchPlan(
+  eventType: string,
+  payload: unknown,
+): OutboxDispatchPlan | null {
+  if (eventType === FEATURES_COMPUTE_JOB_NAME) {
+    if (!isFeaturesComputeOutboxPayload(payload)) {
+      return null;
+    }
+
+    return {
+      jobExecutionId: payload.runId,
+      bossPayload: payload,
+      // Match the API's immediate publish key so retry publishes stay idempotent.
+      singletonKey: buildFeaturesComputeSingletonKey({
+        leadId: payload.leadId,
+        icpProfileId: payload.icpProfileId,
+        snapshotVersion: payload.snapshotVersion,
+      }),
+    };
+  }
+
+  if (isLegacyOutboxPayload(payload)) {
+    return {
+      jobExecutionId: payload.jobExecutionId,
+      bossPayload: payload,
+    };
+  }
+
+  return null;
 }
 
 function calculateRetryDelay(attempt: number): number {
@@ -102,7 +163,8 @@ export async function dispatchPendingOutboxEvents(
       continue;
     }
 
-    if (!isOutboxPayload(event.payload)) {
+    const dispatchPlan = resolveOutboxDispatchPlan(event.type, event.payload);
+    if (!dispatchPlan) {
       await prisma.outboxEvent.update({
         where: { id: event.id },
         data: {
@@ -125,9 +187,8 @@ export async function dispatchPendingOutboxEvents(
       continue;
     }
 
-    const payload: OutboxPayload = event.payload;
     const targetJob = await prisma.jobExecution.findUnique({
-      where: { id: payload.jobExecutionId },
+      where: { id: dispatchPlan.jobExecutionId },
       select: { id: true, status: true },
     });
 
@@ -147,7 +208,7 @@ export async function dispatchPendingOutboxEvents(
       logger.warn(
         {
           outboxEventId: event.id,
-          jobExecutionId: payload.jobExecutionId,
+          jobExecutionId: dispatchPlan.jobExecutionId,
         },
         'Promoted outbox event to dead letter queue because target job is missing',
       );
@@ -179,8 +240,8 @@ export async function dispatchPendingOutboxEvents(
     }
 
     try {
-      await boss.send(event.type, payload, {
-        singletonKey: `outbox:${event.id}`,
+      await boss.send(event.type, dispatchPlan.bossPayload, {
+        singletonKey: dispatchPlan.singletonKey ?? `outbox:${event.id}`,
         retryLimit: 3,
         retryDelay: 5,
         retryBackoff: true,

@@ -16,3 +16,4 @@ export * from './webhook.contract.js';
 export * from './followup.contract.js';
 export * from './discovery-admin.contract.js';
 export * from './manager.contract.js';
+export * from './pipeline.contract.js';
