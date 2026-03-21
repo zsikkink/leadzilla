@@ -401,7 +401,10 @@ export async function handleMessageGenerateJob(
     // Load pre-computed AI business insights from BusinessConversion
     const businessConversion = lead.businessId
       ? await prisma.businessConversion.findFirst({
-          where: { leadId },
+          where: {
+            leadId,
+            businessId: lead.businessId,
+          },
           select: { businessInsights: true },
           orderBy: { createdAt: 'desc' },
         })

@@ -397,4 +397,51 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
       data: { status: 'drafted' },
     });
   });
+
+  it('loads BusinessConversion only from the lead primary business context', async () => {
+    dbMock.prisma.lead.findUnique.mockResolvedValue({
+      id: 'lead_1',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@example.com',
+      phone: null,
+      decisionMakerPhone: null,
+      businessId: 'business_primary_1',
+      deletedAt: null,
+      status: 'qualified',
+    });
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
+      id: 'score_current',
+      scoreBand: 'HIGH',
+      blendedScore: 0.72,
+    });
+    dbMock.prisma.business.findUnique.mockResolvedValue({
+      name: 'Primary Business',
+      apifyWebsiteScrapeJson: null,
+      apifyInstagramScrapeJson: null,
+    });
+    dbMock.prisma.businessConversion.findFirst.mockResolvedValue({
+      businessInsights: 'Slow payment collection',
+    });
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+      }),
+    );
+
+    expect(dbMock.prisma.businessConversion.findFirst).toHaveBeenCalledWith({
+      where: {
+        leadId: 'lead_1',
+        businessId: 'business_primary_1',
+      },
+      select: { businessInsights: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  });
 });

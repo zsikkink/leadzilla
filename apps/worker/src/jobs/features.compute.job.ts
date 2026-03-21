@@ -746,7 +746,10 @@ export async function handleFeaturesComputeJob(
 
     const businessConversion = lead.businessId
       ? await prisma.businessConversion.findFirst({
-          where: { leadId },
+          where: {
+            leadId,
+            businessId: lead.businessId,
+          },
           select: { apolloContactJson: true, hunterContactJson: true, metadata: true, apolloHasDirectPhone: true },
           orderBy: { convertedAt: 'desc' },
         })

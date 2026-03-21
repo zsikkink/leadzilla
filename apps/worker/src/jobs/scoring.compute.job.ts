@@ -140,6 +140,17 @@ export async function handleScoringComputeJob(
             })
           ).map((lead) => lead.id);
 
+    const leadBusinessIdMap = new Map<string, string | null>();
+    if (deps?.enqueueApolloEnrich && targetLeadIds.length > 0) {
+      const leadsWithBusiness = await prisma.lead.findMany({
+        where: { id: { in: targetLeadIds } },
+        select: { id: true, businessId: true },
+      });
+      for (const lead of leadsWithBusiness) {
+        leadBusinessIdMap.set(lead.id, lead.businessId);
+      }
+    }
+
     // Pre-load phone data for channel resolution
     const leadPhoneMap = new Map<string, { phone: string | null; decisionMakerPhone: string | null }>();
     if (deps?.enqueueMessageGenerate && targetLeadIds.length > 0) {
@@ -373,12 +384,19 @@ export async function handleScoringComputeJob(
           // Keep discovery leads in `qualified` until a human explicitly starts draft generation.
           // Apollo reveal can still run to enrich contact data, but drafting is manual.
           if (deps?.enqueueApolloEnrich) {
+            const primaryBusinessId = leadBusinessIdMap.get(targetLeadId) ?? null;
             // Look up BusinessConversion for apolloHasEmail/apolloHasDirectPhone
-            const businessConversion = await prisma.businessConversion.findFirst({
-              where: { leadId: targetLeadId, icpProfileId: targetIcpId },
-              select: { apolloHasEmail: true, apolloHasDirectPhone: true },
-              orderBy: { createdAt: 'desc' },
-            });
+            const businessConversion = primaryBusinessId
+              ? await prisma.businessConversion.findFirst({
+                  where: {
+                    leadId: targetLeadId,
+                    icpProfileId: targetIcpId,
+                    businessId: primaryBusinessId,
+                  },
+                  select: { apolloHasEmail: true, apolloHasDirectPhone: true },
+                  orderBy: { createdAt: 'desc' },
+                })
+              : null;
 
             await deps.enqueueApolloEnrich({
               leadId: targetLeadId,
