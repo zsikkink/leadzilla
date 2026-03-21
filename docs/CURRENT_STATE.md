@@ -38,6 +38,12 @@ Code is still the source of truth. This doc is the fastest orientation path for 
 4. Deploy topology is still only partially aligned to the target model
    - CI/deploy validation is much better than before, but `.github/workflows/deploy.yml` still builds and publishes a `web` Docker image even though the intended frontend target is Vercel. That is a real repo-visible mismatch.
 
+5. Follow-up handoff is still at-most-once between claim and enqueue
+   - `followup.check` now hardens stale/concurrent follow-up selection by clearing `MessageSend.nextFollowUpAfter` as the claim step before it separately enqueues `message.generate`.
+   - If the worker dies after that DB claim succeeds but before `boss.send(...)` is durably persisted, that follow-up can still be lost.
+   - The recent hardening reduced stale/duplicate follow-up generation risk, but it did not close this crash-loss window.
+   - Closing the gap safely would require a broader persisted handoff surface or an extension of the existing outbox pattern.
+
 ## 5. Intended target state
 
 - `apps/web` runs on Vercel.
