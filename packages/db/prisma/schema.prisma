@@ -110,6 +110,11 @@ enum EnrichmentStatus {
   FAILED
 }
 
+enum ApolloRevealAttemptStatus {
+  CLAIMED
+  COMPLETED
+}
+
 enum TrainingRunStatus {
   QUEUED
   RUNNING
@@ -259,6 +264,7 @@ model Lead {
   trainingLabels      TrainingLabel[]
   businessConversions BusinessConversion[]
   pipelineEvents      LeadPipelineEvent[]
+  apolloRevealAttempts ApolloRevealAttempt[]
   rejection           LeadRejection?
 
   @@index([status])
@@ -323,6 +329,7 @@ model IcpProfile {
   discoveryRecords     LeadDiscoveryRecord[]
   featureSnapshots     LeadFeatureSnapshot[]
   scorePredictions     LeadScorePrediction[]
+  apolloRevealAttempts ApolloRevealAttempt[]
   analyticsDailyRollups AnalyticsDailyRollup[]
   messageDrafts        MessageDraft[]
   contactRecoveryItems ContactRecoveryItem[]
@@ -523,12 +530,33 @@ model LeadScorePrediction {
   predictedAt       DateTime           @default(now())
   createdAt         DateTime           @default(now())
 
+  apolloRevealAttempts ApolloRevealAttempt[]
   messageDrafts     MessageDraft[]
 
   @@unique([leadId, icpProfileId, featureSnapshotId, modelVersionId])
   @@index([leadId, predictedAt])
   @@index([icpProfileId, predictedAt])
   @@index([modelVersionId, predictedAt])
+}
+
+model ApolloRevealAttempt {
+  id               String                    @id @default(cuid())
+  leadId           String
+  lead             Lead                      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  icpProfileId     String
+  icpProfile       IcpProfile                @relation(fields: [icpProfileId], references: [id], onDelete: Cascade)
+  scorePredictionId String
+  scorePrediction  LeadScorePrediction       @relation(fields: [scorePredictionId], references: [id], onDelete: Cascade)
+  discoveryRunId   String?
+  status           ApolloRevealAttemptStatus @default(CLAIMED)
+  jobId            String?
+  claimedAt        DateTime                  @default(now())
+  completedAt      DateTime?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+
+  @@unique([leadId, icpProfileId, scorePredictionId])
+  @@index([status])
 }
 
 model AnalyticsDailyRollup {

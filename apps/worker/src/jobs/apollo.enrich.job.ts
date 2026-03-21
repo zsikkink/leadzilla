@@ -1,6 +1,7 @@
 import { prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
+import { isPrismaUniqueConstraintError } from '../errors.js';
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
 import {
   getEnrichmentThreshold,
@@ -247,6 +248,74 @@ export async function handleApolloEnrichJob(
     return;
   }
 
+  try {
+    await prisma.apolloRevealAttempt.create({
+      data: {
+        leadId,
+        icpProfileId,
+        scorePredictionId,
+        discoveryRunId: runId,
+        jobId: job.id,
+        status: 'CLAIMED',
+      },
+    });
+  } catch (error: unknown) {
+    if (!isPrismaUniqueConstraintError(error)) {
+      throw error;
+    }
+
+    const existingAttempt = await prisma.apolloRevealAttempt.findUnique({
+      where: {
+        leadId_icpProfileId_scorePredictionId: {
+          leadId,
+          icpProfileId,
+          scorePredictionId,
+        },
+      },
+      select: {
+        id: true,
+        status: true,
+        jobId: true,
+        claimedAt: true,
+        completedAt: true,
+      },
+    });
+
+    if (!existingAttempt) {
+      throw error;
+    }
+
+    logger.info(
+      {
+        ...logCtx,
+        attemptId: existingAttempt.id,
+        attemptStatus: existingAttempt.status,
+        existingJobId: existingAttempt.jobId,
+        claimedAt: existingAttempt.claimedAt,
+        completedAt: existingAttempt.completedAt,
+      },
+      'Apollo reveal attempt already claimed or completed — skipping duplicate provider call',
+    );
+    await tryFinalizeDiscoveryRun(runId, logger);
+    return;
+  }
+
+  const markAttemptCompleted = async (): Promise<void> => {
+    await prisma.apolloRevealAttempt.update({
+      where: {
+        leadId_icpProfileId_scorePredictionId: {
+          leadId,
+          icpProfileId,
+          scorePredictionId,
+        },
+      },
+      data: {
+        status: 'COMPLETED',
+        completedAt: new Date(),
+      },
+    });
+  };
+
   // Call Apollo to reveal contact data (1 export credit)
   const apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
 
@@ -262,6 +331,7 @@ export async function handleApolloEnrichJob(
   });
 
   if (apolloResult.status !== 'success' || apolloResult.contacts.length === 0) {
+    await markAttemptCompleted();
     logger.warn(
       { ...logCtx, apolloStatus: apolloResult.status },
       'Apollo reveal returned no contacts — keeping qualified lead as-is',
@@ -302,6 +372,7 @@ export async function handleApolloEnrichJob(
     });
 
     if (updatedLead.count === 0) {
+      await markAttemptCompleted();
       logger.info(
         { ...logCtx, revealedEmail, revealedPhone },
         'Skipped Apollo contact update to preserve downstream lifecycle state',
@@ -316,6 +387,7 @@ export async function handleApolloEnrichJob(
     );
   }
 
+  await markAttemptCompleted();
   const finalHasEmail = hasEmail || revealedEmail;
   const finalHasPhone = hasPhone || revealedPhone;
   if (!finalHasEmail) {
