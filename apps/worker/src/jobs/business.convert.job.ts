@@ -2444,74 +2444,83 @@ export async function handleBusinessConvertJob(
     },
   });
 
-  // Persist canonical pipeline lineage records used by feature/scoring analytics.
-  if (evidence?.searchTask) {
-    const provider = resolveDiscoveryProvider(evidence.searchTask.paramsJson as Prisma.JsonValue | null);
-    const providerRecordId = evidence.serpapiResultId ?? evidence.id;
-    await prisma.leadDiscoveryRecord.upsert({
-      where: {
-        leadId_icpProfileId_provider_providerRecordId: {
+  if (txResult.isNew) {
+    // Persist canonical pipeline lineage records used by feature/scoring analytics
+    // only for newly created leads. Reused leads are terminal for automated
+    // downstream progression under the single-primary-business model.
+    if (evidence?.searchTask) {
+      const provider = resolveDiscoveryProvider(evidence.searchTask.paramsJson as Prisma.JsonValue | null);
+      const providerRecordId = evidence.serpapiResultId ?? evidence.id;
+      await prisma.leadDiscoveryRecord.upsert({
+        where: {
+          leadId_icpProfileId_provider_providerRecordId: {
+            leadId: txResult.lead.id,
+            icpProfileId,
+            provider,
+            providerRecordId,
+          },
+        },
+        create: {
           leadId: txResult.lead.id,
           icpProfileId,
           provider,
+          providerSource: evidence.sourceType,
           providerRecordId,
+          queryHash: evidence.searchTask.queryHash,
+          rawPayload: toInputJson(evidence.rawJson),
+          provenanceJson: toInputJson({
+            businessId,
+            discoveryRunId,
+            searchTaskId: evidence.searchTask.id,
+            taskType: evidence.searchTask.taskType,
+          }),
+          discoveredAt: evidence.createdAt,
         },
-      },
-      create: {
-        leadId: txResult.lead.id,
-        icpProfileId,
-        provider,
-        providerSource: evidence.sourceType,
-        providerRecordId,
-        queryHash: evidence.searchTask.queryHash,
-        rawPayload: toInputJson(evidence.rawJson),
-        provenanceJson: toInputJson({
-          businessId,
-          discoveryRunId,
-          searchTaskId: evidence.searchTask.id,
-          taskType: evidence.searchTask.taskType,
-        }),
-        discoveredAt: evidence.createdAt,
-      },
-      update: {
-        providerSource: evidence.sourceType,
-        rawPayload: toInputJson(evidence.rawJson),
-        provenanceJson: toInputJson({
-          businessId,
-          discoveryRunId,
-          searchTaskId: evidence.searchTask.id,
-          taskType: evidence.searchTask.taskType,
-        }),
-      },
-    });
-  }
+        update: {
+          providerSource: evidence.sourceType,
+          rawPayload: toInputJson(evidence.rawJson),
+          provenanceJson: toInputJson({
+            businessId,
+            discoveryRunId,
+            searchTaskId: evidence.searchTask.id,
+            taskType: evidence.searchTask.taskType,
+          }),
+        },
+      });
+    }
 
-  if (hunterContactJson) {
-    const requestKey = `hunter:convert:${txResult.lead.id}:${icpProfileId}:${discoveryRunId}`;
-    await prisma.leadEnrichmentRecord.upsert({
-      where: { requestKey },
-      create: {
-        leadId: txResult.lead.id,
-        provider: 'HUNTER',
-        status: 'COMPLETED',
-        requestKey,
-        normalizedPayload: toInputJson({
-          contacts: hunterContactJson,
-          source: 'business.convert',
-        }),
-        rawPayload: toInputJson(hunterContactJson),
-        enrichedAt: new Date(),
-      },
-      update: {
-        status: 'COMPLETED',
-        normalizedPayload: toInputJson({
-          contacts: hunterContactJson,
-          source: 'business.convert',
-        }),
-        rawPayload: toInputJson(hunterContactJson),
-        enrichedAt: new Date(),
-      },
-    });
+    if (hunterContactJson) {
+      const requestKey = `hunter:convert:${txResult.lead.id}:${icpProfileId}:${discoveryRunId}`;
+      await prisma.leadEnrichmentRecord.upsert({
+        where: { requestKey },
+        create: {
+          leadId: txResult.lead.id,
+          provider: 'HUNTER',
+          status: 'COMPLETED',
+          requestKey,
+          normalizedPayload: toInputJson({
+            contacts: hunterContactJson,
+            source: 'business.convert',
+          }),
+          rawPayload: toInputJson(hunterContactJson),
+          enrichedAt: new Date(),
+        },
+        update: {
+          status: 'COMPLETED',
+          normalizedPayload: toInputJson({
+            contacts: hunterContactJson,
+            source: 'business.convert',
+          }),
+          rawPayload: toInputJson(hunterContactJson),
+          enrichedAt: new Date(),
+        },
+      });
+    }
+  } else {
+    logger.info(
+      { ...logCtx, leadId: txResult.lead.id },
+      'Existing lead reuse remains terminal for automated downstream progression; skipping pipeline lineage records',
+    );
   }
 
   // ── 9. Enqueue features.compute if lead is newly created and NOT auto-rejected ─
