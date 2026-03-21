@@ -274,10 +274,20 @@ export async function handleScoringBatchJob(
 
         // ── Lead status transition + rejection tracking ──────────────
         const isRejected = !deterministic.hardFilterPassed || blendedScore < qualificationThreshold;
-        await prisma.lead.update({
-          where: { id: lead.id },
+        const statusUpdated = await prisma.lead.updateMany({
+          where: {
+            id: lead.id,
+            status: { in: ['new', 'processing', 'enriched', 'scored', 'qualified', 'rejected', 'stuck'] },
+          },
           data: { status: isRejected ? 'rejected' : 'qualified' },
         });
+        if (statusUpdated.count === 0) {
+          logger.info(
+            { jobId: job.id, leadId: lead.id },
+            'Skipped lead status update to preserve downstream lifecycle state',
+          );
+          continue;
+        }
 
         if (isRejected) {
           const rejectionReason = !deterministic.hardFilterPassed ? 'HARD_FILTER_FAILED' : 'BELOW_THRESHOLD';
@@ -315,10 +325,14 @@ export async function handleScoringBatchJob(
             { jobId: job.id, leadId: lead.id, blendedScore, reason: rejectionReason },
             `Lead rejected — ${rejectionReason}`,
           );
+        } else {
+          await prisma.leadRejection.deleteMany({
+            where: { leadId: lead.id },
+          });
         }
 
         // Qualified leads stay in `qualified` until a human starts draft generation.
-        if (blendedScore >= qualificationThreshold) {
+        if (!isRejected) {
           qualified += 1;
         }
       }
