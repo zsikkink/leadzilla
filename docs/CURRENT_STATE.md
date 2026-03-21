@@ -44,6 +44,13 @@ Code is still the source of truth. This doc is the fastest orientation path for 
    - The recent hardening reduced stale/duplicate follow-up generation risk, but it did not close this crash-loss window.
    - Closing the gap safely would require a broader persisted handoff surface or an extension of the existing outbox pattern.
 
+6. `message.send` is still best-effort before provider success is durably persisted
+   - `message.send` calls the provider while `MessageSend.status` is still `QUEUED`, then writes `SENT` plus provider metadata afterward.
+   - Email via Resend already sends a provider-side `Idempotency-Key`, which materially reduces duplicate-send risk there.
+   - WhatsApp via Trengo currently has no equivalent provider idempotency token and no persisted pre-send claim surface.
+   - If the worker dies after Trengo accepts the send but before the success write commits, a retry can still send the same WhatsApp message twice.
+   - Closing the gap safely would require either a persisted pre-provider claim for `MessageSend` or a broader extension of the durable outbox/job-tracking pattern.
+
 ## 5. Intended target state
 
 - `apps/web` runs on Vercel.
