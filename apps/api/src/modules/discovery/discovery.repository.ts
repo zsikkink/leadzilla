@@ -113,9 +113,15 @@ export interface DiscoveryRepository {
     payload: DiscoveryRunJobPayload,
   ): Promise<void>;
   markDiscoveryRunFailed(runId: string, message: string): Promise<void>;
-  getDiscoveryRunStatus(runId: string): Promise<DiscoveryRunStatusResponse>;
+  getDiscoveryRunStatus(
+    runId: string,
+    requestedByUserId?: string | undefined,
+  ): Promise<DiscoveryRunStatusResponse>;
   listDiscoveryRecords(query: ListDiscoveryRecordsQuery): Promise<ListDiscoveryRecordsResponse>;
-  listDiscoveryRuns(query: ListDiscoveryRunsQuery): Promise<ListDiscoveryRunsResponse>;
+  listDiscoveryRuns(
+    query: ListDiscoveryRunsQuery,
+    requestedByUserId?: string | undefined,
+  ): Promise<ListDiscoveryRunsResponse>;
 }
 
 export class StubDiscoveryRepository implements DiscoveryRepository {
@@ -135,7 +141,10 @@ export class StubDiscoveryRepository implements DiscoveryRepository {
     throw new DiscoveryNotImplementedError('TODO: mark discovery run failed persistence');
   }
 
-  async getDiscoveryRunStatus(_runId: string): Promise<DiscoveryRunStatusResponse> {
+  async getDiscoveryRunStatus(
+    _runId: string,
+    _requestedByUserId?: string | undefined,
+  ): Promise<DiscoveryRunStatusResponse> {
     throw new DiscoveryNotImplementedError('TODO: get discovery run status persistence');
   }
 
@@ -143,7 +152,10 @@ export class StubDiscoveryRepository implements DiscoveryRepository {
     throw new DiscoveryNotImplementedError('TODO: list discovery records persistence');
   }
 
-  async listDiscoveryRuns(_query: ListDiscoveryRunsQuery): Promise<ListDiscoveryRunsResponse> {
+  async listDiscoveryRuns(
+    _query: ListDiscoveryRunsQuery,
+    _requestedByUserId?: string | undefined,
+  ): Promise<ListDiscoveryRunsResponse> {
     throw new DiscoveryNotImplementedError('TODO: list discovery runs persistence');
   }
 }
@@ -214,11 +226,22 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
     });
   }
 
-  async getDiscoveryRunStatus(runId: string): Promise<DiscoveryRunStatusResponse> {
+  async getDiscoveryRunStatus(
+    runId: string,
+    requestedByUserId?: string | undefined,
+  ): Promise<DiscoveryRunStatusResponse> {
     const run = await prisma.jobExecution.findFirst({
       where: {
         id: runId,
         type: DISCOVERY_RUN_JOB_TYPE,
+        ...(requestedByUserId
+          ? {
+              payload: {
+                path: ['requestedByUserId'],
+                equals: requestedByUserId,
+              },
+            }
+          : {}),
       },
     });
 
@@ -349,8 +372,21 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
     };
   }
 
-  async listDiscoveryRuns(query: ListDiscoveryRunsQuery): Promise<ListDiscoveryRunsResponse> {
-    const where = { type: DISCOVERY_RUN_JOB_TYPE };
+  async listDiscoveryRuns(
+    query: ListDiscoveryRunsQuery,
+    requestedByUserId?: string | undefined,
+  ): Promise<ListDiscoveryRunsResponse> {
+    const where = {
+      type: DISCOVERY_RUN_JOB_TYPE,
+      ...(requestedByUserId
+        ? {
+            payload: {
+              path: ['requestedByUserId'],
+              equals: requestedByUserId,
+            },
+          }
+        : {}),
+    };
 
     const [total, rows] = await Promise.all([
       prisma.jobExecution.count({ where }),

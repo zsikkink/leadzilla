@@ -132,6 +132,24 @@ export interface DiscoveryRouteDependencies {
   enqueueDiscoveryRun?: (payload: DiscoveryRunJobPayload) => Promise<void>;
 }
 
+function requireAuthenticatedUserId(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): string | null {
+  const userId = request.user?.sub;
+  if (userId) {
+    return userId;
+  }
+
+  reply.status(401).send(
+    ErrorResponseSchema.parse({
+      error: 'Authentication required',
+      requestId: request.id,
+    }),
+  );
+  return null;
+}
+
 function sendValidationError(reply: FastifyReply, requestId: string, message: string) {
   reply.status(400);
   return ErrorResponseSchema.parse({
@@ -218,14 +236,8 @@ export function registerDiscoveryRoutes(
       return sendValidationError(reply, request.id, `Invalid discovery run payload: ${details}`);
     }
 
-    const userId = request.user?.sub;
+    const userId = requireAuthenticatedUserId(request, reply);
     if (!userId) {
-      reply.status(401).send(
-        ErrorResponseSchema.parse({
-          error: 'Authentication required',
-          requestId: request.id,
-        }),
-      );
       return;
     }
 
@@ -284,7 +296,7 @@ export function registerDiscoveryRoutes(
       const result = await service.createDiscoveryRun({
         ...parsed.data,
         limit: cappedLimit,
-        requestedByUserId: parsed.data.requestedByUserId ?? userId,
+        requestedByUserId: userId,
       });
       return CreateDiscoveryRunResponseSchema.parse(result);
     } catch (error: unknown) {
@@ -301,8 +313,13 @@ export function registerDiscoveryRoutes(
       return sendValidationError(reply, request.id, 'Invalid discovery runs query');
     }
 
+    const userId = requireAuthenticatedUserId(request, reply);
+    if (!userId) {
+      return;
+    }
+
     try {
-      const result = await service.listDiscoveryRuns(parsedQuery.data);
+      const result = await service.listDiscoveryRuns(parsedQuery.data, userId);
       return ListDiscoveryRunsResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
@@ -318,8 +335,13 @@ export function registerDiscoveryRoutes(
       return sendValidationError(reply, request.id, 'Invalid discovery run id');
     }
 
+    const userId = requireAuthenticatedUserId(request, reply);
+    if (!userId) {
+      return;
+    }
+
     try {
-      const result = await service.getDiscoveryRunStatus(parsedParams.data.runId);
+      const result = await service.getDiscoveryRunStatus(parsedParams.data.runId, userId);
       return DiscoveryRunStatusResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
@@ -335,12 +357,24 @@ export function registerDiscoveryRoutes(
       return sendValidationError(reply, request.id, 'Invalid discovery run id');
     }
 
+    const userId = requireAuthenticatedUserId(request, reply);
+    if (!userId) {
+      return;
+    }
+
     const { runId } = parsedParams.data;
 
     try {
       // Load the run metadata from JobExecution
       const jobExecution = await prisma.jobExecution.findFirst({
-        where: { id: runId, type: 'discovery.run' },
+        where: {
+          id: runId,
+          type: 'discovery.run',
+          payload: {
+            path: ['requestedByUserId'],
+            equals: userId,
+          },
+        },
       });
 
       if (!jobExecution) {

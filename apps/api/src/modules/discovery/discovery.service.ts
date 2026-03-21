@@ -31,9 +31,15 @@ export interface DiscoveryServiceDependencies {
 
 export interface DiscoveryService {
   createDiscoveryRun(input: CreateDiscoveryRunRequest): Promise<CreateDiscoveryRunResponse>;
-  getDiscoveryRunStatus(runId: string): Promise<DiscoveryRunStatusResponse>;
+  getDiscoveryRunStatus(
+    runId: string,
+    requestedByUserId?: string | undefined,
+  ): Promise<DiscoveryRunStatusResponse>;
   listDiscoveryRecords(query: ListDiscoveryRecordsQuery): Promise<ListDiscoveryRecordsResponse>;
-  listDiscoveryRuns(query: ListDiscoveryRunsQuery): Promise<ListDiscoveryRunsResponse>;
+  listDiscoveryRuns(
+    query: ListDiscoveryRunsQuery,
+    requestedByUserId?: string | undefined,
+  ): Promise<ListDiscoveryRunsResponse>;
 }
 
 /**
@@ -128,14 +134,14 @@ export function buildDiscoveryService(
         status: queuedStatus,
       };
     },
-    async getDiscoveryRunStatus(runId) {
-      return repository.getDiscoveryRunStatus(runId);
+    async getDiscoveryRunStatus(runId, requestedByUserId) {
+      return repository.getDiscoveryRunStatus(runId, requestedByUserId);
     },
     async listDiscoveryRecords(query) {
       return repository.listDiscoveryRecords(query);
     },
-    async listDiscoveryRuns(query) {
-      return repository.listDiscoveryRuns(query);
+    async listDiscoveryRuns(query, requestedByUserId) {
+      return repository.listDiscoveryRuns(query, requestedByUserId);
     },
   };
 }
