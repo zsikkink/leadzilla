@@ -27,6 +27,7 @@ const {
       },
       leadRejection: {
         upsert: vi.fn(),
+        deleteMany: vi.fn(),
       },
       businessConversion: {
         findFirst: vi.fn(),
@@ -160,6 +161,7 @@ describe('handleScoringComputeJob primary business conversion anchoring', () => 
       apolloHasEmail: true,
       apolloHasDirectPhone: false,
     });
+    dbMock.prisma.leadRejection.deleteMany.mockResolvedValue({ count: 0 });
     dbMock.prisma.jobExecution.updateMany.mockResolvedValue({ count: 1 });
     trackerMock.tryFinalizeDiscoveryRun.mockResolvedValue(undefined);
   });
@@ -203,5 +205,59 @@ describe('handleScoringComputeJob primary business conversion anchoring', () => 
       apolloHasDirectPhone: false,
       correlationId: expect.any(String),
     });
+    expect(dbMock.prisma.leadRejection.deleteMany).toHaveBeenCalledWith({
+      where: { leadId: 'lead_1' },
+    });
+  });
+
+  it('does not enqueue Apollo enrich when a hard filter fails even if blended score is high', async () => {
+    sharedMock.findActiveTrainedModel.mockResolvedValue({
+      model: {},
+    });
+    sharedMock.extractFeatureVectorForModel.mockReturnValue([]);
+    scoringMock.predictLogistic.mockReturnValue(0.92);
+    scoringMock.evaluateDeterministicScore.mockReturnValue({
+      qualificationScore: 0,
+      hardFilterPassed: false,
+      qualificationPath: 'HARD_FILTERED',
+      reasonCodes: ['HARD_FILTER_FAILED_COUNTRY'],
+      categoryScores: {},
+      ruleEvaluation: [],
+    });
+    dbMock.prisma.leadRejection.upsert.mockResolvedValue({
+      id: 'rejection_1',
+    });
+    const enqueueApolloEnrich = vi.fn(async () => undefined);
+
+    await handleScoringComputeJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        mode: 'BY_LEAD_IDS',
+        leadIds: ['lead_1'],
+        icpProfileId: 'icp_1',
+        requestedByUserId: 'user_1',
+      }),
+      {
+        enqueueApolloEnrich,
+        deterministicWeight: 0,
+        aiWeight: 1,
+      },
+    );
+
+    expect(dbMock.prisma.lead.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'lead_1',
+        status: { in: ['new', 'processing', 'enriched', 'scored', 'qualified', 'rejected', 'stuck'] },
+      },
+      data: { status: 'rejected' },
+    });
+    expect(dbMock.prisma.leadRejection.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { leadId: 'lead_1' },
+      }),
+    );
+    expect(dbMock.prisma.leadRejection.deleteMany).not.toHaveBeenCalled();
+    expect(enqueueApolloEnrich).not.toHaveBeenCalled();
   });
 });

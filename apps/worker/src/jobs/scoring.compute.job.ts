@@ -378,9 +378,13 @@ export async function handleScoringComputeJob(
             { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, blendedScore, reason: rejectionReason },
             `Lead rejected — ${rejectionReason}`,
           );
+        } else {
+          await prisma.leadRejection.deleteMany({
+            where: { leadId: targetLeadId },
+          });
         }
 
-        if (blendedScore >= qualificationThreshold) {
+        if (!isRejected) {
           // Keep discovery leads in `qualified` until a human explicitly starts draft generation.
           // Apollo reveal can still run to enrich contact data, but drafting is manual.
           if (deps?.enqueueApolloEnrich) {
