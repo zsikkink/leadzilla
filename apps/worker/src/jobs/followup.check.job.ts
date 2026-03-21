@@ -7,7 +7,7 @@ import {
   MESSAGE_GENERATE_RETRY_OPTIONS,
   type MessageGenerateJobPayload,
 } from './message.generate.job.js';
-import { getFollowUpMaxCount, loadAutoApproveConfig, shouldAutoApprove } from '../utils/pipeline-settings.js';
+import { getFollowUpMaxCount } from '../utils/pipeline-settings.js';
 
 export const FOLLOWUP_CHECK_JOB_NAME = 'followup.check';
 
@@ -36,6 +36,13 @@ export interface FollowupCheckJobDependencies {
   boss: Pick<PgBoss, 'send'>;
 }
 
+const TERMINAL_FOLLOW_UP_FEEDBACK_EVENT_TYPES = [
+  'UNSUBSCRIBED',
+  'MEETING_BOOKED',
+  'DEAL_WON',
+  'BOUNCED',
+] satisfies Array<'UNSUBSCRIBED' | 'MEETING_BOOKED' | 'DEAL_WON' | 'BOUNCED'>;
+
 export async function handleFollowupCheckJob(
   logger: FollowupCheckLogger,
   job: Job<FollowupCheckJobPayload>,
@@ -50,7 +57,6 @@ export async function handleFollowupCheckJob(
 
   try {
     const now = new Date();
-    const autoApproveConfig = await loadAutoApproveConfig();
     const maxFollowUps = await getFollowUpMaxCount();
 
     // Find all MessageSends eligible for follow-up
@@ -75,13 +81,8 @@ export async function handleFollowupCheckJob(
             feedbackEvents: {
               // REPLIED is intentionally excluded so OUT_OF_OFFICE responses can
               // reschedule follow-ups via reply.classify without being canceled.
-              where: { eventType: { in: ['UNSUBSCRIBED', 'MEETING_BOOKED', 'DEAL_WON', 'BOUNCED'] } },
+              where: { eventType: { in: TERMINAL_FOLLOW_UP_FEEDBACK_EVENT_TYPES } },
               select: { id: true },
-              take: 1,
-            },
-            scorePredictions: {
-              select: { id: true, blendedScore: true },
-              orderBy: { predictedAt: 'desc' },
               take: 1,
             },
           },
@@ -121,8 +122,18 @@ export async function handleFollowupCheckJob(
       // Double-check: no terminal feedback events
       if (send.lead.feedbackEvents.length > 0) {
         // Stale data — cancel this follow-up
-        await prisma.messageSend.update({
-          where: { id: send.id },
+        await prisma.messageSend.updateMany({
+          where: {
+            id: send.id,
+            nextFollowUpAfter: { not: null },
+            lead: {
+              feedbackEvents: {
+                some: {
+                  eventType: { in: TERMINAL_FOLLOW_UP_FEEDBACK_EVENT_TYPES },
+                },
+              },
+            },
+          },
           data: { nextFollowUpAfter: null },
         });
         continue;
@@ -131,16 +142,34 @@ export async function handleFollowupCheckJob(
       const icpProfileId = send.messageDraft.icpProfileId;
       const previouslyPitchedFeatures = pitchedByLeadIcp.get(`${send.leadId}:${icpProfileId}`) ?? [];
 
-      // Clear first (idempotent guard) — prevents double-enqueue on crash
-      await prisma.messageSend.update({
-        where: { id: send.id },
+      // Claim the follow-up slot before enqueueing so stale or concurrent
+      // workers cannot schedule the same downstream message.generate twice.
+      const claimResult = await prisma.messageSend.updateMany({
+        where: {
+          id: send.id,
+          status: { in: ['SENT', 'REPLIED'] },
+          followUpNumber: send.followUpNumber,
+          nextFollowUpAfter: { not: null, lte: now },
+          lead: {
+            deletedAt: null,
+            status: { in: ['messaged', 'replied'] },
+            feedbackEvents: {
+              none: {
+                eventType: { in: TERMINAL_FOLLOW_UP_FEEDBACK_EVENT_TYPES },
+              },
+            },
+          },
+        },
         data: { nextFollowUpAfter: null },
       });
 
-      // Compute auto-approve based on PipelineSetting + lead's blended score
-      const latestScore = send.lead.scorePredictions[0];
-      const blendedScore = latestScore?.blendedScore ?? 0;
-      const autoApprove = shouldAutoApprove(autoApproveConfig, blendedScore);
+      if (claimResult.count === 0) {
+        logger.info(
+          { jobId: job.id, sendId: send.id, leadId: send.leadId },
+          'Follow-up send no longer eligible, skipping stale follow-up candidate',
+        );
+        continue;
+      }
 
       // Enqueue message.generate in follow-up mode
       await deps.boss.send(
@@ -152,11 +181,9 @@ export async function handleFollowupCheckJob(
           followUpNumber: send.followUpNumber + 1,
           parentMessageSendId: send.id,
           previouslyPitchedFeatures,
-          autoApprove,
           channel: send.channel,
           knowledgeEntryIds: [],
           promptVersion: 'v1-followup',
-          scorePredictionId: latestScore?.id,
           correlationId: correlationId ?? job.id,
         } satisfies MessageGenerateJobPayload,
         {
