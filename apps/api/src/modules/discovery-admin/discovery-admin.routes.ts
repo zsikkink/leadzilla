@@ -136,6 +136,45 @@ const StaleApolloRevealAttemptsResponseSchema = z
     total: z.number().int().min(0),
   })
   .strict();
+const StaleMessageSendsQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(20),
+    olderThanMinutes: z.coerce.number().int().min(1).max(10_080).default(30),
+  })
+  .strict();
+const StaleMessageSendRowSchema = z
+  .object({
+    id: z.string().min(1),
+    leadId: z.string().min(1),
+    leadEmail: z.string().nullable(),
+    leadFirstName: z.string().nullable(),
+    leadLastName: z.string().nullable(),
+    businessName: z.string().nullable(),
+    messageDraftId: z.string().min(1),
+    messageVariantId: z.string().min(1),
+    channel: z.enum(['EMAIL', 'WHATSAPP']),
+    provider: z.enum(['RESEND', 'TRENGO']),
+    status: z.literal('SENDING'),
+    idempotencyKey: z.string().min(1),
+    providerMessageId: z.string().nullable(),
+    providerConversationId: z.string().nullable(),
+    scheduledAt: z.string().datetime().nullable(),
+    sentAt: z.string().datetime().nullable(),
+    followUpNumber: z.number().int().min(0),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+    sendingAgeMinutes: z.number().int().min(0),
+  })
+  .strict();
+const StaleMessageSendsResponseSchema = z
+  .object({
+    items: z.array(StaleMessageSendRowSchema),
+    page: z.number().int().min(1),
+    pageSize: z.number().int().min(1).max(100),
+    total: z.number().int().min(0),
+  })
+  .strict();
 const ResolveApolloRevealAttemptResponseSchema = z
   .object({
     id: z.string().min(1),
@@ -337,6 +376,27 @@ export function registerDiscoveryAdminRoutes(
     try {
       const result = await service.listJobRequests(parsedQuery.data);
       return JobRequestListResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.get('/v1/admin/jobs/message-sends/stale', async (request, reply) => {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
+      return;
+    }
+
+    const parsedQuery = StaleMessageSendsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid stale message sends query');
+    }
+
+    try {
+      const result = await service.listStaleMessageSends(parsedQuery.data);
+      return StaleMessageSendsResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;

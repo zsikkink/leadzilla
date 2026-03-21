@@ -413,6 +413,42 @@ export interface DiscoveryAdminListStaleApolloRevealAttemptsResponse {
   total: number;
 }
 
+export interface DiscoveryAdminStaleMessageSendRow {
+  id: string;
+  leadId: string;
+  leadEmail: string | null;
+  leadFirstName: string | null;
+  leadLastName: string | null;
+  businessName: string | null;
+  messageDraftId: string;
+  messageVariantId: string;
+  channel: 'EMAIL' | 'WHATSAPP';
+  provider: 'RESEND' | 'TRENGO';
+  status: 'SENDING';
+  idempotencyKey: string;
+  providerMessageId: string | null;
+  providerConversationId: string | null;
+  scheduledAt: string | null;
+  sentAt: string | null;
+  followUpNumber: number;
+  createdAt: string;
+  updatedAt: string;
+  sendingAgeMinutes: number;
+}
+
+export interface DiscoveryAdminListStaleMessageSendsQuery {
+  page: number;
+  pageSize: number;
+  olderThanMinutes: number;
+}
+
+export interface DiscoveryAdminListStaleMessageSendsResponse {
+  items: DiscoveryAdminStaleMessageSendRow[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
 function toIsoString(value: Date | string | null): string | null {
   if (value === null) {
     return null;
@@ -427,6 +463,9 @@ export interface DiscoveryAdminRepository {
   listSearchTasks(query: AdminListSearchTasksQuery): Promise<AdminListSearchTasksResponse>;
   getSearchTaskById(id: string): Promise<AdminSearchTaskDetailResponse>;
   listJobRequests(query: DiscoveryAdminListJobRequestsQuery): Promise<DiscoveryAdminListJobRequestsResponse>;
+  listStaleMessageSends(
+    query: DiscoveryAdminListStaleMessageSendsQuery,
+  ): Promise<DiscoveryAdminListStaleMessageSendsResponse>;
   listStaleApolloRevealAttempts(
     query: DiscoveryAdminListStaleApolloRevealAttemptsQuery,
   ): Promise<DiscoveryAdminListStaleApolloRevealAttemptsResponse>;
@@ -725,6 +764,86 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
       page: query.page,
       pageSize: query.pageSize,
       total: countRows[0]?.total ?? 0,
+    };
+  }
+
+  async listStaleMessageSends(
+    query: DiscoveryAdminListStaleMessageSendsQuery,
+  ): Promise<DiscoveryAdminListStaleMessageSendsResponse> {
+    const cutoff = new Date(Date.now() - query.olderThanMinutes * 60_000);
+    const where: Prisma.MessageSendWhereInput = {
+      status: 'SENDING',
+      updatedAt: { lt: cutoff },
+    };
+
+    const [total, rows] = await Promise.all([
+      prisma.messageSend.count({ where }),
+      prisma.messageSend.findMany({
+        where,
+        orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        select: {
+          id: true,
+          leadId: true,
+          messageDraftId: true,
+          messageVariantId: true,
+          channel: true,
+          provider: true,
+          status: true,
+          idempotencyKey: true,
+          providerMessageId: true,
+          providerConversationId: true,
+          scheduledAt: true,
+          sentAt: true,
+          followUpNumber: true,
+          createdAt: true,
+          updatedAt: true,
+          lead: {
+            select: {
+              email: true,
+              firstName: true,
+              lastName: true,
+              business: {
+                select: {
+                  name: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    ]);
+
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        leadId: row.leadId,
+        leadEmail: row.lead.email,
+        leadFirstName: row.lead.firstName,
+        leadLastName: row.lead.lastName,
+        businessName: row.lead.business?.name ?? null,
+        messageDraftId: row.messageDraftId,
+        messageVariantId: row.messageVariantId,
+        channel: row.channel,
+        provider: row.provider,
+        status: 'SENDING',
+        idempotencyKey: row.idempotencyKey,
+        providerMessageId: row.providerMessageId,
+        providerConversationId: row.providerConversationId,
+        scheduledAt: row.scheduledAt?.toISOString() ?? null,
+        sentAt: row.sentAt?.toISOString() ?? null,
+        followUpNumber: row.followUpNumber,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+        sendingAgeMinutes: Math.max(
+          0,
+          Math.floor((Date.now() - row.updatedAt.getTime()) / 60_000),
+        ),
+      })),
+      page: query.page,
+      pageSize: query.pageSize,
+      total,
     };
   }
 
