@@ -370,6 +370,39 @@ export interface DiscoveryAdminListJobRequestsResponse {
   total: number;
 }
 
+export type DiscoveryAdminApolloRevealAttemptStatus = 'CLAIMED' | 'COMPLETED';
+
+export interface DiscoveryAdminApolloRevealAttemptRow {
+  id: string;
+  leadId: string;
+  leadEmail: string | null;
+  leadFirstName: string | null;
+  leadLastName: string | null;
+  businessName: string | null;
+  icpProfileId: string;
+  scorePredictionId: string;
+  discoveryRunId: string | null;
+  status: DiscoveryAdminApolloRevealAttemptStatus;
+  jobId: string | null;
+  claimedAt: string;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DiscoveryAdminListStaleApolloRevealAttemptsQuery {
+  page: number;
+  pageSize: number;
+  olderThanMinutes: number;
+}
+
+export interface DiscoveryAdminListStaleApolloRevealAttemptsResponse {
+  items: DiscoveryAdminApolloRevealAttemptRow[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
 function toIsoString(value: Date | string | null): string | null {
   if (value === null) {
     return null;
@@ -384,6 +417,9 @@ export interface DiscoveryAdminRepository {
   listSearchTasks(query: AdminListSearchTasksQuery): Promise<AdminListSearchTasksResponse>;
   getSearchTaskById(id: string): Promise<AdminSearchTaskDetailResponse>;
   listJobRequests(query: DiscoveryAdminListJobRequestsQuery): Promise<DiscoveryAdminListJobRequestsResponse>;
+  listStaleApolloRevealAttempts(
+    query: DiscoveryAdminListStaleApolloRevealAttemptsQuery,
+  ): Promise<DiscoveryAdminListStaleApolloRevealAttemptsResponse>;
   listJobRuns(query: JobRunListQuery): Promise<ListJobRunsResponse>;
   getJobRunById(id: string): Promise<JobRunDetailResponse>;
   cancelDiscoveryRun(
@@ -678,6 +714,73 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
     };
   }
 
+  async listStaleApolloRevealAttempts(
+    query: DiscoveryAdminListStaleApolloRevealAttemptsQuery,
+  ): Promise<DiscoveryAdminListStaleApolloRevealAttemptsResponse> {
+    const cutoff = new Date(Date.now() - query.olderThanMinutes * 60_000);
+    const where: Prisma.ApolloRevealAttemptWhereInput = {
+      status: 'CLAIMED',
+      claimedAt: { lt: cutoff },
+    };
+
+    const [total, rows] = await Promise.all([
+      prisma.apolloRevealAttempt.count({ where }),
+      prisma.apolloRevealAttempt.findMany({
+        where,
+        orderBy: [{ claimedAt: 'asc' }, { id: 'asc' }],
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        select: {
+          id: true,
+          leadId: true,
+          icpProfileId: true,
+          scorePredictionId: true,
+          discoveryRunId: true,
+          status: true,
+          jobId: true,
+          claimedAt: true,
+          completedAt: true,
+          createdAt: true,
+          updatedAt: true,
+          lead: {
+            select: {
+              email: true,
+              firstName: true,
+              lastName: true,
+              business: {
+                select: {
+                  name: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    ]);
+
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        leadId: row.leadId,
+        leadEmail: row.lead.email,
+        leadFirstName: row.lead.firstName,
+        leadLastName: row.lead.lastName,
+        businessName: row.lead.business?.name ?? null,
+        icpProfileId: row.icpProfileId,
+        scorePredictionId: row.scorePredictionId,
+        discoveryRunId: row.discoveryRunId,
+        status: row.status,
+        jobId: row.jobId,
+        claimedAt: row.claimedAt.toISOString(),
+        completedAt: row.completedAt?.toISOString() ?? null,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      })),
+      page: query.page,
+      pageSize: query.pageSize,
+      total,
+    };
+  }
 
   async listJobRuns(query: JobRunListQuery): Promise<ListJobRunsResponse> {
     const where: Prisma.JobRunWhereInput = {

@@ -100,6 +100,42 @@ const JobRequestListResponseSchema = z
     total: z.number().int().min(0),
   })
   .strict();
+const ApolloRevealAttemptStatusSchema = z.enum(['CLAIMED', 'COMPLETED']);
+const StaleApolloRevealAttemptsQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(20),
+    olderThanMinutes: z.coerce.number().int().min(1).max(10_080).default(30),
+  })
+  .strict();
+const StaleApolloRevealAttemptRowSchema = z
+  .object({
+    id: z.string().min(1),
+    leadId: z.string().min(1),
+    leadEmail: z.string().nullable(),
+    leadFirstName: z.string().nullable(),
+    leadLastName: z.string().nullable(),
+    businessName: z.string().nullable(),
+    icpProfileId: z.string().min(1),
+    scorePredictionId: z.string().min(1),
+    discoveryRunId: z.string().nullable(),
+    status: ApolloRevealAttemptStatusSchema,
+    jobId: z.string().nullable(),
+    claimedAt: z.string().datetime(),
+    completedAt: z.string().datetime().nullable(),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+  })
+  .strict();
+const StaleApolloRevealAttemptsResponseSchema = z
+  .object({
+    items: z.array(StaleApolloRevealAttemptRowSchema),
+    page: z.number().int().min(1),
+    pageSize: z.number().int().min(1).max(100),
+    total: z.number().int().min(0),
+  })
+  .strict();
+
 function handleModuleError(error: unknown, request: FastifyRequest, reply: FastifyReply): boolean {
   if (error instanceof DiscoveryAdminNotFoundError) {
     reply.status(404).send(
@@ -297,6 +333,26 @@ export function registerDiscoveryAdminRoutes(
     }
   });
 
+  app.get('/v1/admin/jobs/apollo-reveal-attempts/stale', async (request, reply) => {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
+      return;
+    }
+
+    const parsedQuery = StaleApolloRevealAttemptsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid stale Apollo claims query');
+    }
+
+    try {
+      const result = await service.listStaleApolloRevealAttempts(parsedQuery.data);
+      return StaleApolloRevealAttemptsResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
 
   app.get('/v1/admin/jobs/runs', async (request, reply) => {
     if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {

@@ -16,6 +16,8 @@ import type {
 import { DiscoveryAdminNotImplementedError } from './discovery-admin.errors.js';
 import type {
   CancelDiscoveryRunResult,
+  DiscoveryAdminListStaleApolloRevealAttemptsQuery,
+  DiscoveryAdminListStaleApolloRevealAttemptsResponse,
   DiscoveryAdminListJobRequestsQuery,
   DiscoveryAdminListJobRequestsResponse,
   DiscoveryAdminRepository,
@@ -34,6 +36,9 @@ export interface DiscoveryAdminService {
   triggerDiscoverySeed(input: RunDiscoverySeedRequest): Promise<TriggerJobRunResponse>;
   triggerDiscoveryTaskRun(input: RunDiscoveryTasksRequest): Promise<TriggerJobRunResponse>;
   listJobRequests(query: DiscoveryAdminListJobRequestsQuery): Promise<DiscoveryAdminListJobRequestsResponse>;
+  listStaleApolloRevealAttempts(
+    query: DiscoveryAdminListStaleApolloRevealAttemptsQuery,
+  ): Promise<DiscoveryAdminListStaleApolloRevealAttemptsResponse>;
   listJobRuns(query: JobRunListQuery): Promise<ListJobRunsResponse>;
   getJobRunById(id: string): Promise<JobRunDetailResponse>;
   cancelDiscoveryRun(
@@ -74,6 +79,9 @@ export function buildDiscoveryAdminService(
     },
     async listJobRequests(query) {
       return repository.listJobRequests(query);
+    },
+    async listStaleApolloRevealAttempts(query) {
+      return repository.listStaleApolloRevealAttempts(query);
     },
     async listJobRuns(query) {
       return repository.listJobRuns(query);
