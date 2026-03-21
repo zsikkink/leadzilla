@@ -48,8 +48,8 @@ Code is still the source of truth. This doc is the fastest orientation path for 
    - `message.send` now atomically claims `MessageSend.status` from `QUEUED` to `SENDING` before any provider call, and only the claim winner is allowed to send.
    - Retries that see `SENDING` now no-op, which closes the earlier crash/retry duplicate-send replay window, especially for WhatsApp via Trengo.
    - Email via Resend still benefits from a provider-side `Idempotency-Key`, but the core duplicate-prevention boundary is now the persisted `SENDING` claim.
-   - The remaining tradeoff is a send stuck in `SENDING` after a crash or ambiguous provider outcome. The current design intentionally does not auto-reclaim or auto-retry that state.
-   - Operator visibility and safe recovery for stale `SENDING` sends remain future work.
+   - Discovery-admin now exposes stale `SENDING` sends and an admin-only `SENDING -> UNRESOLVED` quarantine action for ambiguous sends that must not be replayed automatically.
+   - The remaining tradeoff is still duplicate-prevention-first, not self-healing: `UNRESOLVED` sends stay out of active limbo, but they are not auto-retried, auto-failed, or provider-reconciled.
 
 ## 5. Intended target state
 

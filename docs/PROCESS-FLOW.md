@@ -629,6 +629,7 @@ Delivers the approved message through the appropriate channel.
 - **Suppression check**: Skip if the lead has ever had a `BOUNCED` or `UNSUBSCRIBED` feedback event, or if the lead has been soft-deleted
 - **Dedup check**: Skip if a `MessageSend` record with status `SENT` or `DELIVERED` already exists for this draft+variant (prevents double-sends on retries)
 - **Persisted claim**: Before any provider call, the worker atomically claims the send by moving `MessageSend.status` from `QUEUED` to `SENDING`. Retries that see `SENDING` no-op and do not replay the provider call.
+- **Operator quarantine**: Discovery-admin can move a stale `SENDING` send to `UNRESOLVED`. That state is admin-only, blocks replay like `SENDING`, and remains distinct from `FAILED` or `SENT`.
 - **Provider idempotency**: Email via Resend also carries an `Idempotency-Key`. WhatsApp via Trengo does not have an equivalent provider token, so the persisted `SENDING` claim is the primary duplicate-prevention boundary there.
 
 #### Email (via Resend)
@@ -655,8 +656,8 @@ Delivers the approved message through the appropriate channel.
 - **Missing data** (no phone for WhatsApp channel): Marked as `FAILED`, logged, no retry
 
 **Current remaining tradeoff**:
-- If the worker crashes or the provider outcome is ambiguous after the `SENDING` claim is taken, the send can remain stuck in `SENDING`.
-- This closes the old duplicate-send replay window, but it means operator visibility/recovery for stale `SENDING` sends is still future work.
+- If the worker crashes or the provider outcome is ambiguous after the `SENDING` claim is taken, the send can remain stuck in `SENDING` until an operator either leaves it for later webhook evidence or quarantines it as `UNRESOLVED`.
+- This closes the old duplicate-send replay window, but the design is still intentionally not self-healing: there is no auto-retry, auto-fail, or provider-read reconciliation for `SENDING` / `UNRESOLVED` sends.
 
 ---
 

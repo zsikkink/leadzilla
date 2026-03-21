@@ -22,6 +22,7 @@ import type {
   DiscoveryAdminListJobRequestsResponse,
   DiscoveryAdminListStaleMessageSendsQuery,
   DiscoveryAdminListStaleMessageSendsResponse,
+  DiscoveryAdminResolveMessageSendResult,
   DiscoveryAdminResolveApolloRevealAttemptResult,
   DiscoveryAdminRepository,
 } from './discovery-admin.repository.js';
@@ -42,6 +43,7 @@ export interface DiscoveryAdminService {
   listStaleMessageSends(
     query: DiscoveryAdminListStaleMessageSendsQuery,
   ): Promise<DiscoveryAdminListStaleMessageSendsResponse>;
+  resolveMessageSend(id: string): Promise<DiscoveryAdminResolveMessageSendResult>;
   listStaleApolloRevealAttempts(
     query: DiscoveryAdminListStaleApolloRevealAttemptsQuery,
   ): Promise<DiscoveryAdminListStaleApolloRevealAttemptsResponse>;
@@ -92,6 +94,9 @@ export function buildDiscoveryAdminService(
     },
     async listStaleMessageSends(query) {
       return repository.listStaleMessageSends(query);
+    },
+    async resolveMessageSend(id) {
+      return repository.resolveMessageSend(id);
     },
     async listStaleApolloRevealAttempts(query) {
       return repository.listStaleApolloRevealAttempts(query);

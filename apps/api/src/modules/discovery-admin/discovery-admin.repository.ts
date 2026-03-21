@@ -9,6 +9,7 @@ import type {
   JobRunDetailResponse,
   JobRunListQuery,
   ListJobRunsResponse,
+  MessageSendStatus,
 } from '@lead-flood/contracts';
 import { prisma, type Prisma } from '@lead-flood/db';
 
@@ -449,6 +450,15 @@ export interface DiscoveryAdminListStaleMessageSendsResponse {
   total: number;
 }
 
+export interface DiscoveryAdminResolveMessageSendResult {
+  id: string;
+  status: MessageSendStatus;
+  providerMessageId: string | null;
+  providerConversationId: string | null;
+  sentAt: string | null;
+  updatedAt: string;
+}
+
 function toIsoString(value: Date | string | null): string | null {
   if (value === null) {
     return null;
@@ -466,6 +476,7 @@ export interface DiscoveryAdminRepository {
   listStaleMessageSends(
     query: DiscoveryAdminListStaleMessageSendsQuery,
   ): Promise<DiscoveryAdminListStaleMessageSendsResponse>;
+  resolveMessageSend(id: string): Promise<DiscoveryAdminResolveMessageSendResult>;
   listStaleApolloRevealAttempts(
     query: DiscoveryAdminListStaleApolloRevealAttemptsQuery,
   ): Promise<DiscoveryAdminListStaleApolloRevealAttemptsResponse>;
@@ -844,6 +855,49 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
       page: query.page,
       pageSize: query.pageSize,
       total,
+    };
+  }
+
+  async resolveMessageSend(id: string): Promise<DiscoveryAdminResolveMessageSendResult> {
+    const updateResult = await prisma.messageSend.updateMany({
+      where: {
+        id,
+        status: 'SENDING',
+      },
+      data: {
+        status: 'UNRESOLVED',
+      },
+    });
+
+    const send = await prisma.messageSend.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        status: true,
+        providerMessageId: true,
+        providerConversationId: true,
+        sentAt: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!send) {
+      throw new DiscoveryAdminNotFoundError('Message send not found');
+    }
+
+    if (updateResult.count === 0 && send.status !== 'UNRESOLVED') {
+      throw new DiscoveryAdminBadRequestError(
+        'Message send is no longer in SENDING and cannot be quarantined',
+      );
+    }
+
+    return {
+      id: send.id,
+      status: send.status,
+      providerMessageId: send.providerMessageId,
+      providerConversationId: send.providerConversationId,
+      sentAt: send.sentAt?.toISOString() ?? null,
+      updatedAt: send.updatedAt.toISOString(),
     };
   }
 

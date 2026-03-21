@@ -13,6 +13,7 @@ import {
   JobRunIdParamsSchema,
   JobRunListQuerySchema,
   ListJobRunsResponseSchema,
+  MessageSendStatusSchema,
   type RunDiscoverySeedRequest,
   type RunDiscoveryTasksRequest,
   type TriggerJobRunResponse,
@@ -173,6 +174,17 @@ const StaleMessageSendsResponseSchema = z
     page: z.number().int().min(1),
     pageSize: z.number().int().min(1).max(100),
     total: z.number().int().min(0),
+  })
+  .strict();
+const MessageSendIdParamsSchema = z.object({ id: z.string().min(1) }).strict();
+const ResolveMessageSendResponseSchema = z
+  .object({
+    id: z.string().min(1),
+    status: MessageSendStatusSchema,
+    providerMessageId: z.string().nullable(),
+    providerConversationId: z.string().nullable(),
+    sentAt: z.string().datetime().nullable(),
+    updatedAt: z.string().datetime(),
   })
   .strict();
 const ResolveApolloRevealAttemptResponseSchema = z
@@ -397,6 +409,27 @@ export function registerDiscoveryAdminRoutes(
     try {
       const result = await service.listStaleMessageSends(parsedQuery.data);
       return StaleMessageSendsResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.post('/v1/admin/jobs/message-sends/:id/resolve', async (request, reply) => {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
+      return;
+    }
+
+    const parsedParams = MessageSendIdParamsSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return sendValidationError(reply, request.id, 'Invalid message send id');
+    }
+
+    try {
+      const result = await service.resolveMessageSend(parsedParams.data.id);
+      return ResolveMessageSendResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;

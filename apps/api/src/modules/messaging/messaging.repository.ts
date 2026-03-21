@@ -174,7 +174,7 @@ type PrismaMessageSend = {
   channel: 'EMAIL' | 'WHATSAPP';
   provider: 'RESEND' | 'TRENGO';
   providerMessageId: string | null;
-  status: 'QUEUED' | 'SENDING' | 'SENT' | 'DELIVERED' | 'REPLIED' | 'BOUNCED' | 'FAILED';
+  status: 'QUEUED' | 'SENDING' | 'UNRESOLVED' | 'SENT' | 'DELIVERED' | 'REPLIED' | 'BOUNCED' | 'FAILED';
   idempotencyKey: string;
   scheduledAt: Date | null;
   sentAt: Date | null;
@@ -275,6 +275,7 @@ async function findExistingInitialSendForDraft(draftId: string): Promise<PrismaM
 const BLOCKING_INITIAL_SEND_STATUSES: MessageSendStatus[] = [
   'QUEUED',
   'SENDING',
+  'UNRESOLVED',
   'SENT',
   'DELIVERED',
   'REPLIED',

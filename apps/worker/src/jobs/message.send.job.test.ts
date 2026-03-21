@@ -542,6 +542,56 @@ describe('handleMessageSendJob stale retry safety', () => {
     );
   });
 
+  it('no-ops without calling the provider when a retry sees UNRESOLVED', async () => {
+    dbMock.prisma.messageSend.findUnique.mockResolvedValueOnce({
+      id: 'send_1',
+      leadId: 'lead_1',
+      status: 'UNRESOLVED',
+      channel: 'EMAIL',
+      followUpNumber: 0,
+      idempotencyKey: 'idem_1',
+      messageVariant: {
+        variantKey: 'variant_a',
+        subject: 'Hello',
+        bodyText: 'Body copy',
+        bodyHtml: null,
+      },
+      lead: {
+        id: 'lead_1',
+        email: 'ada@example.com',
+        phone: null,
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+        deletedAt: null,
+      },
+    });
+
+    const sendEmail = vi.fn(async () => ({
+      status: 'success' as const,
+      providerMessageId: 'provider_msg_1',
+    }));
+
+    await handleMessageSendJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        sendId: 'send_1',
+        messageDraftId: 'draft_1',
+        messageVariantId: 'variant_1',
+        idempotencyKey: 'idem_1',
+        channel: 'EMAIL',
+      }),
+      makeDeps(sendEmail),
+    );
+
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(dbMock.prisma.messageSend.updateMany).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ sendId: 'send_1', status: 'UNRESOLVED' }),
+      'MessageSend is quarantined as unresolved and will not be replayed automatically',
+    );
+  });
+
   it('leaves the send in SENDING on retryable provider errors after claim', async () => {
     const sendEmail = vi.fn(async () => ({
       status: 'retryable_error' as const,

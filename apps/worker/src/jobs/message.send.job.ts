@@ -92,19 +92,27 @@ export async function handleMessageSendJob(
       return;
     }
 
-    if (send.lead.deletedAt) {
-      await markFailedIfQueued(sendId, 'LEAD_DELETED', 'Lead has been soft-deleted');
-      logger.warn({ jobId: job.id, sendId, leadId: send.lead.id }, 'Skipping soft-deleted lead');
-      return;
-    }
-
     if (send.status === 'SENDING') {
       logger.info({ jobId: job.id, sendId, status: send.status }, 'MessageSend already claimed for provider send');
       return;
     }
 
+    if (send.status === 'UNRESOLVED') {
+      logger.info(
+        { jobId: job.id, sendId, status: send.status },
+        'MessageSend is quarantined as unresolved and will not be replayed automatically',
+      );
+      return;
+    }
+
     if (send.status !== 'QUEUED') {
       logger.warn({ jobId: job.id, sendId, status: send.status }, 'MessageSend already processed');
+      return;
+    }
+
+    if (send.lead.deletedAt) {
+      await markFailedIfQueued(sendId, 'LEAD_DELETED', 'Lead has been soft-deleted');
+      logger.warn({ jobId: job.id, sendId, leadId: send.lead.id }, 'Skipping soft-deleted lead');
       return;
     }
 

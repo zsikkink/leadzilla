@@ -166,6 +166,7 @@ enum MessageApprovalStatus {
 enum MessageSendStatus {
   QUEUED
   SENDING
+  UNRESOLVED
   SENT
   DELIVERED
   REPLIED
