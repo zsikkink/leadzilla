@@ -112,11 +112,28 @@ export async function handleApolloEnrichJob(
       phone: true,
       decisionMakerPhone: true,
       businessId: true,
+      deletedAt: true,
+      status: true,
     },
   });
 
   if (!lead) {
     logger.warn(logCtx, 'Lead not found — skipping apollo.enrich');
+    await tryFinalizeDiscoveryRun(runId, logger);
+    return;
+  }
+
+  if (lead.deletedAt) {
+    logger.warn(logCtx, 'Skipping soft-deleted lead in apollo.enrich');
+    await tryFinalizeDiscoveryRun(runId, logger);
+    return;
+  }
+
+  if (lead.status !== 'qualified') {
+    logger.info(
+      { ...logCtx, leadStatus: lead.status },
+      'Lead is no longer eligible for Apollo enrichment, skipping apollo.enrich',
+    );
     await tryFinalizeDiscoveryRun(runId, logger);
     return;
   }
@@ -275,10 +292,24 @@ export async function handleApolloEnrichJob(
   }
 
   if (Object.keys(updateData).length > 0) {
-    await prisma.lead.update({
-      where: { id: leadId },
+    const updatedLead = await prisma.lead.updateMany({
+      where: {
+        id: leadId,
+        deletedAt: null,
+        status: 'qualified',
+      },
       data: updateData,
     });
+
+    if (updatedLead.count === 0) {
+      logger.info(
+        { ...logCtx, revealedEmail, revealedPhone },
+        'Skipped Apollo contact update to preserve downstream lifecycle state',
+      );
+      await tryFinalizeDiscoveryRun(runId, logger);
+      return;
+    }
+
     logger.info(
       { ...logCtx, revealedEmail, revealedPhone },
       'Updated lead with Apollo-revealed data',

@@ -11,7 +11,7 @@ const { dbMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => ({
       },
       lead: {
         findUnique: vi.fn(),
-        update: vi.fn(),
+        updateMany: vi.fn(),
       },
       business: {
         findUnique: vi.fn(),
@@ -75,6 +75,8 @@ describe('handleApolloEnrichJob draft policy alignment', () => {
       phone: null,
       decisionMakerPhone: null,
       businessId: 'biz_1',
+      deletedAt: null,
+      status: 'qualified',
     });
     dbMock.prisma.business.findUnique.mockResolvedValue({
       websiteDomain: 'example.com',
@@ -82,8 +84,8 @@ describe('handleApolloEnrichJob draft policy alignment', () => {
     dbMock.prisma.discoveryCostEvent.create.mockResolvedValue({
       id: 'cost_1',
     });
-    dbMock.prisma.lead.update.mockResolvedValue({
-      id: 'lead_1',
+    dbMock.prisma.lead.updateMany.mockResolvedValue({
+      count: 1,
     });
     pipelineSettingsMock.getEnrichmentThreshold.mockResolvedValue(0.5);
     pipelineSettingsMock.isProviderWithinBudget.mockResolvedValue(true);
@@ -127,11 +129,160 @@ describe('handleApolloEnrichJob draft policy alignment', () => {
     );
 
     expect(searchContactsByDomain).toHaveBeenCalledWith('example.com');
-    expect(dbMock.prisma.lead.update).toHaveBeenCalledWith({
-      where: { id: 'lead_1' },
+    expect(dbMock.prisma.lead.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'lead_1',
+        deletedAt: null,
+        status: 'qualified',
+      },
       data: { email: 'ada@example.com' },
     });
     expect(enqueueMessageGenerate).not.toHaveBeenCalled();
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
+  });
+
+  it('skips Apollo side effects for soft-deleted leads', async () => {
+    const searchContactsByDomain = vi.fn(async () => ({
+      status: 'success' as const,
+      contacts: [],
+    }));
+
+    dbMock.prisma.lead.findUnique.mockResolvedValue({
+      id: 'lead_1',
+      email: null,
+      phone: null,
+      decisionMakerPhone: null,
+      businessId: 'biz_1',
+      deletedAt: new Date('2026-03-20T12:00:00.000Z'),
+      status: 'qualified',
+    });
+
+    await handleApolloEnrichJob(
+      logger,
+      makeJob({
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        scorePredictionId: 'score_1',
+        runId: 'run_1',
+        scoreBand: 'HIGH',
+        apolloHasEmail: true,
+        apolloHasDirectPhone: true,
+      }),
+      {
+        apolloAdapter: {
+          searchContactsByDomain,
+          isConfigured: true,
+        },
+      },
+    );
+
+    expect(searchContactsByDomain).not.toHaveBeenCalled();
+    expect(dbMock.prisma.discoveryCostEvent.create).not.toHaveBeenCalled();
+    expect(dbMock.prisma.lead.updateMany).not.toHaveBeenCalled();
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
+  });
+
+  it('skips Apollo side effects for leads no longer in qualified status', async () => {
+    const searchContactsByDomain = vi.fn(async () => ({
+      status: 'success' as const,
+      contacts: [],
+    }));
+
+    dbMock.prisma.lead.findUnique.mockResolvedValue({
+      id: 'lead_1',
+      email: null,
+      phone: null,
+      decisionMakerPhone: null,
+      businessId: 'biz_1',
+      deletedAt: null,
+      status: 'drafted',
+    });
+
+    await handleApolloEnrichJob(
+      logger,
+      makeJob({
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        scorePredictionId: 'score_1',
+        runId: 'run_1',
+        scoreBand: 'HIGH',
+        apolloHasEmail: true,
+        apolloHasDirectPhone: true,
+      }),
+      {
+        apolloAdapter: {
+          searchContactsByDomain,
+          isConfigured: true,
+        },
+      },
+    );
+
+    expect(searchContactsByDomain).not.toHaveBeenCalled();
+    expect(dbMock.prisma.discoveryCostEvent.create).not.toHaveBeenCalled();
+    expect(dbMock.prisma.lead.updateMany).not.toHaveBeenCalled();
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
+  });
+
+  it('does not clobber later lead lifecycle state on a stale retry', async () => {
+    const searchContactsByDomain = vi.fn(async () => ({
+      status: 'success' as const,
+      contacts: [
+        {
+          email: 'ada@example.com',
+          phone: '15551234567',
+          firstName: 'Ada',
+          lastName: 'Lovelace',
+          title: 'Founder',
+          companyName: 'Example Co',
+        },
+      ],
+    }));
+
+    dbMock.prisma.lead.updateMany.mockResolvedValue({
+      count: 0,
+    });
+
+    await handleApolloEnrichJob(
+      logger,
+      makeJob({
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        scorePredictionId: 'score_1',
+        runId: 'run_1',
+        scoreBand: 'HIGH',
+        apolloHasEmail: true,
+        apolloHasDirectPhone: true,
+      }),
+      {
+        apolloAdapter: {
+          searchContactsByDomain,
+          isConfigured: true,
+        },
+      },
+    );
+
+    expect(searchContactsByDomain).toHaveBeenCalledWith('example.com');
+    expect(dbMock.prisma.discoveryCostEvent.create).toHaveBeenCalledTimes(1);
+    expect(dbMock.prisma.lead.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'lead_1',
+        deletedAt: null,
+        status: 'qualified',
+      },
+      data: {
+        email: 'ada@example.com',
+        decisionMakerPhone: '15551234567',
+        phone: '15551234567',
+      },
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        leadId: 'lead_1',
+        revealedEmail: true,
+        revealedPhone: true,
+      }),
+      'Skipped Apollo contact update to preserve downstream lifecycle state',
+    );
     expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
   });
 });
