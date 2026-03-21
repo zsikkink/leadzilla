@@ -370,7 +370,7 @@ export interface DiscoveryAdminListJobRequestsResponse {
   total: number;
 }
 
-export type DiscoveryAdminApolloRevealAttemptStatus = 'CLAIMED' | 'COMPLETED';
+export type DiscoveryAdminApolloRevealAttemptStatus = 'CLAIMED' | 'COMPLETED' | 'ABANDONED';
 
 export interface DiscoveryAdminApolloRevealAttemptRow {
   id: string;
@@ -387,6 +387,16 @@ export interface DiscoveryAdminApolloRevealAttemptRow {
   claimedAt: string;
   completedAt: string | null;
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface DiscoveryAdminResolveApolloRevealAttemptResult {
+  id: string;
+  status: DiscoveryAdminApolloRevealAttemptStatus;
+  claimedAt: string;
+  completedAt: string | null;
+  resolvedAt: string | null;
+  resolvedByUserId: string | null;
   updatedAt: string;
 }
 
@@ -420,6 +430,10 @@ export interface DiscoveryAdminRepository {
   listStaleApolloRevealAttempts(
     query: DiscoveryAdminListStaleApolloRevealAttemptsQuery,
   ): Promise<DiscoveryAdminListStaleApolloRevealAttemptsResponse>;
+  resolveApolloRevealAttempt(
+    id: string,
+    resolvedByUserId: string,
+  ): Promise<DiscoveryAdminResolveApolloRevealAttemptResult>;
   listJobRuns(query: JobRunListQuery): Promise<ListJobRunsResponse>;
   getJobRunById(id: string): Promise<JobRunDetailResponse>;
   cancelDiscoveryRun(
@@ -779,6 +793,57 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
       page: query.page,
       pageSize: query.pageSize,
       total,
+    };
+  }
+
+  async resolveApolloRevealAttempt(
+    id: string,
+    resolvedByUserId: string,
+  ): Promise<DiscoveryAdminResolveApolloRevealAttemptResult> {
+    const resolvedAt = new Date();
+    const updateResult = await prisma.apolloRevealAttempt.updateMany({
+      where: {
+        id,
+        status: 'CLAIMED',
+      },
+      data: {
+        status: 'ABANDONED',
+        resolvedAt,
+        resolvedByUserId,
+      },
+    });
+
+    const attempt = await prisma.apolloRevealAttempt.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        status: true,
+        claimedAt: true,
+        completedAt: true,
+        resolvedAt: true,
+        resolvedByUserId: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!attempt) {
+      throw new DiscoveryAdminNotFoundError('Apollo reveal attempt not found');
+    }
+
+    if (updateResult.count === 0 && attempt.status === 'COMPLETED') {
+      throw new DiscoveryAdminBadRequestError(
+        'Apollo reveal attempt is already completed and cannot be resolved',
+      );
+    }
+
+    return {
+      id: attempt.id,
+      status: attempt.status,
+      claimedAt: attempt.claimedAt.toISOString(),
+      completedAt: attempt.completedAt?.toISOString() ?? null,
+      resolvedAt: attempt.resolvedAt?.toISOString() ?? null,
+      resolvedByUserId: attempt.resolvedByUserId,
+      updatedAt: attempt.updatedAt.toISOString(),
     };
   }
 

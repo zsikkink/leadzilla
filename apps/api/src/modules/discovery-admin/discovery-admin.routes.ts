@@ -100,7 +100,8 @@ const JobRequestListResponseSchema = z
     total: z.number().int().min(0),
   })
   .strict();
-const ApolloRevealAttemptStatusSchema = z.enum(['CLAIMED', 'COMPLETED']);
+const ApolloRevealAttemptStatusSchema = z.enum(['CLAIMED', 'COMPLETED', 'ABANDONED']);
+const ApolloRevealAttemptIdParamsSchema = z.object({ id: z.string().min(1) }).strict();
 const StaleApolloRevealAttemptsQuerySchema = z
   .object({
     page: z.coerce.number().int().min(1).default(1),
@@ -133,6 +134,17 @@ const StaleApolloRevealAttemptsResponseSchema = z
     page: z.number().int().min(1),
     pageSize: z.number().int().min(1).max(100),
     total: z.number().int().min(0),
+  })
+  .strict();
+const ResolveApolloRevealAttemptResponseSchema = z
+  .object({
+    id: z.string().min(1),
+    status: ApolloRevealAttemptStatusSchema,
+    claimedAt: z.string().datetime(),
+    completedAt: z.string().datetime().nullable(),
+    resolvedAt: z.string().datetime().nullable(),
+    resolvedByUserId: z.string().min(1).nullable(),
+    updatedAt: z.string().datetime(),
   })
   .strict();
 
@@ -346,6 +358,32 @@ export function registerDiscoveryAdminRoutes(
     try {
       const result = await service.listStaleApolloRevealAttempts(parsedQuery.data);
       return StaleApolloRevealAttemptsResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.post('/v1/admin/jobs/apollo-reveal-attempts/:id/resolve', async (request, reply) => {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
+      return;
+    }
+
+    const userId = requireAuthenticatedUserId(request, reply);
+    if (!userId) {
+      return;
+    }
+
+    const parsedParams = ApolloRevealAttemptIdParamsSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return sendValidationError(reply, request.id, 'Invalid Apollo reveal attempt id');
+    }
+
+    try {
+      const result = await service.resolveApolloRevealAttempt(parsedParams.data.id, userId);
+      return ResolveApolloRevealAttemptResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;

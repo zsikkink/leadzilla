@@ -20,6 +20,7 @@ import type {
   DiscoveryAdminListStaleApolloRevealAttemptsResponse,
   DiscoveryAdminListJobRequestsQuery,
   DiscoveryAdminListJobRequestsResponse,
+  DiscoveryAdminResolveApolloRevealAttemptResult,
   DiscoveryAdminRepository,
 } from './discovery-admin.repository.js';
 
@@ -39,6 +40,10 @@ export interface DiscoveryAdminService {
   listStaleApolloRevealAttempts(
     query: DiscoveryAdminListStaleApolloRevealAttemptsQuery,
   ): Promise<DiscoveryAdminListStaleApolloRevealAttemptsResponse>;
+  resolveApolloRevealAttempt(
+    id: string,
+    resolvedByUserId: string,
+  ): Promise<DiscoveryAdminResolveApolloRevealAttemptResult>;
   listJobRuns(query: JobRunListQuery): Promise<ListJobRunsResponse>;
   getJobRunById(id: string): Promise<JobRunDetailResponse>;
   cancelDiscoveryRun(
@@ -82,6 +87,9 @@ export function buildDiscoveryAdminService(
     },
     async listStaleApolloRevealAttempts(query) {
       return repository.listStaleApolloRevealAttempts(query);
+    },
+    async resolveApolloRevealAttempt(id, resolvedByUserId) {
+      return repository.resolveApolloRevealAttempt(id, resolvedByUserId);
     },
     async listJobRuns(query) {
       return repository.listJobRuns(query);

@@ -113,6 +113,7 @@ enum EnrichmentStatus {
 enum ApolloRevealAttemptStatus {
   CLAIMED
   COMPLETED
+  ABANDONED
 }
 
 enum TrainingRunStatus {
@@ -552,6 +553,8 @@ model ApolloRevealAttempt {
   jobId            String?
   claimedAt        DateTime                  @default(now())
   completedAt      DateTime?
+  resolvedAt       DateTime?
+  resolvedByUserId String?
   createdAt        DateTime                  @default(now())
   updatedAt        DateTime                  @updatedAt
 
