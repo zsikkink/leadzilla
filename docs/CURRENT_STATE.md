@@ -44,12 +44,12 @@ Code is still the source of truth. This doc is the fastest orientation path for 
    - The recent hardening reduced stale/duplicate follow-up generation risk, but it did not close this crash-loss window.
    - Closing the gap safely would require a broader persisted handoff surface or an extension of the existing outbox pattern.
 
-6. `message.send` is still best-effort before provider success is durably persisted
-   - `message.send` calls the provider while `MessageSend.status` is still `QUEUED`, then writes `SENT` plus provider metadata afterward.
-   - Email via Resend already sends a provider-side `Idempotency-Key`, which materially reduces duplicate-send risk there.
-   - WhatsApp via Trengo currently has no equivalent provider idempotency token and no persisted pre-send claim surface.
-   - If the worker dies after Trengo accepts the send but before the success write commits, a retry can still send the same WhatsApp message twice.
-   - Closing the gap safely would require either a persisted pre-provider claim for `MessageSend` or a broader extension of the durable outbox/job-tracking pattern.
+6. `message.send` is now duplicate-prevention-first, not self-healing
+   - `message.send` now atomically claims `MessageSend.status` from `QUEUED` to `SENDING` before any provider call, and only the claim winner is allowed to send.
+   - Retries that see `SENDING` now no-op, which closes the earlier crash/retry duplicate-send replay window, especially for WhatsApp via Trengo.
+   - Email via Resend still benefits from a provider-side `Idempotency-Key`, but the core duplicate-prevention boundary is now the persisted `SENDING` claim.
+   - The remaining tradeoff is a send stuck in `SENDING` after a crash or ambiguous provider outcome. The current design intentionally does not auto-reclaim or auto-retry that state.
+   - Operator visibility and safe recovery for stale `SENDING` sends remain future work.
 
 ## 5. Intended target state
 

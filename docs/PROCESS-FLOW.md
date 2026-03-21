@@ -628,7 +628,8 @@ Delivers the approved message through the appropriate channel.
 **Pre-send checks** (applied to ALL sends):
 - **Suppression check**: Skip if the lead has ever had a `BOUNCED` or `UNSUBSCRIBED` feedback event, or if the lead has been soft-deleted
 - **Dedup check**: Skip if a `MessageSend` record with status `SENT` or `DELIVERED` already exists for this draft+variant (prevents double-sends on retries)
-- **Idempotency key**: Every send carries a unique idempotency key — if the send request reaches the provider twice (crash + retry), the provider rejects the duplicate
+- **Persisted claim**: Before any provider call, the worker atomically claims the send by moving `MessageSend.status` from `QUEUED` to `SENDING`. Retries that see `SENDING` no-op and do not replay the provider call.
+- **Provider idempotency**: Email via Resend also carries an `Idempotency-Key`. WhatsApp via Trengo does not have an equivalent provider token, so the persisted `SENDING` claim is the primary duplicate-prevention boundary there.
 
 #### Email (via Resend)
 - **Daily limit**: Configurable (`emailDailyLimit` setting, default 100/day). The rate limiter tracks sends per 24-hour rolling window.
@@ -648,9 +649,14 @@ Delivers the approved message through the appropriate channel.
 - The system computes `nextFollowUpAfter` — when the next follow-up should be sent if no reply comes
 
 **Failure handling**:
-- **Retryable** (429 rate limit, 5xx server error): Throws a `RetryableError` — pg-boss retries up to 5 times with 90-second delay and exponential backoff
+- **Retryable before provider claim** (for example queue scheduling/rate-window deferral): pg-boss can retry or defer safely because no provider side effect has happened yet
+- **Retryable after provider claim**: The worker now leaves the send in `SENDING` rather than auto-replaying the provider call. This is intentionally duplicate-prevention-first, not self-healing.
 - **Terminal** (400-499 except 429): Marked as `FAILED` with a failure code and reason. No retry — something is fundamentally wrong (bad phone format, template rejected, etc.)
 - **Missing data** (no phone for WhatsApp channel): Marked as `FAILED`, logged, no retry
+
+**Current remaining tradeoff**:
+- If the worker crashes or the provider outcome is ambiguous after the `SENDING` claim is taken, the send can remain stuck in `SENDING`.
+- This closes the old duplicate-send replay window, but it means operator visibility/recovery for stale `SENDING` sends is still future work.
 
 ---
 
