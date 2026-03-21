@@ -46,6 +46,15 @@ export interface MessageSendJobDependencies {
 }
 
 const LEAD_STATUSES_BEFORE_FIRST_SEND = ['qualified', 'drafted'] as const;
+const SEND_STATUSES_RECOVERABLE_AFTER_PROVIDER_SUCCESS = ['DELIVERED', 'REPLIED', 'BOUNCED'] as const;
+
+function isRecoverablePostSuccessStatus(
+  status: string,
+): status is (typeof SEND_STATUSES_RECOVERABLE_AFTER_PROVIDER_SUCCESS)[number] {
+  return SEND_STATUSES_RECOVERABLE_AFTER_PROVIDER_SUCCESS.includes(
+    status as (typeof SEND_STATUSES_RECOVERABLE_AFTER_PROVIDER_SUCCESS)[number],
+  );
+}
 
 export async function handleMessageSendJob(
   logger: MessageSendLogger,
@@ -199,6 +208,23 @@ export async function handleMessageSendJob(
           nextFollowUpAfter,
         });
         if (!markedSent) {
+          const reconciledStatus = await reconcileSuccessfulSendAfterStateAdvance(sendId, {
+            providerMessageId: result.providerMessageId,
+            followUpNumber,
+            nextFollowUpAfter,
+          });
+          if (reconciledStatus) {
+            if (followUpNumber === 0 && reconciledStatus !== 'BOUNCED') {
+              await markLeadMessagedIfNotAdvanced(send.lead.id);
+            }
+
+            logger.info(
+              { jobId: job.id, sendId, status: reconciledStatus },
+              'MessageSend success metadata reconciled after external status advance',
+            );
+            return;
+          }
+
           logger.warn(
             { jobId: job.id, sendId, status: send.status },
             'MessageSend state advanced before success write; skipping stale send update',
@@ -320,6 +346,24 @@ export async function handleMessageSendJob(
           nextFollowUpAfter,
         });
         if (!markedSent) {
+          const reconciledStatus = await reconcileSuccessfulSendAfterStateAdvance(sendId, {
+            providerMessageId: result.providerMessageId,
+            providerConversationId: ticketId,
+            followUpNumber,
+            nextFollowUpAfter,
+          });
+          if (reconciledStatus) {
+            if (followUpNumber === 0 && reconciledStatus !== 'BOUNCED') {
+              await markLeadMessagedIfNotAdvanced(send.lead.id);
+            }
+
+            logger.info(
+              { jobId: job.id, sendId, status: reconciledStatus },
+              'MessageSend success metadata reconciled after external status advance',
+            );
+            return;
+          }
+
           logger.warn(
             { jobId: job.id, sendId, status: send.status },
             'MessageSend state advanced before success write; skipping stale send update',
@@ -409,6 +453,66 @@ async function markLeadMessagedIfNotAdvanced(leadId: string): Promise<void> {
       status: 'messaged',
     },
   });
+}
+
+async function reconcileSuccessfulSendAfterStateAdvance(
+  sendId: string,
+  data: {
+    providerMessageId: string;
+    providerConversationId?: string | null | undefined;
+    followUpNumber: number;
+    nextFollowUpAfter: Date | null;
+  },
+): Promise<'DELIVERED' | 'REPLIED' | 'BOUNCED' | null> {
+  const send = await prisma.messageSend.findUnique({
+    where: { id: sendId },
+    select: {
+      status: true,
+      providerMessageId: true,
+      providerConversationId: true,
+      sentAt: true,
+      nextFollowUpAfter: true,
+    },
+  });
+
+  if (!send || !isRecoverablePostSuccessStatus(send.status)) {
+    return null;
+  }
+
+  const reconciliationData: {
+    providerMessageId?: string;
+    providerConversationId?: string | null;
+    sentAt?: Date;
+    nextFollowUpAfter?: Date | null;
+  } = {};
+
+  if (!send.providerMessageId) {
+    reconciliationData.providerMessageId = data.providerMessageId;
+  }
+
+  if (data.providerConversationId !== undefined && !send.providerConversationId) {
+    reconciliationData.providerConversationId = data.providerConversationId;
+  }
+
+  if (!send.sentAt) {
+    reconciliationData.sentAt = new Date();
+  }
+
+  if (send.status === 'DELIVERED' && send.nextFollowUpAfter === null) {
+    reconciliationData.nextFollowUpAfter = data.nextFollowUpAfter;
+  }
+
+  if (Object.keys(reconciliationData).length > 0) {
+    await prisma.messageSend.updateMany({
+      where: {
+        id: sendId,
+        status: send.status,
+      },
+      data: reconciliationData,
+    });
+  }
+
+  return send.status;
 }
 
 async function markSentIfQueued(
