@@ -2194,8 +2194,37 @@ export async function handleBusinessConvertJob(
     // Check for existing lead with same email (dedup)
     const existingLead = await tx.lead.findFirst({
       where: { email: leadEmail },
-      select: { id: true },
+      select: { id: true, deletedAt: true },
     });
+
+    if (existingLead?.deletedAt) {
+      logger.warn(
+        { ...logCtx, softDeletedLeadId: existingLead.id, email: leadEmail, deletedAt: existingLead.deletedAt },
+        'Lead with this email is soft-deleted — treating convert as terminal',
+      );
+
+      // Keep business-level contact evidence, but do not link a soft-deleted lead.
+      if (allCandidates.length > 0) {
+        await tx.businessContact.createMany({
+          data: allCandidates.slice(0, 5).map((c) => ({
+            businessId: business.id,
+            name: c.name,
+            title: c.title,
+            email: c.email,
+            phone: c.phone,
+            linkedinUrl: c.linkedinUrl,
+            seniority: c.seniority,
+            positionRank: c.positionRank,
+            source: c.source,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      await persistCostEvents(tx as unknown as typeof prisma, discoveryRunId, businessId, costEvents);
+
+      return { lead: existingLead, isNew: false, softDeletedEmailCollision: true as const };
+    }
 
     if (existingLead) {
       logger.info(
@@ -2443,6 +2472,19 @@ export async function handleBusinessConvertJob(
       icpProfileId,
     },
   });
+
+  if (txResult.softDeletedEmailCollision) {
+    await prisma.business.update({
+      where: { id: businessId },
+      data: {
+        preQualified: false,
+        disqualificationReason: 'SOFT_DELETED_LEAD_EMAIL_CONFLICT',
+      },
+    });
+
+    await tryFinalizeDiscoveryRun(discoveryRunId, logger);
+    return;
+  }
 
   if (txResult.isNew) {
     // Persist canonical pipeline lineage records used by feature/scoring analytics

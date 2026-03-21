@@ -34,6 +34,7 @@ const { dbMock, txMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => (
   txMock: {
     lead: {
       findFirst: vi.fn(),
+      create: vi.fn(),
     },
     businessConversion: {
       create: vi.fn(),
@@ -237,7 +238,9 @@ describe('handleBusinessConvertJob reused-lead terminalization', () => {
 
     txMock.lead.findFirst.mockResolvedValue({
       id: 'lead_existing_1',
+      deletedAt: null,
     });
+    txMock.lead.create.mockResolvedValue({ id: 'lead_new_1' });
     txMock.businessConversion.create.mockResolvedValue({ id: 'conversion_1' });
     txMock.businessContact.createMany.mockResolvedValue({ count: 2 });
     txMock.discoveryCostEvent.create.mockResolvedValue({ id: 'cost_1' });
@@ -280,6 +283,56 @@ describe('handleBusinessConvertJob reused-lead terminalization', () => {
         icpProfileId: 'icp_1',
       }),
       'Existing lead reuse remains terminal for automated downstream progression; skipping pipeline lineage records',
+    );
+  });
+
+  it('treats a soft-deleted same-email lead as an explicit terminal collision', async () => {
+    const enqueueFeaturesCompute = vi.fn();
+    txMock.lead.findFirst.mockResolvedValueOnce({
+      id: 'lead_deleted_1',
+      deletedAt: new Date('2026-03-19T10:00:00.000Z'),
+    });
+
+    await handleBusinessConvertJob(
+      logger,
+      makeJob({
+        businessId: 'business_1',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+      }),
+      makeDeps(enqueueFeaturesCompute),
+    );
+
+    expect(txMock.businessConversion.create).not.toHaveBeenCalled();
+    expect(txMock.lead.create).not.toHaveBeenCalled();
+    expect(txMock.businessContact.createMany).toHaveBeenCalledTimes(1);
+    expect(dbMock.prisma.business.update).toHaveBeenCalledWith({
+      where: { id: 'business_1' },
+      data: {
+        preQualified: false,
+        disqualificationReason: 'SOFT_DELETED_LEAD_EMAIL_CONFLICT',
+      },
+    });
+    expect(dbMock.prisma.contactRecoveryItem.deleteMany).toHaveBeenCalledWith({
+      where: {
+        businessId: 'business_1',
+        icpProfileId: 'icp_1',
+      },
+    });
+    expect(dbMock.prisma.leadDiscoveryRecord.upsert).not.toHaveBeenCalled();
+    expect(dbMock.prisma.leadEnrichmentRecord.upsert).not.toHaveBeenCalled();
+    expect(enqueueFeaturesCompute).not.toHaveBeenCalled();
+    expect(trackerMock.checkLeadTargetReached).not.toHaveBeenCalled();
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: 'business_1',
+        softDeletedLeadId: 'lead_deleted_1',
+        email: 'ada@acme.example',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+      }),
+      'Lead with this email is soft-deleted — treating convert as terminal',
     );
   });
 });
