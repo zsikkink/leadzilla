@@ -106,12 +106,7 @@ export async function validateGoogleCseResults(
 ): Promise<GoogleCseValidatedPerson[]> {
   if (!config.openAiApiKey || input.results.length === 0) return [];
 
-  const linkedInResults = input.results.filter((r) =>
-    r.link.includes('linkedin.com/in/'),
-  );
-  if (linkedInResults.length === 0) return [];
-
-  const formatted = linkedInResults
+  const formatted = input.results
     .map(
       (r, i) =>
         `${i + 1}. Title: "${r.title}"\n   Snippet: "${r.snippet}"\n   URL: ${r.link}`,
@@ -122,7 +117,7 @@ export async function validateGoogleCseResults(
     {
       role: 'system',
       content:
-        'You validate LinkedIn search results to find the CEO/founder/owner of a business. Return JSON with a "persons" array. Each item: name (string), title (string or null), linkedinUrl (string), confidence (number 0-1). Only include people who appear to be CEO, founder, owner, managing director, or president of the specified business. Exclude people at other companies.',
+        'You identify the CEO/founder/owner of a business from web search results. Return JSON with a "persons" array. Each item: name (string), title (string or null), linkedinUrl (string or null — only if the URL is a LinkedIn profile), confidence (number 0-1). Include people who appear to be CEO, founder, owner, managing director, president, general manager, or principal of the specified business. Exclude people at other companies. Extract names from LinkedIn profiles, company about pages, news articles, or any credible source.',
     },
     {
       role: 'user',

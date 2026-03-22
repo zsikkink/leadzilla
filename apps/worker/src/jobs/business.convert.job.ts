@@ -1322,7 +1322,7 @@ export async function handleBusinessConvertJob(
   const googleCseResults: Array<{ title: string; snippet: string; link: string }> = [];
 
   if (deps.googleCseAdapter?.isConfigured) {
-    const cseQuery = `${business.name} ${business.city ?? ''} CEO site:linkedin.com`.trim();
+    const cseQuery = `${business.name} ${business.city ?? ''} CEO OR founder OR owner OR "managing director"`.trim();
     const cseResult = await deps.googleCseAdapter.search(cseQuery, 5);
     gateStats.googleCseQueried = true;
 
