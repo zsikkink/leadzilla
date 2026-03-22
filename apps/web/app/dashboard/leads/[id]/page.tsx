@@ -1,5 +1,6 @@
 'use client';
 
+import type { GetLeadResponse } from '@lead-flood/contracts';
 import {
   AlertCircle,
   AlertTriangle,
@@ -24,7 +25,7 @@ import {
   Users,
 } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useMemo, useState, type CSSProperties } from 'react';
 
 import { AboutBusinessCard } from '../../../../src/components/about-business-card.js';
 import { LeadStatusBadge } from '../../../../src/components/lead-status-badge.js';
@@ -39,7 +40,6 @@ import {
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
 import { countryName } from '../../../../src/lib/countries.js';
-import { getSupabaseBrowserClient } from '../../../../src/lib/supabase-client.js';
 import { getTeamMemberTier, sortTeamMembers } from '../../../../src/lib/team-members.js';
 
 interface EnrichmentField {
@@ -147,6 +147,40 @@ function normalizeEmail(email: string | null | undefined): string | null {
   if (!email) return null;
   const normalized = email.trim().toLowerCase();
   return normalized.length > 0 ? normalized : null;
+}
+
+function readOptionalString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function getBusinessNameFromLead(lead: GetLeadResponse | null): string | null {
+  if (!lead?.enrichmentData || typeof lead.enrichmentData !== 'object') {
+    return null;
+  }
+
+  const data = lead.enrichmentData as Record<string, unknown>;
+  return readOptionalString(
+    data.companyName
+      ?? data.company_name
+      ?? data.organization_name
+      ?? data.company,
+  );
+}
+
+function buildTeamMembersFromLead(lead: GetLeadResponse | null): TeamMember[] {
+  const candidates = lead?.contactDiscovery?.topCandidates ?? [];
+  return candidates.map((candidate, index) => ({
+    id: `contact-discovery-${index}`,
+    fullName: candidate.name,
+    jobTitle: candidate.title,
+    email: candidate.email,
+    phone: null,
+    linkedinUrl: candidate.linkedinUrl,
+    seniority: null,
+    positionRank: index,
+    source: candidate.sourceStage ?? 'Contact discovery',
+    fromBusinessContacts: false,
+  }));
 }
 
 function getLeadTitleFromEnrichment(enrichmentData: unknown): string | null {
@@ -546,193 +580,18 @@ export default function LeadDetailPage() {
     useCallback(() => apiClient.listSends({ leadId: id, page: 1, pageSize: 50 }), [apiClient, id]),
     [id],
   );
-
-  // Fetch linked Business scraper data via business_conversions → businesses
-  const [businessData, setBusinessData] = useState<BusinessScrapeData | null>(null);
-  const [businessId, setBusinessId] = useState<string | null>(null);
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
-  const [instagramPosts, setInstagramPosts] = useState<InstagramPost[]>([]);
-  const [leadPhoneSource, setLeadPhoneSource] = useState<string | null>(null);
-  const [leadBusinessEmail, setLeadBusinessEmail] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    async function fetchBusiness() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-        // Find business linked to this lead
-        const { data: conversions } = await supabase
-          .from('business_conversions')
-          .select('businessId, icpProfileId')
-          .eq('leadId', id)
-          .limit(1);
-
-        const bizId = conversions?.[0]?.businessId;
-        const convIcpProfileId = conversions?.[0]?.icpProfileId as string | null | undefined;
-        if (!bizId || cancelled) return;
-
-        setBusinessId(bizId);
-        if (convIcpProfileId) setLeadIcpProfileId(convIcpProfileId);
-
-        const { data: biz } = await supabase
-          .from('businesses')
-          .select('name, website_domain, instagram_handle, rating, review_count, follower_count, category, country_code, city, apify_website_scrape_json, apify_instagram_scrape_json')
-          .eq('id', bizId)
-          .single();
-
-        if (!biz || cancelled) return;
-
-        setBusinessData({
-          name: biz.name ?? '',
-          websiteScrape: biz.apify_website_scrape_json as Record<string, unknown> | null,
-          instagramScrape: biz.apify_instagram_scrape_json as Record<string, unknown> | null,
-          websiteDomain: biz.website_domain,
-          instagramHandle: biz.instagram_handle,
-          rating: biz.rating,
-          reviewCount: biz.review_count,
-          followerCount: biz.follower_count,
-          category: biz.category,
-          countryCode: biz.country_code ?? null,
-          city: biz.city ?? null,
-        });
-
-        // Fetch phoneSource and businessEmail from Lead table
-        const { data: leadExtra } = await supabase
-          .from('Lead')
-          .select('phoneSource, businessEmail')
-          .eq('id', id)
-          .single();
-        if (leadExtra && !cancelled) {
-          setLeadPhoneSource((leadExtra.phoneSource as string) ?? null);
-          setLeadBusinessEmail((leadExtra.businessEmail as string) ?? null);
-        }
-
-        // Fetch team members from business_contacts table
-        const { data: contacts } = await supabase
-          .from('business_contacts')
-          .select('id, name, title, email, phone, linkedinUrl, seniority, positionRank, source')
-          .eq('businessId', bizId)
-          .order('positionRank', { ascending: true })
-          .order('createdAt', { ascending: false });
-
-        if (contacts && contacts.length > 0 && !cancelled) {
-          const mapped = contacts.map((c: {
-            id: string;
-            name: string;
-            title: string | null;
-            email: string | null;
-            phone: string | null;
-            linkedinUrl: string | null;
-            seniority: string | null;
-            positionRank: number | null;
-            source: string | null;
-          }) => ({
-            id: c.id,
-            fullName: c.name,
-            jobTitle: c.title,
-            email: c.email,
-            phone: c.phone,
-            linkedinUrl: c.linkedinUrl,
-            seniority: c.seniority,
-            positionRank: c.positionRank,
-            source: (c.source as string) ?? null,
-            fromBusinessContacts: true,
-          }));
-          setTeamMembers(mapped);
-        } else if (!cancelled) {
-          // Fallback: extract decision makers from website scrape data
-          const websiteScrape = biz.apify_website_scrape_json as Record<string, unknown> | null;
-          if (websiteScrape) {
-            const dms = websiteScrape.decisionMakers as Array<Record<string, unknown>> | undefined;
-            if (Array.isArray(dms) && dms.length > 0) {
-              setTeamMembers(dms.map((dm, idx) => ({
-                id: `dm-${idx}`,
-                fullName: typeof dm.name === 'string' ? dm.name : 'Unknown',
-                jobTitle: typeof dm.title === 'string' ? dm.title : null,
-                email: typeof dm.email === 'string' ? dm.email : null,
-                phone: null,
-                linkedinUrl: typeof dm.linkedinUrl === 'string' ? dm.linkedinUrl : null,
-                seniority: null,
-                positionRank: null,
-                source: 'Website',
-                fromBusinessContacts: false,
-              })));
-            }
-          }
-        }
-
-        // Extract Instagram recent posts from scrape data
-        const igScrape = biz.apify_instagram_scrape_json as Record<string, unknown> | null;
-        if (igScrape && Array.isArray(igScrape.recentPosts) && !cancelled) {
-          const posts = (igScrape.recentPosts as Array<Record<string, unknown>>)
-            .slice(0, 6)
-            .map((p) => ({
-              caption: typeof p.caption === 'string' ? p.caption : '',
-              likes: typeof p.likeCount === 'number'
-                ? p.likeCount
-                : (typeof p.likes === 'number' ? p.likes : (typeof p.likesCount === 'number' ? p.likesCount : 0)),
-              comments: typeof p.commentCount === 'number'
-                ? p.commentCount
-                : (typeof p.comments === 'number' ? p.comments : (typeof p.commentsCount === 'number' ? p.commentsCount : 0)),
-              timestamp: typeof p.timestamp === 'string' ? p.timestamp : (typeof p.takenAtTimestamp === 'string' ? p.takenAtTimestamp : ''),
-              url: typeof p.url === 'string' ? p.url : (typeof p.shortCode === 'string' ? `https://instagram.com/p/${p.shortCode}` : null),
-              thumbnailUrl:
-                typeof p.thumbnailUrl === 'string'
-                  ? p.thumbnailUrl
-                  : (
-                    typeof p.displayUrl === 'string'
-                      ? p.displayUrl
-                      : (typeof p.url === 'string' ? p.url : null)
-                  ),
-              postType: getInstagramPostType(typeof p.postType === 'string' ? p.postType.toLowerCase() : null),
-            }));
-          setInstagramPosts(posts);
-        }
-      } catch {
-        // Silently fail — business intel is supplementary
-      }
-    }
-    void fetchBusiness();
-    return () => { cancelled = true; };
-  }, [id]);
-
-  // Backup contact rotation
-  const [leadIcpProfileId, setLeadIcpProfileId] = useState<string | null>(null);
   const [isCreatingBackup, setIsCreatingBackup] = useState(false);
   const [backupSuccess, setBackupSuccess] = useState<string | null>(null);
-
-  const backupContacts = useMemo(() => {
-    if (!lead.data) return [];
-    const currentEmail = lead.data.email?.toLowerCase();
-    return sortTeamMembers(teamMembers, lead.data.email).ordered
-      .filter((tm) => tm.email && tm.email.toLowerCase() !== currentEmail);
-  }, [teamMembers, lead.data]);
 
   const maxFollowUpNumber = useMemo(() => {
     if (!sends.data?.items.length) return -1;
     return Math.max(...sends.data.items.map((s) => s.followUpNumber ?? 0));
   }, [sends.data]);
 
-  const hasReply = sends.data?.items.some((s) => s.status === 'REPLIED') ?? false;
-  const showBackupBanner = maxFollowUpNumber >= 3 && !hasReply && backupContacts.length > 0;
-  const nextBackup = backupContacts[0];
-
-  const handleStartBackupSequence = async (contact: typeof backupContacts[0]) => {
+  const handleStartBackupSequence = async (contact: TeamMember) => {
     if (!contact.email) return;
     setIsCreatingBackup(true);
     try {
-      // Dedup check — don't create duplicate leads for same email
-      const supabase = getSupabaseBrowserClient();
-      const { data: existing } = await supabase
-        .from('Lead')
-        .select('id')
-        .eq('email', contact.email.toLowerCase())
-        .is('deletedAt', null)
-        .limit(1);
-      if (existing && existing.length > 0) {
-        setBackupSuccess(`Lead already exists for ${contact.email}.`);
-        return;
-      }
-
       const nameParts = contact.fullName.split(' ');
       const firstName = nameParts[0] ?? contact.fullName;
       const lastName = nameParts.slice(1).join(' ') || 'Unknown';
@@ -741,7 +600,6 @@ export default function LeadDetailPage() {
         lastName,
         email: contact.email,
         source: 'BACKUP_CONTACT_ROTATION',
-        ...(leadIcpProfileId ? { icpProfileId: leadIcpProfileId } : {}),
       });
       setBackupSuccess(`New lead created for ${contact.fullName}. Message generation will start automatically.`);
     } catch (err) {
@@ -752,6 +610,32 @@ export default function LeadDetailPage() {
   };
 
   const l = lead.data;
+  const businessName = useMemo(() => getBusinessNameFromLead(l ?? null), [l]);
+  const teamMembers = useMemo(() => buildTeamMembersFromLead(l ?? null), [l]);
+  const businessSummary = useMemo(() => {
+    if (!l) {
+      return null;
+    }
+
+    if (!businessName && !l.businessCategory && !l.businessCountryCode && !l.businessCity) {
+      return null;
+    }
+
+    return {
+      category: l.businessCategory ?? null,
+      countryCode: l.businessCountryCode ?? null,
+      city: l.businessCity ?? null,
+    };
+  }, [businessName, l]);
+  const backupContacts = useMemo(() => {
+    if (!l) return [];
+    const currentEmail = l.email?.toLowerCase();
+    return sortTeamMembers(teamMembers, l.email).ordered
+      .filter((tm) => tm.email && tm.email.toLowerCase() !== currentEmail);
+  }, [l, teamMembers]);
+  const hasReply = sends.data?.items.some((s) => s.status === 'REPLIED') ?? false;
+  const showBackupBanner = maxFollowUpNumber >= 3 && !hasReply && backupContacts.length > 0;
+  const nextBackup = backupContacts[0];
   const sortedTeamMembers = useMemo(
     () => (l ? sortTeamMembers(teamMembers, l.email).ordered : []),
     [teamMembers, l],
@@ -769,7 +653,6 @@ export default function LeadDetailPage() {
     ? getTeamMemberTier(leadMatchedTeamMember.seniority, leadMatchedTeamMember.jobTitle)
     : fallbackLeadTier;
   const executiveDirectorContacts = sortedTeamMembers.filter((member) => (
-    member.fromBusinessContacts &&
     isExecutiveOrDirector(member) &&
     normalizeEmail(member.email) !== leadEmailNormalized
   ));
@@ -817,16 +700,11 @@ export default function LeadDetailPage() {
               {l.firstName} {l.lastName}
             </h1>
             <p className="mt-0.5 text-sm text-muted-foreground">{l.email}</p>
-            {businessData ? (
-              <button
-                type="button"
-                onClick={() => router.push(`/dashboard/leads/businesses?selected=${businessId ?? ''}`)}
-                className="mt-1 inline-flex items-center gap-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:text-zbooni-green"
-              >
+            {businessName ? (
+              <p className="mt-1 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground/70">
                 <Building2 className="h-3 w-3" />
-                {businessData.name}
-                <ExternalLink className="h-2.5 w-2.5" />
-              </button>
+                {businessName}
+              </p>
             ) : null}
           </div>
           <div className="flex items-center gap-2">
@@ -861,8 +739,8 @@ export default function LeadDetailPage() {
           ) : null}
         </div>
 
-        {/* D9: Phone with source label + D9 business email + LinkedIn */}
-        {(enrichmentFields.some((f) => f.label === 'Phone') || leadBusinessEmail || primaryLinkedinUrl) && (
+        {/* D9: Phone + LinkedIn */}
+        {(enrichmentFields.some((f) => f.label === 'Phone') || primaryLinkedinUrl) && (
           <div className="mt-3 flex flex-wrap gap-3">
             {enrichmentFields.filter((f) => f.label === 'Phone').map((f) => (
               <div key="phone" className="flex items-center gap-2 text-sm">
@@ -870,26 +748,8 @@ export default function LeadDetailPage() {
                 <a href={f.href ?? '#'} className="font-medium text-zbooni-teal hover:text-zbooni-green transition-colors">
                   {f.value}
                 </a>
-                {leadPhoneSource && (
-                  <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${
-                    leadPhoneSource === 'APOLLO' || leadPhoneSource === 'HUNTER'
-                      ? 'bg-zbooni-green/15 text-zbooni-green'
-                      : 'bg-muted/20 text-muted-foreground/50'
-                  }`}>
-                    {leadPhoneSource === 'WEBSITE_SCRAPE' ? 'Website' : leadPhoneSource}
-                  </span>
-                )}
               </div>
             ))}
-            {leadBusinessEmail && (
-              <div className="flex items-center gap-2 text-sm">
-                <Mail className="h-3.5 w-3.5 text-muted-foreground/50" />
-                <a href={`mailto:${leadBusinessEmail}`} className="font-medium text-zbooni-teal hover:text-zbooni-green transition-colors">
-                  {leadBusinessEmail}
-                </a>
-                <span className="rounded-full bg-muted/20 px-1.5 py-0.5 text-[9px] font-bold text-muted-foreground/50">Business</span>
-              </div>
-            )}
             {primaryLinkedinUrl && (
               <a
                 href={primaryLinkedinUrl}
@@ -913,23 +773,15 @@ export default function LeadDetailPage() {
       </div>
 
       {/* About This Business (D1) */}
-      {businessData ? (
+      {businessSummary ? (
         <AboutBusinessCard
-          category={businessData.category}
-          metaDescription={
-            businessData.websiteScrape
-              ? ((businessData.websiteScrape.metaDescription as string) ?? null)
-              : null
-          }
-          instagramBio={
-            businessData.instagramScrape
-              ? ((businessData.instagramScrape.biography as string) ?? null)
-              : null
-          }
-          countryCode={businessData.countryCode}
-          city={businessData.city}
-          rating={businessData.rating}
-          reviewCount={businessData.reviewCount}
+          category={businessSummary.category}
+          metaDescription={null}
+          instagramBio={null}
+          countryCode={businessSummary.countryCode}
+          city={businessSummary.city}
+          rating={null}
+          reviewCount={null}
         />
       ) : null}
 
@@ -1029,30 +881,6 @@ export default function LeadDetailPage() {
                 : 'No enrichment data available yet. This lead may still be processing.'}
             </p>
           </div>
-        </div>
-      ) : null}
-
-      {/* Intelligence Gathered (from Business scraper data) */}
-      {businessData ? (
-        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-            <Building2 className="h-4 w-4 text-zbooni-teal" />
-            Intelligence Gathered
-            {businessData.name ? (
-              <span className="ml-2 text-sm font-normal text-muted-foreground/60">— {businessData.name}</span>
-            ) : null}
-            {businessData.websiteDomain ? (
-              <a
-                href={`https://${businessData.websiteDomain}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="ml-auto text-xs text-zbooni-teal hover:text-zbooni-green transition-colors flex items-center gap-1"
-              >
-                {businessData.websiteDomain} <ExternalLink className="h-3 w-3" />
-              </a>
-            ) : null}
-          </h2>
-          <IntelligenceGathered data={businessData} />
         </div>
       ) : null}
 
@@ -1176,65 +1004,6 @@ export default function LeadDetailPage() {
                 </div>
               );
             })}
-          </div>
-        </div>
-      ) : null}
-
-      {/* Instagram Recent Posts */}
-      {instagramPosts.length > 0 ? (
-        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-            <Instagram className="h-4 w-4 text-pink-400" />
-            Recent Instagram Posts
-            <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">{instagramPosts.length}</span>
-          </h2>
-          <div className="space-y-3">
-            {instagramPosts.map((post, i) => (
-              <div key={i} className="rounded-lg border border-border/20 bg-zbooni-dark/30 px-4 py-3">
-                <div className="flex gap-3">
-                  {post.thumbnailUrl ? (
-                    <img
-                      src={post.thumbnailUrl}
-                      alt="Instagram post preview"
-                      className="h-16 w-16 shrink-0 rounded-md border border-border/30 object-cover"
-                    />
-                  ) : (
-                    <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-md border border-dashed border-border/40 bg-zbooni-dark/50 text-muted-foreground/60">
-                      <Camera className="h-4 w-4" />
-                      <span className="mt-1 text-[9px] font-semibold uppercase tracking-wide">
-                        {getInstagramPostTypeLabel(post.postType)}
-                      </span>
-                    </div>
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm text-muted-foreground/80 line-clamp-3">{post.caption || 'No caption'}</p>
-                    <div className="mt-2 flex items-center gap-4 text-[11px] text-muted-foreground/50">
-                      <span>{post.likes.toLocaleString()} likes</span>
-                      <span>{post.comments.toLocaleString()} comments</span>
-                      {post.timestamp ? <span>{new Date(post.timestamp).toLocaleDateString()}</span> : null}
-                      {post.url ? (
-                        <a href={post.url} target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 text-pink-400 hover:text-pink-300 transition-colors">
-                          View <ExternalLink className="h-2.5 w-2.5" />
-                        </a>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {/* D10: Instagram cookie expiry warning */}
-      {businessData?.instagramHandle && (
-        !businessData.instagramScrape ||
-        (businessData.instagramScrape.isVerified == null && businessData.instagramScrape.businessCategory == null)
-      ) ? (
-        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3">
-          <div className="flex items-center gap-2 text-xs text-amber-400">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            <span>Instagram insights are partial right now. Session credentials likely need refresh.</span>
           </div>
         </div>
       ) : null}

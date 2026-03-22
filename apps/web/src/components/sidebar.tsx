@@ -6,7 +6,6 @@ import { usePathname } from 'next/navigation';
 import {
   Activity,
   BarChart3,
-  Bug,
   ChevronsLeft,
   ChevronsRight,
   Inbox,
@@ -36,7 +35,6 @@ const DASHBOARD_NAV_ITEMS = [
 
 const DEV_CONSOLE_NAV_ITEMS = [
   { href: '/discovery', label: 'Controls & Settings', icon: Settings },
-  { href: '/discovery/debug', label: 'Pipeline Debug', icon: Bug },
   { href: '/discovery/rules', label: 'ICP & Rules', icon: TerminalSquare },
 ] as const;
 

@@ -13,6 +13,22 @@ const HOP_BY_HOP_HEADERS = new Set([
   'content-length',
 ]);
 
+const ALLOWED_ADMIN_ROOT_SEGMENTS = new Set([
+  'jobs',
+  'leads',
+  'search-tasks',
+]);
+
+class AdminProxyRouteError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = 'AdminProxyRouteError';
+  }
+}
+
 function sanitizeBaseUrl(rawValue: string): string {
   return rawValue.replace(/\/+$/, '');
 }
@@ -24,7 +40,12 @@ function buildTargetUrl(request: NextRequest, pathSegments: string[]): string {
   }
 
   if (pathSegments.length === 0) {
-    throw new Error('Missing admin route path');
+    throw new AdminProxyRouteError('Missing admin route path', 400);
+  }
+
+  const rootSegment = pathSegments[0];
+  if (!rootSegment || !ALLOWED_ADMIN_ROOT_SEGMENTS.has(rootSegment)) {
+    throw new AdminProxyRouteError('Unsupported admin route', 404);
   }
 
   const encodedPath = pathSegments.map((segment) => encodeURIComponent(segment)).join('/');
@@ -88,7 +109,7 @@ async function proxyAdminRequest(request: NextRequest, params: { path?: string[]
       {
         error: error instanceof Error ? error.message : 'Admin proxy configuration error',
       },
-      { status: 500 },
+      { status: error instanceof AdminProxyRouteError ? error.status : 500 },
     );
   }
 
