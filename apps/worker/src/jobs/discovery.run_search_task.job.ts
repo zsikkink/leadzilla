@@ -440,6 +440,57 @@ export async function handleDiscoveryRunSearchTaskJob(
     );
   }
 
+  const observedBusinessIds = Array.isArray(
+    (runResult as { observedBusinessIds?: string[] }).observedBusinessIds,
+  )
+    ? (runResult as { observedBusinessIds?: string[] }).observedBusinessIds ?? []
+    : runResult.newBusinessIds;
+
+  if (
+    observedBusinessIds.length > 0 &&
+    dependencies.enqueueBusinessPrequalify &&
+    job.data.discoveryRunId &&
+    job.data.icpProfileId
+  ) {
+    const newBusinessIds = new Set(runResult.newBusinessIds);
+    const existingObservedBusinessIds = observedBusinessIds.filter(
+      (businessId: string) => !newBusinessIds.has(businessId),
+    );
+
+    let enqueuedCount = 0;
+
+    for (const businessId of existingObservedBusinessIds) {
+      await dependencies.enqueueBusinessPrequalify({
+        businessId,
+        discoveryRunId: job.data.discoveryRunId,
+        icpProfileId: job.data.icpProfileId,
+        ...(job.data.includeWebsiteAnalysis !== undefined
+          ? { includeWebsiteAnalysis: job.data.includeWebsiteAnalysis }
+          : {}),
+        ...(job.data.includeSocialMediaAnalysis !== undefined
+          ? { includeSocialMediaAnalysis: job.data.includeSocialMediaAnalysis }
+          : {}),
+        ...(job.data.minReviewCount !== undefined ? { minReviewCount: job.data.minReviewCount } : {}),
+        ...(correlationId ? { correlationId } : {}),
+      });
+      enqueuedCount += 1;
+    }
+
+    if (existingObservedBusinessIds.length > 0) {
+      logger.info(
+        {
+          jobId: job.id,
+          queue: job.name,
+          discoveryRunId: job.data.discoveryRunId,
+          icpProfileId: job.data.icpProfileId,
+          observedExistingBusinessCount: existingObservedBusinessIds.length,
+          enqueuedPrequalifyCount: enqueuedCount,
+        },
+        'Enqueued business.prequalify for existing businesses observed in the current search task',
+      );
+    }
+  }
+
   if (runResult.taskId) {
     runState.processedTaskCount += 1;
     runState.serpapiRequests += 1;

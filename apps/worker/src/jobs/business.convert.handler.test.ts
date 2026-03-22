@@ -29,10 +29,17 @@ const { dbMock, txMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => (
       leadEnrichmentRecord: {
         upsert: vi.fn(),
       },
+      messageDraft: {
+        findFirst: vi.fn(),
+      },
+      leadScorePrediction: {
+        findFirst: vi.fn(),
+      },
     },
   },
   txMock: {
     lead: {
+      findMany: vi.fn(),
       findFirst: vi.fn(),
       create: vi.fn(),
     },
@@ -144,7 +151,7 @@ function makeDeps(enqueueFeaturesCompute = vi.fn()): BusinessConvertJobDependenc
   };
 }
 
-describe('handleBusinessConvertJob reused-lead terminalization', () => {
+describe('handleBusinessConvertJob reused-lead rediscovery handling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
@@ -213,6 +220,7 @@ describe('handleBusinessConvertJob reused-lead terminalization', () => {
       instagramScrapedAt: null,
       deterministicScore: 0.82,
       scoreBand: 'HIGH',
+      discoveryRunId: 'run_old',
       preQualified: true,
     });
     dbMock.prisma.discoveryCostEvent.count.mockResolvedValue(0);
@@ -232,13 +240,21 @@ describe('handleBusinessConvertJob reused-lead terminalization', () => {
       },
     });
     dbMock.prisma.contactRecoveryItem.deleteMany.mockResolvedValue({ count: 1 });
-    dbMock.prisma.leadDiscoveryRecord.upsert.mockResolvedValue({ id: 'discovery_record_1' });
     dbMock.prisma.leadEnrichmentRecord.upsert.mockResolvedValue({ id: 'enrichment_record_1' });
+    dbMock.prisma.messageDraft.findFirst.mockResolvedValue(null);
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue(null);
     dbMock.prisma.$transaction.mockImplementation(async (callback: (tx: typeof txMock) => Promise<unknown>) => callback(txMock));
 
+    txMock.lead.findMany.mockResolvedValue([
+      {
+        id: 'lead_existing_1',
+        businessId: 'business_1',
+      },
+    ]);
     txMock.lead.findFirst.mockResolvedValue({
       id: 'lead_existing_1',
       deletedAt: null,
+      businessId: 'business_1',
     });
     txMock.lead.create.mockResolvedValue({ id: 'lead_new_1' });
     txMock.businessConversion.create.mockResolvedValue({ id: 'conversion_1' });
@@ -250,7 +266,7 @@ describe('handleBusinessConvertJob reused-lead terminalization', () => {
     trackerMock.checkLeadTargetReached.mockResolvedValue(false);
   });
 
-  it('keeps reused leads terminal by skipping downstream lineage writes', async () => {
+  it('restores current ICP lineage and re-enters features when a reused lead lacks a current ICP score', async () => {
     const enqueueFeaturesCompute = vi.fn();
 
     await handleBusinessConvertJob(
@@ -271,9 +287,25 @@ describe('handleBusinessConvertJob reused-lead terminalization', () => {
         icpProfileId: 'icp_1',
       },
     });
+    expect(dbMock.prisma.messageDraft.findFirst).toHaveBeenCalledWith({
+      where: { leadId: 'lead_existing_1', icpProfileId: 'icp_1' },
+      select: { id: true },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+    expect(dbMock.prisma.leadScorePrediction.findFirst).toHaveBeenCalledWith({
+      where: { leadId: 'lead_existing_1', icpProfileId: 'icp_1' },
+      select: { id: true },
+      orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }],
+    });
     expect(dbMock.prisma.leadDiscoveryRecord.upsert).not.toHaveBeenCalled();
     expect(dbMock.prisma.leadEnrichmentRecord.upsert).not.toHaveBeenCalled();
-    expect(enqueueFeaturesCompute).not.toHaveBeenCalled();
+    expect(enqueueFeaturesCompute).toHaveBeenCalledWith({
+      runId: 'run_1',
+      leadId: 'lead_existing_1',
+      icpProfileId: 'icp_1',
+      snapshotVersion: 1,
+      correlationId: expect.any(String),
+    });
     expect(trackerMock.checkLeadTargetReached).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -282,15 +314,145 @@ describe('handleBusinessConvertJob reused-lead terminalization', () => {
         discoveryRunId: 'run_1',
         icpProfileId: 'icp_1',
       }),
-      'Existing lead reuse remains terminal for automated downstream progression; skipping pipeline lineage records',
+      'Existing business rediscovery re-entered shared features.compute for the single active same-business lead',
+    );
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith(
+      'run_1',
+      logger,
+      expect.objectContaining({ excludeActiveJobId: expect.any(String) }),
+    );
+  });
+
+  it('treats same-ICP rediscovery as an explicit already-known no-op when a score already exists', async () => {
+    const enqueueFeaturesCompute = vi.fn();
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValueOnce({
+      id: 'score_existing_1',
+    });
+
+    await handleBusinessConvertJob(
+      logger,
+      makeJob({
+        businessId: 'business_1',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+      }),
+      makeDeps(enqueueFeaturesCompute),
+    );
+
+    expect(dbMock.prisma.leadDiscoveryRecord.upsert).not.toHaveBeenCalled();
+    expect(enqueueFeaturesCompute).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: 'business_1',
+        leadId: 'lead_existing_1',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+        scorePredictionId: 'score_existing_1',
+        messageDraftId: null,
+      }),
+      'Existing business rediscovery already has current ICP downstream state; treating it as an explicit already-known no-op',
+    );
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith(
+      'run_1',
+      logger,
+      expect.objectContaining({ excludeActiveJobId: expect.any(String) }),
+    );
+  });
+
+  it('treats multi-lead existing businesses as terminal unsupported no-ops for rediscovery', async () => {
+    const enqueueFeaturesCompute = vi.fn();
+    txMock.lead.findMany.mockResolvedValueOnce([
+      { id: 'lead_existing_1', businessId: 'business_1' },
+      { id: 'lead_existing_2', businessId: 'business_1' },
+    ]);
+
+    await handleBusinessConvertJob(
+      logger,
+      makeJob({
+        businessId: 'business_1',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+      }),
+      makeDeps(enqueueFeaturesCompute),
+    );
+
+    expect(txMock.businessConversion.create).not.toHaveBeenCalled();
+    expect(txMock.lead.create).not.toHaveBeenCalled();
+    expect(enqueueFeaturesCompute).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: 'business_1',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+        sameBusinessLeadCount: 2,
+      }),
+      'Existing business rediscovery is terminal because it does not map to exactly one active same-business lead',
+    );
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith(
+      'run_1',
+      logger,
+      expect.objectContaining({ excludeActiveJobId: expect.any(String) }),
     );
   });
 
   it('treats a soft-deleted same-email lead as an explicit terminal collision', async () => {
     const enqueueFeaturesCompute = vi.fn();
+    dbMock.prisma.business.findUnique.mockResolvedValueOnce({
+      id: 'business_1',
+      name: 'Acme Dental',
+      websiteDomain: 'acme.example',
+      instagramHandle: null,
+      phoneE164: null,
+      reviewCount: 42,
+      address: '123 Main St',
+      city: 'New York',
+      countryCode: 'US',
+      category: 'Dental Clinic',
+      apifyWebsiteScrapeJson: {
+        paymentWidgets: [],
+        hasShopify: false,
+        platform: null,
+        hasBookingForm: false,
+        hasPricingTiers: false,
+        hasProductCatalog: false,
+        hasWhatsApp: false,
+        detectedPlatforms: [],
+        decisionMakers: [],
+        contactInfo: { emails: [], phones: [], addresses: [] },
+        socialLinks: [],
+        technologies: {
+          analytics: [],
+          crm: [],
+          liveChat: [],
+          emailMarketing: [],
+          ecommerce: [],
+          payments: [],
+          cssFrameworks: [],
+          hosting: [],
+        },
+        businessSignals: {
+          estimatedEmployeeCount: 12,
+          certifications: [],
+          hasClientLogos: false,
+          hasTestimonials: false,
+          hasCaseStudies: false,
+        },
+        aboutPageText: 'Ada Lovelace founded Acme Dental and leads operations.',
+        pagesCrawled: 2,
+        crawlDurationMs: 120,
+      },
+      apifyInstagramScrapeJson: null,
+      websiteScrapedAt: new Date(),
+      instagramScrapedAt: null,
+      deterministicScore: 0.82,
+      scoreBand: 'HIGH',
+      discoveryRunId: 'run_1',
+      preQualified: true,
+    });
     txMock.lead.findFirst.mockResolvedValueOnce({
       id: 'lead_deleted_1',
       deletedAt: new Date('2026-03-19T10:00:00.000Z'),
+      businessId: 'business_1',
     });
 
     await handleBusinessConvertJob(
@@ -323,7 +485,11 @@ describe('handleBusinessConvertJob reused-lead terminalization', () => {
     expect(dbMock.prisma.leadEnrichmentRecord.upsert).not.toHaveBeenCalled();
     expect(enqueueFeaturesCompute).not.toHaveBeenCalled();
     expect(trackerMock.checkLeadTargetReached).not.toHaveBeenCalled();
-    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith(
+      'run_1',
+      logger,
+      expect.objectContaining({ excludeActiveJobId: expect.any(String) }),
+    );
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         businessId: 'business_1',

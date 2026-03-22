@@ -179,6 +179,7 @@ export async function handleBusinessPrequalifyJob(
     icpProfileId,
     correlationId: effectiveCorrelationId,
   };
+  const trackerSelfExclusion = { excludeActiveJobId: job.id };
 
   logger.info(
     { ...logCtx, minReviewCount: effectiveMinReviewCount },
@@ -188,7 +189,7 @@ export async function handleBusinessPrequalifyJob(
   try {
     if (await isDiscoveryRunTerminal(discoveryRunId)) {
       logger.warn(logCtx, 'Discovery run already terminal — skipping pre-qualification');
-      await tryFinalizeDiscoveryRun(discoveryRunId, logger);
+      await tryFinalizeDiscoveryRun(discoveryRunId, logger, trackerSelfExclusion);
       return;
     }
 
@@ -204,7 +205,7 @@ export async function handleBusinessPrequalifyJob(
 
     // ── Check: website domain ──────────────────────────────────────────
     if (!business.websiteDomain) {
-      await disqualify(businessId, discoveryRunId, 'NO_WEBSITE_DOMAIN', logCtx, logger, undefined, providerUsed);
+      await disqualify(businessId, discoveryRunId, 'NO_WEBSITE_DOMAIN', logCtx, logger, undefined, providerUsed, job.id);
       return;
     }
 
@@ -215,7 +216,7 @@ export async function handleBusinessPrequalifyJob(
       await disqualify(businessId, discoveryRunId, 'INSUFFICIENT_REVIEWS', logCtx, logger, {
         reviewCount: business.reviewCount,
         minReviewCount: effectiveMinReviewCount,
-      }, providerUsed);
+      }, providerUsed, job.id);
       return;
     }
 
@@ -224,7 +225,7 @@ export async function handleBusinessPrequalifyJob(
     if (!resolves) {
       await disqualify(businessId, discoveryRunId, 'DOMAIN_NOT_RESOLVING', logCtx, logger, {
         domain: business.websiteDomain,
-      }, providerUsed);
+      }, providerUsed, job.id);
       return;
     }
 
@@ -233,7 +234,7 @@ export async function handleBusinessPrequalifyJob(
     if (parked) {
       await disqualify(businessId, discoveryRunId, 'PARKED_DOMAIN', logCtx, logger, {
         domain: business.websiteDomain,
-      }, providerUsed);
+      }, providerUsed, job.id);
       return;
     }
 
@@ -282,6 +283,7 @@ async function disqualify(
   logger: BusinessPrequalifyLogger,
   extra?: Record<string, unknown>,
   provider?: 'SERPAPI' | 'GOOGLE_PLACES' | undefined,
+  callerJobId?: string | undefined,
 ): Promise<void> {
   await prisma.business.update({
     where: { id: businessId },
@@ -299,7 +301,11 @@ async function disqualify(
   );
 
   // Check if this was the last pending item for the discovery run
-  await tryFinalizeDiscoveryRun(discoveryRunId, logger);
+  await tryFinalizeDiscoveryRun(
+    discoveryRunId,
+    logger,
+    callerJobId ? { excludeActiveJobId: callerJobId } : undefined,
+  );
 }
 
 async function recordCostEvent(

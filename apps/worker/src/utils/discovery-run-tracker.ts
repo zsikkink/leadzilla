@@ -1,4 +1,4 @@
-import { type Prisma, prisma, toInputJson } from '@lead-flood/db';
+import { type Prisma, getPipelineSetting, prisma, toInputJson, upsertPipelineSetting } from '@lead-flood/db';
 import type { SendOptions } from 'pg-boss';
 
 import { getQualificationThreshold } from '../scoring/shared.js';
@@ -23,17 +23,22 @@ import { getQualificationThreshold } from '../scoring/shared.js';
 
 const SAFETY_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
 
-function extractDiscoveryRunIdFromMetadata(
-  metadata: Prisma.JsonValue | null | undefined,
+function extractStringFieldFromJson(
+  value: Prisma.JsonValue | null | undefined,
+  key: string,
 ): string | null {
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
-  const value = (metadata as Record<string, unknown>).discoveryRunId;
-  return typeof value === 'string' && value.length > 0 ? value : null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const extracted = (value as Record<string, unknown>)[key];
+  return typeof extracted === 'string' && extracted.length > 0 ? extracted : null;
 }
 
 interface TrackerLogger {
   info: (obj: Record<string, unknown>, msg: string) => void;
   warn: (obj: Record<string, unknown>, msg: string) => void;
+}
+
+interface TryFinalizeDiscoveryRunOptions {
+  excludeActiveJobId?: string | undefined;
 }
 
 interface SearchTaskCounters {
@@ -86,17 +91,22 @@ function toNonNegativeCount(value: unknown): number {
     : 0;
 }
 
-async function countPendingPipelineJobs(discoveryRunId: string): Promise<number> {
+async function countPendingPipelineJobs(
+  discoveryRunId: string,
+  excludeActiveJobId?: string | undefined,
+): Promise<number> {
   const rows = await prisma.$queryRawUnsafe<PgBossPendingJobRow[]>(
     `
       select name, state, count(*)::int as count
       from pgboss.job
-      where state in ('created', 'retry')
+      where state in ('created', 'retry', 'active')
         and name in ('business.prequalify', 'business.convert')
         and data ->> 'discoveryRunId' = $1
+        and ($2::text is null or id::text <> $2::text)
       group by name, state
     `,
     discoveryRunId,
+    excludeActiveJobId ?? null,
   );
 
   return rows.reduce((sum, row) => sum + toNonNegativeCount(row.count), 0);
@@ -367,6 +377,7 @@ export async function markSearchTasksComplete(
 export async function tryFinalizeDiscoveryRun(
   possibleRunId: string,
   logger: TrackerLogger,
+  options?: TryFinalizeDiscoveryRunOptions,
 ): Promise<void> {
   // 1. Load the JobExecution — bail if not a running discovery run
   const execution = await prisma.jobExecution.findUnique({
@@ -382,6 +393,10 @@ export async function tryFinalizeDiscoveryRun(
   const result = execution.result && typeof execution.result === 'object'
     ? execution.result as Record<string, unknown>
     : {};
+  const runIcpProfileId = extractStringFieldFromJson(
+    execution.payload as Prisma.JsonValue | null | undefined,
+    'icpProfileId',
+  );
 
   // Only finalize after search tasks are done
   if (!result.searchTasksComplete) {
@@ -396,15 +411,37 @@ export async function tryFinalizeDiscoveryRun(
     Date.now() - searchCompletedAt.getTime() > SAFETY_TIMEOUT_MS;
 
   const businesses = await prisma.business.findMany({
-    where: { discoveryRunId: possibleRunId },
-    select: { id: true, preQualified: true, disqualificationReason: true },
+    where: {
+      OR: [
+        { discoveryRunId: possibleRunId },
+        {
+          evidence: {
+            some: {
+              searchTask: {
+                is: { discoveryRunId: possibleRunId },
+              },
+            },
+          },
+        },
+      ],
+    },
+    select: {
+      id: true,
+      discoveryRunId: true,
+      preQualified: true,
+      disqualificationReason: true,
+    },
   });
+  const businessesById = new Map(businesses.map((business) => [business.id, business]));
   const pipelineBusinessIds = businesses.map((business) => business.id);
   const totalBusinesses = Math.max(
     pipelineBusinessIds.length,
     toNonNegativeCount(result.totalFound),
   );
-  const pendingQueueItems = await countPendingPipelineJobs(possibleRunId);
+  const pendingQueueItems = await countPendingPipelineJobs(
+    possibleRunId,
+    options?.excludeActiveJobId,
+  );
 
   if (pipelineBusinessIds.length === 0) {
     const newBusinesses = typeof result.newBusinesses === 'number' ? result.newBusinesses : 0;
@@ -457,87 +494,193 @@ export async function tryFinalizeDiscoveryRun(
   let failedLeads = 0;
   let inFlightItems = 0;
   let recoveryTerminalCount = 0;
+  let existingAlreadyKnownTerminalCount = 0;
   const leadTargetReached = result.leadTargetReached === true;
 
   if (qualifiedOrPendingIds.length > 0) {
-    // Get BusinessConversions to find associated leads
-    const conversions = await prisma.businessConversion.findMany({
-      where: { businessId: { in: qualifiedOrPendingIds } },
-      select: { businessId: true, leadId: true, metadata: true },
-    });
-    const runConversions = conversions.filter(
-      (c) => extractDiscoveryRunIdFromMetadata(c.metadata as Prisma.JsonValue | null) === possibleRunId,
+    const newQualifiedOrPendingIds = qualifiedOrPendingIds.filter(
+      (id) => businessesById.get(id)?.discoveryRunId === possibleRunId,
     );
-
-    // Businesses with explicit recovery records for this run are terminal,
-    // even if no lead conversion exists.
-    const recoveryRows = await prisma.contactRecoveryItem.findMany({
-      where: {
-        discoveryRunId: possibleRunId,
-        businessId: { in: qualifiedOrPendingIds },
-      },
-      select: { businessId: true, reason: true },
-    });
+    const existingObservedQualifiedOrPendingIds = qualifiedOrPendingIds.filter(
+      (id) => businessesById.get(id)?.discoveryRunId !== possibleRunId,
+    );
+    const [runOwnedRecoveryRows, sharedExistingRecoveryRows] = await Promise.all([
+      newQualifiedOrPendingIds.length > 0
+        ? prisma.contactRecoveryItem.findMany({
+            where: {
+              discoveryRunId: possibleRunId,
+              businessId: { in: newQualifiedOrPendingIds },
+            },
+            select: { businessId: true, reason: true },
+          })
+        : Promise.resolve([]),
+      runIcpProfileId && existingObservedQualifiedOrPendingIds.length > 0
+        ? prisma.contactRecoveryItem.findMany({
+            where: {
+              businessId: { in: existingObservedQualifiedOrPendingIds },
+              icpProfileId: runIcpProfileId,
+            },
+            select: { businessId: true, reason: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const recoveryRows = [...runOwnedRecoveryRows, ...sharedExistingRecoveryRows];
     const businessesWithRecovery = new Set(recoveryRows.map((row) => row.businessId));
     recoveryTerminalCount = businessesWithRecovery.size;
     for (const row of recoveryRows) {
       disqualReasons[row.reason] = (disqualReasons[row.reason] ?? 0) + 1;
     }
 
-    const businessesWithConversion = new Set(runConversions.map((c) => c.businessId));
-    const leadIds = [...new Set(runConversions.map((c) => c.leadId))];
-
-    // Businesses still waiting for conversion
-    const noConversionCount = qualifiedOrPendingIds.filter(
-      (id) => !businessesWithConversion.has(id) && !businessesWithRecovery.has(id),
-    ).length;
-    inFlightItems += noConversionCount;
-
-    if (leadIds.length > 0) {
-      const leads = await prisma.lead.findMany({
-        where: { id: { in: leadIds } },
-        select: {
-          id: true,
-          status: true,
-          deletedAt: true,
-          messageDrafts: { select: { id: true }, take: 1 },
-          scorePredictions: {
-            select: { scoreBand: true, blendedScore: true },
-            orderBy: { predictedAt: 'desc' },
-            take: 1,
-          },
-        },
+    if (newQualifiedOrPendingIds.length > 0) {
+      const conversions = await prisma.businessConversion.findMany({
+        where: { businessId: { in: newQualifiedOrPendingIds } },
+        select: { businessId: true, leadId: true, metadata: true },
       });
+      const runConversions = conversions.filter(
+        (c) => extractStringFieldFromJson(c.metadata as Prisma.JsonValue | null, 'discoveryRunId') === possibleRunId,
+      );
+      const businessesWithConversion = new Set(runConversions.map((c) => c.businessId));
+      const leadIds = [...new Set(runConversions.map((c) => c.leadId))];
 
-      for (const lead of leads) {
-        if (lead.deletedAt || lead.status === 'failed') {
-          failedLeads++;
-        } else if (lead.status === 'rejected') {
-          rejectedLeads++;
-        } else if (
-          lead.status === 'qualified'
-          || lead.status === 'drafted'
-          || lead.status === 'messaged'
-          || lead.status === 'replied'
-          || lead.status === 'cold'
-        ) {
-          convertedLeads++;
-          if (lead.messageDrafts.length > 0) {
-            messageDraftedLeads++;
-          }
-        } else if (lead.messageDrafts.length > 0) {
-          convertedLeads++;
-          messageDraftedLeads++;
-        } else if (lead.scorePredictions.length > 0) {
-          const latest = lead.scorePredictions[0]!;
-          if (latest.scoreBand === 'LOW' || latest.blendedScore < qualificationThreshold) {
+      const noConversionCount = newQualifiedOrPendingIds.filter(
+        (id) => !businessesWithConversion.has(id) && !businessesWithRecovery.has(id),
+      ).length;
+      inFlightItems += noConversionCount;
+
+      if (leadIds.length > 0) {
+        const leads = await prisma.lead.findMany({
+          where: { id: { in: leadIds } },
+          select: {
+            id: true,
+            status: true,
+            deletedAt: true,
+            messageDrafts: { select: { id: true }, take: 1 },
+            scorePredictions: {
+              select: { scoreBand: true, blendedScore: true },
+              orderBy: { predictedAt: 'desc' },
+              take: 1,
+            },
+          },
+        });
+
+        for (const lead of leads) {
+          if (lead.deletedAt || lead.status === 'failed') {
+            failedLeads++;
+          } else if (lead.status === 'rejected') {
             rejectedLeads++;
+          } else if (
+            lead.status === 'qualified'
+            || lead.status === 'drafted'
+            || lead.status === 'messaged'
+            || lead.status === 'replied'
+            || lead.status === 'cold'
+          ) {
+            convertedLeads++;
+            if (lead.messageDrafts.length > 0) {
+              messageDraftedLeads++;
+            }
+          } else if (lead.messageDrafts.length > 0) {
+            convertedLeads++;
+            messageDraftedLeads++;
+          } else if (lead.scorePredictions.length > 0) {
+            const latest = lead.scorePredictions[0]!;
+            if (latest.scoreBand === 'LOW' || latest.blendedScore < qualificationThreshold) {
+              rejectedLeads++;
+            } else {
+              inFlightItems++;
+            }
           } else {
             inFlightItems++;
           }
-        } else {
-          // No score yet — still in flight (waiting for features, scoring, etc.)
-          inFlightItems++;
+        }
+      }
+    }
+
+    if (existingObservedQualifiedOrPendingIds.length > 0) {
+      const existingObservedBusinessIdsWithoutRecovery = existingObservedQualifiedOrPendingIds.filter(
+        (id) => !businessesWithRecovery.has(id),
+      );
+
+      if (!runIcpProfileId) {
+        inFlightItems += existingObservedBusinessIdsWithoutRecovery.length;
+      } else if (existingObservedBusinessIdsWithoutRecovery.length > 0) {
+        const activeExistingLeadRows = await prisma.lead.findMany({
+          where: {
+            businessId: { in: existingObservedBusinessIdsWithoutRecovery },
+            deletedAt: null,
+          },
+          select: {
+            id: true,
+            businessId: true,
+          },
+        });
+        const activeExistingLeadIds = activeExistingLeadRows.map((lead) => lead.id);
+        const [drafts, scorePredictions] = activeExistingLeadIds.length > 0
+          ? await Promise.all([
+              prisma.messageDraft.findMany({
+                where: {
+                  leadId: { in: activeExistingLeadIds },
+                  icpProfileId: runIcpProfileId,
+                },
+                select: {
+                  id: true,
+                  leadId: true,
+                },
+              }),
+              prisma.leadScorePrediction.findMany({
+                where: {
+                  leadId: { in: activeExistingLeadIds },
+                  icpProfileId: runIcpProfileId,
+                },
+                select: {
+                  leadId: true,
+                  scoreBand: true,
+                  blendedScore: true,
+                  predictedAt: true,
+                  createdAt: true,
+                },
+                orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }],
+              }),
+            ])
+          : [[], []];
+
+        const activeLeadsByBusinessId = new Map<string, Array<{ id: string }>>();
+        for (const lead of activeExistingLeadRows) {
+          if (!lead.businessId) {
+            continue;
+          }
+          const existing = activeLeadsByBusinessId.get(lead.businessId) ?? [];
+          existing.push({ id: lead.id });
+          activeLeadsByBusinessId.set(lead.businessId, existing);
+        }
+
+        const draftLeadIds = new Set(drafts.map((draft) => draft.leadId));
+        const latestScoreByLeadId = new Map<string, (typeof scorePredictions)[number]>();
+        for (const prediction of scorePredictions) {
+          if (!latestScoreByLeadId.has(prediction.leadId)) {
+            latestScoreByLeadId.set(prediction.leadId, prediction);
+          }
+        }
+
+        for (const businessId of existingObservedBusinessIdsWithoutRecovery) {
+          const business = businessesById.get(businessId);
+          if (!business || business.preQualified !== true) {
+            inFlightItems++;
+            continue;
+          }
+
+          const activeLeads = activeLeadsByBusinessId.get(businessId) ?? [];
+          if (activeLeads.length !== 1) {
+            existingAlreadyKnownTerminalCount++;
+            continue;
+          }
+
+          const leadId = activeLeads[0]!.id;
+          if (draftLeadIds.has(leadId) || latestScoreByLeadId.has(leadId)) {
+            existingAlreadyKnownTerminalCount++;
+          } else {
+            inFlightItems++;
+          }
         }
       }
     }
@@ -549,7 +692,13 @@ export async function tryFinalizeDiscoveryRun(
 
   // 5. Compute terminal count for progress tracking
   const completedLeads = convertedLeads;
-  const terminalCount = completedLeads + rejectedLeads + failedLeads + disqualifiedIds.size + recoveryTerminalCount;
+  const terminalCount =
+    completedLeads
+    + rejectedLeads
+    + failedLeads
+    + disqualifiedIds.size
+    + recoveryTerminalCount
+    + existingAlreadyKnownTerminalCount;
 
   // 6. Finalize if all items are terminal OR safety timeout
   if (leadTargetReached || inFlightItems === 0 || isTimedOut) {
@@ -879,7 +1028,7 @@ async function finalizeRun(
             conversions
               .filter(
                 (c) =>
-                  extractDiscoveryRunIdFromMetadata(c.metadata as Prisma.JsonValue | null) === discoveryRunId,
+                  extractStringFieldFromJson(c.metadata as Prisma.JsonValue | null, 'discoveryRunId') === discoveryRunId,
               )
               .map((c) => c.leadId),
           ),
@@ -919,58 +1068,31 @@ async function finalizeRun(
     const yieldRate = newBusinesses / searchTasksProcessed;
     try {
       // Store smoothed yield rate (legacy)
-      const setting = await prisma.pipelineSetting.findUnique({
-        where: { key: `discovery_yield_rate:${icpProfileId}` },
-      });
+      const yieldRateKey = `discovery_yield_rate:${icpProfileId}`;
+      const setting = await getPipelineSetting(yieldRateKey);
       const historicalRate = setting?.valueJson ? Number(setting.valueJson) : yieldRate;
       const smoothedRate = 0.3 * yieldRate + 0.7 * historicalRate;
 
-      await prisma.pipelineSetting.upsert({
-        where: { key: `discovery_yield_rate:${icpProfileId}` },
-        create: {
-          key: `discovery_yield_rate:${icpProfileId}`,
-          valueJson: smoothedRate,
-        },
-        update: {
-          valueJson: smoothedRate,
-        },
-      });
+      await upsertPipelineSetting(yieldRateKey, smoothedRate);
 
       // Store search efficiency (businesses per task) for new two-rate formula
       if (newBusinesses > 0) {
         const searchEfficiency = newBusinesses / searchTasksProcessed;
-        await prisma.pipelineSetting.upsert({
-          where: { key: `discovery_search_efficiency:${icpProfileId}` },
-          create: {
-            key: `discovery_search_efficiency:${icpProfileId}`,
-            valueJson: searchEfficiency,
-          },
-          update: {
-            valueJson: searchEfficiency,
-          },
-        });
+        await upsertPipelineSetting(
+          `discovery_search_efficiency:${icpProfileId}`,
+          searchEfficiency,
+        );
       }
 
       // Store conversion rate (qualified leads / unique businesses) — EMA-smoothed
       if (completedLeads > 0 && newBusinesses > 0) {
         const conversionRate = completedLeads / newBusinesses;
         const convKey = `discovery_conversion_rate:${icpProfileId}`;
-        const existingConv = await prisma.pipelineSetting.findUnique({
-          where: { key: convKey },
-        });
+        const existingConv = await getPipelineSetting(convKey);
         const historicalConv = existingConv?.valueJson ? Number(existingConv.valueJson) : conversionRate;
         const smoothedConv = 0.3 * conversionRate + 0.7 * historicalConv;
 
-        await prisma.pipelineSetting.upsert({
-          where: { key: convKey },
-          create: {
-            key: convKey,
-            valueJson: smoothedConv,
-          },
-          update: {
-            valueJson: smoothedConv,
-          },
-        });
+        await upsertPipelineSetting(convKey, smoothedConv);
       }
     } catch {
       // Best-effort — don't fail the finalization

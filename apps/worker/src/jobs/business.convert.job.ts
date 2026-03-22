@@ -1008,12 +1008,13 @@ export async function handleBusinessConvertJob(
     icpProfileId,
     correlationId: effectiveCorrelationId,
   };
+  const trackerSelfExclusion = { excludeActiveJobId: job.id };
 
   logger.info(logCtx, 'Started business.convert job');
 
   if (await isDiscoveryRunTerminal(discoveryRunId)) {
     logger.warn(logCtx, 'Discovery run already terminal — skipping conversion');
-    await tryFinalizeDiscoveryRun(discoveryRunId, logger);
+    await tryFinalizeDiscoveryRun(discoveryRunId, logger, trackerSelfExclusion);
     return;
   }
 
@@ -1037,6 +1038,7 @@ export async function handleBusinessConvertJob(
       instagramScrapedAt: true,
       deterministicScore: true,
       scoreBand: true,
+      discoveryRunId: true,
       preQualified: true,
     },
   });
@@ -1047,7 +1049,7 @@ export async function handleBusinessConvertJob(
       where: { id: businessId },
       data: { preQualified: false, disqualificationReason: 'BUSINESS_NOT_FOUND' },
     }).catch(() => { /* Business truly doesn't exist — nothing to update */ });
-    await tryFinalizeDiscoveryRun(discoveryRunId, logger);
+    await tryFinalizeDiscoveryRun(discoveryRunId, logger, trackerSelfExclusion);
     return;
   }
 
@@ -1061,7 +1063,7 @@ export async function handleBusinessConvertJob(
       where: { id: businessId },
       data: { preQualified: false, disqualificationReason: 'NO_WEBSITE_DOMAIN' },
     });
-    await tryFinalizeDiscoveryRun(discoveryRunId, logger);
+    await tryFinalizeDiscoveryRun(discoveryRunId, logger, trackerSelfExclusion);
     return;
   }
 
@@ -2145,11 +2147,12 @@ export async function handleBusinessConvertJob(
         : { preQualified: false, disqualificationReason: recoveryReason },
     });
     await persistCostEvents(prisma, discoveryRunId, businessId, costEvents);
-    await tryFinalizeDiscoveryRun(discoveryRunId, logger);
+    await tryFinalizeDiscoveryRun(discoveryRunId, logger, trackerSelfExclusion);
     return;
   }
 
   const leadEmail = contactEmail;
+  const isCurrentRunExistingBusiness = business.discoveryRunId !== discoveryRunId;
 
   const hasRealDecisionMaker = resolvedContact !== null && isValidPersonName(resolvedContact.name, business.name);
   const contactStatus: ContactResolutionStatus = hasRealDecisionMaker
@@ -2191,10 +2194,160 @@ export async function handleBusinessConvertJob(
   const resolvedName = resolvedContact ? parseName(resolvedContact.name) : { firstName: 'Unknown', lastName: 'Contact' };
 
   const txResult = await prisma.$transaction(async (tx) => {
+    if (isCurrentRunExistingBusiness) {
+      const sameBusinessLeads = await tx.lead.findMany({
+        where: {
+          businessId: business.id,
+          deletedAt: null,
+        },
+        select: { id: true, businessId: true },
+        orderBy: { createdAt: 'asc' },
+        take: 2,
+      });
+
+      if (sameBusinessLeads.length !== 1) {
+        if (allCandidates.length > 0) {
+          await tx.businessContact.createMany({
+            data: allCandidates.slice(0, 5).map((c) => ({
+              businessId: business.id,
+              name: c.name,
+              title: c.title,
+              email: c.email,
+              phone: c.phone,
+              linkedinUrl: c.linkedinUrl,
+              seniority: c.seniority,
+              positionRank: c.positionRank,
+              source: c.source,
+            })),
+            skipDuplicates: true,
+          });
+        }
+
+        await persistCostEvents(tx as unknown as typeof prisma, discoveryRunId, businessId, costEvents);
+
+        return {
+          isNew: false,
+          unsupportedExistingBusinessLeadCount: sameBusinessLeads.length,
+        };
+      }
+
+      const existingBusinessLead = sameBusinessLeads[0]!;
+      logger.info(
+        {
+          ...logCtx,
+          existingLeadId: existingBusinessLead.id,
+          sameBusinessLeadCount: sameBusinessLeads.length,
+        },
+        'Existing business rediscovery matched a single active same-business lead',
+      );
+
+      await tx.businessConversion.create({
+        data: {
+          businessId: business.id,
+          leadId: existingBusinessLead.id,
+          icpProfileId,
+          apolloContactJson: apolloContactJson
+            ? toInputJson(apolloContactJson)
+            : Prisma.JsonNull,
+          hunterContactJson: hunterContactJson
+            ? toInputJson(hunterContactJson)
+            : Prisma.JsonNull,
+          apolloHasEmail,
+          apolloHasDirectPhone,
+          metadata: toInputJson({
+            discoveryRunId,
+            contactStatus,
+            contactRecovery: {
+              telemetry: recoveryTelemetry,
+              attempts: recoveryAttempts,
+              topSourceFamily: recoveryTelemetry.topSourceFamily,
+              topQueryFamily: recoveryTelemetry.topQueryFamily,
+              diagnostics: recoveryTelemetry.diagnostics,
+              verificationVerdict: recoveryTelemetry.verificationVerdict,
+              supportingUrls: recoveryTelemetry.supportingUrls,
+              topCandidates: cseTopCandidates,
+              identityConfidence: Number(identityConfidence.toFixed(3)),
+              contactConfidence: Number(contactConfidence.toFixed(3)),
+              terminalReason: null,
+              resolutionState: 'lead_created',
+              adjudication,
+              winnerSelectionMethod,
+            },
+            contactProvenance: allCandidates.slice(0, 5).map((c) => ({
+              name: c.name,
+              source: c.source,
+              sourceStage: null,
+              confidence: c.confidence ?? null,
+              matchedSignals: c.matchedSignals ?? [],
+              verificationVerdict: c.verificationVerdict ?? 'skipped',
+              supportingUrls: dedupeUrls(c.supportingUrls ?? []),
+              hasEmail: c.email !== null,
+              hasLinkedin: c.linkedinUrl !== null,
+            })),
+            confidence: {
+              identityConfidence: Number(identityConfidence.toFixed(3)),
+              contactConfidence: Number(contactConfidence.toFixed(3)),
+            },
+            decisionProvenance: {
+              winnerSelectionMethod,
+              selectedCandidateName: resolvedContact?.name ?? null,
+              selectedCandidateTitle: resolvedContact?.title ?? null,
+              selectedCandidateEmail: contactEmail,
+              selectedCandidateTier: resolvedContact?.title ? getDecisionMakerTier(resolvedContact.title) : null,
+              adjudicationVerdict: adjudication?.verdict ?? null,
+              adjudicationConfidenceBucket: adjudication?.confidenceBucket ?? null,
+              adjudicationRationale: adjudication?.rationale ?? null,
+            },
+            rediscovery: {
+              mode: 'existing_business_same_lead',
+            },
+          }),
+          ...(businessInsights !== null ? { businessInsights } : {}),
+        },
+      }).catch((err: unknown) => {
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2002'
+        ) {
+          logger.info(
+            { ...logCtx, existingLeadId: existingBusinessLead.id },
+            'BusinessConversion already exists for existing business rediscovery — skipping duplicate',
+          );
+          return;
+        }
+        throw err;
+      });
+
+      if (allCandidates.length > 0) {
+        await tx.businessContact.createMany({
+          data: allCandidates.slice(0, 5).map((c) => ({
+            businessId: business.id,
+            name: c.name,
+            title: c.title,
+            email: c.email,
+            phone: c.phone,
+            linkedinUrl: c.linkedinUrl,
+            seniority: c.seniority,
+            positionRank: c.positionRank,
+            source: c.source,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      await persistCostEvents(tx as unknown as typeof prisma, discoveryRunId, businessId, costEvents);
+
+      return {
+        lead: existingBusinessLead,
+        isNew: false,
+        reusedPrimaryBusiness: true,
+      };
+    }
+
     // Check for existing lead with same email (dedup)
     const existingLead = await tx.lead.findFirst({
       where: { email: leadEmail },
-      select: { id: true, deletedAt: true },
+      select: { id: true, deletedAt: true, businessId: true },
     });
 
     if (existingLead?.deletedAt) {
@@ -2327,7 +2480,11 @@ export async function handleBusinessConvertJob(
       // Record cost events
       await persistCostEvents(tx as unknown as typeof prisma, discoveryRunId, businessId, costEvents);
 
-      return { lead: existingLead, isNew: false };
+      return {
+        lead: existingLead,
+        isNew: false,
+        reusedPrimaryBusiness: existingLead.businessId === business.id,
+      };
     }
 
     // Determine first/last name — never use business name as fallback (B1)
@@ -2482,28 +2639,37 @@ export async function handleBusinessConvertJob(
       },
     });
 
-    await tryFinalizeDiscoveryRun(discoveryRunId, logger);
+    await tryFinalizeDiscoveryRun(discoveryRunId, logger, trackerSelfExclusion);
     return;
   }
 
+  let restoredExistingLeadIcpLineage = false;
+  let existingLeadAlreadyKnownNoop = false;
+  const txLeadId = 'lead' in txResult ? txResult.lead.id : null;
+  const txLeadBusinessId = 'lead' in txResult ? txResult.lead.businessId ?? null : null;
+
+  if ((txResult.isNew || txResult.reusedPrimaryBusiness) && !txLeadId) {
+    throw new Error('business.convert invariant violated: missing lead for persisted tx result');
+  }
+  const requiredLeadId = txLeadId!;
+
   if (txResult.isNew) {
-    // Persist canonical pipeline lineage records used by feature/scoring analytics
-    // only for newly created leads. Reused leads are terminal for automated
-    // downstream progression under the single-primary-business model.
+    // New leads still write the full canonical lineage/enrichment records here.
+    // Reused same-primary leads reconcile current-ICP discovery lineage below.
     if (evidence?.searchTask) {
       const provider = resolveDiscoveryProvider(evidence.searchTask.paramsJson as Prisma.JsonValue | null);
       const providerRecordId = evidence.serpapiResultId ?? evidence.id;
       await prisma.leadDiscoveryRecord.upsert({
         where: {
           leadId_icpProfileId_provider_providerRecordId: {
-            leadId: txResult.lead.id,
+            leadId: requiredLeadId,
             icpProfileId,
             provider,
             providerRecordId,
           },
         },
         create: {
-          leadId: txResult.lead.id,
+          leadId: requiredLeadId,
           icpProfileId,
           provider,
           providerSource: evidence.sourceType,
@@ -2532,11 +2698,11 @@ export async function handleBusinessConvertJob(
     }
 
     if (hunterContactJson) {
-      const requestKey = `hunter:convert:${txResult.lead.id}:${icpProfileId}:${discoveryRunId}`;
+      const requestKey = `hunter:convert:${requiredLeadId}:${icpProfileId}:${discoveryRunId}`;
       await prisma.leadEnrichmentRecord.upsert({
         where: { requestKey },
         create: {
-          leadId: txResult.lead.id,
+          leadId: requiredLeadId,
           provider: 'HUNTER',
           status: 'COMPLETED',
           requestKey,
@@ -2559,24 +2725,97 @@ export async function handleBusinessConvertJob(
       });
     }
   } else {
-    logger.info(
-      { ...logCtx, leadId: txResult.lead.id },
-      'Existing lead reuse remains terminal for automated downstream progression; skipping pipeline lineage records',
-    );
+    if (txResult.reusedPrimaryBusiness && txLeadId) {
+      const [existingDraft, existingScore] = await Promise.all([
+        prisma.messageDraft.findFirst({
+          where: { leadId: txLeadId, icpProfileId },
+          select: { id: true },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        }),
+        prisma.leadScorePrediction.findFirst({
+          where: { leadId: txLeadId, icpProfileId },
+          select: { id: true },
+          orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }],
+        }),
+      ]);
+
+      if (existingDraft || existingScore) {
+        existingLeadAlreadyKnownNoop = true;
+        gateStats.outcome = 'existing_already_known';
+        logger.info(
+          {
+            ...logCtx,
+            leadId: txLeadId,
+            messageDraftId: existingDraft?.id ?? null,
+            scorePredictionId: existingScore?.id ?? null,
+          },
+          'Existing business rediscovery already has current ICP downstream state; treating it as an explicit already-known no-op',
+        );
+      } else if (!shouldAutoReject && !isDraftedLead && deps.enqueueFeaturesCompute) {
+        await deps.enqueueFeaturesCompute({
+          runId: discoveryRunId,
+          leadId: txLeadId,
+          icpProfileId,
+          snapshotVersion: 1,
+          correlationId: effectiveCorrelationId,
+        });
+
+        restoredExistingLeadIcpLineage = true;
+        gateStats.outcome = 'existing_reentered';
+        logger.info(
+          {
+            ...logCtx,
+            leadId: txLeadId,
+          },
+          'Existing business rediscovery re-entered shared features.compute for the single active same-business lead',
+        );
+      } else {
+        gateStats.outcome = 'existing_pending';
+        logger.info(
+          {
+            ...logCtx,
+            leadId: txLeadId,
+            enqueueFeaturesComputeConfigured: deps.enqueueFeaturesCompute ? true : false,
+          },
+          'Existing business rediscovery found a single active same-business lead but did not enqueue features.compute',
+        );
+      }
+    } else if (txResult.unsupportedExistingBusinessLeadCount !== undefined) {
+      existingLeadAlreadyKnownNoop = true;
+      gateStats.outcome = 'existing_unsupported';
+      logger.info(
+        {
+          ...logCtx,
+          sameBusinessLeadCount: txResult.unsupportedExistingBusinessLeadCount,
+        },
+        'Existing business rediscovery is terminal because it does not map to exactly one active same-business lead',
+      );
+    } else {
+      existingLeadAlreadyKnownNoop = true;
+      gateStats.outcome = 'existing_terminal';
+      logger.info(
+        {
+          ...logCtx,
+          leadId: txLeadId,
+          primaryBusinessId: txLeadBusinessId,
+        },
+        'Existing lead reuse remains terminal because the rediscovered business is not the lead primary business',
+      );
+    }
   }
 
   // ── 9. Enqueue features.compute if lead is newly created and NOT auto-rejected ─
   if (txResult.isNew && !shouldAutoReject && !isDraftedLead && deps.enqueueFeaturesCompute) {
     await deps.enqueueFeaturesCompute({
       runId: discoveryRunId,
-      leadId: txResult.lead.id,
+      leadId: requiredLeadId,
       icpProfileId,
       snapshotVersion: 1,
       correlationId: effectiveCorrelationId,
     });
 
     logger.info(
-      { ...logCtx, leadId: txResult.lead.id },
+      { ...logCtx, leadId: txLeadId },
       'Enqueued features.compute for newly created lead',
     );
   }
@@ -2586,19 +2825,27 @@ export async function handleBusinessConvertJob(
     const targetReached = await checkLeadTargetReached(discoveryRunId, logger);
     if (targetReached) {
       logger.info(
-        { ...logCtx, leadId: txResult.lead.id },
+        { ...logCtx, leadId: txLeadId },
         'Lead target reached — remaining pipeline jobs will be skipped',
       );
     }
   }
 
+  if (!txResult.isNew) {
+    await tryFinalizeDiscoveryRun(discoveryRunId, logger, trackerSelfExclusion);
+  }
+
   // ── 11. Completion log ────────────────────────────────────────────────
-  gateStats.outcome = isDraftedLead ? 'drafted' : 'lead_created';
+  if (gateStats.outcome === 'pending') {
+    gateStats.outcome = isDraftedLead ? 'drafted' : 'lead_created';
+  }
   logger.info(
     {
       ...logCtx,
-      leadId: txResult.lead.id,
+      leadId: txLeadId,
       isNewLead: txResult.isNew,
+      restoredExistingLeadIcpLineage,
+      existingLeadAlreadyKnownNoop,
       isDraftedLead,
       autoRejected: shouldAutoReject,
       contactSource: resolvedContact?.source ?? 'none',
