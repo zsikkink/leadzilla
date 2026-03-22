@@ -776,7 +776,7 @@ export default function DiscoverPage() {
                   <p className="text-xs text-muted-foreground/70">
                     Est. cost: <strong className="text-foreground">~${totalCost.toFixed(2)}</strong>
                     <span className="text-muted-foreground/50">
-                      {' '}(Google Places ${googlePlacesCost.toFixed(2)} + Hunter ${hunterCost.toFixed(2)})
+                      {' '}(Google Places ${googlePlacesCost.toFixed(2)} + Web Search free + Hunter ${hunterCost.toFixed(2)})
                     </span>
                   </p>
                 </div>

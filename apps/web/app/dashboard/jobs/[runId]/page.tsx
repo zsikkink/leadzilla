@@ -331,8 +331,19 @@ function aggregateCosts(events: CostEventData[]) {
 }
 
 function formatProviderName(provider: string): string {
-  if (provider === 'SERPAPI') return 'GOOGLE_PLACES';
-  return provider;
+  switch (provider) {
+    case 'SERPAPI':
+    case 'GOOGLE_PLACES':
+      return 'Google Places';
+    case 'GOOGLE_CUSTOM_SEARCH':
+      return 'Web Search (Brave)';
+    case 'HUNTER':
+      return 'Hunter';
+    case 'APOLLO':
+      return 'Apollo';
+    default:
+      return provider.replace(/_/g, ' ');
+  }
 }
 
 // ── Main page ────────────────────────────────────────────────────────────

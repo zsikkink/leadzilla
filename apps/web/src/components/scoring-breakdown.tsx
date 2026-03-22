@@ -355,7 +355,14 @@ export function ScoringBreakdown({
   );
 }
 
+const FEATURE_KEY_LABELS: Record<string, string> = {
+  'found_csuite_decision_maker': 'Found C-Suite Decision Maker',
+  'apollo_has_direct_phone': 'Apollo Has Direct Phone',
+};
+
 function formatFieldKey(key: string): string {
+  const custom = FEATURE_KEY_LABELS[key];
+  if (custom) return custom;
   return key
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
