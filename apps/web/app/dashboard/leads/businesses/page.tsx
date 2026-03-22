@@ -64,6 +64,7 @@ interface BusinessRow {
   manualReviewUpdatedAt?: string | null | undefined;
   // Joined from business_conversions → leads
   leadBlendedScore?: number | null | undefined;
+  conversionMetadata?: Record<string, unknown> | null | undefined;
 }
 
 // ── Helpers for extracting scraper intelligence ────────────────────────────
@@ -365,7 +366,10 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
     (instagramScrape.isVerified == null && instagramScrape.businessCategory == null)
   );
 
-  // Extract metaDescription for about card
+  // Extract descriptions for about card
+  const websiteDescription = biz.conversionMetadata
+    ? ((biz.conversionMetadata.websiteDescription as string) ?? null)
+    : null;
   const metaDescription = websiteScrape
     ? ((websiteScrape.metaDescription as string) ?? null)
     : null;
@@ -392,6 +396,7 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
       <div className="mt-4">
         <AboutBusinessCard
           category={biz.category}
+          websiteDescription={websiteDescription}
           metaDescription={metaDescription}
           instagramBio={igBio}
           countryCode={biz.country_code}
@@ -768,15 +773,20 @@ export default function BusinessIntelligencePage() {
           }
         }
 
-        // Fetch lead blended scores via business_conversions → leads
+        // Fetch lead blended scores + conversion metadata via business_conversions → leads
         const { data: conversions } = await supabase
           .from('business_conversions')
-          .select('business_id, lead_id')
+          .select('business_id, lead_id, metadata')
           .in('business_id', bizIds);
 
         if (conversions && conversions.length > 0) {
-          for (const conv of conversions as Array<{ business_id: string; lead_id: string }>) {
+          // Build businessId → conversion metadata map (take first conversion)
+          const bizMetadataMap = new Map<string, Record<string, unknown>>();
+          for (const conv of conversions as Array<{ business_id: string; lead_id: string; metadata: Record<string, unknown> | null }>) {
             convertedBizIds.add(conv.business_id);
+            if (conv.metadata && !bizMetadataMap.has(conv.business_id)) {
+              bizMetadataMap.set(conv.business_id, conv.metadata);
+            }
           }
 
           const leadIds = [...new Set(conversions.map((c: { lead_id: string }) => c.lead_id))];
@@ -807,12 +817,13 @@ export default function BusinessIntelligencePage() {
               }
             }
 
-            // Merge scores into business rows
+            // Merge scores + conversion metadata into business rows
             for (const row of rows) {
               const leadId = bizLeadMap.get(row.id);
               if (leadId) {
                 row.leadBlendedScore = leadScoreMap.get(leadId) ?? null;
               }
+              row.conversionMetadata = bizMetadataMap.get(row.id) ?? null;
             }
           }
         }
@@ -869,23 +880,6 @@ export default function BusinessIntelligencePage() {
             linkedinUrl: c.linkedinUrl,
             source: (c.source as string) ?? null,
           })));
-        } else if (!cancelled) {
-          // Fallback: extract decision makers from website scrape data
-          const biz = businesses.find((b) => b.id === selectedId);
-          const websiteScrape = biz?.apify_website_scrape_json as Record<string, unknown> | null | undefined;
-          if (websiteScrape) {
-            const dms = websiteScrape.decisionMakers as Array<Record<string, unknown>> | undefined;
-            if (Array.isArray(dms) && dms.length > 0) {
-              setSelectedContacts(dms.slice(0, 10).map((dm, idx) => ({
-                id: `dm-${idx}`,
-                fullName: typeof dm.name === 'string' ? dm.name : 'Unknown',
-                jobTitle: typeof dm.title === 'string' ? dm.title : null,
-                email: typeof dm.email === 'string' ? dm.email : null,
-                linkedinUrl: typeof dm.linkedinUrl === 'string' ? dm.linkedinUrl : null,
-                source: 'Website',
-              })));
-            }
-          }
         }
       } catch {
         // Silently fail — supplementary data

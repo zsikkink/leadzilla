@@ -246,7 +246,7 @@ export async function handleBusinessPrequalifyJob(
       },
     });
 
-    await recordCostEvent(discoveryRunId, businessId, providerUsed ?? 'SERPAPI');
+    await recordCostEvent(discoveryRunId, businessId, providerUsed ?? 'GOOGLE_PLACES');
 
     // ── Enqueue business.convert if dependency provided ────────────────
     if (deps?.enqueueBusinessConvert) {
@@ -291,7 +291,7 @@ async function disqualify(
     },
   });
 
-  await recordCostEvent(discoveryRunId, businessId, provider ?? 'SERPAPI');
+  await recordCostEvent(discoveryRunId, businessId, provider ?? 'GOOGLE_PLACES');
 
   logger.info(
     { ...logCtx, reason, ...extra },
@@ -305,7 +305,7 @@ async function disqualify(
 async function recordCostEvent(
   discoveryRunId: string,
   businessId: string,
-  provider: 'SERPAPI' | 'GOOGLE_PLACES' = 'SERPAPI',
+  provider: 'SERPAPI' | 'GOOGLE_PLACES' = 'GOOGLE_PLACES',
 ): Promise<void> {
   await prisma.discoveryCostEvent.create({
     data: {

@@ -32,23 +32,13 @@ export interface ApolloEnrichJobPayload {
   correlationId?: string | undefined;
 }
 
-interface ApolloContact {
-  email: string;
-  phone: string | null;
-  firstName: string;
-  lastName: string;
-  title: string | null;
-  companyName: string | null;
-}
-
-type ApolloContactSearchResult =
-  | { status: 'success'; contacts: ApolloContact[] }
-  | { status: 'retryable_error'; failure: { classification: 'retryable'; statusCode: number | null; message: string; raw: unknown } }
-  | { status: 'terminal_error'; failure: { classification: 'terminal'; statusCode: number | null; message: string; raw: unknown } };
-
 export interface ApolloEnrichJobDependencies {
   apolloAdapter: {
-    searchContactsByDomain(domain: string): Promise<ApolloContactSearchResult>;
+    revealContactPhone?(params: { apolloId?: string | undefined; firstName?: string | undefined; lastName?: string | undefined; domain?: string | undefined }): Promise<
+      | { status: 'success'; phone: string | null; asyncPending: boolean }
+      | { status: 'retryable_error'; failure: { classification: 'retryable'; statusCode: number | null; message: string; raw: unknown } }
+      | { status: 'terminal_error'; failure: { classification: 'terminal'; statusCode: number | null; message: string; raw: unknown } }
+    >;
     isConfigured: boolean;
   };
   enqueueMessageGenerate?: ((payload: {
@@ -80,8 +70,8 @@ export async function handleApolloEnrichJob(
     scorePredictionId,
     runId,
     scoreBand,
-    apolloHasEmail,
-    apolloHasDirectPhone,
+    apolloHasEmail: _apolloHasEmail,
+    apolloHasDirectPhone: _apolloHasDirectPhone,
     correlationId,
   } = job.data;
   const effectiveCorrelationId = correlationId ?? job.id;
@@ -186,40 +176,6 @@ export async function handleApolloEnrichJob(
     return;
   }
 
-  // Determine what needs to be revealed
-  let needsEmailReveal = false;
-  let needsPhoneReveal = false;
-
-  if (scoreBand === 'MEDIUM') {
-    // MEDIUM → reveal email only if missing + Apollo has it. NEVER reveal phone.
-    if (!hasEmail && apolloHasEmail) {
-      needsEmailReveal = true;
-    }
-  } else if (scoreBand === 'HIGH') {
-    // HIGH → reveal what's missing
-    if (!hasEmail && apolloHasEmail) {
-      needsEmailReveal = true;
-    }
-    if (hasEmail && !hasPhone && apolloHasDirectPhone) {
-      needsPhoneReveal = true;
-    }
-    if (!hasEmail && apolloHasEmail) {
-      // If revealing email, also reveal phone if available
-      needsPhoneReveal = apolloHasDirectPhone;
-    }
-  }
-
-  // If nothing to reveal, continue to message generation when sendable.
-  if (!needsEmailReveal && !needsPhoneReveal) {
-    logger.info(
-      { ...logCtx, hasEmail, hasPhone },
-      'No Apollo reveal needed — proceeding with existing contact data',
-    );
-    await enqueueMessageGenerateIfSendable(hasEmail, hasPhone, 'no_reveal_needed');
-    await tryFinalizeDiscoveryRun(runId, logger);
-    return;
-  }
-
   // Get domain for Apollo search
   let domain: string | null = null;
   if (lead.businessId) {
@@ -247,67 +203,88 @@ export async function handleApolloEnrichJob(
     return;
   }
 
-  // Call Apollo to reveal contact data (1 export credit)
-  const apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
-
-  // Track Apollo cost event (1 credit per API call regardless of result)
-  await prisma.discoveryCostEvent.create({
-    data: {
-      discoveryRunId: runId,
-      provider: 'APOLLO',
-      costCents: 1,
-      apiCallType: 'post_score_enrich',
-      leadId,
-    },
-  });
-
-  if (apolloResult.status !== 'success' || apolloResult.contacts.length === 0) {
-    logger.warn(
-      { ...logCtx, apolloStatus: apolloResult.status },
-      'Apollo reveal returned no contacts — keeping qualified lead as-is',
+  // Call Apollo phone reveal (1 mobile credit) — only for HIGH band
+  if (scoreBand !== 'HIGH') {
+    logger.info(
+      { ...logCtx, scoreBand },
+      'Score band is not HIGH — skipping phone reveal, continuing to message.generate',
     );
-    await enqueueMessageGenerateIfSendable(hasEmail, hasPhone, 'skip_paid_reveal_empty');
+    await enqueueMessageGenerateIfSendable(hasEmail, hasPhone, 'skip_phone_reveal_not_high');
     await tryFinalizeDiscoveryRun(runId, logger);
     return;
   }
 
-  const topContact = apolloResult.contacts[0]!;
-
-  // Update lead with revealed data
-  const updateData: Record<string, unknown> = {};
-  let revealedEmail = false;
-  let revealedPhone = false;
-
-  if (needsEmailReveal && topContact.email) {
-    updateData.email = topContact.email;
-    revealedEmail = true;
+  if (hasPhone) {
+    logger.info(logCtx, 'Lead already has phone — skipping phone reveal');
+    await enqueueMessageGenerateIfSendable(hasEmail, hasPhone, 'skip_phone_reveal_has_phone');
+    await tryFinalizeDiscoveryRun(runId, logger);
+    return;
   }
 
-  if (needsPhoneReveal && topContact.phone) {
-    updateData.decisionMakerPhone = topContact.phone;
-    if (!lead.phone) {
-      updateData.phone = topContact.phone;
-    }
-    revealedPhone = true;
+  if (!deps?.apolloAdapter?.revealContactPhone) {
+    logger.warn(logCtx, 'Apollo revealContactPhone not available — skipping');
+    await enqueueMessageGenerateIfSendable(hasEmail, hasPhone, 'skip_phone_reveal_no_method');
+    await tryFinalizeDiscoveryRun(runId, logger);
+    return;
   }
 
-  if (Object.keys(updateData).length > 0) {
+  // Get primary contact info from business_contacts for the reveal call
+  const primaryContact = await prisma.businessContact.findFirst({
+    where: { businessId: lead.businessId! },
+    orderBy: { positionRank: 'asc' },
+    select: { name: true },
+  });
+
+  const revealParams: { firstName?: string | undefined; lastName?: string | undefined; domain?: string | undefined } = {};
+  if (primaryContact?.name) {
+    const nameParts = primaryContact.name.split(' ');
+    const first = nameParts[0] ?? undefined;
+    const last = nameParts.slice(1).join(' ') || undefined;
+    if (first) revealParams.firstName = first;
+    if (last) revealParams.lastName = last;
+  }
+  if (domain) {
+    revealParams.domain = domain;
+  }
+
+  const phoneResult = await deps.apolloAdapter.revealContactPhone(revealParams);
+
+  // Track cost: 1 mobile credit
+  await prisma.discoveryCostEvent.create({
+    data: {
+      discoveryRunId: runId,
+      provider: 'APOLLO',
+      costCents: 5,
+      apiCallType: 'phone_reveal',
+      leadId,
+    },
+  });
+
+  if (phoneResult.status === 'success' && phoneResult.phone) {
     await prisma.lead.update({
       where: { id: leadId },
-      data: updateData,
+      data: {
+        decisionMakerPhone: phoneResult.phone,
+        ...(!lead.phone ? { phone: phoneResult.phone } : {}),
+      },
     });
     logger.info(
-      { ...logCtx, revealedEmail, revealedPhone },
-      'Updated lead with Apollo-revealed data',
+      { ...logCtx, phone: phoneResult.phone },
+      'Apollo phone reveal succeeded — updated lead',
     );
-  }
-
-  const finalHasEmail = hasEmail || revealedEmail;
-  const finalHasPhone = hasPhone || revealedPhone;
-  if (!finalHasEmail) {
-    logger.warn(logCtx, 'Lead still has no email after Apollo reveal — cannot enqueue message.generate');
+    await enqueueMessageGenerateIfSendable(hasEmail, true, 'phone_revealed');
+  } else if (phoneResult.status === 'success' && phoneResult.asyncPending) {
+    logger.info(logCtx, 'Apollo phone reveal returned async pending — phone may arrive via webhook later');
+    await enqueueMessageGenerateIfSendable(hasEmail, hasPhone, 'phone_reveal_async');
+  } else if (phoneResult.status !== 'success') {
+    logger.warn(
+      { ...logCtx, phoneStatus: phoneResult.status },
+      'Apollo phone reveal failed — continuing without phone',
+    );
+    await enqueueMessageGenerateIfSendable(hasEmail, hasPhone, 'phone_reveal_failed');
   } else {
-    await enqueueMessageGenerateIfSendable(finalHasEmail, finalHasPhone, 'revealed_or_existing');
+    logger.info(logCtx, 'Apollo phone reveal returned no phone');
+    await enqueueMessageGenerateIfSendable(hasEmail, hasPhone, 'phone_reveal_empty');
   }
 
   await tryFinalizeDiscoveryRun(runId, logger);

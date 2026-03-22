@@ -552,6 +552,7 @@ export default function LeadDetailPage() {
   const [businessId, setBusinessId] = useState<string | null>(null);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [instagramPosts, setInstagramPosts] = useState<InstagramPost[]>([]);
+  const [conversionMetadata, setConversionMetadata] = useState<Record<string, unknown> | null>(null);
   const [leadPhoneSource, setLeadPhoneSource] = useState<string | null>(null);
   const [leadBusinessEmail, setLeadBusinessEmail] = useState<string | null>(null);
   useEffect(() => {
@@ -562,16 +563,18 @@ export default function LeadDetailPage() {
         // Find business linked to this lead
         const { data: conversions } = await supabase
           .from('business_conversions')
-          .select('businessId, icpProfileId')
+          .select('businessId, icpProfileId, metadata')
           .eq('leadId', id)
           .limit(1);
 
         const bizId = conversions?.[0]?.businessId;
         const convIcpProfileId = conversions?.[0]?.icpProfileId as string | null | undefined;
+        const convMetadata = conversions?.[0]?.metadata as Record<string, unknown> | null | undefined;
         if (!bizId || cancelled) return;
 
         setBusinessId(bizId);
         if (convIcpProfileId) setLeadIcpProfileId(convIcpProfileId);
+        if (convMetadata) setConversionMetadata(convMetadata);
 
         const { data: biz } = await supabase
           .from('businesses')
@@ -638,26 +641,6 @@ export default function LeadDetailPage() {
             fromBusinessContacts: true,
           }));
           setTeamMembers(mapped);
-        } else if (!cancelled) {
-          // Fallback: extract decision makers from website scrape data
-          const websiteScrape = biz.apify_website_scrape_json as Record<string, unknown> | null;
-          if (websiteScrape) {
-            const dms = websiteScrape.decisionMakers as Array<Record<string, unknown>> | undefined;
-            if (Array.isArray(dms) && dms.length > 0) {
-              setTeamMembers(dms.map((dm, idx) => ({
-                id: `dm-${idx}`,
-                fullName: typeof dm.name === 'string' ? dm.name : 'Unknown',
-                jobTitle: typeof dm.title === 'string' ? dm.title : null,
-                email: typeof dm.email === 'string' ? dm.email : null,
-                phone: null,
-                linkedinUrl: typeof dm.linkedinUrl === 'string' ? dm.linkedinUrl : null,
-                seniority: null,
-                positionRank: null,
-                source: 'Website',
-                fromBusinessContacts: false,
-              })));
-            }
-          }
         }
 
         // Extract Instagram recent posts from scrape data
@@ -916,6 +899,11 @@ export default function LeadDetailPage() {
       {businessData ? (
         <AboutBusinessCard
           category={businessData.category}
+          websiteDescription={
+            conversionMetadata
+              ? ((conversionMetadata.websiteDescription as string) ?? null)
+              : null
+          }
           metaDescription={
             businessData.websiteScrape
               ? ((businessData.websiteScrape.metaDescription as string) ?? null)
@@ -931,6 +919,95 @@ export default function LeadDetailPage() {
           rating={businessData.rating}
           reviewCount={businessData.reviewCount}
         />
+      ) : null}
+
+      {/* LinkedIn Profiles Found (from Google CSE results in conversion metadata) */}
+      {conversionMetadata &&
+        Array.isArray(conversionMetadata.googleCseResults) &&
+        (conversionMetadata.googleCseResults as Array<Record<string, unknown>>).length > 0 ? (
+        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+          <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
+            <Linkedin className="h-4 w-4 text-[#0A66C2]" />
+            LinkedIn Profiles Found
+            <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">
+              {(conversionMetadata.googleCseResults as unknown[]).length}
+            </span>
+            {conversionMetadata.foundCsuiteDecisionMaker === true && (
+              <span className="ml-auto rounded-full bg-zbooni-green/15 px-2.5 py-0.5 text-[10px] font-bold text-zbooni-green">
+                C-Suite Found
+              </span>
+            )}
+          </h2>
+          <div className="space-y-2">
+            {(conversionMetadata.googleCseResults as Array<Record<string, unknown>>).map((result, i) => {
+              const matchedPerson = conversionMetadata.googleCseMatchedPerson as Record<string, unknown> | null | undefined;
+              const isMatched = matchedPerson &&
+                typeof matchedPerson.linkedinUrl === 'string' &&
+                typeof result.link === 'string' &&
+                matchedPerson.linkedinUrl === result.link;
+
+              return (
+                <div
+                  key={i}
+                  className={`rounded-lg border px-4 py-3 ${
+                    isMatched
+                      ? 'border-zbooni-green/40 bg-zbooni-green/[0.04]'
+                      : 'border-border/20 bg-zbooni-dark/30'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                      isMatched ? 'bg-zbooni-green/15' : 'bg-[#0A66C2]/10'
+                    }`}>
+                      <Linkedin className={`h-4 w-4 ${isMatched ? 'text-zbooni-green' : 'text-[#0A66C2]'}`} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        {typeof result.link === 'string' ? (
+                          <a
+                            href={result.link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sm font-semibold text-zbooni-teal transition-colors hover:text-zbooni-green flex items-center gap-1"
+                          >
+                            <span className="truncate">{typeof result.title === 'string' ? result.title : 'LinkedIn Profile'}</span>
+                            <ExternalLink className="h-3 w-3 shrink-0" />
+                          </a>
+                        ) : (
+                          <p className="text-sm font-semibold truncate">
+                            {typeof result.title === 'string' ? result.title : 'LinkedIn Profile'}
+                          </p>
+                        )}
+                        {isMatched && (
+                          <span className="shrink-0 rounded-full border border-zbooni-green/40 bg-zbooni-green/20 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-zbooni-green">
+                            Matched
+                          </span>
+                        )}
+                      </div>
+                      {typeof result.snippet === 'string' && (
+                        <p className="mt-0.5 text-xs text-muted-foreground/60 line-clamp-2">{result.snippet}</p>
+                      )}
+                      {isMatched && matchedPerson && (
+                        <div className="mt-1.5 flex flex-wrap gap-2">
+                          {typeof matchedPerson.name === 'string' && (
+                            <span className="rounded-full bg-zbooni-green/10 px-2 py-0.5 text-[10px] font-semibold text-zbooni-green">
+                              {matchedPerson.name}
+                            </span>
+                          )}
+                          {typeof matchedPerson.title === 'string' && (
+                            <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
+                              {matchedPerson.title}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       ) : null}
 
       {/* Scoring Breakdown (D3) */}
