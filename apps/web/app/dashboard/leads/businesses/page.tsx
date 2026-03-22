@@ -337,6 +337,68 @@ function mergeSocialLinksForBiz(
   return links;
 }
 
+function ApolloOrgIntelCardBiz({ data }: { data: unknown }) {
+  if (!data || typeof data !== 'object') return null;
+  const org = data as Record<string, unknown>;
+  const hasAnyField = org.industry || org.estimatedEmployees || org.foundedYear || org.annualRevenue || org.primaryPhone || org.linkedinUrl || org.country;
+  if (!hasAnyField) return null;
+
+  return (
+    <div className="mt-4 rounded-xl border border-border/30 bg-zbooni-dark/30 p-4">
+      <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-muted-foreground/50 flex items-center gap-2">
+        <Building2 className="h-3.5 w-3.5 text-zbooni-teal" />
+        Company Intel (Apollo)
+      </h3>
+      <div className="space-y-2 text-sm">
+        {typeof org.industry === 'string' && org.industry && (
+          <div className="flex justify-between">
+            <span className="text-muted-foreground/60">Industry</span>
+            <span>{org.industry}</span>
+          </div>
+        )}
+        {typeof org.estimatedEmployees === 'number' && (
+          <div className="flex justify-between">
+            <span className="text-muted-foreground/60">Employees</span>
+            <span>{org.estimatedEmployees.toLocaleString()}</span>
+          </div>
+        )}
+        {typeof org.foundedYear === 'number' && (
+          <div className="flex justify-between">
+            <span className="text-muted-foreground/60">Founded</span>
+            <span>{org.foundedYear}</span>
+          </div>
+        )}
+        {typeof org.annualRevenue === 'string' && org.annualRevenue && (
+          <div className="flex justify-between">
+            <span className="text-muted-foreground/60">Revenue</span>
+            <span>{org.annualRevenue}</span>
+          </div>
+        )}
+        {typeof org.primaryPhone === 'string' && org.primaryPhone && (
+          <div className="flex justify-between">
+            <span className="text-muted-foreground/60">Phone</span>
+            <span className="font-mono text-xs">{org.primaryPhone}</span>
+          </div>
+        )}
+        {typeof org.linkedinUrl === 'string' && org.linkedinUrl && (
+          <div className="flex justify-between">
+            <span className="text-muted-foreground/60">LinkedIn</span>
+            <a href={org.linkedinUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green truncate max-w-[200px]">
+              Company Profile <ExternalLink className="h-3 w-3 shrink-0" />
+            </a>
+          </div>
+        )}
+        {typeof org.country === 'string' && org.country && (
+          <div className="flex justify-between">
+            <span className="text-muted-foreground/60">Location</span>
+            <span>{[typeof org.city === 'string' ? org.city : null, org.country].filter(Boolean).join(', ')}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; contacts: BusinessContact[]; onClose: () => void }) {
   const orderedContacts = useMemo(() => sortTeamMembers(contacts).ordered, [contacts]);
   const websiteScrape = biz.apify_website_scrape_json;
@@ -405,6 +467,9 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
           reviewCount={biz.review_count}
         />
       </div>
+
+      {/* Company Intel (Apollo org enrichment from conversion metadata) */}
+      <ApolloOrgIntelCardBiz data={biz.conversionMetadata?.apolloOrgEnrichment} />
 
       {/* Quick stats */}
       <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">

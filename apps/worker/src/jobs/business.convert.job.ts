@@ -267,6 +267,11 @@ export interface BusinessConvertJobDependencies {
       | { status: 'terminal_error'; failure: { classification: 'terminal'; statusCode: number | null; message: string; raw: unknown } }
     >;
     revealContactEmail?(params: { firstName: string; lastName: string; domain: string; organizationName?: string | undefined }): Promise<ApolloRevealEmailResult>;
+    enrichOrganization?(domain: string): Promise<
+      | { status: 'success'; data: { name: string | null; industry: string | null; estimatedEmployees: number | null; linkedinUrl: string | null; primaryPhone: string | null; city: string | null; country: string | null; foundedYear: number | null; annualRevenue: string | null; websiteUrl: string | null } }
+      | { status: 'retryable_error'; failure: { classification: 'retryable'; statusCode: number | null; message: string; raw: unknown } }
+      | { status: 'terminal_error'; failure: { classification: 'terminal'; statusCode: number | null; message: string; raw: unknown } }
+    >;
     isConfigured: boolean;
   };
   hunterAdapter: {
@@ -1287,6 +1292,25 @@ export async function handleBusinessConvertJob(
   };
   const _estimatedEmployees = websiteScrapeData?.businessSignals?.estimatedEmployeeCount ?? null;
 
+  // ── 4d. Apollo organization enrichment (company intel) ─────────────────
+  let apolloOrgData: Record<string, unknown> | null = null;
+
+  if (deps.apolloAdapter.isConfigured && deps.apolloAdapter.enrichOrganization && domain) {
+    const orgResult = await deps.apolloAdapter.enrichOrganization(domain);
+    if (orgResult.status === 'success' && orgResult.data.name) {
+      apolloOrgData = orgResult.data as unknown as Record<string, unknown>;
+      logger.info(
+        { ...logCtx, orgName: orgResult.data.name, employees: orgResult.data.estimatedEmployees, industry: orgResult.data.industry },
+        'Apollo org enrichment completed',
+      );
+    } else if (orgResult.status !== 'success') {
+      logger.warn(
+        { ...logCtx, orgStatus: orgResult.status },
+        'Apollo org enrichment failed — continuing without',
+      );
+    }
+  }
+
   // Store website description from scrape data
   const websiteDescription = websiteScrapeData?.aboutPageText
     ?? (websiteScrapeData as Record<string, unknown> | undefined)?.metaDescription as string | null
@@ -1996,6 +2020,7 @@ export async function handleBusinessConvertJob(
                 googleCseResults,
                 googleCseMatchedPerson: googleCseMatchedPerson ? { name: googleCseMatchedPerson.name, title: googleCseMatchedPerson.title, linkedinUrl: googleCseMatchedPerson.linkedinUrl } : null,
                 websiteDescription,
+                apolloOrgEnrichment: apolloOrgData,
                 contactRecovery: {
                   telemetry: recoveryTelemetry,
                   attempts: recoveryAttempts,
@@ -2146,6 +2171,7 @@ export async function handleBusinessConvertJob(
           googleCseResults,
           googleCseMatchedPerson: googleCseMatchedPerson ? { name: googleCseMatchedPerson.name, title: googleCseMatchedPerson.title, linkedinUrl: googleCseMatchedPerson.linkedinUrl } : null,
           websiteDescription,
+          apolloOrgEnrichment: apolloOrgData,
           contactStatus,
           contactRecovery: {
             telemetry: recoveryTelemetry,

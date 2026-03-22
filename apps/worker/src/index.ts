@@ -601,6 +601,7 @@ async function main(): Promise<void> {
           searchContactsByDomain: (domain) => apolloAdapter.searchContactsByDomain(domain),
           preScreenDomain: (domain) => apolloAdapter.preScreenDomain(domain),
           revealContactEmail: (params) => apolloAdapter.revealContactEmail(params),
+          enrichOrganization: (domain) => apolloAdapter.enrichOrganization(domain),
           isConfigured: Boolean(env.APOLLO_API_KEY),
         },
         hunterAdapter: {
