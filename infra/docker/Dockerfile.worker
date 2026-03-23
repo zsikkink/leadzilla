@@ -16,6 +16,6 @@ COPY eslint.config.mjs ./
 
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @lead-flood/db prisma:generate
-RUN pnpm build
+RUN pnpm --filter @lead-flood/worker... build
 
 CMD ["pnpm", "--filter", "@lead-flood/worker", "start"]
