@@ -267,6 +267,11 @@ describe('pipeline full lifecycle', () => {
       create: { key: 'auto_approve_score_max', valueJson: 1 },
       update: { valueJson: 1 },
     });
+    await prisma.pipelineSetting.upsert({
+      where: { key: 'scoreQualificationThreshold' },
+      create: { key: 'scoreQualificationThreshold', valueJson: 0.4 },
+      update: { valueJson: 0.4 },
+    });
 
     // Seed LeadDiscoveryRecord (simulates discovery pipeline output)
     await prisma.leadDiscoveryRecord.create({

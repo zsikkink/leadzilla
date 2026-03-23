@@ -296,6 +296,12 @@ describe('pipeline full chain: features.compute → message.send', () => {
         result: { totalItems: 1, processedItems: 1, failedItems: 0 } as Prisma.InputJsonValue,
       },
     });
+
+    await prisma.pipelineSetting.upsert({
+      where: { key: 'scoreQualificationThreshold' },
+      create: { key: 'scoreQualificationThreshold', valueJson: 0.4 },
+      update: { valueJson: 0.4 },
+    });
   });
 
   afterAll(async () => {
