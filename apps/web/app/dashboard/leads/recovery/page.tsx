@@ -1,6 +1,6 @@
 'use client';
 
-import type { ContactRecoveryCandidate, ContactRecoveryItem, ContactRecoveryStatus } from '@lead-flood/contracts';
+import type { ContactRecoveryCandidate, ContactRecoveryItem } from '@lead-flood/contracts';
 import {
   Building2,
   ExternalLink,
@@ -25,13 +25,6 @@ import { useApiQuery } from '@/hooks/use-api-query.js';
 import { useAuth } from '@/hooks/use-auth.js';
 import { cn } from '@/lib/utils.js';
 import { countryName } from '@/lib/countries.js';
-
-// ── Constants ────────────────────────────────────────────────────────────────
-
-const STATUS_OPTIONS = [
-  { value: 'OPEN', label: 'Open queue' },
-  { value: 'REJECTED', label: 'Rejected items' },
-];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -483,7 +476,6 @@ export default function ContactRecoveryPage() {
   const [pageSize, setPageSize] = useState(20);
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [status, setStatus] = useState<ContactRecoveryStatus>('OPEN');
   const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('selected'));
   const [rejectingId, setRejectingId] = useState<string | null>(null);
 
@@ -498,12 +490,12 @@ export default function ContactRecoveryPage() {
         apiClient.listContactRecoveryItems({
           page,
           pageSize,
-          status,
+          status: 'OPEN',
           ...(debouncedQuery ? { q: debouncedQuery } : {}),
         }),
-      [apiClient, debouncedQuery, page, pageSize, status],
+      [apiClient, debouncedQuery, page, pageSize],
     ),
-    [debouncedQuery, page, pageSize, status],
+    [debouncedQuery, page, pageSize],
   );
 
   useEffect(() => {
@@ -578,30 +570,19 @@ export default function ContactRecoveryPage() {
             />
             <span className="text-[11px] text-muted-foreground/40">{recovery.data?.items.length ?? 0} shown</span>
           </div>
-          <div className="flex gap-2">
-            <CustomSelect
-              value={status}
-              onChange={(value) => {
-                setStatus(value as ContactRecoveryStatus);
-                setPage(1);
-              }}
-              options={STATUS_OPTIONS}
-              placeholder="Open queue"
-            />
-            <CustomSelect
-              value={String(pageSize)}
-              onChange={(value) => {
-                setPageSize(parseInt(value, 10) || 20);
-                setPage(1);
-              }}
-              options={[
-                { value: '10', label: '10 per page' },
-                { value: '20', label: '20 per page' },
-                { value: '40', label: '40 per page' },
-              ]}
-              placeholder="20 per page"
-            />
-          </div>
+          <CustomSelect
+            value={String(pageSize)}
+            onChange={(value) => {
+              setPageSize(parseInt(value, 10) || 20);
+              setPage(1);
+            }}
+            options={[
+              { value: '10', label: '10 per page' },
+              { value: '20', label: '20 per page' },
+              { value: '40', label: '40 per page' },
+            ]}
+            placeholder="20 per page"
+          />
         </div>
       </div>
 
