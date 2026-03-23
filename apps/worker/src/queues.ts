@@ -102,6 +102,7 @@ interface QueueRetryOptions {
 interface WorkerQueueDefinition {
   name: string;
   retryOptions: QueueRetryOptions;
+  policy?: PgBoss.QueuePolicy;
 }
 
 function normalizeRetryOptions(
@@ -182,10 +183,12 @@ export const WORKER_QUEUE_DEFINITIONS: readonly WorkerQueueDefinition[] = [
   {
     name: MESSAGE_GENERATE_JOB_NAME,
     retryOptions: normalizeRetryOptions(MESSAGE_GENERATE_JOB_NAME, MESSAGE_GENERATE_RETRY_OPTIONS),
+    policy: 'short',
   },
   {
     name: MESSAGE_SEND_JOB_NAME,
     retryOptions: normalizeRetryOptions(MESSAGE_SEND_JOB_NAME, MESSAGE_SEND_RETRY_OPTIONS),
+    policy: 'short',
   },
   {
     name: MESSAGE_APPROVAL_RECOVERY_JOB_NAME,
@@ -254,10 +257,13 @@ function toQueueOptions(definition: WorkerQueueDefinition): PgBoss.Queue {
     retryDelay: definition.retryOptions.retryDelay,
     retryBackoff: definition.retryOptions.retryBackoff,
     deadLetter: definition.retryOptions.deadLetter,
+    ...(definition.policy ? { policy: definition.policy } : {}),
   };
 }
 
-export async function ensureWorkerQueues(boss: Pick<PgBoss, 'createQueue'>): Promise<void> {
+export async function ensureWorkerQueues(
+  boss: Pick<PgBoss, 'createQueue' | 'updateQueue'>,
+): Promise<void> {
   const deadLetterQueues = new Set<string>();
 
   for (const definition of WORKER_QUEUE_DEFINITIONS) {
@@ -272,5 +278,9 @@ export async function ensureWorkerQueues(boss: Pick<PgBoss, 'createQueue'>): Pro
 
   for (const definition of WORKER_QUEUE_DEFINITIONS) {
     await boss.createQueue(definition.name, toQueueOptions(definition));
+
+    if (definition.policy) {
+      await boss.updateQueue(definition.name, toQueueOptions(definition));
+    }
   }
 }

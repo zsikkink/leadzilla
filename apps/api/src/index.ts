@@ -132,8 +132,8 @@ async function main(): Promise<void> {
   await boss.start();
   await boss.createQueue('features.compute');
   await boss.createQueue('scoring.compute');
-  await boss.createQueue('message.send');
-  await boss.createQueue('message.generate');
+  await boss.createQueue('message.send', { name: 'message.send', policy: 'short' });
+  await boss.createQueue('message.generate', { name: 'message.generate', policy: 'short' });
   await boss.createQueue('analytics.rollup');
   await boss.createQueue('reply.classify');
   await boss.createQueue('discovery.seed');
