@@ -278,8 +278,9 @@ export default function AnalyticsPage() {
           const { data: conversions } = await supabase
             .from('business_conversions')
             .select('leadId')
-            .eq('icpProfileId', icpFilter);
-          const leadIds = conversions?.map((c: { leadId: string }) => c.leadId) ?? [];
+            .eq('icpProfileId', icpFilter)
+            .not('leadId', 'is', null);
+          const leadIds = (conversions?.map((c: { leadId: string }) => c.leadId) ?? []).filter(Boolean);
           if (leadIds.length > 0) {
             query = query.in('id', leadIds);
           } else {
