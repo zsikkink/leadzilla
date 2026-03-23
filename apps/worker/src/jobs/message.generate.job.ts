@@ -21,7 +21,7 @@ import {
   checkNegativeKeywords,
   buildNegativeKeywordPromptSuffix,
 } from '../messaging/validate-message.js';
-import { getFallbackForChannel, type MessageContext } from '../messaging/fallback-templates.js';
+import { getFallbackForChannel, type MessageContext, type FallbackExtra } from '../messaging/fallback-templates.js';
 import { MESSAGE_SEND_JOB_NAME, MESSAGE_SEND_RETRY_OPTIONS, type MessageSendJobPayload } from './message.send.job.js';
 
 export const MESSAGE_GENERATE_JOB_NAME = 'message.generate';
@@ -429,6 +429,13 @@ export async function handleMessageGenerateJob(
       logger.warn({ jobId: job.id, leadId, icpProfileId }, 'ICP sales hook missing; message quality may degrade');
     }
 
+    // Build extra context for fallback templates (ICP hook, segment, category)
+    const fallbackExtra: FallbackExtra = {
+      icpHook: requiredIcpHook,
+      icpSegment,
+      businessCategory: (featuresJson.industry as string) ?? null,
+    };
+
     const groundingContext = {
       leadName: `${lead.firstName} ${lead.lastName}`,
       leadEmail: lead.email,
@@ -516,7 +523,17 @@ export async function handleMessageGenerateJob(
     // Build generateContext outside the if-block so NK retry can reference it
     let generateContext = groundingContext;
 
+    // --- Diagnostic: log which fallback path fires so we can trace failures ---
+    // ROOT CAUSE (fixed): zodToJsonSchema used `anyOf` for nullable types, but
+    // OpenAI strict structured output requires `type: ["string", "null"]`.
+    // Every call returned 400 → terminal_error → stub body → hard rejection → fallback.
+
     if (deps?.openAiAdapter?.isConfigured) {
+      logger.info(
+        { jobId: job.id, leadId, openAiConfigured: true },
+        '[A1-DIAG] OpenAI adapter is configured, proceeding with AI generation',
+      );
+
       let systemPromptOverride: string | undefined;
 
       if (followUpNumber > 0 && pitchedFeature) {
@@ -537,6 +554,25 @@ export async function handleMessageGenerateJob(
         ? { ...groundingContext, icpDescription: systemPromptOverride }
         : groundingContext;
 
+      // [A4-DIAG] Log the assembled prompt at debug level so we can verify
+      // sales hook, custom settings, and business intelligence reach OpenAI
+      logger.info(
+        {
+          jobId: job.id,
+          leadId,
+          hasBusinessIntelligence: !!generateContext.businessIntelligence,
+          hasIcpHook: !!generateContext.icpHook,
+          hasCustomRole: !!generateContext.customRole,
+          hasCustomSystemPrompt: !!generateContext.customSystemPrompt,
+          hasMessagingInstructions: !!generateContext.messagingInstructions,
+          icpHookValue: generateContext.icpHook ?? '(none)',
+          customRolePreview: generateContext.customRole?.slice(0, 80) ?? '(default)',
+          customSystemPromptPreview: generateContext.customSystemPrompt?.slice(0, 80) ?? '(default)',
+          messagingInstructionsPreview: generateContext.messagingInstructions?.slice(0, 80) ?? '(none)',
+        },
+        '[A4-DIAG] Assembled message generation context',
+      );
+
       // First attempt
       const result = await deps.openAiAdapter.generateMessageVariants(generateContext);
 
@@ -545,70 +581,97 @@ export async function handleMessageGenerateJob(
         messageContent = result.data.message;
 
         logger.info(
-          { jobId: job.id, leadId, model: result.data.model },
+          { jobId: job.id, leadId, model: result.data.model, bodyLength: messageContent.bodyText.length },
           'OpenAI message generation succeeded',
         );
       } else {
+        // [A1-DIAG] Fallback trigger point (b): OpenAI returned an error.
+        // Log the full failure details so we can diagnose schema/API issues.
+        const failure = 'failure' in result ? result.failure : null;
         logger.warn(
-          { jobId: job.id, leadId, status: result.status },
-          'OpenAI message generation failed — using fallback templates',
+          {
+            jobId: job.id,
+            leadId,
+            status: result.status,
+            failureMessage: failure?.message ?? 'unknown',
+            failureStatusCode: failure?.statusCode ?? null,
+            failureClassification: failure?.classification ?? null,
+          },
+          '[A1-DIAG] OpenAI generation failed — falling back to templates',
         );
+        // Immediately use fallback instead of passing the stub body to validation
+        // (the stub 'Message generation pending' always triggers hard-reject)
+        messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext, fallbackExtra);
+        generatedByModel = 'fallback-template';
       }
 
-      // Validate the message
-      const validation = validateMessageVariant(resolvedChannel, messageContent);
+      // Only validate AI-generated messages (skip validation for fallback templates
+      // which are pre-vetted and don't need spam/placeholder checks)
+      if (generatedByModel !== 'fallback-template') {
+        const validation = validateMessageVariant(resolvedChannel, messageContent);
 
-      if (validation.reasons.length > 0) {
-        logger.info(
-          { jobId: job.id, leadId, reasons: validation.reasons },
-          'Message validation findings',
-        );
-      }
+        if (validation.reasons.length > 0) {
+          logger.info(
+            { jobId: job.id, leadId, reasons: validation.reasons },
+            'Message validation findings',
+          );
+        }
 
-      // If hard rejection, retry once with stricter prompt
-      if (validation.hardReject) {
-        logger.warn(
-          { jobId: job.id, leadId },
-          'Hard rejection detected, retrying with stricter prompt',
-        );
+        // If hard rejection, retry once with stricter prompt
+        if (validation.hardReject) {
+          // [A1-DIAG] Fallback trigger point (c): validation hard-rejected the AI message
+          logger.warn(
+            { jobId: job.id, leadId, reasons: validation.reasons },
+            '[A1-DIAG] Hard rejection on AI message, retrying with stricter prompt',
+          );
 
-        const stricterSuffix = buildStricterPromptSuffix(resolvedChannel);
-        const retryContext = {
-          ...generateContext,
-          icpDescription: `${generateContext.icpDescription}\n\n${stricterSuffix}`,
-        };
+          const stricterSuffix = buildStricterPromptSuffix(resolvedChannel);
+          const retryContext = {
+            ...generateContext,
+            icpDescription: `${generateContext.icpDescription}\n\n${stricterSuffix}`,
+          };
 
-        const retryResult = await deps.openAiAdapter.generateMessageVariants(retryContext);
+          const retryResult = await deps.openAiAdapter.generateMessageVariants(retryContext);
 
-        if (retryResult.status === 'success') {
-          generatedByModel = retryResult.data.model;
-          const retryValidation = validateMessageVariant(resolvedChannel, retryResult.data.message);
+          if (retryResult.status === 'success') {
+            generatedByModel = retryResult.data.model;
+            const retryValidation = validateMessageVariant(resolvedChannel, retryResult.data.message);
 
-          if (!retryValidation.hardReject) {
-            messageContent = retryValidation.cleaned;
+            if (!retryValidation.hardReject) {
+              messageContent = retryValidation.cleaned;
+            } else {
+              // [A1-DIAG] Fallback trigger point (c2): retry still hard-rejected
+              logger.warn(
+                { jobId: job.id, leadId, reasons: retryValidation.reasons },
+                '[A1-DIAG] Retry still hard-rejected, using fallback template',
+              );
+              messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext, fallbackExtra);
+              generatedByModel = 'fallback-template';
+            }
           } else {
-            // Still hard rejecting after retry — use fallback
+            // [A1-DIAG] Fallback trigger point (b2): retry OpenAI call failed
+            const retryFailure = 'failure' in retryResult ? retryResult.failure : null;
             logger.warn(
-              { jobId: job.id, leadId },
-              'Retry still has hard rejection, using fallback template',
+              {
+                jobId: job.id,
+                leadId,
+                status: retryResult.status,
+                failureMessage: retryFailure?.message ?? 'unknown',
+              },
+              '[A1-DIAG] Retry OpenAI call failed, using fallback template',
             );
-            messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
+            messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext, fallbackExtra);
             generatedByModel = 'fallback-template';
           }
         } else {
-          // Retry OpenAI call itself failed — use fallback
-          logger.warn({ jobId: job.id, leadId }, 'Retry OpenAI failed, using fallback template');
-          messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
-          generatedByModel = 'fallback-template';
+          // No hard rejection — apply soft cleaning
+          messageContent = validation.cleaned;
         }
-      } else {
-        // No hard rejection — apply soft cleaning
-        messageContent = validation.cleaned;
       }
     } else {
-      // OpenAI not configured — use fallback
-      logger.warn({ jobId: job.id, leadId }, 'OpenAI not configured, using fallback template');
-      messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
+      // [A1-DIAG] Fallback trigger point (a): OpenAI adapter not configured
+      logger.warn({ jobId: job.id, leadId, hasDeps: !!deps, hasAdapter: !!deps?.openAiAdapter }, 'OpenAI not configured, using fallback template');
+      messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext, fallbackExtra);
       generatedByModel = 'fallback-template';
     }
 
@@ -665,7 +728,7 @@ export async function handleMessageGenerateJob(
         { jobId: job.id, leadId },
         'Message body contains raw JSON, replacing with fallback template',
       );
-      messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
+      messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext, fallbackExtra);
       generatedByModel = 'fallback-template';
     }
 
