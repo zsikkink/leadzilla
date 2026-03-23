@@ -23,12 +23,32 @@ import {
 } from 'lucide-react';
 
 import { AboutBusinessCard } from '@/components/about-business-card.js';
+import { CustomSelect } from '@/components/custom-select.js';
 import { LeadsNav } from '@/components/leads-nav.js';
 import { SocialLinkIcon } from '@/components/social-link-icon.js';
 import { cn } from '@/lib/utils.js';
 import { getSupabaseBrowserClient } from '@/lib/supabase-client.js';
 import { countryName } from '@/lib/countries.js';
 import { sortTeamMembers } from '@/lib/team-members.js';
+
+// ── Sort options ────────────────────────────────────────────────────────────
+
+interface SortOption {
+  value: string;
+  label: string;
+  column: string;
+  ascending: boolean;
+  nullsFirst?: boolean | undefined;
+}
+
+const SORT_OPTIONS: SortOption[] = [
+  { value: 'newest', label: 'Newest First', column: 'created_at', ascending: false },
+  { value: 'oldest', label: 'Oldest First', column: 'created_at', ascending: true },
+  { value: 'alpha', label: 'Alphabetical', column: 'name', ascending: true },
+  { value: 'rating', label: 'Highest Rating', column: 'rating', ascending: false, nullsFirst: false },
+  { value: 'reviews', label: 'Most Reviews', column: 'review_count', ascending: false, nullsFirst: false },
+  { value: 'score', label: 'Highest Score', column: 'deterministic_score', ascending: false },
+];
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -696,6 +716,7 @@ export default function BusinessIntelligencePage() {
   const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('selected'));
   const [selectedContacts, setSelectedContacts] = useState<BusinessContact[]>([]);
   const [page, setPage] = useState(1);
+  const [sortKey, setSortKey] = useState('newest');
   const pageSize = 30;
 
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -709,7 +730,7 @@ export default function BusinessIntelligencePage() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const fetchBusinesses = useCallback(async (pageNum: number, search: string) => {
+  const fetchBusinesses = useCallback(async (pageNum: number, search: string, sort: string) => {
     setIsLoading(true);
     setError(null);
     try {
@@ -729,9 +750,19 @@ export default function BusinessIntelligencePage() {
         query = query.or(`name.ilike.%${search}%,category.ilike.%${search}%,website_domain.ilike.%${search}%,city.ilike.%${search}%,instagram_handle.ilike.%${search}%`);
       }
 
+      // Apply selected sort
+      const sortOption = SORT_OPTIONS.find((o) => o.value === sort) ?? SORT_OPTIONS[0]!;
+      const orderOpts: { ascending: boolean; nullsFirst?: boolean } = { ascending: sortOption.ascending };
+      if (sortOption.nullsFirst !== undefined) {
+        orderOpts.nullsFirst = sortOption.nullsFirst;
+      }
+      query = query.order(sortOption.column, orderOpts);
+      // Secondary sort for stable ordering
+      if (sortOption.column !== 'created_at') {
+        query = query.order('created_at', { ascending: false });
+      }
+
       const { data, error: fetchError, count } = await query
-        .order('deterministic_score', { ascending: false })
-        .order('updated_at', { ascending: false })
         .range(from, to);
 
       if (fetchError) throw new Error(fetchError.message);
@@ -840,8 +871,8 @@ export default function BusinessIntelligencePage() {
   }, []);
 
   useEffect(() => {
-    void fetchBusinesses(page, debouncedSearch);
-  }, [page, debouncedSearch, fetchBusinesses]);
+    void fetchBusinesses(page, debouncedSearch, sortKey);
+  }, [page, debouncedSearch, sortKey, fetchBusinesses]);
 
   // Fetch business_contacts when a business is selected
   useEffect(() => {
@@ -901,8 +932,6 @@ export default function BusinessIntelligencePage() {
   const selected = selectedId ? businesses.find((b) => b.id === selectedId) ?? null : null;
   const totalPages = Math.ceil(total / pageSize);
 
-  const withScrapeData = businesses.filter((b) => b.apify_website_scrape_json || b.apify_instagram_scrape_json).length;
-
   return (
     <div className="space-y-4">
       <LeadsNav active="business-intel" />
@@ -912,25 +941,36 @@ export default function BusinessIntelligencePage() {
         <div>
           <h1 className="text-2xl font-extrabold tracking-tight">Business Intelligence</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            {total} businesses discovered &middot; {withScrapeData} with enrichment data
+            {total} businesses discovered
           </p>
         </div>
       </div>
 
       {error && <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</div>}
 
-      {/* Search */}
+      {/* Search + Sort */}
       <div className="rounded-2xl border border-border/50 bg-card p-4 shadow-sm">
-        <div className="flex items-center gap-3">
-          <Search className="h-4 w-4 text-muted-foreground/40" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Filter by name, category, city, domain, or Instagram handle..."
-            className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <div className="flex items-center gap-3 lg:flex-1">
+            <Search className="h-4 w-4 text-muted-foreground/40" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Filter by name, category, city, domain, or Instagram handle..."
+              className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
+            />
+            <span className="text-[11px] text-muted-foreground/40">{filtered.length} shown</span>
+          </div>
+          <CustomSelect
+            value={sortKey}
+            onChange={(value) => {
+              setSortKey(value);
+              setPage(1);
+            }}
+            options={SORT_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            placeholder="Sort by..."
           />
-          <span className="text-[11px] text-muted-foreground/40">{filtered.length} shown</span>
         </div>
       </div>
 
