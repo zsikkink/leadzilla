@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { Prisma } from '@prisma/client';
+import prismaClientPkg from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 
 import { prisma, withPoolRetry } from '@lead-flood/db';
 
@@ -16,6 +17,8 @@ import type {
   NormalizedProviderResponse,
   SearchTaskType,
 } from '../providers/types.js';
+
+const { Prisma: PrismaClient } = prismaClientPkg;
 
 type SearchTaskStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED' | 'SKIPPED';
 type SourceType = 'DIRECTORY' | 'SMB_SITE' | 'SOCIAL' | 'MARKETPLACE' | 'UNKNOWN';
@@ -391,11 +394,11 @@ async function lockNextRunnableTask(
 ): Promise<SearchTaskRow | null> {
   return prisma.$transaction(async (tx) => {
     const timeBucketFilter = options.timeBucket
-      ? Prisma.sql`AND "time_bucket" = ${options.timeBucket}`
-      : Prisma.empty;
+      ? PrismaClient.sql`AND "time_bucket" = ${options.timeBucket}`
+      : PrismaClient.empty;
     const discoveryRunFilter = options.discoveryRunId
-      ? Prisma.sql`AND "discovery_run_id" = ${options.discoveryRunId}`
-      : Prisma.sql`AND "discovery_run_id" IS NULL`;
+      ? PrismaClient.sql`AND "discovery_run_id" = ${options.discoveryRunId}`
+      : PrismaClient.sql`AND "discovery_run_id" IS NULL`;
     const rows = await tx.$queryRaw<SearchTaskRow[]>`
       SELECT
         id,

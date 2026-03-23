@@ -3,7 +3,8 @@ import { promises as dns } from 'node:dns';
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyPluginAsync } from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
-import { Prisma } from '@prisma/client';
+import prismaClientPkg from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import {
   ContactRecoveryDetailResponseSchema,
@@ -41,6 +42,8 @@ import {
   type ReadySchemaHealth,
 } from '@lead-flood/contracts';
 import { getScoreQualificationThresholdSetting, prisma } from '@lead-flood/db';
+
+const { Prisma: PrismaClient } = prismaClientPkg;
 
 import { buildAuthGuard, type AuthGuardOptions, type VerifyAccessToken } from './auth/guard.js';
 import type { ApiEnv } from './env.js';
@@ -513,7 +516,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 
       const metadataValue = parsedBody.data.metadata
         ? JSON.parse(JSON.stringify(parsedBody.data.metadata)) as Prisma.InputJsonValue
-        : Prisma.JsonNull;
+        : PrismaClient.JsonNull;
 
       const [rejection] = await prisma.$transaction([
         prisma.leadRejection.upsert({

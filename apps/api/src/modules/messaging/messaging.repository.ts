@@ -15,7 +15,7 @@ import type {
   RejectMessageDraftRequest,
   SendMessageRequest,
 } from '@lead-flood/contracts';
-import { Prisma } from '@prisma/client';
+import prismaClientPkg from '@prisma/client';
 import { prisma } from '@lead-flood/db';
 
 import {
@@ -23,6 +23,8 @@ import {
   MessagingNotImplementedError,
   MessagingSendIneligibleError,
 } from './messaging.errors.js';
+
+const { Prisma: PrismaClient } = prismaClientPkg;
 
 export interface CreateMessageSendForApprovalInput {
   leadId: string;
@@ -306,7 +308,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
         promptVersion: input.promptVersion,
         generatedByModel: 'stub',
         groundingKnowledgeIds: input.knowledgeEntryIds,
-        groundingContextJson: Prisma.JsonNull,
+        groundingContextJson: PrismaClient.JsonNull,
         approvalStatus: 'PENDING',
         variants: {
           create: [
@@ -502,7 +504,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
 
       return mapDraftToResponse(draft);
     } catch (error: unknown) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+      if (error instanceof PrismaClient.PrismaClientKnownRequestError && error.code === 'P2025') {
         throw new MessagingNotFoundError('Message draft not found');
       }
       throw error;
@@ -524,7 +526,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
       });
       return mapDraftToResponse(draft);
     } catch (error: unknown) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+      if (error instanceof PrismaClient.PrismaClientKnownRequestError && error.code === 'P2025') {
         throw new MessagingNotFoundError('Message draft not found');
       }
       throw error;

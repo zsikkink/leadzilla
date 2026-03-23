@@ -7,10 +7,13 @@ import type {
   ListFeedbackEventsQuery,
   ListFeedbackEventsResponse,
 } from '@lead-flood/contracts';
-import { Prisma } from '@prisma/client';
+import prismaClientPkg from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '@lead-flood/db';
 
 import { FeedbackNotImplementedError } from './feedback.errors.js';
+
+const { Prisma: PrismaClient } = prismaClientPkg;
 
 export interface FeedbackRepository {
   leadExists(leadId: string): Promise<boolean>;
@@ -92,7 +95,7 @@ export class PrismaFeedbackRepository extends StubFeedbackRepository {
       dedupeKey,
       payloadJson: input.payloadJson !== undefined
         ? (JSON.parse(JSON.stringify(input.payloadJson)) as Prisma.InputJsonValue)
-        : Prisma.JsonNull,
+        : PrismaClient.JsonNull,
       occurredAt: new Date(input.occurredAt),
     };
 

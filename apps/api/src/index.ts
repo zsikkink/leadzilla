@@ -1,5 +1,6 @@
 import PgBoss from 'pg-boss';
-import { Prisma } from '@prisma/client';
+import prismaClientPkg from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 
 import {
   assertDatabaseConnection,
@@ -25,6 +26,8 @@ import {
 import { buildSupabaseAccessTokenVerifier } from './auth/supabase.js';
 import { loadApiEnv } from './env.js';
 import type { ReplyClassifyJobPayload } from '@lead-flood/contracts';
+
+const { Prisma: PrismaClient } = prismaClientPkg;
 
 import type { AnalyticsRollupJobPayload } from './modules/analytics/analytics.service.js';
 import type { DiscoveryRunJobPayload } from './modules/discovery/discovery.service.js';
@@ -435,7 +438,7 @@ async function main(): Promise<void> {
           jobId: jobExecution.id,
         };
       } catch (error: unknown) {
-        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        if (error instanceof PrismaClient.PrismaClientKnownRequestError && error.code === 'P2002') {
           throw new LeadAlreadyExistsError('Lead already exists for this email');
         }
 
