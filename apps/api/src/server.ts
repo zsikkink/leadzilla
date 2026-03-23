@@ -75,6 +75,32 @@ import { registerWebhookRoutes } from './modules/webhook/webhook.routes.js';
 
 const SIMPLE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+function buildAllowedCorsOrigins(primaryOrigin: string): Set<string> {
+  const allowedOrigins = new Set<string>([primaryOrigin]);
+
+  try {
+    const url = new URL(primaryOrigin);
+    const hostname = url.hostname;
+
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+      return allowedOrigins;
+    }
+
+    const alternate = new URL(primaryOrigin);
+    alternate.hostname = hostname.startsWith('www.')
+      ? hostname.slice(4)
+      : `www.${hostname}`;
+
+    if (alternate.origin !== primaryOrigin) {
+      allowedOrigins.add(alternate.origin);
+    }
+  } catch {
+    return allowedOrigins;
+  }
+
+  return allowedOrigins;
+}
+
 function normalizeLeadEmail(raw: string): string {
   let email: string;
   try {
@@ -215,6 +241,7 @@ export interface BuildServerOptions {
 }
 
 export function buildServer(options: BuildServerOptions): FastifyInstance {
+  const allowedCorsOrigins = buildAllowedCorsOrigins(options.env.CORS_ORIGIN);
   const app = Fastify({
     logger: false,
     loggerInstance: options.logger,
@@ -224,7 +251,14 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
   });
 
   app.register(cors, {
-    origin: options.env.CORS_ORIGIN,
+    origin(origin, callback) {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      callback(null, allowedCorsOrigins.has(origin));
+    },
     credentials: true,
   });
 

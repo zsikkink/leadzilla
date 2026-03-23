@@ -193,6 +193,29 @@ describe('buildServer', () => {
     });
   });
 
+  it('allows both apex and www variants of the configured CORS origin', async () => {
+    const server = buildServer({
+      ...makeDefaultOptions(),
+      env: {
+        ...env,
+        CORS_ORIGIN: 'https://zboonisales.com',
+      },
+    });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'OPTIONS',
+      url: '/health',
+      headers: {
+        origin: 'https://www.zboonisales.com',
+        'access-control-request-method': 'GET',
+      },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.headers['access-control-allow-origin']).toBe('https://www.zboonisales.com');
+  });
+
   it('returns not_ready when schema health fails', async () => {
     const server = buildServer({
       ...makeDefaultOptions(),
