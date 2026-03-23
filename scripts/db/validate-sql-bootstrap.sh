@@ -58,6 +58,12 @@ set +a
 API_PORT="${API_PORT:-5057}"
 FAILURES=0
 
+prepare_workspace_dependencies() {
+  local target="$1"
+  echo "[db:validate:sql-bootstrap] Building workspace dependencies for $target"
+  pnpm --filter "${target}^..." build
+}
+
 validate_api() {
   local api_status="000"
 
@@ -154,10 +160,12 @@ validate_worker() {
 }
 
 if [[ "$VALIDATE_SCOPE" == "api" || "$VALIDATE_SCOPE" == "all" ]]; then
+  prepare_workspace_dependencies @lead-flood/api
   validate_api
 fi
 
 if [[ "$VALIDATE_SCOPE" == "worker" || "$VALIDATE_SCOPE" == "all" ]]; then
+  prepare_workspace_dependencies @lead-flood/worker
   validate_worker
 fi
 

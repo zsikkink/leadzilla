@@ -1,5 +1,6 @@
 import { createLogger } from '@lead-flood/observability';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type * as LeadFloodDbModule from '@lead-flood/db';
 
 import { type LoginRequest } from '@lead-flood/contracts';
 
@@ -13,7 +14,7 @@ const { dbMocks } = vi.hoisted(() => ({
 }));
 
 vi.mock('@lead-flood/db', async () => {
-  const actual = await vi.importActual<typeof import('@lead-flood/db')>('@lead-flood/db');
+  const actual = await vi.importActual<typeof LeadFloodDbModule>('@lead-flood/db');
   return {
     ...actual,
     query: dbMocks.query,
