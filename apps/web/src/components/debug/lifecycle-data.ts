@@ -54,11 +54,39 @@ export interface HunterContact {
   type: string | null;
 }
 
+export interface ApolloOrgEnrichment {
+  name: string | null;
+  industry: string | null;
+  estimatedEmployees: number | null;
+  linkedinUrl: string | null;
+  primaryPhone: string | null;
+  city: string | null;
+  country: string | null;
+  foundedYear: number | null;
+  annualRevenue: string | null;
+}
+
+export interface BraveSearchResult {
+  title: string;
+  snippet: string;
+  link: string;
+}
+
+export interface CeoMatch {
+  name: string;
+  title: string | null;
+  linkedinUrl: string | null;
+}
+
 export interface BusinessConversionData {
-  method: string | null;
   businessInsights: string | null;
   apolloContacts: ApolloContact[];
   hunterContacts: HunterContact[];
+  apolloOrgEnrichment: ApolloOrgEnrichment | null;
+  braveSearchResults: BraveSearchResult[];
+  ceoMatch: CeoMatch | null;
+  foundCsuiteDecisionMaker: boolean;
+  contactSource: string | null;
 }
 
 export interface FeatureSnapshotData {
@@ -264,18 +292,61 @@ export async function fetchLeadLifecycleData(
   // Step 1: Find business conversion for this lead
   const { data: conversions } = await supabase
     .from('business_conversions')
-    .select('businessId, method, businessInsights, apolloContactJson, hunterContactJson')
+    .select('businessId, businessInsights, apolloContactJson, hunterContactJson, metadata')
     .eq('leadId', leadId)
     .limit(1);
 
   const conversion = conversions?.[0] ?? null;
 
   if (conversion) {
+    const meta = (typeof conversion.metadata === 'object' && conversion.metadata !== null ? conversion.metadata : {}) as Record<string, unknown>;
+
+    // Parse Brave Search results (stored as googleCseResults in metadata)
+    const rawBraveResults = Array.isArray(meta.googleCseResults) ? meta.googleCseResults : [];
+    const braveSearchResults: BraveSearchResult[] = rawBraveResults.map((r: unknown) => {
+      const item = r as Record<string, unknown>;
+      return {
+        title: (item.title as string) ?? '',
+        snippet: (item.snippet as string) ?? (item.description as string) ?? '',
+        link: (item.link as string) ?? (item.url as string) ?? '',
+      };
+    });
+
+    // Parse CEO match (stored as googleCseMatchedPerson in metadata)
+    const rawCeoMatch = meta.googleCseMatchedPerson as Record<string, unknown> | null | undefined;
+    const ceoMatch: CeoMatch | null = rawCeoMatch && typeof rawCeoMatch === 'object'
+      ? {
+          name: (rawCeoMatch.name as string) ?? '',
+          title: (rawCeoMatch.title as string) ?? null,
+          linkedinUrl: (rawCeoMatch.linkedinUrl as string) ?? null,
+        }
+      : null;
+
+    // Parse Apollo Org Enrichment
+    const rawOrgEnrichment = meta.apolloOrgEnrichment as Record<string, unknown> | null | undefined;
+    const apolloOrgEnrichment: ApolloOrgEnrichment | null = rawOrgEnrichment && typeof rawOrgEnrichment === 'object'
+      ? {
+          name: (rawOrgEnrichment.name as string) ?? null,
+          industry: (rawOrgEnrichment.industry as string) ?? null,
+          estimatedEmployees: typeof rawOrgEnrichment.estimatedEmployees === 'number' ? rawOrgEnrichment.estimatedEmployees : null,
+          linkedinUrl: (rawOrgEnrichment.linkedinUrl as string) ?? null,
+          primaryPhone: (rawOrgEnrichment.primaryPhone as string) ?? null,
+          city: (rawOrgEnrichment.city as string) ?? null,
+          country: (rawOrgEnrichment.country as string) ?? null,
+          foundedYear: typeof rawOrgEnrichment.foundedYear === 'number' ? rawOrgEnrichment.foundedYear : null,
+          annualRevenue: (rawOrgEnrichment.annualRevenue as string) ?? null,
+        }
+      : null;
+
     result.businessConversion = {
-      method: conversion.method ?? null,
       businessInsights: typeof conversion.businessInsights === 'string' ? conversion.businessInsights : null,
       apolloContacts: parseApolloContacts(conversion.apolloContactJson),
       hunterContacts: parseHunterContacts(conversion.hunterContactJson),
+      apolloOrgEnrichment,
+      braveSearchResults,
+      ceoMatch,
+      foundCsuiteDecisionMaker: meta.foundCsuiteDecisionMaker === true,
+      contactSource: typeof meta.contactSource === 'string' ? meta.contactSource : null,
     };
 
     const bizId = conversion.businessId;

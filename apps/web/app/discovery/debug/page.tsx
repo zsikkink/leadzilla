@@ -192,6 +192,9 @@ function buildPipelineStages(lead: LeadItem): PipelineStage[] {
     { id: 'prequalification', title: 'Pre-qualification', icon: Layers, status: qualificationStatus, timestamp: qualificationCompleted ? lead.updatedAt : null, details: prequalDetails },
     { id: 'enrichment', title: 'Enrichment', icon: Globe, status: enrichmentStatus, timestamp: hasEnrichment ? lead.updatedAt : null, details: enrichmentSkippedDetails, hasEnrichedContent: true },
     { id: 'conversion', title: 'Business Conversion', icon: Database, status: hasEnrichment || statusLevel >= 2 ? 'completed' : enrichmentFailed ? 'failed' : 'pending', timestamp: hasEnrichment ? lead.updatedAt : null, details: [], hasEnrichedContent: true },
+    { id: 'brave-search', title: 'Brave Search (CEO/Founder)', icon: Search, status: hasEnrichment || statusLevel >= 2 ? 'completed' : enrichmentFailed ? 'skipped' : 'pending', timestamp: null, details: [], hasEnrichedContent: true },
+    { id: 'llm-ceo-validation', title: 'LLM CEO Validation', icon: Sparkles, status: hasEnrichment || statusLevel >= 2 ? 'completed' : enrichmentFailed ? 'skipped' : 'pending', timestamp: null, details: [], hasEnrichedContent: true },
+    { id: 'apollo-org-enrichment', title: 'Apollo Org Enrichment', icon: Database, status: hasEnrichment || statusLevel >= 2 ? 'completed' : enrichmentFailed ? 'skipped' : 'pending', timestamp: null, details: [], hasEnrichedContent: true },
     { id: 'features', title: 'Feature Computation', icon: Sparkles, status: hasScore ? 'completed' : enrichmentFailed ? 'skipped' : 'pending', timestamp: hasScore ? lead.updatedAt : null, details: [], hasEnrichedContent: true },
     { id: 'scoring', title: 'Scoring', icon: Target, status: hasScore ? 'completed' : enrichmentFailed ? 'skipped' : 'pending', timestamp: hasScore ? lead.updatedAt : null, details: isRejected ? [{ label: 'Outcome', value: 'Lead rejected' }] : [], hasEnrichedContent: true },
     { id: 'message-gen', title: 'Message Generation', icon: Mail, status: isMessaged || isReplied || isCold ? 'completed' : downstreamSkipped ? 'skipped' : 'pending', timestamp: null, details: downstreamSkipped ? [{ label: 'Reason', value: skipReason }] : [], hasEnrichedContent: true },
@@ -214,7 +217,7 @@ function buildPipelineCategories(stages: PipelineStage[]): PipelineCategory[] {
   const groups: { id: string; title: string; icon: React.ComponentType<{ className?: string | undefined }>; stageIds: string[] }[] = [
     { id: 'discovery', title: 'Discovery', icon: Radar, stageIds: ['discovery'] },
     { id: 'qualification', title: 'Pre-qualification', icon: Layers, stageIds: ['prequalification'] },
-    { id: 'enrichment', title: 'Enrichment & Conversion', icon: Globe, stageIds: ['enrichment', 'conversion'] },
+    { id: 'enrichment', title: 'Enrichment & Conversion', icon: Globe, stageIds: ['enrichment', 'conversion', 'brave-search', 'llm-ceo-validation', 'apollo-org-enrichment'] },
     { id: 'intelligence', title: 'Intelligence / Scoring', icon: Sparkles, stageIds: ['features', 'scoring'] },
     { id: 'outreach', title: 'Outreach', icon: MessageSquare, stageIds: ['message-gen', 'message-send', 'followups'] },
     { id: 'learning', title: 'Learning Loops', icon: TrendingUp, stageIds: ['feedback'] },

@@ -54,7 +54,7 @@ interface SimFormState {
   hasPricingTiers: boolean;
   highTicketSignals: boolean;
   decisionMakerCount: number;
-  hasExecutiveContact: boolean;
+  foundCsuiteDecisionMaker: boolean;
   socialLinkCount: number;
   hasLinkedin: boolean;
   recentActivity: boolean;
@@ -97,7 +97,7 @@ const DEFAULT_SIM: SimFormState = {
   hasPricingTiers: false,
   highTicketSignals: false,
   decisionMakerCount: 2,
-  hasExecutiveContact: true,
+  foundCsuiteDecisionMaker: false,
   socialLinkCount: 4,
   hasLinkedin: true,
   recentActivity: true,
@@ -148,7 +148,7 @@ const FIELD_KEY_MAP: Record<string, (form: SimFormState) => unknown> = {
   avg_rating: (f) => f.avgRating,
   // V2.1 scraper features
   decision_maker_count: (f) => f.decisionMakerCount,
-  has_executive_contact: (f) => f.hasExecutiveContact,
+  found_csuite_decision_maker: (f) => f.foundCsuiteDecisionMaker ? 1 : 0,
   website_email_count: (f) => f.websiteEmailCount,
   website_phone_count: (f) => f.websitePhoneCount,
   social_link_count: (f) => f.socialLinkCount,
@@ -207,6 +207,7 @@ const FIELD_KEY_CATEGORY_MAP: Record<string, string> = {
   apify_has_shopify: 'GENERAL',
   apify_has_product_catalog: 'GENERAL',
   instagram_is_business_account: 'GENERAL',
+  found_csuite_decision_maker: 'CONTACT_QUALITY',
 };
 
 /* ------------------------------------------------------------------ */
@@ -1025,8 +1026,8 @@ export default function ICPRulesPage() {
                   High-Ticket Signals
                 </label>
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.hasExecutiveContact} onChange={(e) => setSimForm((prev) => ({ ...prev, hasExecutiveContact: e.target.checked }))} />
-                  Has Executive Contact
+                  <input type="checkbox" checked={simForm.foundCsuiteDecisionMaker} onChange={(e) => setSimForm((prev) => ({ ...prev, foundCsuiteDecisionMaker: e.target.checked }))} />
+                  Found C-Suite Decision Maker
                 </label>
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
                   <input type="checkbox" checked={simForm.hasLinkedin} onChange={(e) => setSimForm((prev) => ({ ...prev, hasLinkedin: e.target.checked }))} />

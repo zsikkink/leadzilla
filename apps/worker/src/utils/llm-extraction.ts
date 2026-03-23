@@ -117,7 +117,7 @@ export async function validateGoogleCseResults(
     {
       role: 'system',
       content:
-        'You identify the CEO/founder/owner of a business from web search results. Return JSON with a "persons" array. Each item: name (string), title (string or null), linkedinUrl (string or null — only if the URL is a LinkedIn profile), confidence (number 0-1). Include people who appear to be CEO, founder, owner, managing director, president, general manager, or principal of the specified business. Exclude people at other companies. Extract names from LinkedIn profiles, company about pages, news articles, or any credible source.',
+        'You identify the CEO/founder/owner of a business from web search results. Return JSON with a "persons" array. Each item: name (string), title (string or null), linkedinUrl (string or null — only if the URL is a LinkedIn profile), confidence (number 0-1). Include people who appear to be CEO, founder, owner, managing director, president, general manager, or principal of the specified business. Exclude people at other companies. Extract names from LinkedIn profiles, company about pages, news articles, or any credible source. Prefer the highest-authority person: CEO/founder/owner/president > managing director/general manager > VP/head of > director. If multiple people match, assign higher confidence to the highest-authority title.',
     },
     {
       role: 'user',
@@ -133,6 +133,18 @@ export async function validateGoogleCseResults(
     };
     if (!Array.isArray(parsed.persons)) return [];
 
+    // Simple authority tier for sorting: higher authority = lower number = sorted first
+    const titleTier = (title: string | null | undefined): number => {
+      if (!title) return 5;
+      const t = title.toLowerCase();
+      if (/\b(ceo|founder|co-?founder|owner|president|chair)/i.test(t)) return 0;
+      if (/\b(cfo|coo|cto|cio|cmo|managing director|general manager)/i.test(t)) return 1;
+      if (/\b(vp|vice\s*president|head\s+of)/i.test(t)) return 2;
+      if (/\bdirector\b/i.test(t)) return 3;
+      if (/\b(manager|lead|supervisor)\b/i.test(t)) return 4;
+      return 5;
+    };
+
     return parsed.persons
       .filter(
         (p) =>
@@ -141,7 +153,11 @@ export async function validateGoogleCseResults(
           typeof p.confidence === 'number' &&
           p.confidence >= 0.5,
       )
-      .sort((a, b) => b.confidence - a.confidence)
+      .sort((a, b) => {
+        const tierDiff = titleTier(a.title) - titleTier(b.title);
+        if (tierDiff !== 0) return tierDiff;
+        return b.confidence - a.confidence;
+      })
       .slice(0, 3);
   } catch {
     return [];

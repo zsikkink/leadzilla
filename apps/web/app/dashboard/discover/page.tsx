@@ -743,7 +743,7 @@ export default function DiscoverPage() {
               .filter((r): r is number => r !== undefined);
             const avgLeadRate = selectedLeadRates.length > 0
               ? selectedLeadRates.reduce((a, b) => a + b, 0) / selectedLeadRates.length
-              : 0.015; // default fallback: ~1.5% leads per search task
+              : 0.10; // default fallback: ~10% leads per search task (conservative based on pipeline data)
             const hasHistoricalData = selectedLeadRates.length > 0;
             const searchBudget = Math.ceil(desiredLeads / avgLeadRate * 1.5);
             // ~50% of discovered businesses pass prequalification and reach Hunter

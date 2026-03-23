@@ -863,15 +863,36 @@ export default function LeadDetailPage() {
             </h1>
             <p className="mt-0.5 text-sm text-muted-foreground">{l.email}</p>
             {businessData ? (
-              <button
-                type="button"
-                onClick={() => router.push(`/dashboard/leads/businesses?selected=${businessId ?? ''}`)}
-                className="mt-1 inline-flex items-center gap-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:text-zbooni-green"
-              >
-                <Building2 className="h-3 w-3" />
-                {businessData.name}
-                <ExternalLink className="h-2.5 w-2.5" />
-              </button>
+              <div className="mt-1 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => router.push(`/dashboard/leads/businesses?selected=${businessId ?? ''}`)}
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:text-zbooni-green"
+                >
+                  <Building2 className="h-3 w-3" />
+                  {businessData.name}
+                  <ExternalLink className="h-2.5 w-2.5" />
+                </button>
+                {(() => {
+                  const apolloCountry = typeof conversionMetadata?.apolloOrgEnrichment === 'object' && conversionMetadata.apolloOrgEnrichment !== null
+                    ? (conversionMetadata.apolloOrgEnrichment as Record<string, unknown>).country
+                    : null;
+                  if (
+                    typeof apolloCountry === 'string' && apolloCountry.length > 0 &&
+                    businessData.countryCode &&
+                    apolloCountry.toLowerCase() !== businessData.countryCode.toLowerCase() &&
+                    apolloCountry.toLowerCase() !== countryName(businessData.countryCode).toLowerCase()
+                  ) {
+                    return (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-bold text-amber-300">
+                        <MapPin className="h-2.5 w-2.5" />
+                        HQ: {apolloCountry}
+                      </span>
+                    );
+                  }
+                  return null;
+                })()}
+              </div>
             ) : null}
           </div>
           <div className="flex items-center gap-2">
@@ -983,14 +1004,14 @@ export default function LeadDetailPage() {
         />
       ) : null}
 
-      {/* LinkedIn Profiles Found (from Google CSE results in conversion metadata) */}
+      {/* Web Search Results (from Brave Search in conversion metadata) */}
       {conversionMetadata &&
         Array.isArray(conversionMetadata.googleCseResults) &&
         (conversionMetadata.googleCseResults as Array<Record<string, unknown>>).length > 0 ? (
         <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
           <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-            <Linkedin className="h-4 w-4 text-[#0A66C2]" />
-            LinkedIn Profiles Found
+            <Globe className="h-4 w-4 text-zbooni-teal" />
+            Web Search Results (CEO/Founder)
             <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">
               {(conversionMetadata.googleCseResults as unknown[]).length}
             </span>

@@ -362,10 +362,10 @@ export class OpenAiAdapter {
 
     const systemPrompt = [
       'You are a sales intelligence analyst for Zbooni, a UAE fintech company.',
-      'Given business data from web scraping, write exactly 2 specific, insightful observations a salesperson could reference in outreach.',
-      'Be concrete — mention specific services, products, pricing, team members, technology choices, or recent activity.',
-      'Keep each observation to 1-2 sentences.',
-      'Format: Return a JSON object with a single "insights" field containing the two observations separated by a newline.',
+      'Given business data from web scraping, respond in exactly 2-4 sentences.',
+      'Describe what the business does, who they serve, and their key offering.',
+      'Be specific and factual — mention concrete services, products, pricing, team members, or technology choices. No filler words.',
+      'Format: Return a JSON object with a single "insights" field containing the text.',
     ].join(' ');
 
     const InsightsSchema = z.object({
@@ -378,6 +378,7 @@ export class OpenAiAdapter {
       businessData,
       InsightsSchema,
       (parsed) => parsed.insights,
+      200,
     );
 
     return result;
@@ -427,6 +428,7 @@ export class OpenAiAdapter {
     userPrompt: string,
     schema: z.ZodType,
     transform: (parsed: z.infer<typeof schema>) => T,
+    maxTokens?: number | undefined,
   ): Promise<
     | { status: 'success'; data: T }
     | { status: 'retryable_error'; failure: OpenAiFailure }
@@ -458,6 +460,7 @@ export class OpenAiAdapter {
             },
           },
           temperature: 0.7,
+          ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
         }),
         signal: controller.signal,
       });
