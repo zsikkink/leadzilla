@@ -30,6 +30,8 @@ import { cn } from '@/lib/utils.js';
 import { getSupabaseBrowserClient } from '@/lib/supabase-client.js';
 import { countryName } from '@/lib/countries.js';
 import { sortTeamMembers } from '@/lib/team-members.js';
+import { toScoreTier, tierColor, parseTierBands, DEFAULT_TIER_BANDS, type TierBands } from '@/lib/score-tier-utils.js';
+import { useAuth } from '@/hooks/use-auth.js';
 
 // ── Sort options ────────────────────────────────────────────────────────────
 
@@ -241,12 +243,13 @@ function cleanBusinessName(rawName: string): string {
 
 // ── Score badge ──────────────────────────────────────────────────────────────
 
-function ScoreBadge({ score, band, leadScore }: { score: number; band: string | null; leadScore?: number | null | undefined }) {
+function ScoreBadge({ score, band, leadScore, bands }: { score: number; band: string | null; leadScore?: number | null | undefined; bands?: TierBands | undefined }) {
+  const b = bands ?? DEFAULT_TIER_BANDS;
   // Prefer lead's blended score over pre-qualification deterministic score
   if (leadScore != null) {
     const pct = Math.round(leadScore * 100);
-    const leadBand = leadScore >= 0.7 ? 'HIGH' : leadScore >= 0.4 ? 'MEDIUM' : 'LOW';
-    const color = leadBand === 'HIGH' ? 'text-zbooni-green bg-zbooni-green/10' : leadBand === 'MEDIUM' ? 'text-yellow-400 bg-yellow-400/10' : 'text-red-400 bg-red-400/10';
+    const leadBand = toScoreTier(leadScore, b);
+    const color = tierColor(leadBand);
     return (
       <span className={cn('rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider', color)}>
         {pct}% {leadBand}
@@ -260,7 +263,7 @@ function ScoreBadge({ score, band, leadScore }: { score: number; band: string | 
       </span>
     );
   }
-  const color = band === 'HIGH' ? 'text-zbooni-green bg-zbooni-green/10' : band === 'MEDIUM' ? 'text-yellow-400 bg-yellow-400/10' : 'text-red-400 bg-red-400/10';
+  const color = band === 'HIGH' ? tierColor('HIGH') : band === 'MEDIUM' ? tierColor('MEDIUM') : tierColor('LOW');
   return (
     <span className={cn('rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider', color)}>
       {score.toFixed(2)} {band ?? ''}
@@ -270,7 +273,7 @@ function ScoreBadge({ score, band, leadScore }: { score: number; band: string | 
 
 // ── Business card (list view) ────────────────────────────────────────────────
 
-function BusinessCard({ biz, isSelected, onSelect }: { biz: BusinessRow; isSelected: boolean; onSelect: () => void }) {
+function BusinessCard({ biz, isSelected, onSelect, bands }: { biz: BusinessRow; isSelected: boolean; onSelect: () => void; bands?: TierBands | undefined }) {
   const websiteScrape = biz.apify_website_scrape_json;
   const techCount = websiteScrape ? extractTechStack(websiteScrape).reduce((sum, cat) => sum + cat.technologies.length, 0) : 0;
   const decisionMakers = websiteScrape ? extractDecisionMakers(websiteScrape).length : 0;
@@ -292,7 +295,7 @@ function BusinessCard({ biz, isSelected, onSelect }: { biz: BusinessRow; isSelec
           <p className="text-sm font-bold tracking-tight truncate">{cleanBusinessName(biz.name)}</p>
           <p className="text-[11px] text-muted-foreground/60">{biz.category ?? 'Uncategorized'}</p>
         </div>
-        <ScoreBadge score={biz.deterministic_score} band={biz.score_band} leadScore={biz.leadBlendedScore} />
+        <ScoreBadge score={biz.deterministic_score} band={biz.score_band} leadScore={biz.leadBlendedScore} bands={bands} />
       </div>
       <div className="mt-2 flex items-center gap-3 text-[11px] text-muted-foreground/40">
         <span className="flex items-center gap-1"><Globe className="h-3 w-3" />{countryName(biz.country_code)}{biz.city ? ` / ${biz.city}` : ''}</span>
@@ -419,7 +422,7 @@ function ApolloOrgIntelCardBiz({ data }: { data: unknown }) {
   );
 }
 
-function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; contacts: BusinessContact[]; onClose: () => void }) {
+function BusinessDetailPanel({ biz, contacts, onClose, bands }: { biz: BusinessRow; contacts: BusinessContact[]; onClose: () => void; bands?: TierBands | undefined }) {
   const orderedContacts = useMemo(() => sortTeamMembers(contacts).ordered, [contacts]);
   const websiteScrape = biz.apify_website_scrape_json;
   const instagramScrape = biz.apify_instagram_scrape_json;
@@ -469,7 +472,7 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
           <p className="mt-1 text-xs text-muted-foreground/60">{biz.category ?? 'Uncategorized'} &middot; {countryName(biz.country_code)}{biz.city ? `, ${biz.city}` : ''}</p>
         </div>
         <div className="flex items-center gap-3">
-          <ScoreBadge score={biz.deterministic_score} band={biz.score_band} leadScore={biz.leadBlendedScore} />
+          <ScoreBadge score={biz.deterministic_score} band={biz.score_band} leadScore={biz.leadBlendedScore} bands={bands} />
           <button type="button" onClick={onClose} className="rounded-lg p-1 text-muted-foreground/40 hover:bg-muted/10 hover:text-foreground"><X className="h-4 w-4" /></button>
         </div>
       </div>
@@ -778,6 +781,7 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
 
 export default function BusinessIntelligencePage() {
   const searchParams = useSearchParams();
+  const { apiClient } = useAuth();
   const [businesses, setBusinesses] = useState<BusinessRow[]>([]);
   const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -788,6 +792,7 @@ export default function BusinessIntelligencePage() {
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState('newest');
   const pageSize = 30;
+  const [tierBands, setTierBands] = useState<TierBands>(DEFAULT_TIER_BANDS);
 
   const [debouncedSearch, setDebouncedSearch] = useState('');
 
@@ -799,6 +804,19 @@ export default function BusinessIntelligencePage() {
     }, 300);
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  // Load score tier bands from pipeline settings
+  useEffect(() => {
+    apiClient
+      .listPipelineSettings()
+      .then(({ items }) => {
+        const bands = items.find((i) => i.key === 'scoreTierBands');
+        if (bands) {
+          setTierBands(parseTierBands(bands.value));
+        }
+      })
+      .catch(() => undefined);
+  }, [apiClient]);
 
   const fetchBusinesses = useCallback(async (pageNum: number, search: string, sort: string) => {
     setIsLoading(true);
@@ -1045,7 +1063,7 @@ export default function BusinessIntelligencePage() {
           ) : filtered.length > 0 ? (
             <>
               {filtered.map((biz) => (
-                <BusinessCard key={biz.id} biz={biz} isSelected={selectedId === biz.id} onSelect={() => setSelectedId(biz.id)} />
+                <BusinessCard key={biz.id} biz={biz} isSelected={selectedId === biz.id} onSelect={() => setSelectedId(biz.id)} bands={tierBands} />
               ))}
               {/* Pagination */}
               {totalPages > 1 && (
@@ -1067,7 +1085,7 @@ export default function BusinessIntelligencePage() {
         {/* Right: detail panel */}
         {selected ? (
           <div className="lg:sticky lg:top-20 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto">
-            <BusinessDetailPanel biz={selected} contacts={selectedContacts} onClose={() => setSelectedId(null)} />
+            <BusinessDetailPanel biz={selected} contacts={selectedContacts} onClose={() => setSelectedId(null)} bands={tierBands} />
           </div>
         ) : (
           <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">

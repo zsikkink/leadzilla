@@ -426,6 +426,11 @@ export async function handleMessageGenerateJob(
         ? icpAngle.trim()
         : (icpProfile?.description ? `Hook: ${icpProfile.description.split('.').at(0)?.trim()}` : null));
     const icpSegment = icpProfile?.name ?? null;
+    // Sales hook debug: log what was extracted so we can verify hooks reach OpenAI
+    logger.info(
+      { jobId: job.id, leadId, icpProfileId, salesHook: requiredIcpHook ? requiredIcpHook.slice(0, 80) : '(none)', icpSegment },
+      requiredIcpHook ? `Sales hook extracted: "${requiredIcpHook.slice(0, 50)}"` : 'No sales hook found for ICP',
+    );
     if (!requiredIcpHook) {
       logger.warn({ jobId: job.id, leadId, icpProfileId }, 'ICP sales hook missing; message quality may degrade');
     }
@@ -485,27 +490,23 @@ export async function handleMessageGenerateJob(
       pitchedFeature = candidates[followUpNumber % candidates.length] ?? candidates[0] ?? null;
     }
 
-    // Score-based channel selection:
-    // HIGH (>=0.67) + has decision maker phone → WhatsApp
-    // MEDIUM (0.3-0.67) → Email only
-    // Explicit channel override takes priority
+    // Channel selection: phone available → WhatsApp, otherwise → Email.
+    // Score tier bands are visual only (dashboard colors/labels) — they do NOT
+    // affect pipeline routing. The enrichment threshold upstream already controls
+    // who gets a phone lookup; here we just check the result.
+    // Explicit channel override takes priority.
     let resolvedChannel = channel ?? 'EMAIL';
 
     if (!channel) {
-      const blendedScore = latestScore?.blendedScore ?? 0;
       // Use decisionMakerPhone (from Apollo) over lead.phone (from Google)
       const hasDecisionMakerPhone = !!(lead.decisionMakerPhone && lead.decisionMakerPhone.trim() !== '');
       const hasPhone = hasDecisionMakerPhone || !!(lead.phone && lead.phone.trim() !== '');
 
-      if (blendedScore >= 0.67 && hasPhone) {
-        resolvedChannel = 'WHATSAPP';
-      } else {
-        resolvedChannel = 'EMAIL';
-      }
+      resolvedChannel = hasPhone ? 'WHATSAPP' : 'EMAIL';
 
       logger.info(
-        { jobId: job.id, leadId, blendedScore, hasDecisionMakerPhone, hasPhone, resolvedChannel },
-        'Score-based channel selection',
+        { jobId: job.id, leadId, hasDecisionMakerPhone, hasPhone, resolvedChannel },
+        'Channel selection (phone-based)',
       );
     }
 
@@ -573,6 +574,14 @@ export async function handleMessageGenerateJob(
         'Assembled message generation context',
       );
 
+      // Sales hook debug: confirm the hook is in the context sent to OpenAI
+      if (generateContext.icpHook) {
+        logger.info(
+          { jobId: job.id, leadId, hookPreview: generateContext.icpHook.slice(0, 50) },
+          `Sales hook included in OpenAI prompt: "${generateContext.icpHook.slice(0, 50)}"`,
+        );
+      }
+
       // First attempt
       const result = await deps.openAiAdapter.generateMessageVariants(generateContext);
 
@@ -599,6 +608,7 @@ export async function handleMessageGenerateJob(
           },
           '[A1-DIAG] OpenAI generation failed — falling back to templates',
         );
+        logger.info({ jobId: job.id, leadId }, 'FALLBACK: OpenAI failed on first attempt — sales hook NOT used in message');
         // Immediately use fallback instead of passing the stub body to validation
         // (the stub 'Message generation pending' always triggers hard-reject)
         messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext, fallbackExtra);
@@ -671,6 +681,7 @@ export async function handleMessageGenerateJob(
     } else {
       // [A1-DIAG] Fallback trigger point (a): OpenAI adapter not configured
       logger.warn({ jobId: job.id, leadId, hasDeps: !!deps, hasAdapter: !!deps?.openAiAdapter }, 'OpenAI not configured, using fallback template');
+      logger.info({ jobId: job.id, leadId }, 'FALLBACK: OpenAI not configured — sales hook NOT used in message');
       messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext, fallbackExtra);
       generatedByModel = 'fallback-template';
     }

@@ -24,6 +24,7 @@ import { getWebEnv } from '@/lib/env.js';
 import { useAuth } from '@/hooks/use-auth.js';
 import { useApiQuery } from '@/hooks/use-api-query.js';
 import { KNOWN_SCORING_FIELD_KEYS } from '@/lib/discovery-admin.js';
+import { toScoreTier, parseTierBands, DEFAULT_TIER_BANDS, type TierBands } from '@/lib/score-tier-utils.js';
 
 import type {
   QualificationRuleResponse,
@@ -227,9 +228,10 @@ function formatValue(val: unknown): string {
   return String(val);
 }
 
-function scoreTier(score: number): { label: string; className: string } {
-  if (score >= 0.7) return { label: 'HIGH', className: 'tier high' };
-  if (score >= 0.4) return { label: 'MEDIUM', className: 'tier medium' };
+function scoreTier(score: number, bands: TierBands = DEFAULT_TIER_BANDS): { label: string; className: string } {
+  const tier = toScoreTier(score, bands);
+  if (tier === 'HIGH') return { label: 'HIGH', className: 'tier high' };
+  if (tier === 'MEDIUM') return { label: 'MEDIUM', className: 'tier medium' };
   return { label: 'LOW', className: 'tier low' };
 }
 
@@ -527,6 +529,7 @@ export default function ICPRulesPage() {
   const [showSimulation, setShowSimulation] = useState(false);
   const [blendWeights, setBlendWeights] = useState({ deterministic: 0.6, ai: 0.4 });
   const [qualificationThreshold, setQualificationThreshold] = useState(0.4);
+  const [tierBands, setTierBands] = useState<TierBands>(DEFAULT_TIER_BANDS);
 
   // Add Rule state
   const [showAddRule, setShowAddRule] = useState(false);
@@ -607,6 +610,7 @@ export default function ICPRulesPage() {
     void apiClient.listPipelineSettings().then((res) => {
       const blend = res.items.find((i) => i.key === 'deterministicAiBlend');
       const threshold = res.items.find((i) => i.key === 'scoreQualificationThreshold');
+      const bands = res.items.find((i) => i.key === 'scoreTierBands');
       const d = typeof blend?.value === 'number' ? blend.value : Number(blend?.value);
       if (Number.isFinite(d) && d >= 0 && d <= 1) {
         setBlendWeights({ deterministic: d, ai: 1 - d });
@@ -614,6 +618,9 @@ export default function ICPRulesPage() {
       const t = typeof threshold?.value === 'number' ? threshold.value : Number(threshold?.value);
       if (Number.isFinite(t) && t >= 0 && t <= 1) {
         setQualificationThreshold(t);
+      }
+      if (bands) {
+        setTierBands(parseTierBands(bands.value));
       }
     }).catch(() => undefined);
   }, [apiClient]);
@@ -623,7 +630,7 @@ export default function ICPRulesPage() {
     [selectedProfile, rules, simForm, blendWeights],
   );
 
-  const tier = simResult ? scoreTier(simResult.score) : null;
+  const tier = simResult ? scoreTier(simResult.score, tierBands) : null;
 
   if (icpQuery.isLoading) {
     return (

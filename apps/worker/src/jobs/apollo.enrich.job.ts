@@ -130,7 +130,7 @@ export async function handleApolloEnrichJob(
       return;
     }
 
-    const channel: 'EMAIL' | 'WHATSAPP' = scoreBand === 'HIGH' && phoneAvailable ? 'WHATSAPP' : 'EMAIL';
+    const channel: 'EMAIL' | 'WHATSAPP' = phoneAvailable ? 'WHATSAPP' : 'EMAIL';
     await deps.enqueueMessageGenerate({
       leadId,
       icpProfileId,
@@ -144,13 +144,6 @@ export async function handleApolloEnrichJob(
       'Enqueued message.generate after apollo.enrich',
     );
   };
-
-  // LOW → skip entirely, do not enqueue message.generate
-  if (scoreBand === 'LOW') {
-    logger.info(logCtx, 'LOW score band — skipping apollo.enrich entirely');
-    await tryFinalizeDiscoveryRun(runId, logger);
-    return;
-  }
 
   // Enrichment threshold gate: skip paid Apollo reveal if score is too low
   const enrichmentThreshold = await getEnrichmentThreshold();
@@ -203,16 +196,10 @@ export async function handleApolloEnrichJob(
     return;
   }
 
-  // Call Apollo phone reveal (1 mobile credit) — only for HIGH band
-  if (scoreBand !== 'HIGH') {
-    logger.info(
-      { ...logCtx, scoreBand },
-      'Score band is not HIGH — skipping phone reveal, continuing to message.generate',
-    );
-    await enqueueMessageGenerateIfSendable(hasEmail, hasPhone, 'skip_phone_reveal_not_high');
-    await tryFinalizeDiscoveryRun(runId, logger);
-    return;
-  }
+  // Call Apollo phone reveal (1 mobile credit) — only if score justifies the spend.
+  // The enrichmentThreshold already gates paid enrichment above; this is the same
+  // threshold applied specifically to the phone reveal credit. Leads that passed
+  // the threshold above but still land here have already been deemed worth enriching.
 
   if (hasPhone) {
     logger.info(logCtx, 'Lead already has phone — skipping phone reveal');

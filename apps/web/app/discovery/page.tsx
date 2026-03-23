@@ -479,7 +479,7 @@ function getDefaultSettings(): SettingsState {
     scoreTierBands: { low: 0.34, med: 0.67, high: 0.67 },
     followUpMaxCount: 3,
     whatsappDailyLimit: 50,
-    emailDailyLimit: 10,
+    emailDailyLimit: 100,
     modelActivationAuc: 0.6,
     providerBudgetCeiling: 50,
   };

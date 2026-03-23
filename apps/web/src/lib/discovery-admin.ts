@@ -23,6 +23,7 @@ import {
 } from '@lead-flood/contracts';
 
 import { getSupabaseBrowserClient } from './supabase-client.js';
+import { toScoreTier, type ScoreTier, type TierBands } from './score-tier-utils.js';
 
 export type JobRequestType = 'DISCOVERY_SEED' | 'DISCOVERY_RUN';
 export type JobRequestStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELED';
@@ -75,16 +76,8 @@ const SCORE_WEIGHTS = {
   recentActivity: 0.15,
 } as const;
 
-type ScoreTier = 'LOW' | 'MEDIUM' | 'HIGH';
-
-function toTier(score: number): ScoreTier {
-  if (score >= 0.67) {
-    return 'HIGH';
-  }
-  if (score >= 0.34) {
-    return 'MEDIUM';
-  }
-  return 'LOW';
+function toTier(score: number, bands?: TierBands): ScoreTier {
+  return toScoreTier(score, bands);
 }
 
 function round(value: number): number {
@@ -139,7 +132,7 @@ function mapLeadRow(row: {
   instagram_handle: string | null;
   created_at: string;
   updated_at: string;
-}): AdminLeadRow {
+}, bands?: TierBands): AdminLeadRow {
   return {
     id: row.id,
     name: row.name,
@@ -147,7 +140,7 @@ function mapLeadRow(row: {
     city: row.city,
     category: row.category,
     score: row.deterministic_score,
-    scoreTier: row.score_band ?? toTier(row.deterministic_score),
+    scoreTier: row.score_band ?? toTier(row.deterministic_score, bands),
     hasWhatsapp: row.has_whatsapp,
     hasInstagram: row.has_instagram,
     acceptsOnlinePayments: row.accepts_online_payments,
@@ -171,7 +164,7 @@ function computeBusinessScore(row: {
   followerCount: number | null;
   physicalAddressPresent: boolean;
   recentActivity: boolean;
-}) {
+}, bands?: TierBands) {
   const reviewCount = row.reviewCount ?? 0;
   const followerCount = row.followerCount ?? 0;
 
@@ -233,7 +226,7 @@ function computeBusinessScore(row: {
   const total = round(contributions.reduce((sum, entry) => sum + entry.contribution, 0));
   return {
     total,
-    tier: toTier(total),
+    tier: toTier(total, bands),
     contributions,
   };
 }

@@ -155,12 +155,7 @@ async function fetchLeadRows(
     }
   }
 
-  const { data, error } = await query;
-
-  if (error) {
-    console.error('Failed to fetch leads for time series:', error);
-    return [];
-  }
+  const { data } = await query.throwOnError();
 
   return (data ?? []) as LeadRow[];
 }
