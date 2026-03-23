@@ -1843,6 +1843,10 @@ export async function handleBusinessConvertJob(
         { ...logCtx, deterministicScore: business.deterministicScore, qualificationThreshold },
         'Business below qualification threshold — skipping contact recovery',
       );
+      await prisma.business.update({
+        where: { id: businessId },
+        data: { preQualified: false, disqualificationReason: 'BELOW_SCORE_THRESHOLD' },
+      });
       await persistCostEvents(prisma, discoveryRunId, businessId, costEvents);
       await tryFinalizeDiscoveryRun(discoveryRunId, logger);
       return;
