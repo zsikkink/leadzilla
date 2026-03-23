@@ -82,10 +82,11 @@ The intended API runtime is Railway backed by remote Supabase Postgres.
 
 Repo deployment surface:
 
-- Railway config: `railway.toml`
-- Docker build: `infra/docker/Dockerfile.api`
-- Process health endpoint: `/health`
-- Railway healthcheck endpoint: `/ready`
+- Root `railway.toml` is intentionally service-neutral in this multi-service repo
+- API Docker build: `infra/docker/Dockerfile.api`
+- Worker Docker build: `infra/docker/Dockerfile.worker`
+- API process health endpoint: `/health`
+- API Railway healthcheck endpoint: `/ready`
 
 Required runtime env on Railway:
 
@@ -106,8 +107,15 @@ In the Railway service settings:
 
 - connect the repo to the API service
 - keep the repo root as the source directory
+- set `RAILWAY_DOCKERFILE_PATH=infra/docker/Dockerfile.api` on the API service
 - set `DATABASE_URL`, `DIRECT_URL`, `SUPABASE_PROJECT_REF` or `SUPABASE_JWT_ISSUER`, and `CORS_ORIGIN`
-- configure the healthcheck path as `/ready` if the service does not pick up `railway.toml`
+- set the API healthcheck path to `/ready`
+
+For the worker service:
+
+- keep the repo root as the source directory
+- set `RAILWAY_DOCKERFILE_PATH=infra/docker/Dockerfile.worker`
+- do not reuse the API `/ready` healthcheck on the worker
 
 Do not add a Railway pre-deploy or release command for Prisma migrations. Production schema changes stay SQL-first via Supabase CLI as documented in `docs/PROD_REMOTE_DB_STRATEGY.md`.
 

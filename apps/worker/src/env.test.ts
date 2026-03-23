@@ -90,4 +90,30 @@ describe('loadWorkerEnv', () => {
       }),
     ).toThrowError('Google CSE is deprecated and not supported');
   });
+
+  it('treats blank optional provider and notification vars as unset', () => {
+    const env = loadWorkerEnv({
+      DATABASE_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood',
+      APP_ENV: 'test',
+      OPENAI_API_KEY: '',
+      RESEND_API_KEY: '',
+      TRENGO_API_KEY: '',
+      TRENGO_CHANNEL_ID: '',
+      TRENGO_TEMPLATE_ID: '',
+      TRENGO_INTERNAL_CONVERSATION_ID: '',
+      SLACK_WEBHOOK_URL: '',
+      SALES_NOTIFICATION_EMAIL: '',
+      SERPAPI_API_KEY: '',
+    });
+
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.RESEND_API_KEY).toBeUndefined();
+    expect(env.TRENGO_API_KEY).toBeUndefined();
+    expect(env.TRENGO_CHANNEL_ID).toBeUndefined();
+    expect(env.TRENGO_TEMPLATE_ID).toBeUndefined();
+    expect(env.TRENGO_INTERNAL_CONVERSATION_ID).toBeUndefined();
+    expect(env.SLACK_WEBHOOK_URL).toBeUndefined();
+    expect(env.SALES_NOTIFICATION_EMAIL).toBeUndefined();
+    expect(env.SERPAPI_API_KEY).toBeUndefined();
+  });
 });

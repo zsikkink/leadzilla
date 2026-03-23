@@ -18,6 +18,24 @@ const LEGACY_GOOGLE_CSE_ENV_KEYS = [
 const LOCAL_DATABASE_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 const SUPABASE_HOST_SUFFIXES = ['.supabase.co', '.supabase.com'] as const;
 
+const optionalNonEmptyString = () =>
+  z.preprocess((value) => {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed.length === 0 ? undefined : trimmed;
+    }
+    return value;
+  }, z.string().min(1).optional());
+
+const optionalUrlString = () =>
+  z.preprocess((value) => {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed.length === 0 ? undefined : trimmed;
+    }
+    return value;
+  }, z.string().url().optional());
+
 function findLegacyGoogleCseEnvKeys(source: NodeJS.ProcessEnv): string[] {
   const explicitMatches = LEGACY_GOOGLE_CSE_ENV_KEYS.filter((key) => key in source);
   const inferredMatches = Object.keys(source).filter((key) =>
@@ -42,28 +60,28 @@ const ApiEnvSchema = z.object({
   DIRECT_URL: z
     .string()
     .min(1, 'DIRECT_URL is required; set it to the Supabase direct or pooled connection string'),
-  SUPABASE_PROJECT_REF: z.string().min(1).optional(),
-  SUPABASE_JWT_ISSUER: z.string().url().optional(),
-  SUPABASE_JWT_AUDIENCE: z.string().min(1).optional(),
+  SUPABASE_PROJECT_REF: optionalNonEmptyString(),
+  SUPABASE_JWT_ISSUER: optionalUrlString(),
+  SUPABASE_JWT_AUDIENCE: optionalNonEmptyString(),
   APOLLO_ENABLED: z.coerce.boolean().optional(),
-  APOLLO_API_KEY: z.string().min(1).optional(),
+  APOLLO_API_KEY: optionalNonEmptyString(),
   LINKEDIN_SCRAPE_ENABLED: z.coerce.boolean().optional(),
-  LINKEDIN_SCRAPE_API_KEY: z.string().min(1).optional(),
-  LINKEDIN_SCRAPE_ENDPOINT: z.string().url().optional(),
+  LINKEDIN_SCRAPE_API_KEY: optionalNonEmptyString(),
+  LINKEDIN_SCRAPE_ENDPOINT: optionalUrlString(),
   COMPANY_SEARCH_ENABLED: z.coerce.boolean().optional(),
   PDL_ENABLED: z.coerce.boolean().optional(),
-  PDL_API_KEY: z.string().min(1).optional(),
+  PDL_API_KEY: optionalNonEmptyString(),
   HUNTER_ENABLED: z.coerce.boolean().optional(),
-  HUNTER_API_KEY: z.string().min(1).optional(),
+  HUNTER_API_KEY: optionalNonEmptyString(),
   CLEARBIT_ENABLED: z.coerce.boolean().optional(),
-  CLEARBIT_API_KEY: z.string().min(1).optional(),
+  CLEARBIT_API_KEY: optionalNonEmptyString(),
   DISCOVERY_ENABLED: z.coerce.boolean().optional(),
   ENRICHMENT_ENABLED: z.coerce.boolean().optional(),
-  OPENAI_API_KEY: z.string().min(1).optional(),
-  OPENAI_GENERATION_MODEL: z.string().min(1).optional(),
-  TRENGO_WEBHOOK_SECRET: z.string().min(1).optional(),
-  RESEND_WEBHOOK_SECRET: z.string().min(1).optional(),
-  ADMIN_API_KEY: z.string().min(1).optional(),
+  OPENAI_API_KEY: optionalNonEmptyString(),
+  OPENAI_GENERATION_MODEL: optionalNonEmptyString(),
+  TRENGO_WEBHOOK_SECRET: optionalNonEmptyString(),
+  RESEND_WEBHOOK_SECRET: optionalNonEmptyString(),
+  ADMIN_API_KEY: optionalNonEmptyString(),
   DISCOVERY_MAX_RUNS_PER_DAY: z.coerce.number().int().min(1).optional(),
   DISCOVERY_MAX_CONCURRENT_RUNS: z.coerce.number().int().min(1).optional(),
   DISCOVERY_MAX_LEADS_PER_RUN: z.coerce.number().int().min(1).optional(),

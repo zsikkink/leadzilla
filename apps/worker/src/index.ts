@@ -1,7 +1,7 @@
 import PgBoss, { type Job } from 'pg-boss';
 
 import { buildFeaturesComputeSingletonKey } from '@lead-flood/contracts';
-import { checkPipelineSchemaHealth } from '@lead-flood/db';
+import { checkWorkerSchemaHealth } from '@lead-flood/db';
 import {
   GooglePlacesDiscoveryProvider,
   loadDiscoveryRuntimeConfig,
@@ -237,7 +237,7 @@ async function main(): Promise<void> {
     level: env.LOG_LEVEL,
   });
 
-  const schemaHealth = await checkPipelineSchemaHealth();
+  const schemaHealth = await checkWorkerSchemaHealth();
   if (schemaHealth.status !== 'ok') {
     logger.error({ schemaHealth }, 'Worker schema guard failed');
     throw new Error(

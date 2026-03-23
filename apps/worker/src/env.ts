@@ -36,6 +36,15 @@ const optionalUrlString = () =>
     return value;
   }, z.string().url().optional());
 
+const optionalEmailString = () =>
+  z.preprocess((value) => {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed.length === 0 ? undefined : trimmed;
+    }
+    return value;
+  }, z.string().email().optional());
+
 const LEGACY_GOOGLE_CSE_ENV_KEYS = [
   'GOOGLE_SEARCH_ENABLED',
   'GOOGLE_SEARCH_API_KEY',
@@ -95,25 +104,25 @@ const WorkerEnvSchema = z.object({
   SERPAPI_DISCOVERY_ENABLED: envBoolean.default(true),
   SERPAPI_WEB_SEARCH_ENABLED: envBoolean.default(true),
   ENRICHMENT_ENABLED: envBoolean.default(true),
-  OPENAI_API_KEY: z.string().min(1).optional(),
-  OPENAI_BASE_URL: z.string().url().optional(),
+  OPENAI_API_KEY: optionalNonEmptyString(),
+  OPENAI_BASE_URL: optionalUrlString(),
   OPENAI_GENERATION_MODEL: z.string().min(1).default('gpt-4o'),
   OPENAI_SCORING_MODEL: z.string().min(1).default('gpt-4o'),
-  RESEND_API_KEY: z.string().min(1).optional(),
+  RESEND_API_KEY: optionalNonEmptyString(),
   RESEND_FROM_EMAIL: z.string().email().default('noreply@leadflood.io'),
-  TRENGO_API_KEY: z.string().min(1).optional(),
+  TRENGO_API_KEY: optionalNonEmptyString(),
   TRENGO_BASE_URL: z.string().url().default('https://app.trengo.com/api/v2'),
-  TRENGO_CHANNEL_ID: z.string().min(1).optional(),
-  TRENGO_TEMPLATE_ID: z.string().min(1).optional(),
+  TRENGO_CHANNEL_ID: optionalNonEmptyString(),
+  TRENGO_TEMPLATE_ID: optionalNonEmptyString(),
   MESSAGING_ENABLED: envBoolean.default(true),
   WHATSAPP_DAILY_SEND_LIMIT: z.coerce.number().int().min(1).default(50),
   EMAIL_DAILY_SEND_LIMIT: z.coerce.number().int().min(1).default(10),
   SCORING_DETERMINISTIC_WEIGHT: z.coerce.number().min(0).max(1).default(0.6),
   SCORING_AI_WEIGHT: z.coerce.number().min(0).max(1).default(0.4),
-  SLACK_WEBHOOK_URL: z.string().url().optional(),
-  SALES_NOTIFICATION_EMAIL: z.string().email().optional(),
-  TRENGO_INTERNAL_CONVERSATION_ID: z.string().min(1).optional(),
-  SERPAPI_API_KEY: z.string().min(1).optional(),
+  SLACK_WEBHOOK_URL: optionalUrlString(),
+  SALES_NOTIFICATION_EMAIL: optionalEmailString(),
+  TRENGO_INTERNAL_CONVERSATION_ID: optionalNonEmptyString(),
+  SERPAPI_API_KEY: optionalNonEmptyString(),
   DISCOVERY_COUNTRIES: z.string().default('JO,SA,AE,EG'),
   DISCOVERY_LANGUAGES: z.string().default('en,ar'),
   DISCOVERY_MAX_PAGES_PER_QUERY: z.coerce.number().int().min(1).default(3),
@@ -121,7 +130,7 @@ const WorkerEnvSchema = z.object({
   DISCOVERY_RPS: z.coerce.number().int().min(1).default(1),
   DISCOVERY_CONCURRENCY: z.coerce.number().int().min(1).default(3),
   DISCOVERY_ENABLE_CACHE: envBoolean.default(true),
-  DISCOVERY_MAPS_ZOOM: z.string().optional(),
+  DISCOVERY_MAPS_ZOOM: optionalNonEmptyString(),
   DISCOVERY_MAX_TASK_ATTEMPTS: z.coerce.number().int().min(1).default(5),
   DISCOVERY_BACKOFF_BASE_SECONDS: z.coerce.number().int().min(1).default(30),
   DISCOVERY_RUN_MAX_TASKS: z.coerce.number().int().min(1).optional(),

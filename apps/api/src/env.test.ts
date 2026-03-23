@@ -36,4 +36,21 @@ describe('loadApiEnv', () => {
       }),
     ).toThrow(/configured for remote Supabase only/);
   });
+
+  it('treats blank optional string env vars as unset', () => {
+    const env = loadApiEnv({
+      ...baseEnv,
+      APP_ENV: 'ci',
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood_release_runtime',
+      DIRECT_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood_release_runtime',
+      TRENGO_WEBHOOK_SECRET: '',
+      RESEND_WEBHOOK_SECRET: '',
+      ADMIN_API_KEY: '',
+    });
+
+    expect(env.TRENGO_WEBHOOK_SECRET).toBeUndefined();
+    expect(env.RESEND_WEBHOOK_SECRET).toBeUndefined();
+    expect(env.ADMIN_API_KEY).toBeUndefined();
+  });
 });
