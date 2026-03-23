@@ -6,6 +6,7 @@ import { useCallback, useState } from 'react';
 import { CustomSelect } from '../../src/components/custom-select.js';
 import { FunnelChart } from '../../src/components/funnel-chart.js';
 import { KpiCard } from '../../src/components/kpi-card.js';
+import { PipelineTimeSeriesChart } from '../../src/components/pipeline-time-series-chart.js';
 import { useAuth } from '../../src/hooks/use-auth.js';
 import { useApiQuery } from '../../src/hooks/use-api-query.js';
 
@@ -180,6 +181,9 @@ export default function DashboardPage() {
 
       {/* Funnel Chart */}
       {funnel.data ? <FunnelChart data={funnel.data} /> : null}
+
+      {/* Pipeline Time Series Chart — wired to ICP filter */}
+      <PipelineTimeSeriesChart icpProfileId={icpFilter} />
 
       {/* Feedback Summary */}
       {feedback.data ? (

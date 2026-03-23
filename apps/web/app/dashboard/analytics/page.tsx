@@ -21,11 +21,13 @@ import {
   Users,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { cn } from '../../../src/lib/utils.js';
+import { CustomSelect } from '../../../src/components/custom-select.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
+import { getSupabaseBrowserClient } from '../../../src/lib/supabase-client.js';
 
 type DateRange = '7d' | '30d' | '90d' | 'all';
 
@@ -206,6 +208,7 @@ function PipelineStageCard({ stage, data }: { stage: PipelineStage; data: Funnel
 export default function AnalyticsPage() {
   const { apiClient } = useAuth();
   const [dateRange, setDateRange] = useState<DateRange>('all');
+  const [icpFilter, setIcpFilter] = useState<string | undefined>(undefined);
 
   // Discovery runs for yield display
   const icps = useApiQuery(
@@ -215,15 +218,27 @@ export default function AnalyticsPage() {
     useCallback(() => apiClient.listDiscoveryRuns({ page: 1, pageSize: 200 }), [apiClient]),
   );
 
+  const icpOptions = [
+    { value: '', label: 'All ICPs' },
+    ...(icps.data?.items.map((icp) => ({ value: icp.id, label: icp.name })) ?? []),
+  ];
+
   const dateFilter = useMemo(() => {
-    if (dateRange === 'all') return {};
-    const now = new Date();
-    const from = new Date();
-    if (dateRange === '7d') from.setDate(now.getDate() - 7);
-    if (dateRange === '30d') from.setDate(now.getDate() - 30);
-    if (dateRange === '90d') from.setDate(now.getDate() - 90);
-    return { from: from.toISOString(), to: now.toISOString() };
-  }, [dateRange]);
+    const base: Record<string, string> = {};
+    if (dateRange !== 'all') {
+      const now = new Date();
+      const from = new Date();
+      if (dateRange === '7d') from.setDate(now.getDate() - 7);
+      if (dateRange === '30d') from.setDate(now.getDate() - 30);
+      if (dateRange === '90d') from.setDate(now.getDate() - 90);
+      base.from = from.toISOString();
+      base.to = now.toISOString();
+    }
+    if (icpFilter) {
+      base.icpProfileId = icpFilter;
+    }
+    return base;
+  }, [dateRange, icpFilter]);
 
   const funnel = useApiQuery(
     useCallback(() => apiClient.getFunnel(dateFilter), [apiClient, dateFilter]),
@@ -244,6 +259,77 @@ export default function AnalyticsPage() {
     useCallback(() => apiClient.listFeedbackEvents({ page: 1, pageSize: 10 }), [apiClient]),
   );
 
+  // D8: Fetch rejected lead count via direct Supabase query
+  // The funnel API doesn't include rejected leads, so we query directly
+  const [rejectedCount, setRejectedCount] = useState<number>(0);
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchRejectedCount() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        let query = supabase
+          .from('Lead')
+          .select('id', { count: 'exact', head: true })
+          .eq('status', 'rejected')
+          .is('deletedAt', null);
+
+        // ICP filtering: join through business_conversions
+        if (icpFilter) {
+          const { data: conversions } = await supabase
+            .from('business_conversions')
+            .select('leadId')
+            .eq('icpProfileId', icpFilter);
+          const leadIds = conversions?.map((c: { leadId: string }) => c.leadId) ?? [];
+          if (leadIds.length > 0) {
+            query = query.in('id', leadIds);
+          } else {
+            if (!cancelled) setRejectedCount(0);
+            return;
+          }
+        }
+
+        // Date filtering on rejectedAt via LeadRejection table is complex;
+        // for simplicity we count all rejected leads matching the ICP filter
+        // (status='rejected' already means they were rejected).
+        const { count } = await query;
+        if (!cancelled) {
+          setRejectedCount(count ?? 0);
+        }
+      } catch (err) {
+        console.error('Failed to fetch rejected count:', err);
+      }
+    }
+    void fetchRejectedCount();
+    return () => { cancelled = true; };
+  }, [icpFilter, dateFilter]);
+
+  // D7: Fetch total scored leads count via Supabase for independent verification
+  const [totalScoredLeads, setTotalScoredLeads] = useState<number>(0);
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchTotalScored() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        let query = supabase
+          .from('LeadScorePrediction')
+          .select('id', { count: 'exact', head: true });
+
+        if (icpFilter) {
+          query = query.eq('icpProfileId', icpFilter);
+        }
+
+        const { count } = await query;
+        if (!cancelled) {
+          setTotalScoredLeads(count ?? 0);
+        }
+      } catch (err) {
+        console.error('Failed to fetch total scored:', err);
+      }
+    }
+    void fetchTotalScored();
+    return () => { cancelled = true; };
+  }, [icpFilter]);
+
   const totalMessaged = funnel.data?.messagesSentCount ?? 0;
   const totalReplied = funnel.data?.repliesCount ?? 0;
   const overallReplyRate = totalMessaged > 0 ? Math.round((totalReplied / totalMessaged) * 100) : 0;
@@ -252,9 +338,13 @@ export default function AnalyticsPage() {
 
   const distributionMax = Math.max(...(scoreDistribution.data?.bands.map((band) => band.count) ?? [0]), 1);
 
+  // D10: Score distribution summary stats
+  const totalScored = scoreDistribution.data?.bands.reduce((sum, b) => sum + b.count, 0) ?? 0;
+  const rejectionRate = totalScored > 0 ? Math.round((rejectedCount / (totalScored + rejectedCount)) * 100) : 0;
+
   return (
     <div className="space-y-6">
-      {/* ── Page header + date range ──────────────────────────────── */}
+      {/* ── Page header + filters ──────────────────────────────── */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-2xl font-extrabold tracking-tight">Agent Analytics</h1>
@@ -262,21 +352,32 @@ export default function AnalyticsPage() {
             Live analytics from your current database state
           </p>
         </div>
-        <div className="flex gap-1.5">
-          {DATE_RANGE_OPTIONS.map((range) => (
-            <button
-              key={range}
-              type="button"
-              onClick={() => setDateRange(range)}
-              className={`rounded-full px-4 py-1.5 text-xs font-semibold transition-colors ${
-                dateRange === range
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-muted/20 text-muted-foreground hover:bg-muted/40'
-              }`}
-            >
-              {DATE_RANGE_LABELS[range]}
-            </button>
-          ))}
+        <div className="flex items-center gap-3">
+          <div className="relative shrink-0">
+            <CustomSelect
+              value={icpFilter ?? ''}
+              onChange={(v) => setIcpFilter(v || undefined)}
+              options={icpOptions}
+              placeholder="All ICPs"
+              className="[&>div:last-child]:right-0 [&>div:last-child]:left-auto"
+            />
+          </div>
+          <div className="flex gap-1.5">
+            {DATE_RANGE_OPTIONS.map((range) => (
+              <button
+                key={range}
+                type="button"
+                onClick={() => setDateRange(range)}
+                className={`rounded-full px-4 py-1.5 text-xs font-semibold transition-colors ${
+                  dateRange === range
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted/20 text-muted-foreground hover:bg-muted/40'
+                }`}
+              >
+                {DATE_RANGE_LABELS[range]}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -437,11 +538,12 @@ export default function AnalyticsPage() {
           <h2 className="text-base font-bold tracking-tight">Funnel Stages</h2>
         </div>
         {funnel.data ? (
-          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-6">
             <StatCard label="Discovered" value={String(funnel.data.discoveredCount)} accent="text-foreground" />
             <StatCard label="Feature Extraction" value={String(funnel.data.qualifiedCount)} accent="text-zbooni-teal" />
             <StatCard label="Enriched" value={String(funnel.data.enrichedCount)} accent="text-zbooni-green" />
             <StatCard label="Scored" value={String(funnel.data.scoredCount)} accent="text-yellow-400" />
+            <StatCard label="Rejected" value={String(rejectedCount)} accent="text-red-400" sub="Lead.status = rejected" />
             <StatCard label="Deals Won" value={String(funnel.data.dealsWonCount)} accent="text-purple-400" />
           </div>
         ) : (
@@ -451,28 +553,61 @@ export default function AnalyticsPage() {
 
       {/* ── Score Distribution ────────────────────────────────────── */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
-          <BarChart3 className="h-4 w-4 text-zbooni-green" />
-          <h2 className="text-base font-bold tracking-tight">Score Distribution</h2>
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="h-4 w-4 text-zbooni-green" />
+            <h2 className="text-base font-bold tracking-tight">Score Distribution</h2>
+          </div>
+          {totalScoredLeads > 0 ? (
+            <span className="text-xs text-muted-foreground/50">
+              {totalScoredLeads} total scored leads (all time)
+            </span>
+          ) : null}
         </div>
         {scoreDistribution.data && scoreDistribution.data.bands.length > 0 ? (
-          <div className="space-y-3">
-            {scoreDistribution.data.bands.map((band) => {
-              const pct = Math.round((band.count / distributionMax) * 100);
-              return (
-                <div key={band.scoreBand} className="flex items-center gap-3">
-                  <p className="w-16 text-xs font-semibold text-muted-foreground">{band.scoreBand}</p>
-                  <div className="h-6 flex-1 overflow-hidden rounded-full bg-zbooni-dark/60">
-                    <div
-                      className="h-full rounded-full bg-zbooni-teal/70"
-                      style={{ width: `${Math.max(pct, band.count > 0 ? 5 : 0)}%` }}
-                    />
+          <>
+            <div className="space-y-3">
+              {scoreDistribution.data.bands.map((band) => {
+                const pct = Math.round((band.count / distributionMax) * 100);
+                const bandPct = totalScored > 0 ? Math.round((band.count / totalScored) * 100) : 0;
+                return (
+                  <div key={band.scoreBand} className="flex items-center gap-3">
+                    <p className="w-16 text-xs font-semibold text-muted-foreground">{band.scoreBand}</p>
+                    <div className="h-6 flex-1 overflow-hidden rounded-full bg-zbooni-dark/60">
+                      <div
+                        className="h-full rounded-full bg-zbooni-teal/70"
+                        style={{ width: `${Math.max(pct, band.count > 0 ? 5 : 0)}%` }}
+                      />
+                    </div>
+                    <p className="w-20 text-right text-sm">
+                      <span className="font-bold">{band.count}</span>
+                      <span className="ml-1 text-muted-foreground/50 text-xs">({bandPct}%)</span>
+                    </p>
                   </div>
-                  <p className="w-12 text-right text-sm font-bold">{band.count}</p>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+            {/* D10: Summary row to reduce whitespace */}
+            <div className="mt-4 grid grid-cols-3 gap-3 rounded-xl border border-border/20 bg-zbooni-dark/30 p-3">
+              <div className="text-center">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Total Scored</p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums">{totalScored}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Rejected</p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums text-red-400">
+                  {rejectedCount}
+                  {rejectionRate > 0 ? <span className="ml-1 text-xs text-muted-foreground/50">({rejectionRate}%)</span> : null}
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Pass Rate</p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums text-zbooni-green">
+                  {totalScored + rejectedCount > 0 ? 100 - rejectionRate : 0}%
+                </p>
+              </div>
+            </div>
+          </>
         ) : (
           <p className="text-sm text-muted-foreground/60">No score distribution rows yet.</p>
         )}
