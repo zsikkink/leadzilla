@@ -1,7 +1,24 @@
 import { createLogger } from '@lead-flood/observability';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type LoginRequest } from '@lead-flood/contracts';
+
+const ADMIN_USER_ID = '11111111-1111-4111-8111-111111111111';
+const NON_ADMIN_USER_ID = '22222222-2222-4222-8222-222222222222';
+
+const { dbMocks } = vi.hoisted(() => ({
+  dbMocks: {
+    query: vi.fn(),
+  },
+}));
+
+vi.mock('@lead-flood/db', async () => {
+  const actual = await vi.importActual<typeof import('@lead-flood/db')>('@lead-flood/db');
+  return {
+    ...actual,
+    query: dbMocks.query,
+  };
+});
 
 import { buildServer, type BuildServerOptions } from './server.js';
 
@@ -134,6 +151,13 @@ function buildContactRecoveryItem(reason: 'NO_CONTACTS_FOUND' | 'NO_EMAIL' | 'DE
 
 describe('buildServer', () => {
   const servers: Array<ReturnType<typeof buildServer>> = [];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    dbMocks.query.mockResolvedValue({
+      rows: [{ isAdmin: false }],
+    });
+  });
 
   afterEach(async () => {
     await Promise.all(servers.map((server) => server.close()));
@@ -328,6 +352,40 @@ describe('buildServer', () => {
     });
   });
 
+  it('keeps contact recovery browse shared for authenticated non-admin users', async () => {
+    const server = buildServer({
+      ...makeDefaultOptions(),
+      verifyAccessToken: async () => ({
+        sub: NON_ADMIN_USER_ID,
+        email: 'demo@lead-flood.local',
+        firstName: 'Demo',
+        lastName: 'User',
+      }),
+      listContactRecoveryItems: async () => ({
+        items: [buildContactRecoveryItem('NO_EMAIL')],
+        page: 1,
+        pageSize: 20,
+        total: 1,
+      }),
+    });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'GET',
+      url: '/v1/leads/recovery?page=1&pageSize=20',
+      headers: authHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      items: [expect.objectContaining({ reason: 'NO_EMAIL' })],
+      page: 1,
+      pageSize: 20,
+      total: 1,
+    });
+    expect(dbMocks.query).not.toHaveBeenCalled();
+  });
+
   it('returns contact recovery detail when found', async () => {
     const server = buildServer({
       ...makeDefaultOptions(),
@@ -440,6 +498,9 @@ describe('buildServer', () => {
         status: 'enriched',
         enrichmentData: { company: 'Analytical Engines' },
         error: null,
+        latestIcpProfileId: 'icp_1',
+        phoneSource: 'APOLLO',
+        businessEmail: 'hello@analytical-engines.example',
         contactDiscovery: {
           cseVerifyAttempted: true,
           cseVerifySucceeded: true,
@@ -495,6 +556,9 @@ describe('buildServer', () => {
     expect(response.json()).toMatchObject({
       id: 'lead_1',
       status: 'enriched',
+      latestIcpProfileId: 'icp_1',
+      phoneSource: 'APOLLO',
+      businessEmail: 'hello@analytical-engines.example',
       contactDiscovery: {
         topSourceFamily: 'linkedin',
         finalOutcome: 'lead_created',
@@ -502,8 +566,51 @@ describe('buildServer', () => {
     });
   });
 
-  it('returns 404 for missing job', async () => {
-    const server = buildServer(makeDefaultOptions());
+  it('returns 403 for non-admin job inspection requests', async () => {
+    const getJobById = vi.fn(async () => null);
+    const server = buildServer({
+      ...makeDefaultOptions(),
+      verifyAccessToken: async () => ({
+        sub: NON_ADMIN_USER_ID,
+        email: 'demo@lead-flood.local',
+        firstName: 'Demo',
+        lastName: 'User',
+      }),
+      getJobById,
+    });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'GET',
+      url: '/v1/jobs/job_1',
+      headers: authHeaders(),
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({
+      error: 'Forbidden',
+      requestId: expect.any(String),
+    });
+    expect(getJobById).not.toHaveBeenCalled();
+    expect(dbMocks.query).toHaveBeenCalledWith(
+      expect.stringContaining('from public.app_admins'),
+      [NON_ADMIN_USER_ID],
+    );
+  });
+
+  it('returns 404 for missing job when requested by an app admin', async () => {
+    dbMocks.query.mockResolvedValue({
+      rows: [{ isAdmin: true }],
+    });
+    const server = buildServer({
+      ...makeDefaultOptions(),
+      verifyAccessToken: async () => ({
+        sub: ADMIN_USER_ID,
+        email: 'demo@lead-flood.local',
+        firstName: 'Demo',
+        lastName: 'User',
+      }),
+    });
     servers.push(server);
 
     const response = await server.inject({
@@ -519,8 +626,17 @@ describe('buildServer', () => {
 
   it('returns job payload when found', async () => {
     const now = new Date('2026-01-01T00:00:00.000Z');
+    dbMocks.query.mockResolvedValue({
+      rows: [{ isAdmin: true }],
+    });
     const server = buildServer({
       ...makeDefaultOptions(),
+      verifyAccessToken: async () => ({
+        sub: ADMIN_USER_ID,
+        email: 'demo@lead-flood.local',
+        firstName: 'Demo',
+        lastName: 'User',
+      }),
       getJobById: async () => ({
         id: 'job_1',
         type: 'enrichment.run',
@@ -548,6 +664,65 @@ describe('buildServer', () => {
       id: 'job_1',
       status: 'completed',
     });
+  });
+
+  it('returns 403 for non-admin lead deletion requests', async () => {
+    const softDeleteLead = vi.fn(async () => true);
+    const server = buildServer({
+      ...makeDefaultOptions(),
+      verifyAccessToken: async () => ({
+        sub: NON_ADMIN_USER_ID,
+        email: 'demo@lead-flood.local',
+        firstName: 'Demo',
+        lastName: 'User',
+      }),
+      softDeleteLead,
+    });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'DELETE',
+      url: '/v1/leads/lead_1',
+      headers: authHeaders(),
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({
+      error: 'Forbidden',
+      requestId: expect.any(String),
+    });
+    expect(softDeleteLead).not.toHaveBeenCalled();
+    expect(dbMocks.query).toHaveBeenCalledWith(
+      expect.stringContaining('from public.app_admins'),
+      [NON_ADMIN_USER_ID],
+    );
+  });
+
+  it('allows app admins to delete leads', async () => {
+    const softDeleteLead = vi.fn(async () => true);
+    dbMocks.query.mockResolvedValue({
+      rows: [{ isAdmin: true }],
+    });
+    const server = buildServer({
+      ...makeDefaultOptions(),
+      verifyAccessToken: async () => ({
+        sub: ADMIN_USER_ID,
+        email: 'demo@lead-flood.local',
+        firstName: 'Demo',
+        lastName: 'User',
+      }),
+      softDeleteLead,
+    });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'DELETE',
+      url: '/v1/leads/lead_1',
+      headers: authHeaders(),
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(softDeleteLead).toHaveBeenCalledWith('lead_1');
   });
 
   it('returns 422 for disposable domain email', async () => {

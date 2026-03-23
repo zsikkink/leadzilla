@@ -390,6 +390,36 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
     expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
   });
 
+  it('keeps already-messaged leads closed to initial draft generation', async () => {
+    dbMock.prisma.lead.findUnique.mockResolvedValue({
+      id: 'lead_1',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@example.com',
+      phone: null,
+      decisionMakerPhone: null,
+      businessId: null,
+      deletedAt: null,
+      status: 'messaged',
+    });
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_2',
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+      }),
+    );
+
+    expect(dbMock.prisma.leadScorePrediction.findFirst).not.toHaveBeenCalled();
+    expect(dbMock.prisma.messageDraft.findFirst).not.toHaveBeenCalled();
+    expect(dbMock.prisma.messageDraft.create).not.toHaveBeenCalled();
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
+  });
+
   it('does not auto-send a reused pending draft on retry', async () => {
     dbMock.prisma.lead.findUnique.mockResolvedValue({
       id: 'lead_1',

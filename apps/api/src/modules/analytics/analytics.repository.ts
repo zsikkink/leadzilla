@@ -1,6 +1,13 @@
 import type {
+  AvgScoreQuery,
+  AvgScoreResponse,
+  DailyQualityTrendItem,
+  DailyQualityTrendsQuery,
+  DailyQualityTrendsResponse,
   FunnelQuery,
   FunnelResponse,
+  IcpPerformanceQuery,
+  IcpPerformanceResponse,
   IcpBreakdownItem,
   ManagerAnalysisResponse,
   ManagerRecommendation,
@@ -21,13 +28,16 @@ import type {
   UpdateRecommendationStatusRequest,
   VariantBreakdownItem,
 } from '@lead-flood/contracts';
-import { prisma } from '@lead-flood/db';
+import { prisma, query as dbQuery } from '@lead-flood/db';
 
 import { AnalyticsNotImplementedError } from './analytics.errors.js';
 
 export interface AnalyticsRepository {
   getFunnel(query: FunnelQuery): Promise<FunnelResponse>;
   getScoreDistribution(query: ScoreDistributionQuery): Promise<ScoreDistributionResponse>;
+  getDailyQualityTrends(query: DailyQualityTrendsQuery): Promise<DailyQualityTrendsResponse>;
+  getAvgScore(query: AvgScoreQuery): Promise<AvgScoreResponse>;
+  getIcpPerformance(query: IcpPerformanceQuery): Promise<IcpPerformanceResponse>;
   getModelMetrics(query: ModelMetricsQuery): Promise<ModelMetricsResponse>;
   getRetrainStatus(query: RetrainStatusQuery): Promise<RetrainStatusResponse>;
   recomputeRollup(input: RecomputeRollupRequest): Promise<void>;
@@ -43,6 +53,18 @@ export class StubAnalyticsRepository implements AnalyticsRepository {
 
   async getScoreDistribution(_query: ScoreDistributionQuery): Promise<ScoreDistributionResponse> {
     throw new AnalyticsNotImplementedError('TODO: get score distribution persistence');
+  }
+
+  async getDailyQualityTrends(_query: DailyQualityTrendsQuery): Promise<DailyQualityTrendsResponse> {
+    throw new AnalyticsNotImplementedError('TODO: get daily quality trends persistence');
+  }
+
+  async getAvgScore(_query: AvgScoreQuery): Promise<AvgScoreResponse> {
+    throw new AnalyticsNotImplementedError('TODO: get avg score persistence');
+  }
+
+  async getIcpPerformance(_query: IcpPerformanceQuery): Promise<IcpPerformanceResponse> {
+    throw new AnalyticsNotImplementedError('TODO: get ICP performance persistence');
   }
 
   async getModelMetrics(_query: ModelMetricsQuery): Promise<ModelMetricsResponse> {
@@ -580,6 +602,415 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
       analysisRunId: rec.analysisRunId,
       createdAt: rec.createdAt.toISOString(),
       updatedAt: rec.updatedAt.toISOString(),
+    };
+  }
+}
+
+const SCORE_BAND_ORDER = ['LOW', 'MEDIUM', 'HIGH'] as const;
+
+type ScoreDistributionBand = (typeof SCORE_BAND_ORDER)[number];
+
+interface ScoreDistributionRow {
+  scoreBand: ScoreDistributionBand;
+  count: number | string;
+}
+
+interface StoredRecommendationSqlRow {
+  id: string;
+  type: string;
+  title: string;
+  description: string;
+  icpProfileId: string | null;
+  icpName: string | null;
+  field: string | null;
+  currentValue: number | null;
+  recommendedValue: number | null;
+  confidence: number;
+  priority: number;
+  status: string;
+  analysisRunId: string | null;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+type RetrainRunStatus = NonNullable<RetrainStatusResponse['currentRun']>['status'];
+
+interface RetrainStatusActiveModelRow {
+  id: string;
+}
+
+interface RetrainStatusCurrentRunRow {
+  id: string;
+  status: RetrainRunStatus;
+  startedAtMs: number | null;
+  endedAtMs: number | null;
+}
+
+interface RetrainStatusLastSuccessfulRunRow {
+  id: string;
+  endedAtMs: number | null;
+}
+
+interface DailyQualityLeadAggregateRow {
+  day: string;
+  totalCreated: number | string;
+  rejectedCount: number | string;
+}
+
+interface DailyQualityScoreAggregateRow {
+  day: string;
+  avgScore: number | string;
+}
+
+interface AvgScoreAggregateRow {
+  avgScore: number | string | null;
+}
+
+interface IcpPerformanceAggregateRow {
+  icpProfileId: string;
+  leadCount: number | string;
+  avgScore: number | string | null;
+  qualifiedCount: number | string;
+  rejectedCount: number | string;
+}
+
+function toNonNegativeInt(value: number | string): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return Math.floor(value);
+  }
+
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+export class HybridAnalyticsRepository extends PrismaAnalyticsRepository {
+  override async getScoreDistribution(input: ScoreDistributionQuery): Promise<ScoreDistributionResponse> {
+    const from = input.from ? new Date(input.from) : null;
+    const to = input.to ? new Date(input.to) : null;
+    const values: unknown[] = [];
+    const filters: string[] = [];
+
+    if (input.icpProfileId) {
+      values.push(input.icpProfileId);
+      filters.push(`"icpProfileId" = $${values.length}`);
+    }
+
+    if (input.modelVersionId) {
+      values.push(input.modelVersionId);
+      filters.push(`"modelVersionId" = $${values.length}`);
+    }
+
+    if (from) {
+      values.push(from);
+      filters.push(`"predictedAt" >= $${values.length}`);
+    }
+
+    if (to) {
+      values.push(to);
+      filters.push(`"predictedAt" <= $${values.length}`);
+    }
+
+    const whereClause = filters.length > 0 ? `where ${filters.join(' and ')}` : '';
+    const result = await dbQuery<ScoreDistributionRow>(
+      `
+        select
+          "scoreBand" as "scoreBand",
+          count(*)::integer as count
+        from public."LeadScorePrediction"
+        ${whereClause}
+        group by "scoreBand"
+      `,
+      values,
+    );
+
+    const bands = SCORE_BAND_ORDER.map((scoreBand) => {
+      const match = result.rows.find((row) => row.scoreBand === scoreBand);
+      return {
+        scoreBand,
+        count: toNonNegativeInt(match?.count ?? 0),
+      };
+    });
+
+    return { bands };
+  }
+
+  override async getDailyQualityTrends(input: DailyQualityTrendsQuery): Promise<DailyQualityTrendsResponse> {
+    const from = input.from ? new Date(input.from) : null;
+    const to = input.to ? new Date(input.to) : null;
+
+    const [leadRowsResult, scoreRowsResult] = await Promise.all([
+      dbQuery<DailyQualityLeadAggregateRow>(
+        `
+          select
+            to_char("createdAt"::date, 'YYYY-MM-DD') as day,
+            count(*)::integer as "totalCreated",
+            count(*) filter (where status = 'rejected')::integer as "rejectedCount"
+          from public."Lead"
+          where "deletedAt" is null
+            and ($1::timestamp is null or "createdAt" >= $1)
+            and ($2::timestamp is null or "createdAt" <= $2)
+          group by 1
+          order by 1 asc
+        `,
+        [from, to],
+      ),
+      dbQuery<DailyQualityScoreAggregateRow>(
+        `
+          select
+            to_char(sp."predictedAt"::date, 'YYYY-MM-DD') as day,
+            avg(sp."blendedScore")::double precision as "avgScore"
+          from public."LeadScorePrediction" sp
+          join public."Lead" lead
+            on lead."id" = sp."leadId"
+          where lead."deletedAt" is null
+            and ($1::timestamp is null or sp."predictedAt" >= $1)
+            and ($2::timestamp is null or sp."predictedAt" <= $2)
+          group by 1
+          order by 1 asc
+        `,
+        [from, to],
+      ),
+    ]);
+
+    const dayMap = new Map<string, DailyQualityTrendItem>();
+
+    for (const row of leadRowsResult.rows) {
+      dayMap.set(row.day, {
+        day: row.day,
+        avgScore: 0,
+        totalCreated: toNonNegativeInt(row.totalCreated),
+        rejectedCount: toNonNegativeInt(row.rejectedCount),
+      });
+    }
+
+    for (const row of scoreRowsResult.rows) {
+      const existing = dayMap.get(row.day);
+      const avgScore = Number(row.avgScore);
+      dayMap.set(row.day, {
+        day: row.day,
+        avgScore: Number.isFinite(avgScore) ? avgScore : 0,
+        totalCreated: existing?.totalCreated ?? 0,
+        rejectedCount: existing?.rejectedCount ?? 0,
+      });
+    }
+
+    return {
+      items: Array.from(dayMap.values()).sort((a, b) => a.day.localeCompare(b.day)),
+    };
+  }
+
+  override async getAvgScore(_input: AvgScoreQuery): Promise<AvgScoreResponse> {
+    const result = await dbQuery<AvgScoreAggregateRow>(
+      `
+        select
+          avg("blendedScore")::double precision as "avgScore"
+        from public."LeadScorePrediction"
+      `,
+      [],
+    );
+
+    const rawAvgScore = result.rows[0]?.avgScore;
+    const avgScore = rawAvgScore === null || rawAvgScore === undefined ? null : Number(rawAvgScore);
+
+    return {
+      avgScore: avgScore !== null && Number.isFinite(avgScore) ? avgScore : null,
+    };
+  }
+
+  override async getIcpPerformance(_input: IcpPerformanceQuery): Promise<IcpPerformanceResponse> {
+    const result = await dbQuery<IcpPerformanceAggregateRow>(
+      `
+        with scored as (
+          select
+            sp."icpProfileId" as "icpProfileId",
+            count(distinct sp."leadId")::integer as "leadCount",
+            avg(sp."blendedScore")::double precision as "avgScore"
+          from public."LeadScorePrediction" sp
+          group by sp."icpProfileId"
+        ),
+        qualified as (
+          select
+            sp."icpProfileId" as "icpProfileId",
+            count(distinct sp."leadId")::integer as "qualifiedCount"
+          from public."LeadScorePrediction" sp
+          join public."Lead" lead
+            on lead."id" = sp."leadId"
+          where lead."deletedAt" is null
+            and lead."status" in ('qualified', 'drafted', 'messaged', 'replied', 'cold')
+          group by sp."icpProfileId"
+        ),
+        rejections as (
+          select
+            lr."icpProfileId" as "icpProfileId",
+            count(*)::integer as "rejectedCount"
+          from public."lead_rejections" lr
+          where lr."icpProfileId" is not null
+          group by lr."icpProfileId"
+        )
+        select
+          scored."icpProfileId" as "icpProfileId",
+          scored."leadCount" as "leadCount",
+          scored."avgScore" as "avgScore",
+          coalesce(qualified."qualifiedCount", 0)::integer as "qualifiedCount",
+          coalesce(rejections."rejectedCount", 0)::integer as "rejectedCount"
+        from scored
+        left join qualified
+          on qualified."icpProfileId" = scored."icpProfileId"
+        left join rejections
+          on rejections."icpProfileId" = scored."icpProfileId"
+        order by scored."leadCount" desc, scored."icpProfileId" asc
+      `,
+      [],
+    );
+
+    return {
+      items: result.rows.map((row) => {
+        const avgScore = row.avgScore === null ? null : Number(row.avgScore);
+        return {
+          icpProfileId: row.icpProfileId,
+          leadCount: toNonNegativeInt(row.leadCount),
+          avgScore: avgScore !== null && Number.isFinite(avgScore) ? avgScore : null,
+          qualifiedCount: toNonNegativeInt(row.qualifiedCount),
+          rejectedCount: toNonNegativeInt(row.rejectedCount),
+        };
+      }),
+    };
+  }
+
+  override async getRetrainStatus(input: RetrainStatusQuery): Promise<RetrainStatusResponse> {
+    const modelTypeValues = input.modelType ? [input.modelType] : [];
+    const modelTypeFilter = input.modelType ? `and "modelType" = $1` : '';
+
+    const [activeModelVersionResult, currentRunResult, lastSuccessfulRunResult] = await Promise.all([
+      dbQuery<RetrainStatusActiveModelRow>(
+        `
+          select "id"
+          from public."ModelVersion"
+          where "stage" = 'ACTIVE'
+            ${modelTypeFilter}
+          order by "activatedAt" desc, "createdAt" desc
+          limit 1
+        `,
+        modelTypeValues,
+      ),
+      dbQuery<RetrainStatusCurrentRunRow>(
+        `
+          select
+            "id",
+            "status",
+            (extract(epoch from "startedAt") * 1000)::double precision as "startedAtMs",
+            (extract(epoch from "endedAt") * 1000)::double precision as "endedAtMs"
+          from public."TrainingRun"
+          where "status" in ('RUNNING', 'QUEUED')
+            ${modelTypeFilter}
+          order by "createdAt" desc
+          limit 1
+        `,
+        modelTypeValues,
+      ),
+      dbQuery<RetrainStatusLastSuccessfulRunRow>(
+        `
+          select
+            "id",
+            (extract(epoch from "endedAt") * 1000)::double precision as "endedAtMs"
+          from public."TrainingRun"
+          where "status" = 'SUCCEEDED'
+            ${modelTypeFilter}
+          order by "endedAt" desc, "createdAt" desc
+          limit 1
+        `,
+        modelTypeValues,
+      ),
+    ]);
+
+    const activeModelVersion = activeModelVersionResult.rows[0];
+    const currentRun = currentRunResult.rows[0];
+    const lastSuccessfulRun = lastSuccessfulRunResult.rows[0];
+
+    return {
+      activeModelVersionId: activeModelVersion?.id ?? null,
+      currentRun: currentRun
+        ? {
+            trainingRunId: currentRun.id,
+            status: currentRun.status,
+            startedAt: currentRun.startedAtMs !== null ? new Date(currentRun.startedAtMs).toISOString() : null,
+            endedAt: currentRun.endedAtMs !== null ? new Date(currentRun.endedAtMs).toISOString() : null,
+          }
+        : null,
+      lastSuccessfulRun:
+        lastSuccessfulRun && lastSuccessfulRun.endedAtMs !== null
+          ? {
+              trainingRunId: lastSuccessfulRun.id,
+              endedAt: new Date(lastSuccessfulRun.endedAtMs).toISOString(),
+            }
+          : null,
+      nextScheduledAt: null,
+    };
+  }
+
+  override async getStoredRecommendations(input: StoredRecommendationsQuery): Promise<StoredRecommendationsResponse> {
+    const limit = input.limit ?? 50;
+    const values: unknown[] = [];
+    const filters: string[] = [];
+
+    if (input.status) {
+      values.push(input.status);
+      filters.push(`"status" = $${values.length}`);
+    }
+
+    if (input.icpProfileId) {
+      values.push(input.icpProfileId);
+      filters.push(`"icpProfileId" = $${values.length}`);
+    }
+
+    values.push(limit);
+    const limitPlaceholder = `$${values.length}`;
+    const whereClause = filters.length > 0 ? `where ${filters.join(' and ')}` : '';
+
+    const result = await dbQuery<StoredRecommendationSqlRow>(
+      `
+        select
+          "id",
+          "type",
+          "title",
+          "description",
+          "icpProfileId",
+          "icpName",
+          "field",
+          "currentValue",
+          "recommendedValue",
+          "confidence",
+          "priority",
+          "status",
+          "analysisRunId",
+          (extract(epoch from "createdAt") * 1000)::double precision as "createdAtMs",
+          (extract(epoch from "updatedAt") * 1000)::double precision as "updatedAtMs"
+        from public."manager_recommendation_records"
+        ${whereClause}
+        order by "priority" asc, "createdAt" desc
+        limit ${limitPlaceholder}
+      `,
+      values,
+    );
+
+    return {
+      items: result.rows.map((row) => ({
+        id: row.id,
+        type: row.type as StoredRecommendation['type'],
+        title: row.title,
+        description: row.description,
+        icpProfileId: row.icpProfileId,
+        icpName: row.icpName,
+        field: row.field,
+        currentValue: row.currentValue,
+        recommendedValue: row.recommendedValue,
+        confidence: row.confidence,
+        priority: row.priority,
+        status: row.status as StoredRecommendation['status'],
+        analysisRunId: row.analysisRunId,
+        createdAt: new Date(row.createdAtMs).toISOString(),
+        updatedAt: new Date(row.updatedAtMs).toISOString(),
+      })),
     };
   }
 }

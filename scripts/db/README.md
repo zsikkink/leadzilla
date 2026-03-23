@@ -10,6 +10,12 @@ historical notes preserved for context.
   `supabase/migrations/`
 - `verify-prod.sh` — verify remote migration metadata and check for pending SQL
   drift
+- `bootstrap-sql-disposable.sh` — bootstrap a disposable local/CI Postgres DB
+  from the canonical SQL chain with a minimal Supabase compatibility shim
+- `validate-sql-bootstrap.sh` — run the SQL-first disposable bootstrap path and
+  verify API `/ready` and/or worker startup/schema guard against it
+- `validate-runtime-services.sh` — verify the built API `/ready` path and/or
+  built worker startup/schema guard against the current `DATABASE_URL`
 - `pull-drift.sh` — capture remote schema drift into SQL for review
 - `prisma-sync.sh` — keep Prisma DB-derived after SQL changes
 - `guard-no-prisma-migrate-prod.sh` — blocks Prisma from being treated as the

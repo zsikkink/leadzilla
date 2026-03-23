@@ -1,6 +1,4 @@
-import prismaClientPkg from '@prisma/client';
-import type { Prisma } from '@prisma/client';
-import { prisma, toInputJson } from '@lead-flood/db';
+import { Prisma, prisma, toInputJson } from '@lead-flood/db';
 import type {
   ContactRecoveryAttempt,
   ContactRecoveryCandidate,
@@ -19,8 +17,6 @@ import {
   type CandidateAdjudicationResult,
   type LlmExtractionConfig,
 } from '../utils/llm-extraction.js';
-
-const { Prisma: PrismaClient } = prismaClientPkg;
 
 // ── Constants ──────────────────────────────────────────────────────────
 export const BUSINESS_CONVERT_JOB_NAME = 'business.convert';
@@ -2252,10 +2248,10 @@ export async function handleBusinessConvertJob(
           icpProfileId,
           apolloContactJson: apolloContactJson
             ? toInputJson(apolloContactJson)
-            : PrismaClient.JsonNull,
+            : Prisma.JsonNull,
           hunterContactJson: hunterContactJson
             ? toInputJson(hunterContactJson)
-            : PrismaClient.JsonNull,
+            : Prisma.JsonNull,
           apolloHasEmail,
           apolloHasDirectPhone,
           metadata: toInputJson({
@@ -2310,7 +2306,7 @@ export async function handleBusinessConvertJob(
         },
       }).catch((err: unknown) => {
         if (
-          err instanceof PrismaClient.PrismaClientKnownRequestError &&
+          err instanceof Prisma.PrismaClientKnownRequestError &&
           err.code === 'P2002'
         ) {
           logger.info(
@@ -2396,10 +2392,10 @@ export async function handleBusinessConvertJob(
           icpProfileId,
           apolloContactJson: apolloContactJson
             ? toInputJson(apolloContactJson)
-            : PrismaClient.JsonNull,
+            : Prisma.JsonNull,
           hunterContactJson: hunterContactJson
             ? toInputJson(hunterContactJson)
-            : PrismaClient.JsonNull,
+            : Prisma.JsonNull,
           apolloHasEmail,
           apolloHasDirectPhone,
               metadata: toInputJson({
@@ -2451,7 +2447,7 @@ export async function handleBusinessConvertJob(
             },
           }).catch((err: unknown) => {
         if (
-          err instanceof PrismaClient.PrismaClientKnownRequestError &&
+          err instanceof Prisma.PrismaClientKnownRequestError &&
           err.code === 'P2002'
         ) {
           logger.info(
@@ -2547,10 +2543,10 @@ export async function handleBusinessConvertJob(
         icpProfileId,
         apolloContactJson: apolloContactJson
           ? toInputJson(apolloContactJson)
-          : PrismaClient.JsonNull,
+          : Prisma.JsonNull,
         hunterContactJson: hunterContactJson
           ? toInputJson(hunterContactJson)
-          : PrismaClient.JsonNull,
+          : Prisma.JsonNull,
         apolloHasEmail,
         apolloHasDirectPhone,
         metadata: toInputJson({

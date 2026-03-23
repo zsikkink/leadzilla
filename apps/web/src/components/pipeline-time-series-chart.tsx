@@ -1,5 +1,6 @@
 'use client';
 
+import type { ListLeadsQuery } from '@lead-flood/contracts';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Area,
@@ -11,7 +12,8 @@ import {
   YAxis,
 } from 'recharts';
 
-import { getSupabaseBrowserClient } from '@/lib/supabase-client.js';
+import { useAuth } from '@/hooks/use-auth.js';
+import type { ApiClient } from '@/lib/api-client.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type DateRange = '7d' | '30d' | '90d' | 'all';
@@ -28,6 +30,48 @@ interface DailyBucket {
 interface LeadRow {
   createdAt: string;
   status: string;
+}
+
+function buildLeadListQuery(range: DateRange, page: number): ListLeadsQuery {
+  const startDate = getStartDate(range);
+
+  return {
+    page,
+    pageSize: 100,
+    includeRejected: true,
+    includeQualityMetrics: false,
+    ...(startDate ? { from: startDate.toISOString() } : {}),
+  };
+}
+
+async function fetchLeadRows(
+  apiClient: Pick<ApiClient, 'listLeads'>,
+  range: DateRange,
+): Promise<LeadRow[]> {
+  const rows: LeadRow[] = [];
+  let page = 1;
+  let total = 0;
+
+  do {
+    const response = await apiClient.listLeads(buildLeadListQuery(range, page));
+
+    rows.push(
+      ...response.items.map((item) => ({
+        createdAt: item.createdAt,
+        status: item.status,
+      })),
+    );
+
+    total = response.total;
+
+    if (response.items.length < response.pageSize) {
+      break;
+    }
+
+    page += 1;
+  } while (rows.length < total);
+
+  return rows;
 }
 
 // ── Chart line config ──────────────────────────────────────────────────────
@@ -171,42 +215,39 @@ function GlassTooltip({
 
 // ── Main component ─────────────────────────────────────────────────────────
 export function PipelineTimeSeriesChart() {
+  const { apiClient, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [range, setRange] = useState<DateRange>('30d');
   const [rows, setRows] = useState<LeadRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch leads from Supabase directly
   useEffect(() => {
     let cancelled = false;
+
+    if (isAuthLoading) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!isAuthenticated) {
+      setRows([]);
+      setError(null);
+      setIsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setIsLoading(true);
     setError(null);
 
     async function fetchLeads() {
       try {
-        const supabase = getSupabaseBrowserClient();
-        let query = supabase
-          .from('Lead')
-          .select('createdAt, status')
-          .is('deletedAt', null)
-          .order('createdAt', { ascending: true });
-
-        const startDate = getStartDate(range);
-        if (startDate) {
-          query = query.gte('createdAt', startDate.toISOString());
-        }
-
-        const { data, error: sbError } = await query;
-
+        const data = await fetchLeadRows(apiClient, range);
         if (cancelled) return;
 
-        if (sbError) {
-          setError(sbError.message);
-          setIsLoading(false);
-          return;
-        }
-
-        setRows((data ?? []) as LeadRow[]);
+        setRows(data);
         setIsLoading(false);
       } catch (err: unknown) {
         if (!cancelled) {
@@ -217,8 +258,10 @@ export function PipelineTimeSeriesChart() {
     }
 
     void fetchLeads();
-    return () => { cancelled = true; };
-  }, [range]);
+    return () => {
+      cancelled = true;
+    };
+  }, [apiClient, isAuthenticated, isAuthLoading, range]);
 
   const chartData = useMemo(() => bucketByDay(rows, range), [rows, range]);
 

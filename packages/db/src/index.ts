@@ -1,4 +1,5 @@
 export { prisma } from './client.js';
+export { Prisma } from '@prisma/client';
 export {
   getPipelineSetting,
   getScoreQualificationThresholdSetting,
@@ -13,5 +14,5 @@ export { toInputJson } from './prisma-json.js';
 export { assertDatabaseConnection, getPgPool, query, withTransaction } from './postgres.js';
 export type { SqlQueryable } from './postgres.js';
 export { withPoolRetry } from './retry.js';
-export { checkPipelineSchemaHealth } from './schema-health.js';
-export type { PipelineSchemaHealth } from './schema-health.js';
+export { checkPipelineSchemaHealth, checkWorkerSchemaHealth } from './schema-health.js';
+export type { PipelineSchemaHealth, PipelineSchemaHealthScope } from './schema-health.js';

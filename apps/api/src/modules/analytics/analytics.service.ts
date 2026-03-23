@@ -1,6 +1,12 @@
 import type {
+  AvgScoreQuery,
+  AvgScoreResponse,
+  DailyQualityTrendsQuery,
+  DailyQualityTrendsResponse,
   FunnelQuery,
   FunnelResponse,
+  IcpPerformanceQuery,
+  IcpPerformanceResponse,
   ManagerRecommendationsQuery,
   ManagerRecommendationsResponse,
   ModelMetricsQuery,
@@ -34,6 +40,9 @@ export interface AnalyticsServiceDependencies {
 export interface AnalyticsService {
   getFunnel(query: FunnelQuery): Promise<FunnelResponse>;
   getScoreDistribution(query: ScoreDistributionQuery): Promise<ScoreDistributionResponse>;
+  getDailyQualityTrends(query: DailyQualityTrendsQuery): Promise<DailyQualityTrendsResponse>;
+  getAvgScore(query: AvgScoreQuery): Promise<AvgScoreResponse>;
+  getIcpPerformance(query: IcpPerformanceQuery): Promise<IcpPerformanceResponse>;
   getModelMetrics(query: ModelMetricsQuery): Promise<ModelMetricsResponse>;
   getRetrainStatus(query: RetrainStatusQuery): Promise<RetrainStatusResponse>;
   recomputeRollup(input: RecomputeRollupRequest): Promise<void>;
@@ -52,6 +61,15 @@ export function buildAnalyticsService(
     },
     async getScoreDistribution(query) {
       return repository.getScoreDistribution(query);
+    },
+    async getDailyQualityTrends(query) {
+      return repository.getDailyQualityTrends(query);
+    },
+    async getAvgScore(query) {
+      return repository.getAvgScore(query);
+    },
+    async getIcpPerformance(query) {
+      return repository.getIcpPerformance(query);
     },
     async getModelMetrics(query) {
       return repository.getModelMetrics(query);

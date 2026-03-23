@@ -25,7 +25,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 import { countryName, toDiscoveryCountryCodes } from '../../../src/lib/countries.js';
-import { getSupabaseBrowserClient } from '../../../src/lib/supabase-client.js';
 import { cn } from '../../../src/lib/utils.js';
 
 // ── City mapping by country ──────────────────────────────
@@ -355,17 +354,13 @@ export default function DiscoverPage() {
     let cancelled = false;
     async function fetchDiscoveryRates() {
       try {
-        const supabase = getSupabaseBrowserClient();
-        const { data } = await supabase
-          .from('pipeline_settings')
-          .select('key, valueJson')
-          .or('key.like.discovery_yield_rate:%,key.like.discovery_conversion_rate:%');
-        if (!data || cancelled) return;
+        const { items } = await apiClient.listPipelineSettings();
+        if (cancelled) return;
         const yieldMap = new Map<string, number>();
         const convMap = new Map<string, number>();
-        for (const row of data) {
-          const key = row.key as string;
-          const rate = typeof row.valueJson === 'number' ? row.valueJson : Number(row.valueJson);
+        for (const item of items) {
+          const key = item.key;
+          const rate = typeof item.value === 'number' ? item.value : Number(item.value);
           if (isNaN(rate) || rate <= 0) continue;
           if (key.startsWith('discovery_yield_rate:')) {
             const icpId = key.replace('discovery_yield_rate:', '');
@@ -383,7 +378,7 @@ export default function DiscoverPage() {
     }
     void fetchDiscoveryRates();
     return () => { cancelled = true; };
-  }, []);
+  }, [apiClient]);
 
   // Run tracking — multi-run via API
   const [runsRefreshKey, setRunsRefreshKey] = useState(0);

@@ -1,11 +1,9 @@
 import { createHash } from 'node:crypto';
-import prismaClientPkg from '@prisma/client';
-import { getScoreQualificationThresholdSetting, prisma } from '@lead-flood/db';
+import { Prisma, getScoreQualificationThresholdSetting, prisma } from '@lead-flood/db';
 import type { DeterministicRule } from './deterministic.js';
 import type { LogisticModel } from './logistic.js';
 
 export const BASELINE_MODEL_VERSION_TAG = 'deterministic-baseline-v1';
-const { Prisma: PrismaClient } = prismaClientPkg;
 
 const DEFAULT_QUALIFICATION_THRESHOLD = 0.4;
 
@@ -272,7 +270,7 @@ export async function ensureBaselineModelVersion(): Promise<string> {
             sourceVersion: BASELINE_FEATURE_EXTRACTOR_VERSION,
             keys: TRAINED_MODEL_FEATURE_KEYS,
           },
-          coefficientsJson: PrismaClient.JsonNull,
+          coefficientsJson: Prisma.JsonNull,
           intercept: 0,
           deterministicWeightsJson: {},
           checksum: deterministicChecksum(checksumSource),
@@ -284,7 +282,7 @@ export async function ensureBaselineModelVersion(): Promise<string> {
 
     return created.id;
   } catch (error: unknown) {
-    if (error instanceof PrismaClient.PrismaClientKnownRequestError && error.code === 'P2002') {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
       const fallback = await prisma.modelVersion.findUnique({
         where: { versionTag: BASELINE_MODEL_VERSION_TAG },
         select: { id: true },

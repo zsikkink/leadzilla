@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { checkPipelineSchemaHealth } from './schema-health.js';
+import { checkPipelineSchemaHealth, checkWorkerSchemaHealth } from './schema-health.js';
 import type { SqlQueryable } from './postgres.js';
 
 function createQueryable(
@@ -16,10 +16,18 @@ function createQueryable(
 }
 
 describe('checkPipelineSchemaHealth', () => {
-  it('returns ok when the required table and enum value exist', async () => {
+  it('returns ok for the api scope when the required tables and enum values exist', async () => {
     const db = createQueryable(
-      [{ table_name: 'contact_recovery_items' }],
-      [{ enum_name: 'CostEventProvider', enum_value: 'GOOGLE_CUSTOM_SEARCH' }],
+      [
+        { table_name: 'contact_recovery_items' },
+        { table_name: 'job_requests' },
+        { table_name: 'job_runs' },
+        { table_name: 'search_tasks' },
+      ],
+      [
+        { enum_name: 'ContactRecoveryReason', enum_value: 'DECISION_MAKER_IDENTIFIED' },
+        { enum_name: 'CostEventProvider', enum_value: 'GOOGLE_CUSTOM_SEARCH' },
+      ],
     );
 
     await expect(checkPipelineSchemaHealth(db)).resolves.toEqual({
@@ -29,13 +37,41 @@ describe('checkPipelineSchemaHealth', () => {
     });
   });
 
-  it('reports missing artifacts when they are absent', async () => {
+  it('reports missing artifacts for the api scope when they are absent', async () => {
     const db = createQueryable([], []);
 
     await expect(checkPipelineSchemaHealth(db)).resolves.toEqual({
       status: 'fail',
-      missingTables: ['contact_recovery_items'],
-      missingEnumValues: ['CostEventProvider:GOOGLE_CUSTOM_SEARCH'],
+      missingTables: [
+        'contact_recovery_items',
+        'job_requests',
+        'job_runs',
+        'search_tasks',
+      ],
+      missingEnumValues: [
+        'ContactRecoveryReason:DECISION_MAKER_IDENTIFIED',
+        'CostEventProvider:GOOGLE_CUSTOM_SEARCH',
+      ],
+    });
+  });
+
+  it('keeps the worker scope narrower than the api scope', async () => {
+    const db = createQueryable(
+      [
+        { table_name: 'contact_recovery_items' },
+        { table_name: 'job_runs' },
+        { table_name: 'search_tasks' },
+      ],
+      [
+        { enum_name: 'ContactRecoveryReason', enum_value: 'DECISION_MAKER_IDENTIFIED' },
+        { enum_name: 'CostEventProvider', enum_value: 'GOOGLE_CUSTOM_SEARCH' },
+      ],
+    );
+
+    await expect(checkWorkerSchemaHealth(db)).resolves.toEqual({
+      status: 'ok',
+      missingTables: [],
+      missingEnumValues: [],
     });
   });
 });

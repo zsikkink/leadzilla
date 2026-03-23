@@ -1,8 +1,6 @@
 import { createHash } from 'node:crypto';
-import prismaClientPkg from '@prisma/client';
-import type { Prisma } from '@prisma/client';
 
-import { prisma, withPoolRetry } from '@lead-flood/db';
+import { Prisma, prisma, withPoolRetry } from '@lead-flood/db';
 
 import type { DiscoveryRuntimeConfig } from '../config.js';
 import { normalizeQuery } from '../dedupe/normalize.js';
@@ -17,8 +15,6 @@ import type {
   NormalizedProviderResponse,
   SearchTaskType,
 } from '../providers/types.js';
-
-const { Prisma: PrismaClient } = prismaClientPkg;
 
 type SearchTaskStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED' | 'SKIPPED';
 type SourceType = 'DIRECTORY' | 'SMB_SITE' | 'SOCIAL' | 'MARKETPLACE' | 'UNKNOWN';
@@ -52,6 +48,7 @@ interface SearchTaskRow {
 interface TaskProcessStats {
   newBusinesses: number;
   newBusinessIds: string[];
+  observedBusinessIds: string[];
   newSources: number;
   localBusinessCount: number;
   organicResultCount: number;
@@ -69,6 +66,7 @@ export interface RunSearchTaskResult {
   durationMs: number;
   newBusinesses: number;
   newBusinessIds: string[];
+  observedBusinessIds: string[];
   newSources: number;
   localBusinessCount: number;
   organicResultCount: number;
@@ -394,11 +392,11 @@ async function lockNextRunnableTask(
 ): Promise<SearchTaskRow | null> {
   return prisma.$transaction(async (tx) => {
     const timeBucketFilter = options.timeBucket
-      ? PrismaClient.sql`AND "time_bucket" = ${options.timeBucket}`
-      : PrismaClient.empty;
+      ? Prisma.sql`AND "time_bucket" = ${options.timeBucket}`
+      : Prisma.empty;
     const discoveryRunFilter = options.discoveryRunId
-      ? PrismaClient.sql`AND "discovery_run_id" = ${options.discoveryRunId}`
-      : PrismaClient.sql`AND "discovery_run_id" IS NULL`;
+      ? Prisma.sql`AND "discovery_run_id" = ${options.discoveryRunId}`
+      : Prisma.sql`AND "discovery_run_id" IS NULL`;
     const rows = await tx.$queryRaw<SearchTaskRow[]>`
       SELECT
         id,
@@ -680,6 +678,7 @@ async function persistProviderResults(
   let newSources = 0;
   let newBusinesses = 0;
   const newBusinessIds: string[] = [];
+  const observedBusinessIds = new Set<string>();
   let businessBudgetReached = false;
 
   for (const result of providerResponse.organicResults) {
@@ -716,6 +715,7 @@ async function persistProviderResults(
     }
 
     const businessUpsert = await upsertBusinessFromLocalResult(task, local, discoveryRunId);
+    observedBusinessIds.add(businessUpsert.businessId);
     if (businessUpsert.created) {
       newBusinesses += 1;
       newBusinessIds.push(businessUpsert.businessId);
@@ -741,6 +741,7 @@ async function persistProviderResults(
     businessBudgetReached,
     newBusinesses,
     newBusinessIds,
+    observedBusinessIds: [...observedBusinessIds],
     newSources,
     localBusinessCount: providerResponse.localBusinesses.length,
     organicResultCount: providerResponse.organicResults.length,
@@ -886,6 +887,7 @@ export async function runSearchTask(
       durationMs: Date.now() - startedAt,
       newBusinesses: 0,
       newBusinessIds: [],
+      observedBusinessIds: [],
       newSources: 0,
       localBusinessCount: 0,
       organicResultCount: 0,
@@ -938,6 +940,7 @@ export async function runSearchTask(
       durationMs: Date.now() - startedAt,
       newBusinesses: stats.newBusinesses,
       newBusinessIds: stats.newBusinessIds,
+      observedBusinessIds: stats.observedBusinessIds,
       newSources: stats.newSources,
       localBusinessCount: stats.localBusinessCount,
       organicResultCount: stats.organicResultCount,
@@ -959,6 +962,7 @@ export async function runSearchTask(
       durationMs: Date.now() - startedAt,
       newBusinesses: 0,
       newBusinessIds: [],
+      observedBusinessIds: [],
       newSources: 0,
       localBusinessCount: 0,
       organicResultCount: 0,

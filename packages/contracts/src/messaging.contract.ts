@@ -86,6 +86,7 @@ export const MessageDraftResponseSchema = z
     approvedByUserId: z.string().nullable(),
     approvedAt: z.string().datetime().nullable(),
     rejectedReason: z.string().nullable(),
+    followUpNumber: z.number().int().min(0),
     variants: z.array(MessageVariantResponseSchema),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
@@ -145,6 +146,17 @@ export const ListMessageDraftsQuerySchema = z
     leadId: z.string().min(1).optional(),
     icpProfileId: z.string().min(1).optional(),
     approvalStatus: MessageApprovalStatusSchema.optional(),
+    followUpOnly: z.preprocess((value) => {
+      if (value === 'true' || value === true) {
+        return true;
+      }
+
+      if (value === 'false' || value === false) {
+        return false;
+      }
+
+      return value;
+    }, z.boolean().optional()),
     page: z.coerce.number().int().min(1).default(1),
     pageSize: z.coerce.number().int().min(1).max(100).default(20),
   })

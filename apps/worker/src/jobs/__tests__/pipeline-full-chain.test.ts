@@ -10,9 +10,8 @@
  *   → message.send (Resend for email, Trengo for WhatsApp)
  */
 import { randomUUID } from 'node:crypto';
-import type { Prisma } from '@prisma/client';
 
-import { prisma } from '@lead-flood/db';
+import { type Prisma, prisma } from '@lead-flood/db';
 import {
   OpenAiAdapter,
   ResendAdapter,
@@ -396,10 +395,14 @@ describe('pipeline full chain: features.compute → message.send', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Stage 5: Message generation — creates PENDING drafts (no autoApprove)
+  // Stage 5: Message generation — creates PENDING drafts under current settings
   // -----------------------------------------------------------------------
   it('stage 4: message.generate creates drafts with PENDING approval', async () => {
     bossSendSpy.mockClear();
+
+    const prediction = await prisma.leadScorePrediction.findFirst({
+      where: { leadId: discoveredLeadId, icpProfileId: ICP_ID },
+    });
 
     const payload: MessageGenerateJobPayload = {
       runId: `msggen-${RUN_ID}`,
@@ -435,7 +438,7 @@ describe('pipeline full chain: features.compute → message.send', () => {
     expect(variantA!.channel).toBe('EMAIL');
     expect(variantA!.bodyText).toBeTruthy();
 
-    // No MessageSend should be created for the pending approval flow
+    // No MessageSend should be created because the draft remains pending
     const sends = await prisma.messageSend.findMany({
       where: { leadId: discoveredLeadId },
     });
@@ -530,6 +533,10 @@ describe('pipeline full chain: features.compute → message.send', () => {
     bossSendSpy.mockClear();
 
     // Generate a WhatsApp follow-up message (auto-approved)
+    const prediction = await prisma.leadScorePrediction.findFirst({
+      where: { leadId: discoveredLeadId, icpProfileId: ICP_ID },
+    });
+
     const emailSend = await prisma.messageSend.findFirst({
       where: { leadId: discoveredLeadId, followUpNumber: 0, status: 'SENT' },
     });

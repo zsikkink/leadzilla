@@ -13,13 +13,9 @@ import type {
   UpdateIcpProfileRequest,
   UpdateQualificationRuleRequest,
 } from '@lead-flood/contracts';
-import prismaClientPkg from '@prisma/client';
-import type { Prisma } from '@prisma/client';
-import { prisma, toInputJson } from '@lead-flood/db';
+import { Prisma, prisma, toInputJson } from '@lead-flood/db';
 
 import { IcpNotFoundError, IcpNotImplementedError } from './icp.errors.js';
-
-const { Prisma: PrismaClient } = prismaClientPkg;
 
 export interface IcpRepository {
   createIcpProfile(input: CreateIcpProfileRequest): Promise<IcpProfileResponse>;
@@ -511,7 +507,7 @@ export class PrismaIcpRepository extends StubIcpRepository {
         metadataJson:
           input.metadataJson !== undefined
             ? toInputJson(input.metadataJson)
-            : PrismaClient.JsonNull,
+            : Prisma.JsonNull,
         targetIndustries: input.targetIndustries ?? [],
         targetCountries: input.targetCountries ?? [],
         minCompanySize: input.minCompanySize ?? null,
@@ -521,7 +517,7 @@ export class PrismaIcpRepository extends StubIcpRepository {
         featureList:
           input.featureList !== undefined
             ? toInputJson(input.featureList)
-            : PrismaClient.JsonNull,
+            : Prisma.JsonNull,
         isActive: input.isActive ?? true,
       },
       include: {
@@ -602,7 +598,7 @@ export class PrismaIcpRepository extends StubIcpRepository {
             ? {
                 metadataJson:
                   input.metadataJson === null
-                    ? PrismaClient.JsonNull
+                    ? Prisma.JsonNull
                     : toInputJson(input.metadataJson),
               }
             : {}),
@@ -628,7 +624,7 @@ export class PrismaIcpRepository extends StubIcpRepository {
             ? {
                 featureList:
                   input.featureList === null
-                    ? PrismaClient.JsonNull
+                    ? Prisma.JsonNull
                     : toInputJson(input.featureList),
               }
             : {}),
@@ -642,7 +638,7 @@ export class PrismaIcpRepository extends StubIcpRepository {
       });
       return mapIcpProfileToResponse(updated);
     } catch (error: unknown) {
-      if (error instanceof PrismaClient.PrismaClientKnownRequestError && error.code === 'P2025') {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
         throw new IcpNotFoundError();
       }
       throw error;
@@ -655,7 +651,7 @@ export class PrismaIcpRepository extends StubIcpRepository {
         where: { id: icpId },
       });
     } catch (error: unknown) {
-      if (error instanceof PrismaClient.PrismaClientKnownRequestError && error.code === 'P2025') {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
         throw new IcpNotFoundError();
       }
       throw error;

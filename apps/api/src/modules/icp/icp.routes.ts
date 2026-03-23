@@ -19,6 +19,7 @@ import {
   UpdateQualificationRuleRequestSchema,
 } from '@lead-flood/contracts';
 
+import { requireAppAdminAccess } from '../../auth/guard.js';
 import { IcpNotFoundError, IcpNotImplementedError } from './icp.errors.js';
 import { PrismaIcpRepository } from './icp.repository.js';
 import { buildIcpService } from './icp.service.js';
@@ -62,8 +63,13 @@ function handleModuleError(error: unknown, request: FastifyRequest, reply: Fasti
 export function registerIcpRoutes(app: FastifyInstance, _dependencies?: IcpRouteDependencies): void {
   const repository = new PrismaIcpRepository();
   const service = buildIcpService(repository);
+  const requireAppAdmin = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await requireAppAdminAccess(request, reply))) {
+      return reply;
+    }
+  };
 
-  app.post('/v1/icps', async (request, reply) => {
+  app.post('/v1/icps', { preHandler: requireAppAdmin }, async (request, reply) => {
     const parsed = CreateIcpProfileRequestSchema.safeParse(request.body);
     if (!parsed.success) {
       return sendValidationError(reply, request.id, 'Invalid ICP create payload');
@@ -114,7 +120,7 @@ export function registerIcpRoutes(app: FastifyInstance, _dependencies?: IcpRoute
     }
   });
 
-  app.patch('/v1/icps/:icpId', async (request, reply) => {
+  app.patch('/v1/icps/:icpId', { preHandler: requireAppAdmin }, async (request, reply) => {
     const parsedParams = IcpIdParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid ICP id');
@@ -136,7 +142,7 @@ export function registerIcpRoutes(app: FastifyInstance, _dependencies?: IcpRoute
     }
   });
 
-  app.delete('/v1/icps/:icpId', async (request, reply) => {
+  app.delete('/v1/icps/:icpId', { preHandler: requireAppAdmin }, async (request, reply) => {
     const parsedParams = IcpIdParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid ICP id');
@@ -154,7 +160,7 @@ export function registerIcpRoutes(app: FastifyInstance, _dependencies?: IcpRoute
     }
   });
 
-  app.post('/v1/icps/:icpId/rules', async (request, reply) => {
+  app.post('/v1/icps/:icpId/rules', { preHandler: requireAppAdmin }, async (request, reply) => {
     const parsedParams = IcpIdParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid ICP id');
@@ -193,7 +199,7 @@ export function registerIcpRoutes(app: FastifyInstance, _dependencies?: IcpRoute
     }
   });
 
-  app.put('/v1/icps/:icpId/rules', async (request, reply) => {
+  app.put('/v1/icps/:icpId/rules', { preHandler: requireAppAdmin }, async (request, reply) => {
     const parsedParams = IcpIdParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid ICP id');
@@ -215,7 +221,7 @@ export function registerIcpRoutes(app: FastifyInstance, _dependencies?: IcpRoute
     }
   });
 
-  app.patch('/v1/icps/:icpId/rules/:ruleId', async (request, reply) => {
+  app.patch('/v1/icps/:icpId/rules/:ruleId', { preHandler: requireAppAdmin }, async (request, reply) => {
     const parsedParams = IcpRuleParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid ICP rule params');
@@ -241,7 +247,7 @@ export function registerIcpRoutes(app: FastifyInstance, _dependencies?: IcpRoute
     }
   });
 
-  app.delete('/v1/icps/:icpId/rules/:ruleId', async (request, reply) => {
+  app.delete('/v1/icps/:icpId/rules/:ruleId', { preHandler: requireAppAdmin }, async (request, reply) => {
     const parsedParams = IcpRuleParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid ICP rule params');
@@ -276,7 +282,7 @@ export function registerIcpRoutes(app: FastifyInstance, _dependencies?: IcpRoute
     }
   });
 
-  app.get('/v1/icp/:icpProfileId/debug-sample', async (request, reply) => {
+  app.get('/v1/icp/:icpProfileId/debug-sample', { preHandler: requireAppAdmin }, async (request, reply) => {
     const parsedParams = IcpDebugSampleParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid ICP debug params');

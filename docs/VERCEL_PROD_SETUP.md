@@ -21,9 +21,9 @@ Set for both Preview and Production (with environment-specific values):
 
 Do not put database credentials in the Vercel web project.
 
-## 3) API/Worker Environment Variables (non-Vercel runtime)
+## 3) API/Worker Environment Variables (Railway runtime)
 
-Set on API + worker deployment:
+Set on the Railway API + worker services:
 
 - `DATABASE_URL`
 - `DIRECT_URL`

@@ -1,5 +1,4 @@
-import prismaClientPkg from '@prisma/client';
-import { prisma } from '@lead-flood/db';
+import { Prisma, prisma } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
@@ -23,8 +22,6 @@ export const MESSAGE_APPROVAL_RECOVERY_RETRY_OPTIONS: Pick<
 
 export const STALE_APPROVED_DRAFT_THRESHOLD_MS = 10 * 60 * 1000;
 const STALE_APPROVED_DRAFT_BATCH_SIZE = 100;
-
-const { Prisma: PrismaClient } = prismaClientPkg;
 
 export interface MessageApprovalRecoveryJobPayload {
   correlationId?: string | undefined;
@@ -135,7 +132,7 @@ async function findSendByIdempotencyKey(idempotencyKey: string): Promise<Recover
 }
 
 function isUniqueIdempotencyConflict(error: unknown): boolean {
-  return error instanceof PrismaClient.PrismaClientKnownRequestError && error.code === 'P2002';
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
 export async function recoverApprovedInitialDraftsMissingMessageSends(

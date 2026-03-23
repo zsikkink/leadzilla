@@ -49,6 +49,7 @@ function buildDraftResponse(overrides?: Partial<Record<string, unknown>>) {
     approvedByUserId: 'user_auth',
     approvedAt: '2026-03-20T00:00:00.000Z',
     rejectedReason: null,
+    followUpNumber: 0,
     variants: [
       {
         id: 'variant_1',
@@ -218,6 +219,33 @@ describe('messaging.routes generate draft rejection handling', () => {
       status: 'EXISTS',
       draftId: 'draft_1',
       variantIds: ['variant_1'],
+    });
+  });
+
+  it('passes the followUpOnly filter through the existing drafts endpoint', async () => {
+    routeMocks.service.listMessageDrafts.mockResolvedValue({
+      items: [buildDraftResponse({ followUpNumber: 1 })],
+      page: 1,
+      pageSize: 20,
+      total: 1,
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/messaging/drafts?followUpOnly=true',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(routeMocks.service.listMessageDrafts).toHaveBeenCalledWith({
+      followUpOnly: true,
+      page: 1,
+      pageSize: 20,
+    });
+    expect(response.json()).toEqual({
+      items: [buildDraftResponse({ followUpNumber: 1 })],
+      page: 1,
+      pageSize: 20,
+      total: 1,
     });
   });
 

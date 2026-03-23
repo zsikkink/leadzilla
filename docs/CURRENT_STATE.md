@@ -9,8 +9,8 @@ Code is still the source of truth. This doc is the fastest orientation path for 
 ## 2. Current architecture truth
 
 - Frontend runtime: `apps/web` is a Next.js app targeting Vercel. Supabase browser auth/session is still used client-side. Discovery-admin leads/search-task reads now go through the Next admin proxy, but some other operational reads still go browser-direct elsewhere in the web app.
-- API runtime: `apps/api` is the protected operational boundary and intended Fly.io API service. It verifies Supabase JWTs, owns `/ready`, owner-scopes normal discovery reads, and enforces discovery-admin access with `x-admin-key` plus server-side `app_admins` membership.
-- Worker runtime: `apps/worker` is server-only background execution and intended Fly.io worker service.
+- API runtime: `apps/api` is the protected operational boundary and intended Railway API service. It verifies Supabase JWTs, owns `/ready`, owner-scopes normal discovery reads, and enforces discovery-admin access with `x-admin-key` plus server-side `app_admins` membership.
+- Worker runtime: `apps/worker` is server-only background execution and intended Railway worker service.
 - Database/auth: Supabase Postgres + Auth.
 - Schema authority: `supabase/migrations/` is the intended canonical schema source for production.
 - Current runtime reality: the repo is still mid-transition away from Prisma. Prisma remains in parts of runtime, local/bootstrap, CI, and tests.
@@ -54,8 +54,8 @@ Code is still the source of truth. This doc is the fastest orientation path for 
 ## 5. Intended target state
 
 - `apps/web` runs on Vercel.
-- `apps/api` runs as a separately operated Fly.io API service.
-- `apps/worker` runs as a separately operated Fly.io worker service.
+- `apps/api` runs as a separately operated Railway API service.
+- `apps/worker` runs as a separately operated Railway worker service.
 - Supabase remains the external Postgres/Auth provider.
 - The API is the real user/admin operational boundary.
 - Browser-direct Supabase usage is limited primarily to auth/session and only explicit, documented exceptions.

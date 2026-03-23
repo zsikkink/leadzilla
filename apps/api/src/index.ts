@@ -1,11 +1,11 @@
 import PgBoss from 'pg-boss';
-import prismaClientPkg from '@prisma/client';
-import type { Prisma } from '@prisma/client';
 
 import {
+  Prisma,
   assertDatabaseConnection,
   checkPipelineSchemaHealth,
   prisma,
+  query,
   toInputJson,
 } from '@lead-flood/db';
 import { createLogger } from '@lead-flood/observability';
@@ -26,8 +26,6 @@ import {
 import { buildSupabaseAccessTokenVerifier } from './auth/supabase.js';
 import { loadApiEnv } from './env.js';
 import type { ReplyClassifyJobPayload } from '@lead-flood/contracts';
-
-const { Prisma: PrismaClient } = prismaClientPkg;
 
 import type { AnalyticsRollupJobPayload } from './modules/analytics/analytics.service.js';
 import type { DiscoveryRunJobPayload } from './modules/discovery/discovery.service.js';
@@ -129,7 +127,7 @@ async function main(): Promise<void> {
   const boss = new PgBoss({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
-    max: 1,
+    max: 2,
   });
 
   await boss.start();
@@ -297,12 +295,20 @@ async function main(): Promise<void> {
     logger,
     verifyAccessToken,
     checkUserActive: async (userId: string) => {
-      const rows = await prisma.$queryRaw<Array<{ banned_until: Date | null }>>`
-        SELECT banned_until FROM auth.users WHERE id = ${userId}::uuid LIMIT 1
-      `;
-      if (rows.length === 0) return false;
-      const bannedUntil = rows[0]!.banned_until;
-      return bannedUntil === null || bannedUntil < new Date();
+      const result = await query<{ banned_until: Date | string | null }>(
+        `
+          select banned_until
+          from auth.users
+          where id = $1::uuid
+          limit 1
+        `,
+        [userId],
+      );
+      const bannedUntil = result.rows[0]?.banned_until;
+      if (bannedUntil === undefined) return false;
+      if (bannedUntil === null) return true;
+      const bannedUntilDate = bannedUntil instanceof Date ? bannedUntil : new Date(bannedUntil);
+      return bannedUntilDate < new Date();
     },
     checkDatabaseHealth: async () => {
       try {
@@ -438,7 +444,7 @@ async function main(): Promise<void> {
           jobId: jobExecution.id,
         };
       } catch (error: unknown) {
-        if (error instanceof PrismaClient.PrismaClientKnownRequestError && error.code === 'P2002') {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
           throw new LeadAlreadyExistsError('Lead already exists for this email');
         }
 
@@ -562,6 +568,7 @@ async function main(): Promise<void> {
         businessCountry: biz?.country ?? null,
         businessCity: biz?.city ?? null,
         businessCategory: biz?.category ?? null,
+        latestIcpProfileId: lead.businessConversions[0]?.icpProfileId ?? null,
         contactDiscovery: telemetry
           ? {
               cseVerifyAttempted: telemetry.cseVerifyAttempted === true,

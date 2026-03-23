@@ -1,6 +1,6 @@
 'use client';
 
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { ApiClient } from '@/lib/api-client.js';
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  Types for the enriched pipeline data we fetch from Supabase
@@ -157,11 +157,21 @@ export interface LeadLifecycleData {
   feedbackEvents: FeedbackEventData[];
 }
 
+type LifecycleApiClient = Pick<
+  ApiClient,
+  | 'getLatestLeadDeterministicScore'
+  | 'getLatestLeadFeatureSnapshot'
+  | 'getLatestLeadScore'
+  | 'listDrafts'
+  | 'listFeedbackEvents'
+  | 'listSends'
+>;
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  Supabase data fetching
 // ══════════════════════════════════════════════════════════════════════════════
 
-function parseWebsiteScrape(json: unknown): WebsiteScrapeData | null {
+function _parseWebsiteScrape(json: unknown): WebsiteScrapeData | null {
   if (!json || typeof json !== 'object') return null;
   const data = json as Record<string, unknown>;
   return {
@@ -175,7 +185,7 @@ function parseWebsiteScrape(json: unknown): WebsiteScrapeData | null {
   };
 }
 
-function parseInstagramScrape(json: unknown): InstagramScrapeData | null {
+function _parseInstagramScrape(json: unknown): InstagramScrapeData | null {
   if (!json || typeof json !== 'object') return null;
   const data = json as Record<string, unknown>;
   return {
@@ -191,7 +201,7 @@ function parseInstagramScrape(json: unknown): InstagramScrapeData | null {
   };
 }
 
-function parseApolloContacts(json: unknown): ApolloContact[] {
+function _parseApolloContacts(json: unknown): ApolloContact[] {
   if (!json || typeof json !== 'object') return [];
   // apolloContactJson can be { contacts: [...] } or an array or a single contact
   const data = json as Record<string, unknown>;
@@ -218,7 +228,7 @@ function parseApolloContacts(json: unknown): ApolloContact[] {
   }).filter((c) => c.name || c.email);
 }
 
-function parseHunterContacts(json: unknown): HunterContact[] {
+function _parseHunterContacts(json: unknown): HunterContact[] {
   if (!json || typeof json !== 'object') return [];
   const data = json as Record<string, unknown>;
   let emails: unknown[] = [];
@@ -245,8 +255,36 @@ function parseHunterContacts(json: unknown): HunterContact[] {
   }).filter((e) => e.email);
 }
 
+async function collectAllPages<TItem>(
+  loadPage: (page: number, pageSize: number) => Promise<{
+    items: TItem[];
+    page: number;
+    pageSize: number;
+    total: number;
+  }>,
+): Promise<TItem[]> {
+  const pageSize = 100;
+  const items: TItem[] = [];
+  let page = 1;
+  let total = 0;
+
+  do {
+    const response = await loadPage(page, pageSize);
+    items.push(...response.items);
+    total = response.total;
+
+    if (response.items.length < response.pageSize) {
+      break;
+    }
+
+    page += 1;
+  } while (items.length < total);
+
+  return items;
+}
+
 export async function fetchLeadLifecycleData(
-  supabase: SupabaseClient,
+  apiClient: LifecycleApiClient,
   leadId: string,
 ): Promise<LeadLifecycleData> {
   const result: LeadLifecycleData = {
@@ -261,79 +299,29 @@ export async function fetchLeadLifecycleData(
     feedbackEvents: [],
   };
 
-  // Step 1: Find business conversion for this lead
-  const { data: conversions } = await supabase
-    .from('business_conversions')
-    .select('businessId, businessInsights, apolloContactJson, hunterContactJson')
-    .eq('leadId', leadId)
-    .limit(1);
-
-  const conversion = conversions?.[0] ?? null;
-
-  if (conversion) {
-    result.businessConversion = {
-      method: null,
-      businessInsights: typeof conversion.businessInsights === 'string' ? conversion.businessInsights : null,
-      apolloContacts: parseApolloContacts(conversion.apolloContactJson),
-      hunterContacts: parseHunterContacts(conversion.hunterContactJson),
-    };
-
-    const bizId = conversion.businessId;
-
-    if (bizId) {
-      // Step 2: Get business record for scrape data
-      const { data: business } = await supabase
-        .from('businesses')
-        .select('apify_website_scrape_json, apify_instagram_scrape_json')
-        .eq('id', bizId)
-        .single();
-
-      if (business) {
-        result.websiteScrape = parseWebsiteScrape(business.apify_website_scrape_json);
-        result.instagramScrape = parseInstagramScrape(business.apify_instagram_scrape_json);
-
-        // Step 3: Get search task via business_evidence (search_task_id lives there, not on businesses)
-        const { data: evidence } = await supabase
-          .from('business_evidence')
-          .select('search_task_id')
-          .eq('business_id', bizId)
-          .not('search_task_id', 'is', null)
-          .limit(1);
-
-        const searchTaskId = evidence?.[0]?.search_task_id;
-        if (searchTaskId) {
-          const { data: searchTask } = await supabase
-            .from('search_tasks')
-            .select('query_text, city, status')
-            .eq('id', searchTaskId)
-            .single();
-
-          if (searchTask) {
-            result.searchTask = {
-              queryText: searchTask.query_text ?? '',
-              provider: 'UNKNOWN',
-              city: searchTask.city ?? null,
-              category: null,
-              status: searchTask.status ?? 'UNKNOWN',
-            };
-          }
-        }
-      }
-    }
-  }
+  const [
+    featureSnapshotResult,
+    latestScoreResult,
+    deterministicScoreResult,
+    draftsResult,
+    sendsResult,
+    feedbackEventsResult,
+  ] = await Promise.allSettled([
+    apiClient.getLatestLeadFeatureSnapshot(leadId),
+    apiClient.getLatestLeadScore(leadId),
+    apiClient.getLatestLeadDeterministicScore(leadId),
+    collectAllPages((page, pageSize) => apiClient.listDrafts({ leadId, page, pageSize })),
+    collectAllPages((page, pageSize) => apiClient.listSends({ leadId, page, pageSize })),
+    collectAllPages((page, pageSize) => apiClient.listFeedbackEvents({ leadId, page, pageSize })),
+  ]);
 
   // Step 4: Feature snapshot (latest)
-  const { data: snapshots } = await supabase
-    .from('LeadFeatureSnapshot')
-    .select('featuresJson, snapshotVersion, sourceVersion, ruleMatchCount, hardFilterPassed, computedAt')
-    .eq('leadId', leadId)
-    .order('computedAt', { ascending: false })
-    .limit(1);
-
-  if (snapshots?.[0]) {
-    const snap = snapshots[0];
+  if (featureSnapshotResult.status === 'fulfilled' && featureSnapshotResult.value.snapshot) {
+    const snap = featureSnapshotResult.value.snapshot;
     result.featureSnapshot = {
-      featuresJson: (typeof snap.featuresJson === 'object' && snap.featuresJson !== null ? snap.featuresJson : {}) as Record<string, unknown>,
+      featuresJson: (typeof snap.featuresJson === 'object' && snap.featuresJson !== null
+        ? snap.featuresJson
+        : {}) as Record<string, unknown>,
       snapshotVersion: snap.snapshotVersion ?? 0,
       sourceVersion: snap.sourceVersion ?? '',
       ruleMatchCount: snap.ruleMatchCount ?? 0,
@@ -343,15 +331,8 @@ export async function fetchLeadLifecycleData(
   }
 
   // Step 5: Score prediction (latest)
-  const { data: predictions } = await supabase
-    .from('LeadScorePrediction')
-    .select('deterministicScore, logisticScore, blendedScore, scoreBand, reasonsJson, ruleEvaluationJson, predictedAt')
-    .eq('leadId', leadId)
-    .order('predictedAt', { ascending: false })
-    .limit(1);
-
-  if (predictions?.[0]) {
-    const pred = predictions[0];
+  if (latestScoreResult.status === 'fulfilled' && latestScoreResult.value.prediction) {
+    const pred = latestScoreResult.value.prediction;
     const reasons = (typeof pred.reasonsJson === 'object' && pred.reasonsJson !== null ? pred.reasonsJson : {}) as Record<string, unknown>;
     const blendWeightsRaw = reasons.blendWeights as Record<string, unknown> | undefined;
     result.scoring = {
@@ -370,82 +351,62 @@ export async function fetchLeadLifecycleData(
           ai: (blendWeightsRaw?.ai as number) ?? 0,
         },
       },
-      ruleEvaluation: Array.isArray(pred.ruleEvaluationJson) ? (pred.ruleEvaluationJson as RuleEvaluation[]) : [],
+      ruleEvaluation:
+        deterministicScoreResult.status === 'fulfilled' && Array.isArray(deterministicScoreResult.value.ruleEvaluation)
+          ? (deterministicScoreResult.value.ruleEvaluation as RuleEvaluation[])
+          : [],
       predictedAt: pred.predictedAt ?? '',
     };
   }
 
   // Step 6: Message drafts with variants
-  const { data: drafts } = await supabase
-    .from('MessageDraft')
-    .select('id, approvalStatus, promptVersion, generatedByModel, followUpNumber, createdAt')
-    .eq('leadId', leadId)
-    .order('createdAt', { ascending: false });
-
-  if (drafts && drafts.length > 0) {
-    for (const draft of drafts) {
-      const { data: variants } = await supabase
-        .from('MessageVariant')
-        .select('id, variantKey, channel, subject, bodyText, qualityScore, isSelected')
-        .eq('messageDraftId', draft.id)
-        .order('isSelected', { ascending: false });
-
-      result.messageDrafts.push({
-        id: draft.id,
-        approvalStatus: draft.approvalStatus ?? 'PENDING',
-        promptVersion: draft.promptVersion ?? '',
-        generatedByModel: draft.generatedByModel ?? '',
-        followUpNumber: draft.followUpNumber ?? 0,
-        createdAt: draft.createdAt ?? '',
-        variants: (variants ?? []).map((v) => ({
-          id: v.id,
-          variantKey: v.variantKey ?? '',
-          channel: v.channel ?? 'EMAIL',
-          subject: v.subject ?? null,
-          bodyText: v.bodyText ?? '',
-          qualityScore: v.qualityScore ?? null,
-          isSelected: v.isSelected ?? false,
+  if (draftsResult.status === 'fulfilled') {
+    result.messageDrafts = draftsResult.value.map((draft) => ({
+      id: draft.id,
+      approvalStatus: draft.approvalStatus ?? 'PENDING',
+      promptVersion: draft.promptVersion ?? '',
+      generatedByModel: draft.generatedByModel ?? '',
+      followUpNumber: draft.followUpNumber ?? 0,
+      createdAt: draft.createdAt ?? '',
+      variants: draft.variants
+        .slice()
+        .sort((left, right) => Number(right.isSelected) - Number(left.isSelected))
+        .map((variant) => ({
+          id: variant.id,
+          variantKey: variant.variantKey ?? '',
+          channel: variant.channel ?? 'EMAIL',
+          subject: variant.subject ?? null,
+          bodyText: variant.bodyText ?? '',
+          qualityScore: variant.qualityScore ?? null,
+          isSelected: variant.isSelected ?? false,
         })),
-      });
-    }
+    }));
   }
 
   // Step 7: Message sends
-  const { data: sends } = await supabase
-    .from('MessageSend')
-    .select('id, channel, status, sentAt, deliveredAt, repliedAt, followUpNumber, failureCode, failureReason')
-    .eq('leadId', leadId)
-    .order('createdAt', { ascending: false });
-
-  if (sends) {
-    result.messageSends = sends.map((s) => ({
-      id: s.id,
-      channel: s.channel ?? 'EMAIL',
-      status: s.status ?? 'QUEUED',
-      sentAt: s.sentAt ?? null,
-      deliveredAt: s.deliveredAt ?? null,
-      repliedAt: s.repliedAt ?? null,
-      followUpNumber: s.followUpNumber ?? 0,
-      failureCode: s.failureCode ?? null,
-      failureReason: s.failureReason ?? null,
+  if (sendsResult.status === 'fulfilled') {
+    result.messageSends = sendsResult.value.map((send) => ({
+      id: send.id,
+      channel: send.channel ?? 'EMAIL',
+      status: send.status ?? 'QUEUED',
+      sentAt: send.sentAt ?? null,
+      deliveredAt: send.deliveredAt ?? null,
+      repliedAt: send.repliedAt ?? null,
+      followUpNumber: send.followUpNumber ?? 0,
+      failureCode: send.failureCode ?? null,
+      failureReason: send.failureReason ?? null,
     }));
   }
 
   // Step 8: Feedback events
-  const { data: events } = await supabase
-    .from('FeedbackEvent')
-    .select('id, eventType, source, replyText, replyClassification, occurredAt')
-    .eq('leadId', leadId)
-    .order('occurredAt', { ascending: false });
-
-  if (events) {
-    result.feedbackEvents = events.map((e) => ({
-      id: e.id,
-      eventType: e.eventType ?? 'UNKNOWN',
-      source: e.source ?? 'UNKNOWN',
-      replyText: e.replyText ?? null,
-      replyClassification: e.replyClassification ?? null,
-      occurredAt: e.occurredAt ?? '',
+  if (feedbackEventsResult.status === 'fulfilled') {
+    result.feedbackEvents = feedbackEventsResult.value.map((event) => ({
+      id: event.id,
+      eventType: event.eventType ?? 'UNKNOWN',
+      source: event.source ?? 'UNKNOWN',
+      replyText: event.replyText ?? null,
+      replyClassification: event.replyClassification ?? null,
+      occurredAt: event.occurredAt ?? '',
     }));
   }
 

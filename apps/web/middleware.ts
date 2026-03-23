@@ -16,23 +16,11 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Check for Supabase auth cookies (sb-*-auth-token) or localStorage-synced header
-  const hasAuthCookie = request.cookies
-    .getAll()
-    .some((c) => c.name.startsWith('sb-') && c.name.endsWith('-auth-token'));
-  const hasAuthHeader = request.headers.get('authorization')?.startsWith('Bearer ');
-
-  if (!hasAuthCookie && !hasAuthHeader) {
-    // In dev mode, skip server-side redirect — the client-side AuthProvider
-    // handles auth via localStorage (Supabase JS stores tokens there, not in cookies).
-    // Without @supabase/ssr, there are no auth cookies for the middleware to check.
-    if (process.env.NODE_ENV !== 'production') {
-      return NextResponse.next();
-    }
-
-    return NextResponse.redirect(new URL('/login', request.url));
-  }
-
+  // This app relies on the browser Supabase client, which persists the session
+  // in localStorage rather than server-readable auth cookies. Enforcing a
+  // production-only cookie redirect here breaks authenticated refreshes and
+  // direct navigations. The client-side AppShell still redirects unauthenticated
+  // users, and API routes remain protected by bearer-token verification.
   return NextResponse.next();
 }
 

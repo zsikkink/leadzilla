@@ -27,7 +27,6 @@ import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
 import { countryName } from '../../../../src/lib/countries.js';
 import { getWebEnv } from '../../../../src/lib/env.js';
-import { getSupabaseBrowserClient } from '../../../../src/lib/supabase-client.js';
 
 // ── Status badge (reused from list page) ─────────────────────────────────
 const STATUS_CONFIG: Record<
@@ -105,6 +104,14 @@ interface BusinessData {
   preQualified: boolean;
   disqualificationReason: string | null;
   searchTaskId: string | null;
+  recoveryItem: {
+    status: string;
+    reason: string;
+    evidenceScore: number | null;
+    candidateCount: number | null;
+    updatedAt: string;
+    telemetry: Record<string, unknown> | null;
+  } | null;
 }
 
 interface CostEventData {
@@ -461,47 +468,25 @@ export default function DiscoveryRunDetailPage() {
   const businesses = (details.data?.businesses ?? []) as BusinessData[];
   const costEvents = (details.data?.costEvents ?? []) as CostEventData[];
   const leads = details.data?.leads ?? [];
+  const recoveryItems = useMemo(
+    () =>
+      businesses
+        .filter(
+          (business): business is BusinessData & { recoveryItem: NonNullable<BusinessData['recoveryItem']> } =>
+            business.recoveryItem !== null,
+        )
+        .map((business) => ({
+          business_id: business.id,
+          business_name: business.name,
+          reason: business.recoveryItem.reason,
+          status: business.recoveryItem.status,
+        })),
+    [businesses],
+  );
 
   const failedTasks = searchTasks.filter((t) => t.status === 'FAILED');
   const aggregatedCosts = useMemo(() => aggregateCosts(costEvents).filter((c) => c.calls > 0), [costEvents]);
   const totalCostCents = aggregatedCosts.reduce((sum, c) => sum + c.costCents, 0);
-
-  // Fetch contact recovery items for businesses in this run
-  const [recoveryItems, setRecoveryItems] = useState<Array<{ business_id: string; business_name: string; reason: string; status: string }>>([]);
-  useEffect(() => {
-    if (businesses.length === 0) return;
-    let cancelled = false;
-    async function fetchRecoveryItems() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-        const bizIds = businesses.map((b) => b.id);
-        const { data } = await supabase
-          .from('contact_recovery_items')
-          .select('business_id, reason, status')
-          .in('business_id', bizIds);
-        if (cancelled || !data) return;
-        const seen = new Set<string>();
-        const items: Array<{ business_id: string; business_name: string; reason: string; status: string }> = [];
-        for (const row of data as Array<{ business_id: string; reason: string; status: string }>) {
-          if (!seen.has(row.business_id)) {
-            seen.add(row.business_id);
-            const biz = businesses.find((b) => b.id === row.business_id);
-            items.push({
-              business_id: row.business_id,
-              business_name: biz?.name ?? 'Unknown',
-              reason: row.reason,
-              status: row.status,
-            });
-          }
-        }
-        setRecoveryItems(items);
-      } catch {
-        // Non-critical — fallback to showing all leads in single section
-      }
-    }
-    void fetchRecoveryItems();
-    return () => { cancelled = true; };
-  }, [businesses]);
 
   // Not found state
   if (run.error && !run.isLoading) {

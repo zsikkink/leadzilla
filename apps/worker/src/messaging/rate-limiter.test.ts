@@ -25,7 +25,7 @@ describe('WhatsAppRateLimiter', () => {
   it('blocks sends outside business hours without querying the database', async () => {
     vi.setSystemTime(new Date('2026-03-14T02:00:00.000Z'));
 
-    const limiter = new WhatsAppRateLimiter({} as never, { dailySendLimit: 10 });
+    const limiter = new WhatsAppRateLimiter({ dailySendLimit: 10 });
 
     await expect(limiter.canSend()).resolves.toEqual({
       allowed: false,
@@ -39,7 +39,7 @@ describe('WhatsAppRateLimiter', () => {
     vi.setSystemTime(new Date('2026-03-14T08:00:00.000Z'));
     dbMock.query.mockResolvedValue({ rows: [{ count: 10 }] });
 
-    const limiter = new WhatsAppRateLimiter({} as never, { dailySendLimit: 10 });
+    const limiter = new WhatsAppRateLimiter({ dailySendLimit: 10 });
 
     await expect(limiter.canSend()).resolves.toEqual({
       allowed: false,
@@ -53,7 +53,7 @@ describe('WhatsAppRateLimiter', () => {
     vi.setSystemTime(new Date('2026-03-14T08:00:00.000Z'));
     dbMock.query.mockResolvedValue({ rows: [{ count: '3' }] });
 
-    const limiter = new WhatsAppRateLimiter({} as never, { dailySendLimit: 10 });
+    const limiter = new WhatsAppRateLimiter({ dailySendLimit: 10 });
 
     await expect(limiter.canSend()).resolves.toEqual({ allowed: true });
   });

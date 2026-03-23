@@ -1,6 +1,4 @@
-import { query, type prisma as prismaInstance } from '@lead-flood/db';
-
-type PrismaInstance = typeof prismaInstance;
+import { query } from '@lead-flood/db';
 
 interface CountRow {
   count: number | string;
@@ -86,8 +84,7 @@ export class WhatsAppRateLimiter {
   private readonly bizStart: number;
   private readonly bizEnd: number;
 
-  constructor(prisma: PrismaInstance, config: WhatsAppRateLimiterConfig) {
-    void prisma;
+  constructor(config: WhatsAppRateLimiterConfig) {
     this.dailySendLimit = config.dailySendLimit;
     this.offsetHours = config.timezoneOffsetHours ?? UAE_OFFSET_HOURS;
     this.bizStart = config.businessHoursStart ?? DEFAULT_BIZ_START;

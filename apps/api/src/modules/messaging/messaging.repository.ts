@@ -15,16 +15,13 @@ import type {
   RejectMessageDraftRequest,
   SendMessageRequest,
 } from '@lead-flood/contracts';
-import prismaClientPkg from '@prisma/client';
-import { prisma } from '@lead-flood/db';
+import { Prisma, prisma } from '@lead-flood/db';
 
 import {
   MessagingNotFoundError,
   MessagingNotImplementedError,
   MessagingSendIneligibleError,
 } from './messaging.errors.js';
-
-const { Prisma: PrismaClient } = prismaClientPkg;
 
 export interface CreateMessageSendForApprovalInput {
   leadId: string;
@@ -226,6 +223,7 @@ function mapDraftToResponse(draft: PrismaMessageDraft): MessageDraftResponse {
     approvedByUserId: draft.approvedByUserId,
     approvedAt: draft.approvedAt?.toISOString() ?? null,
     rejectedReason: draft.rejectedReason,
+    followUpNumber: draft.followUpNumber,
     variants: draft.variants.map((variant) => mapVariantToResponse(variant)),
     createdAt: draft.createdAt.toISOString(),
     updatedAt: draft.updatedAt.toISOString(),
@@ -308,7 +306,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
         promptVersion: input.promptVersion,
         generatedByModel: 'stub',
         groundingKnowledgeIds: input.knowledgeEntryIds,
-        groundingContextJson: PrismaClient.JsonNull,
+        groundingContextJson: Prisma.JsonNull,
         approvalStatus: 'PENDING',
         variants: {
           create: [
@@ -407,6 +405,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
       ...(query.leadId !== undefined ? { leadId: query.leadId } : {}),
       ...(query.icpProfileId !== undefined ? { icpProfileId: query.icpProfileId } : {}),
       ...(query.approvalStatus !== undefined ? { approvalStatus: query.approvalStatus } : {}),
+      ...(query.followUpOnly ? { followUpNumber: { gt: 0 } } : {}),
     };
 
     const [total, rows] = await Promise.all([
@@ -504,7 +503,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
 
       return mapDraftToResponse(draft);
     } catch (error: unknown) {
-      if (error instanceof PrismaClient.PrismaClientKnownRequestError && error.code === 'P2025') {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
         throw new MessagingNotFoundError('Message draft not found');
       }
       throw error;
@@ -526,7 +525,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
       });
       return mapDraftToResponse(draft);
     } catch (error: unknown) {
-      if (error instanceof PrismaClient.PrismaClientKnownRequestError && error.code === 'P2025') {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
         throw new MessagingNotFoundError('Message draft not found');
       }
       throw error;

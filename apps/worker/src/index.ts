@@ -1,8 +1,7 @@
 import PgBoss, { type Job } from 'pg-boss';
 
 import { buildFeaturesComputeSingletonKey } from '@lead-flood/contracts';
-
-import { checkPipelineSchemaHealth, prisma } from '@lead-flood/db';
+import { checkPipelineSchemaHealth } from '@lead-flood/db';
 import {
   GooglePlacesDiscoveryProvider,
   loadDiscoveryRuntimeConfig,
@@ -90,6 +89,12 @@ import {
   recoverApprovedInitialDraftsMissingMessageSends,
   type MessageApprovalRecoveryJobPayload,
 } from './jobs/message.approval.recovery.job.js';
+import {
+  MESSAGE_SEND_RECOVERY_JOB_NAME,
+  handleMessageSendRecoveryJob,
+  recoverStaleQueuedMessageSends,
+  type MessageSendRecoveryJobPayload,
+} from './jobs/message.send.recovery.job.js';
 import {
   MODEL_EVALUATE_JOB_NAME,
   handleModelEvaluateJob,
@@ -243,7 +248,7 @@ async function main(): Promise<void> {
   // ── Connection Budget Documentation ────────────────────────────────────
   // Cloud Supabase free tier has ~15 max connections. This worker process uses:
   //   - Prisma connection pool: 3 connections (connection_limit=3 in DATABASE_URL)
-  //   - pg-boss pool: 1 connection (max: 1 below)
+  //   - pg-boss pool: 2 connections (max: 2 below)
   //   - Total per worker: ~5 connections
   //
   // During peak demand (e.g., 3 concurrent search tasks via batchSize=3),
@@ -259,7 +264,7 @@ async function main(): Promise<void> {
   const boss = new PgBoss({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
-    max: 1,
+    max: 2,
   });
   let stopJobRequestDispatcher: (() => void) | null = null;
   const workerSchedulesEnabled =
@@ -392,11 +397,11 @@ async function main(): Promise<void> {
     templateId: env.TRENGO_TEMPLATE_ID,
   });
 
-  const whatsAppRateLimiter = new WhatsAppRateLimiter(prisma, {
+  const whatsAppRateLimiter = new WhatsAppRateLimiter({
     dailySendLimit: env.WHATSAPP_DAILY_SEND_LIMIT,
   });
 
-  const emailRateLimiter = new EmailRateLimiter(prisma, {
+  const emailRateLimiter = new EmailRateLimiter({
     maxDaily: env.EMAIL_DAILY_SEND_LIMIT,
   });
 
@@ -423,6 +428,9 @@ async function main(): Promise<void> {
   await runOutboxDispatch();
   await recoverApprovedInitialDraftsMissingMessageSends(logger, { boss }).catch((error: unknown) => {
     logger.warn({ error }, 'Failed manual approval MessageSend recovery on worker startup');
+  });
+  await recoverStaleQueuedMessageSends(logger, { boss }).catch((error: unknown) => {
+    logger.warn({ error }, 'Failed stale queued MessageSend recovery on worker startup');
   });
   await sweepStaleDiscoveryPipelineJobs({
     boss: {
@@ -791,6 +799,12 @@ async function main(): Promise<void> {
     logger,
     MESSAGE_APPROVAL_RECOVERY_JOB_NAME,
     (jobLogger, job) => handleMessageApprovalRecoveryJob(jobLogger, job, { boss }),
+  );
+  await registerWorker<MessageSendRecoveryJobPayload>(
+    boss,
+    logger,
+    MESSAGE_SEND_RECOVERY_JOB_NAME,
+    (jobLogger, job) => handleMessageSendRecoveryJob(jobLogger, job, { boss }),
   );
   await registerWorker<AnalyticsRollupJobPayload>(
     boss,

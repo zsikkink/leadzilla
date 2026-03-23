@@ -12,6 +12,9 @@ describe('WORKER_QUEUE_DEFINITIONS', () => {
     expect(WORKER_QUEUE_DEFINITIONS.some((queue) => queue.name === 'message.approval.recovery')).toBe(
       true,
     );
+    expect(WORKER_QUEUE_DEFINITIONS.some((queue) => queue.name === 'message.send.recovery')).toBe(
+      true,
+    );
   });
 
   it('configures message.send and message.generate with short queue policy', () => {
@@ -37,13 +40,26 @@ describe('ensureWorkerQueues', () => {
 
     await ensureWorkerQueues({ createQueue, updateQueue });
 
+    expect(createQueue).toHaveBeenCalledWith(
+      MESSAGE_SEND_JOB_NAME,
+      expect.objectContaining({
+        name: MESSAGE_SEND_JOB_NAME,
+        policy: 'short',
+      }),
+    );
     expect(updateQueue).toHaveBeenCalledWith(
       MESSAGE_SEND_JOB_NAME,
-      expect.objectContaining({ name: MESSAGE_SEND_JOB_NAME, policy: 'short' }),
+      expect.objectContaining({
+        name: MESSAGE_SEND_JOB_NAME,
+        policy: 'short',
+      }),
     );
     expect(updateQueue).toHaveBeenCalledWith(
       MESSAGE_GENERATE_JOB_NAME,
-      expect.objectContaining({ name: MESSAGE_GENERATE_JOB_NAME, policy: 'short' }),
+      expect.objectContaining({
+        name: MESSAGE_GENERATE_JOB_NAME,
+        policy: 'short',
+      }),
     );
   });
 });

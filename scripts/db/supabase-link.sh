@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/lib/load-env-file.sh"
+
 DEFAULT_PROJECT_REF="cbcgrzvqidtrtrtnzlso"
 MODE="link"
 
@@ -13,20 +16,7 @@ fi
 
 load_env_file() {
   local env_file="${ENV_FILE:-}"
-  if [[ -z "$env_file" ]]; then
-    return
-  fi
-
-  if [[ ! -f "$env_file" ]]; then
-    echo "[db:link] ENV_FILE not found: $env_file" >&2
-    exit 1
-  fi
-
-  echo "[db:link] Loading env from $env_file"
-  set -a
-  # shellcheck disable=SC1090
-  source "$env_file"
-  set +a
+  load_env_file_literal "$env_file" "[db:link]" || exit 1
 }
 
 require_cmd() {

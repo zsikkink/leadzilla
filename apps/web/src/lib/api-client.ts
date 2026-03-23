@@ -1,4 +1,7 @@
 import type {
+  AvgScoreResponse,
+  DailyQualityTrendsQuery,
+  DailyQualityTrendsResponse,
   ContactRecoveryDetailResponse,
   ConversationResponse,
   CreateDiscoveryRunRequest,
@@ -12,7 +15,12 @@ import type {
   FunnelResponse,
   GenerateMessageDraftResponse,
   GetLeadResponse,
+  IcpPerformanceResponse,
   IcpProfileResponse,
+  LatestLeadDeterministicScoreResponse,
+  LatestLeadFeatureSnapshotResponse,
+  LatestLeadScoreQuery,
+  LatestLeadScoreResponse,
   ListContactRecoveryItemsQuery,
   ListContactRecoveryItemsResponse,
   ListDiscoveryRecordsQuery,
@@ -210,6 +218,31 @@ export class ApiClient {
     });
   }
 
+  // ── Scoring ───────────────────────────────────────
+  getLatestLeadScore(
+    leadId: string,
+    query?: LatestLeadScoreQuery,
+  ): Promise<LatestLeadScoreResponse> {
+    const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
+    return this.request(`/v1/scoring/leads/${leadId}/latest${qs}`);
+  }
+
+  getLatestLeadFeatureSnapshot(
+    leadId: string,
+    query?: LatestLeadScoreQuery,
+  ): Promise<LatestLeadFeatureSnapshotResponse> {
+    const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
+    return this.request(`/v1/scoring/leads/${leadId}/latest-feature-snapshot${qs}`);
+  }
+
+  getLatestLeadDeterministicScore(
+    leadId: string,
+    query?: LatestLeadScoreQuery,
+  ): Promise<LatestLeadDeterministicScoreResponse> {
+    const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
+    return this.request(`/v1/scoring/leads/${leadId}/latest-deterministic${qs}`);
+  }
+
   // ── Messaging ─────────────────────────────────────
   listDrafts(query?: ListMessageDraftsQuery): Promise<ListMessageDraftsResponse> {
     const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
@@ -274,6 +307,19 @@ export class ApiClient {
     return this.request(`/v1/analytics/score-distribution${qs}`);
   }
 
+  getDailyQualityTrends(query?: DailyQualityTrendsQuery): Promise<DailyQualityTrendsResponse> {
+    const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
+    return this.request(`/v1/analytics/daily-quality-trends${qs}`);
+  }
+
+  getAvgScore(): Promise<AvgScoreResponse> {
+    return this.request('/v1/analytics/avg-score');
+  }
+
+  getIcpPerformance(): Promise<IcpPerformanceResponse> {
+    return this.request('/v1/analytics/icp-performance');
+  }
+
   getModelMetrics(query?: Record<string, unknown>): Promise<ModelMetricsResponse> {
     const qs = query ? `?${toSearchParams(query)}` : '';
     return this.request(`/v1/analytics/model-metrics${qs}`);
@@ -331,7 +377,24 @@ export class ApiClient {
   getDiscoveryRunDetails(runId: string): Promise<{
     run: Record<string, unknown>;
     searchTasks: Array<{ id: string; queryText: string; countryCode: string; city: string | null; status: string; resultsCount: number; provider: string; error: string | null }>;
-    businesses: Array<{ id: string; name: string; websiteDomain: string | null; deterministicScore: number | null; scoreBand: string | null; preQualified: boolean; disqualificationReason: string | null; searchTaskId: string | null }>;
+    businesses: Array<{
+      id: string;
+      name: string;
+      websiteDomain: string | null;
+      deterministicScore: number | null;
+      scoreBand: string | null;
+      preQualified: boolean;
+      disqualificationReason: string | null;
+      searchTaskId: string | null;
+      recoveryItem: {
+        status: string;
+        reason: string;
+        evidenceScore: number | null;
+        candidateCount: number | null;
+        updatedAt: string;
+        telemetry: Record<string, unknown> | null;
+      } | null;
+    }>;
     leads: Array<Record<string, unknown>>;
     costEvents: Array<{ id: string; provider: string; action: string; creditCost: number; createdAt: string }>;
   }> {

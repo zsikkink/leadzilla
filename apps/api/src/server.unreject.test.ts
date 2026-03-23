@@ -6,6 +6,7 @@ import type { LoginRequest } from '@lead-flood/contracts';
 const { dbMock } = vi.hoisted(() => ({
   dbMock: {
     getScoreQualificationThresholdSetting: vi.fn(),
+    query: vi.fn(),
     prisma: {
       lead: {
         findFirst: vi.fn(),
@@ -27,12 +28,16 @@ const { dbMock } = vi.hoisted(() => ({
 
 vi.mock('@lead-flood/db', () => ({
   getScoreQualificationThresholdSetting: dbMock.getScoreQualificationThresholdSetting,
+  query: dbMock.query,
   prisma: dbMock.prisma,
   Prisma: dbMock.Prisma,
 }));
 
 import type { ApiEnv } from './env.js';
 import { buildServer, type BuildServerOptions } from './server.js';
+
+const ADMIN_USER_ID = '11111111-1111-4111-8111-111111111111';
+const NON_ADMIN_USER_ID = '22222222-2222-4222-8222-222222222222';
 
 const env: ApiEnv = {
   NODE_ENV: 'test',
@@ -52,7 +57,12 @@ const env: ApiEnv = {
 const makeDefaultOptions = (): BuildServerOptions => ({
   env,
   logger: createLogger({ service: 'api-test', env: 'test', level: 'error' }),
-  verifyAccessToken: async () => ({ sub: 'user_1', email: 'demo@lead-flood.local', firstName: 'Demo', lastName: 'User' }),
+  verifyAccessToken: async () => ({
+    sub: ADMIN_USER_ID,
+    email: 'demo@lead-flood.local',
+    firstName: 'Demo',
+    lastName: 'User',
+  }),
   checkDatabaseHealth: async () => true,
   checkSchemaHealth: async () => ({ status: 'ok', missingTables: [], missingEnumValues: [] }),
   authenticateUser: async ({ email }: LoginRequest) => ({
@@ -85,6 +95,9 @@ describe('buildServer unreject route', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    dbMock.query.mockResolvedValue({
+      rows: [{ isAdmin: true }],
+    });
     dbMock.prisma.lead.findFirst.mockResolvedValue({ id: 'lead_1', status: 'rejected' });
     dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({ blendedScore: 0.62 });
     dbMock.prisma.leadRejection.deleteMany.mockResolvedValue({ count: 1 });
@@ -114,6 +127,36 @@ describe('buildServer unreject route', () => {
       where: { id: 'lead_1' },
       data: { status: 'qualified' },
     });
+  });
+
+  it('returns 403 for non-admin unreject requests', async () => {
+    dbMock.query.mockResolvedValue({
+      rows: [{ isAdmin: false }],
+    });
+    const server = buildServer({
+      ...makeDefaultOptions(),
+      verifyAccessToken: async () => ({
+        sub: NON_ADMIN_USER_ID,
+        email: 'demo@lead-flood.local',
+        firstName: 'Demo',
+        lastName: 'User',
+      }),
+    });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'PATCH',
+      url: '/v1/leads/lead_1/unreject',
+      headers: authHeaders(),
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({
+      error: 'Forbidden',
+      requestId: expect.any(String),
+    });
+    expect(dbMock.prisma.lead.findFirst).not.toHaveBeenCalled();
+    expect(dbMock.getScoreQualificationThresholdSetting).not.toHaveBeenCalled();
   });
 
   it('restores scored when the shared threshold helper returns a higher threshold', async () => {

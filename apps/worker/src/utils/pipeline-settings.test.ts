@@ -21,6 +21,7 @@ vi.mock('@lead-flood/db', () => ({
 import {
   getMessagingRole,
   getPipelineSettings,
+  loadVerifiedScoreQualificationThreshold,
   loadAutoApproveConfig,
 } from './pipeline-settings.js';
 
@@ -65,5 +66,29 @@ describe('pipeline settings utility', () => {
     });
 
     await expect(getMessagingRole()).resolves.toBe('founder whisperer');
+  });
+
+  it('loads the verified score qualification threshold without falling back', async () => {
+    dbMock.getPipelineSetting.mockResolvedValue({
+      key: 'scoreQualificationThreshold',
+      valueJson: '0.68',
+    });
+
+    await expect(loadVerifiedScoreQualificationThreshold()).resolves.toBe(0.68);
+  });
+
+  it('throws when the verified score qualification threshold is missing or invalid', async () => {
+    dbMock.getPipelineSetting.mockResolvedValue(null);
+    await expect(loadVerifiedScoreQualificationThreshold()).rejects.toThrow(
+      'scoreQualificationThreshold is missing or invalid in pipeline settings',
+    );
+
+    dbMock.getPipelineSetting.mockResolvedValue({
+      key: 'scoreQualificationThreshold',
+      valueJson: 1.4,
+    });
+    await expect(loadVerifiedScoreQualificationThreshold()).rejects.toThrow(
+      'scoreQualificationThreshold is missing or invalid in pipeline settings',
+    );
   });
 });

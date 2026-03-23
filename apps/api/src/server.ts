@@ -1,10 +1,14 @@
 import { promises as dns } from 'node:dns';
 
-import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyPluginAsync } from 'fastify';
+import Fastify, {
+  type FastifyBaseLogger,
+  type FastifyInstance,
+  type FastifyPluginAsync,
+  type FastifyReply,
+  type FastifyRequest,
+} from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
-import prismaClientPkg from '@prisma/client';
-import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import {
   ContactRecoveryDetailResponseSchema,
@@ -41,11 +45,14 @@ import {
   ReadyResponseSchema,
   type ReadySchemaHealth,
 } from '@lead-flood/contracts';
-import { getScoreQualificationThresholdSetting, prisma } from '@lead-flood/db';
+import { Prisma, getScoreQualificationThresholdSetting, prisma } from '@lead-flood/db';
 
-const { Prisma: PrismaClient } = prismaClientPkg;
-
-import { buildAuthGuard, type AuthGuardOptions, type VerifyAccessToken } from './auth/guard.js';
+import {
+  buildAuthGuard,
+  requireAppAdminAccess,
+  type AuthGuardOptions,
+  type VerifyAccessToken,
+} from './auth/guard.js';
 import type { ApiEnv } from './env.js';
 import { registerAnalyticsRoutes } from './modules/analytics/analytics.routes.js';
 import type { AnalyticsRollupJobPayload } from './modules/analytics/analytics.service.js';
@@ -153,6 +160,9 @@ export interface LeadRecord {
   businessCountry?: string | null | undefined;
   businessCity?: string | null | undefined;
   businessCategory?: string | null | undefined;
+  latestIcpProfileId?: string | null | undefined;
+  phoneSource?: string | null | undefined;
+  businessEmail?: string | null | undefined;
   contactDiscovery?: unknown | null | undefined;
 }
 
@@ -289,6 +299,11 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 
   const protectedRoutes: FastifyPluginAsync = async (api) => {
     api.addHook('onRequest', authGuard);
+    const requireAppAdmin = async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!(await requireAppAdminAccess(request, reply))) {
+        return reply;
+      }
+    };
 
     api.post('/v1/leads', async (request, reply) => {
       const parsedRequest = CreateLeadRequestSchema.safeParse(request.body);
@@ -397,6 +412,9 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         businessCountry: lead.businessCountry ?? null,
         businessCity: lead.businessCity ?? null,
         businessCategory: lead.businessCategory ?? null,
+        latestIcpProfileId: lead.latestIcpProfileId ?? null,
+        phoneSource: lead.phoneSource ?? null,
+        businessEmail: lead.businessEmail ?? null,
         contactDiscovery: lead.contactDiscovery ?? null,
       });
     });
@@ -446,7 +464,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       return ContactRecoveryDetailResponseSchema.parse(item);
     });
 
-    api.delete('/v1/leads/:id', async (request, reply) => {
+    api.delete('/v1/leads/:id', { preHandler: requireAppAdmin }, async (request, reply) => {
       const parsedParams = z.object({ id: z.string().min(1) }).safeParse(request.params);
       if (!parsedParams.success) {
         reply.status(400);
@@ -516,7 +534,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 
       const metadataValue = parsedBody.data.metadata
         ? JSON.parse(JSON.stringify(parsedBody.data.metadata)) as Prisma.InputJsonValue
-        : PrismaClient.JsonNull;
+        : Prisma.JsonNull;
 
       const [rejection] = await prisma.$transaction([
         prisma.leadRejection.upsert({
@@ -588,7 +606,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       return ContactRecoveryDetailResponseSchema.parse(result);
     });
 
-    api.patch('/v1/leads/:id/unreject', async (request, reply) => {
+    api.patch('/v1/leads/:id/unreject', { preHandler: requireAppAdmin }, async (request, reply) => {
       const parsedParams = z.object({ id: z.string().min(1) }).safeParse(request.params);
       if (!parsedParams.success) {
         reply.status(400);
@@ -723,7 +741,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       });
     });
 
-    api.get('/v1/jobs/:id', async (request, reply) => {
+    api.get('/v1/jobs/:id', { preHandler: requireAppAdmin }, async (request, reply) => {
       const parsedParams = z.object({ id: z.string().min(1) }).safeParse(request.params);
       if (!parsedParams.success) {
         reply.status(400);

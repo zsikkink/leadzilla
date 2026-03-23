@@ -1,6 +1,23 @@
-import { prisma } from '@lead-flood/db';
 import { createLogger } from '@lead-flood/observability';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const ADMIN_USER_ID = '11111111-1111-4111-8111-111111111111';
+
+const { dbMocks } = vi.hoisted(() => ({
+  dbMocks: {
+    query: vi.fn(),
+  },
+}));
+
+vi.mock('@lead-flood/db', async () => {
+  const actual = await vi.importActual<typeof import('@lead-flood/db')>('@lead-flood/db');
+  return {
+    ...actual,
+    query: dbMocks.query,
+  };
+});
+
+import { prisma } from '@lead-flood/db';
 
 import type { ApiEnv } from '../../src/env.js';
 import { buildServer } from '../../src/server.js';
@@ -25,18 +42,19 @@ const env: ApiEnv = {
   ENRICHMENT_ENABLED: true,
 };
 
-const TEST_ADMIN_KEY = 'test-admin-key-secret';
-
 function authHeaders(): Record<string, string> {
   return { authorization: 'Bearer test-token' };
 }
 
-function adminHeaders(): Record<string, string> {
-  return { authorization: 'Bearer test-token', 'x-admin-key': TEST_ADMIN_KEY };
-}
-
 describe('qualification rules integration', () => {
   const createdIcpIds: string[] = [];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    dbMocks.query.mockResolvedValue({
+      rows: [{ isAdmin: true }],
+    });
+  });
 
   afterEach(async () => {
     if (createdIcpIds.length > 0) {
@@ -90,7 +108,7 @@ describe('qualification rules integration', () => {
     const server = buildServer({
       env,
       logger: createLogger({ service: 'api-test', env: 'test', level: 'error' }),
-      verifyAccessToken: async () => ({ sub: 'user_1', email: null, firstName: null, lastName: null }),
+      verifyAccessToken: async () => ({ sub: ADMIN_USER_ID, email: null, firstName: null, lastName: null }),
       checkDatabaseHealth: async () => true,
       checkSchemaHealth: async () => ({ status: 'ok', missingTables: [], missingEnumValues: [] }),
       authenticateUser: async () => null,
@@ -101,7 +119,6 @@ describe('qualification rules integration', () => {
       getContactRecoveryItem: async () => null,
       rejectContactRecoveryItem: async () => null,
       getJobById: async () => null,
-      adminApiKey: TEST_ADMIN_KEY,
     });
 
     const listResponse = await server.inject({
@@ -140,7 +157,7 @@ describe('qualification rules integration', () => {
     const replaceResponse = await server.inject({
       method: 'PUT',
       url: `/v1/icps/${icp.id}/rules`,
-      headers: adminHeaders(),
+      headers: authHeaders(),
       payload: {
         rules: [
           {
@@ -186,11 +203,11 @@ describe('qualification rules integration', () => {
     await server.close();
   });
 
-  it('creates and updates ICP profiles with feature lists using JWT auth only', async () => {
+  it('creates and updates ICP profiles with feature lists for authenticated app admins', async () => {
     const server = buildServer({
       env,
       logger: createLogger({ service: 'api-test', env: 'test', level: 'error' }),
-      verifyAccessToken: async () => ({ sub: 'user_1', email: null, firstName: null, lastName: null }),
+      verifyAccessToken: async () => ({ sub: ADMIN_USER_ID, email: null, firstName: null, lastName: null }),
       checkDatabaseHealth: async () => true,
       checkSchemaHealth: async () => ({ status: 'ok', missingTables: [], missingEnumValues: [] }),
       authenticateUser: async () => null,
@@ -201,7 +218,6 @@ describe('qualification rules integration', () => {
       getContactRecoveryItem: async () => null,
       rejectContactRecoveryItem: async () => null,
       getJobById: async () => null,
-      adminApiKey: TEST_ADMIN_KEY,
     });
 
     const createResponse = await server.inject({

@@ -72,6 +72,9 @@ describe('GetLeadResponseSchema', () => {
       error: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      latestIcpProfileId: 'icp_1',
+      phoneSource: 'APOLLO',
+      businessEmail: 'hello@analytical-engines.example',
       contactDiscovery: {
         cseVerifyAttempted: true,
         cseVerifySucceeded: true,
@@ -114,6 +117,9 @@ describe('GetLeadResponseSchema', () => {
     });
 
     expect(parsed.contactDiscovery?.topCandidates).toHaveLength(1);
+    expect(parsed.latestIcpProfileId).toBe('icp_1');
+    expect(parsed.phoneSource).toBe('APOLLO');
+    expect(parsed.businessEmail).toBe('hello@analytical-engines.example');
   });
 });
 

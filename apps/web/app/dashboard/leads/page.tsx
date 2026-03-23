@@ -1,10 +1,10 @@
 'use client';
 
 import type { LeadScoreBand, LeadStatus } from '@lead-flood/contracts';
-import { Eye, Loader2, MessageSquare, Phone, Undo2, X } from 'lucide-react';
+import { AlertTriangle, Eye, Loader2, MessageSquare, Phone, Undo2, X } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { CustomSelect } from '../../../src/components/custom-select.js';
@@ -14,6 +14,10 @@ import { ScoreBandBadge } from '../../../src/components/score-band-badge.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 import { getWebEnv } from '../../../src/lib/env.js';
+import {
+  getLeadDraftGenerationState,
+  parseScoreQualificationThreshold,
+} from '../../../src/lib/lead-draft-gating.js';
 import { cn } from '../../../src/lib/utils.js';
 
 const STATUS_OPTIONS = [
@@ -45,6 +49,50 @@ const PAGE_SIZE_OPTIONS = [
   { value: '40', label: '40 per page' },
   { value: '50', label: '50 per page' },
 ];
+
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function buildMessageQueueHref(leadId: string, draftId?: string | null): string {
+  const params = new URLSearchParams({ leadId });
+  if (draftId) {
+    params.set('draftId', draftId);
+  }
+  return `/dashboard/messages?${params.toString()}`;
+}
+
+function getDraftReadinessLabel(input: {
+  reason:
+    | 'missing_icp_profile'
+    | 'missing_score'
+    | 'below_threshold'
+    | 'threshold_loading'
+    | 'threshold_unavailable'
+    | 'enabled';
+  blendedScore: number | null;
+  qualificationThreshold: number | null;
+}): string {
+  switch (input.reason) {
+    case 'enabled':
+      return 'Ready to generate';
+    case 'missing_icp_profile':
+      return 'Not ready: no ICP assigned';
+    case 'missing_score':
+      return 'Not ready: no score available';
+    case 'threshold_loading':
+      return 'Not ready: loading threshold';
+    case 'threshold_unavailable':
+      return 'Not ready: threshold unavailable';
+    case 'below_threshold':
+      if (input.blendedScore !== null && input.qualificationThreshold !== null) {
+        return `Not ready: ${formatPercent(input.blendedScore)} is below ${formatPercent(input.qualificationThreshold)}`;
+      }
+      return 'Not ready: score is below threshold';
+  }
+
+  return 'Not ready';
+}
 
 // ── Extract blended score from enrichment data ──────────
 function extractBlendedScore(enrichmentData: unknown): number | null {
@@ -85,6 +133,16 @@ function extractPhone(enrichmentData: unknown): string | null {
   return null;
 }
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  if (typeof error === 'string' && error.trim().length > 0) {
+    return error;
+  }
+  return 'unknown error';
+}
+
 // ── Reason badge colors ─────────────────────────────────
 const REASON_COLORS: Record<string, string> = {
   MANUAL: 'bg-muted-foreground/15 text-muted-foreground',
@@ -119,7 +177,7 @@ interface RejectedLeadRow {
 }
 
 export default function LeadsPage() {
-  const { apiClient, token } = useAuth();
+  const { apiClient, token, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -129,10 +187,13 @@ export default function LeadsPage() {
   const [statusFilter, setStatusFilter] = useState<LeadStatus | undefined>(undefined);
   const [scoreBandFilter, setScoreBandFilter] = useState<LeadScoreBand | undefined>(undefined);
   const [qualificationThreshold, setQualificationThreshold] = useState<number | null>(null);
+  const [isQualificationThresholdLoading, setIsQualificationThresholdLoading] = useState(true);
+  const [qualificationThresholdError, setQualificationThresholdError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [generatingForLead, setGeneratingForLead] = useState<string | null>(null);
   const [rejectingLead, setRejectingLead] = useState<string | null>(null);
+  const thresholdLoadedRef = useRef(false);
 
   // Rejected leads state
   const [rejectedLeads, setRejectedLeads] = useState<RejectedLeadRow[]>([]);
@@ -145,22 +206,42 @@ export default function LeadsPage() {
     setPage(1);
   }, [searchParams]);
 
-  // Load qualification threshold from pipeline settings
-  useEffect(() => {
-    apiClient
-      .listPipelineSettings()
-      .then(({ items }) => {
-        const setting = items.find((i) => i.key === 'scoreQualificationThreshold');
-        if (setting && typeof setting.value === 'number') {
-          setQualificationThreshold(setting.value);
-        } else {
-          setQualificationThreshold(0.5); // default
-        }
-      })
-      .catch(() => {
-        setQualificationThreshold(0.5); // fallback
-      });
+  const loadQualificationThreshold = useCallback(async () => {
+    setIsQualificationThresholdLoading(true);
+    setQualificationThresholdError(null);
+
+    try {
+      const { items } = await apiClient.listPipelineSettings();
+      const value = parseScoreQualificationThreshold(items);
+
+      if (value === null) {
+        setQualificationThreshold(null);
+        setQualificationThresholdError(
+          'Score qualification threshold is missing or invalid in pipeline settings.',
+        );
+        return;
+      }
+
+      setQualificationThreshold(value);
+    } catch (error: unknown) {
+      setQualificationThreshold(null);
+      setQualificationThresholdError(
+        `Failed to load pipeline settings: ${getErrorMessage(error)}`,
+      );
+    } finally {
+      setIsQualificationThresholdLoading(false);
+    }
   }, [apiClient]);
+
+  // Load the verified qualification threshold once auth is ready.
+  useEffect(() => {
+    if (thresholdLoadedRef.current || isAuthLoading || !isAuthenticated) {
+      return;
+    }
+
+    thresholdLoadedRef.current = true;
+    void loadQualificationThreshold();
+  }, [isAuthLoading, isAuthenticated, loadQualificationThreshold]);
 
   // Debounce search query
   useEffect(() => {
@@ -261,15 +342,50 @@ export default function LeadsPage() {
   };
 
   const handleGenerateMessage = async (leadId: string, icpProfileId: string, firstName: string, scorePredictionId: string | null) => {
+    if (isQualificationThresholdLoading) {
+      toast.error('Draft generation is disabled while pipeline settings are still loading.');
+      return;
+    }
+
+    if (qualificationThresholdError || qualificationThreshold === null) {
+      toast.error('Draft generation is disabled until the score qualification threshold is available.');
+      return;
+    }
+
     setGeneratingForLead(leadId);
     try {
-      await apiClient.generateDraft({
+      const result = await apiClient.generateDraft({
         leadId,
         icpProfileId,
         ...(scorePredictionId ? { scorePredictionId } : {}),
         promptVersion: 'v2',
       });
-      toast.success(`Message draft generated for ${firstName}`);
+
+      const leadDisplayName = firstName.trim().length > 0 ? firstName.trim() : 'this lead';
+
+      switch (result.status) {
+        case 'QUEUED': {
+          toast.success(
+            `Draft generation queued for ${leadDisplayName}. Opening Message Queue for this lead.`,
+          );
+          router.push(buildMessageQueueHref(leadId));
+          break;
+        }
+        case 'CREATED': {
+          toast.success(
+            `Draft created for ${leadDisplayName}. Opening Message Queue to review it.`,
+          );
+          router.push(buildMessageQueueHref(leadId, result.draftId));
+          break;
+        }
+        case 'EXISTS': {
+          toast.info(
+            `An initial draft already exists for ${leadDisplayName}. Opening Message Queue to review it.`,
+          );
+          router.push(buildMessageQueueHref(leadId, result.draftId));
+          break;
+        }
+      }
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Failed to generate message');
     } finally {
@@ -338,6 +454,37 @@ export default function LeadsPage() {
 
           {leads.error ? (
             <p className="text-sm text-destructive">{leads.error}</p>
+          ) : null}
+
+          {isQualificationThresholdLoading ? (
+            <div className="flex items-center gap-3 rounded-xl border border-border/50 bg-card/60 px-4 py-3 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+              <p>Loading pipeline settings. Draft generation is temporarily disabled.</p>
+            </div>
+          ) : null}
+
+          {qualificationThresholdError ? (
+            <div className="flex flex-col gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />
+                <p>
+                  {qualificationThresholdError}. Draft generation is disabled until a retry succeeds.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadQualificationThreshold()}
+                disabled={isQualificationThresholdLoading}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/15 px-3 py-2 text-xs font-semibold text-red-100 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isQualificationThresholdLoading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                )}
+                Retry Load
+              </button>
+            </div>
           ) : null}
 
           {/* Table */}
@@ -441,44 +588,83 @@ export default function LeadsPage() {
                               <Eye className="h-3.5 w-3.5" />
                             </button>
                             {(() => {
-                              const isAboveThreshold = qualificationThreshold !== null
-                                && blendedScore !== null
-                                && blendedScore >= qualificationThreshold;
-                              const canGenerateDraft = lead.status === 'qualified' && isAboveThreshold;
+                              const draftGenerationState = getLeadDraftGenerationState({
+                                leadStatus: lead.status,
+                                hasIcpProfileId: Boolean(lead.latestIcpProfileId),
+                                blendedScore,
+                                qualificationThreshold,
+                                isQualificationThresholdLoading,
+                                qualificationThresholdError,
+                              });
 
-                              if (!canGenerateDraft) return null;
+                              if (draftGenerationState.kind === 'hidden') return null;
+
+                              const draftDisabled = draftGenerationState.kind !== 'enabled';
+                              const readinessLabel = getDraftReadinessLabel({
+                                reason:
+                                  draftGenerationState.kind === 'enabled'
+                                    ? 'enabled'
+                                    : draftGenerationState.reason,
+                                blendedScore,
+                                qualificationThreshold,
+                              });
+                              const draftTitle = draftDisabled
+                                ? readinessLabel
+                                : 'Generate the initial draft for this qualified lead. Sending then depends on approval or auto-approval settings.';
+                              const readinessClassName = draftDisabled
+                                ? 'text-amber-300'
+                                : 'text-zbooni-green';
 
                               return (
-                                <>
-                                  {lead.latestIcpProfileId ? (
+                                <div className="flex flex-col items-start gap-1.5">
+                                  <div className="flex items-center gap-1">
+                                    <span title={draftTitle}>
+                                      <button
+                                        type="button"
+                                        title={draftTitle}
+                                        disabled={draftDisabled || generatingForLead === lead.id}
+                                        className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-zbooni-teal/15 hover:text-zbooni-teal disabled:opacity-50"
+                                        onClick={() => {
+                                          if (!lead.latestIcpProfileId) return;
+                                          void handleGenerateMessage(
+                                            lead.id,
+                                            lead.latestIcpProfileId,
+                                            lead.firstName ?? '',
+                                            lead.latestScorePredictionId ?? null,
+                                          );
+                                        }}
+                                      >
+                                        {generatingForLead === lead.id ? (
+                                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        ) : (
+                                          <MessageSquare className="h-3.5 w-3.5" />
+                                        )}
+                                      </button>
+                                    </span>
                                     <button
                                       type="button"
-                                      title="Generate the initial draft for this qualified lead. Sending then depends on approval or auto-approval settings."
-                                      disabled={generatingForLead === lead.id}
-                                      className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-zbooni-teal/15 hover:text-zbooni-teal disabled:opacity-50"
-                                      onClick={() => handleGenerateMessage(lead.id, lead.latestIcpProfileId!, lead.firstName ?? '', lead.latestScorePredictionId ?? null)}
+                                      title="Reject lead"
+                                      disabled={rejectingLead === lead.id}
+                                      className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-red-500/15 hover:text-red-400 disabled:opacity-50"
+                                      onClick={() => handleReject(lead.id, lead.firstName ?? '', lead.lastName ?? '')}
                                     >
-                                      {generatingForLead === lead.id ? (
+                                      {rejectingLead === lead.id ? (
                                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                       ) : (
-                                        <MessageSquare className="h-3.5 w-3.5" />
+                                        <X className="h-3.5 w-3.5" />
                                       )}
                                     </button>
-                                  ) : null}
-                                  <button
-                                    type="button"
-                                    title="Reject lead"
-                                    disabled={rejectingLead === lead.id}
-                                    className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-red-500/15 hover:text-red-400 disabled:opacity-50"
-                                    onClick={() => handleReject(lead.id, lead.firstName ?? '', lead.lastName ?? '')}
-                                  >
-                                    {rejectingLead === lead.id ? (
-                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                    ) : (
-                                      <X className="h-3.5 w-3.5" />
+                                  </div>
+                                  <p
+                                    className={cn(
+                                      'max-w-[220px] text-[11px] leading-snug',
+                                      readinessClassName,
                                     )}
-                                  </button>
-                                </>
+                                    title={draftTitle}
+                                  >
+                                    {readinessLabel}
+                                  </p>
+                                </div>
                               );
                             })()}
                           </div>

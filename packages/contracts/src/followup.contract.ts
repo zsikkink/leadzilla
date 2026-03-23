@@ -49,6 +49,5 @@ export const FollowUpGenerateFieldsSchema = z.object({
   followUpNumber: z.number().int().min(0).max(3).optional(),
   parentMessageSendId: z.string().optional(),
   previouslyPitchedFeatures: z.array(z.string()).optional(),
-  autoApprove: z.boolean().optional(),
 });
 export type FollowUpGenerateFields = z.infer<typeof FollowUpGenerateFieldsSchema>;

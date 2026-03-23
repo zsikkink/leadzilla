@@ -1,6 +1,23 @@
-import { prisma } from '@lead-flood/db';
 import { createLogger } from '@lead-flood/observability';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const ADMIN_USER_ID = '11111111-1111-4111-8111-111111111111';
+
+const { dbMocks } = vi.hoisted(() => ({
+  dbMocks: {
+    query: vi.fn(),
+  },
+}));
+
+vi.mock('@lead-flood/db', async () => {
+  const actual = await vi.importActual<typeof import('@lead-flood/db')>('@lead-flood/db');
+  return {
+    ...actual,
+    query: dbMocks.query,
+  };
+});
+
+import { prisma } from '@lead-flood/db';
 
 import type { ApiEnv } from '../../src/env.js';
 import { buildServer } from '../../src/server.js';
@@ -64,6 +81,10 @@ describe('inspection endpoints integration', () => {
   });
 
   it('returns discovery, enrichment, leads, and debug inspection data', async () => {
+    dbMocks.query.mockResolvedValue({
+      rows: [{ isAdmin: true }],
+    });
+
     const icp = await prisma.icpProfile.create({
       data: {
         name: `Inspection ICP ${Date.now()}`,
@@ -216,7 +237,7 @@ describe('inspection endpoints integration', () => {
     const server = buildServer({
       env,
       logger: createLogger({ service: 'api-test', env: 'test', level: 'error' }),
-      verifyAccessToken: async () => ({ sub: 'user_1', email: null, firstName: null, lastName: null }),
+      verifyAccessToken: async () => ({ sub: ADMIN_USER_ID, email: null, firstName: null, lastName: null }),
       checkDatabaseHealth: async () => true,
       checkSchemaHealth: async () => ({ status: 'ok', missingTables: [], missingEnumValues: [] }),
       authenticateUser: async () => null,

@@ -18,12 +18,6 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @lead-flood/db prisma:generate
 RUN pnpm --filter @lead-flood/api... build
 RUN pnpm --filter @lead-flood/api deploy --legacy --prod /opt/deploy
-RUN deploy_prisma_default=$(find /opt/deploy/node_modules/.pnpm -path '*/node_modules/@prisma/client/default.js' -print -quit) \
-  && src_prisma_default=$(find node_modules/.pnpm -path '*/node_modules/.prisma/client/default.js' -print -quit) \
-  && deploy_node_modules_dir=$(dirname "$(dirname "$(dirname "$deploy_prisma_default")")") \
-  && src_prisma_dir=$(dirname "$(dirname "$src_prisma_default")") \
-  && mkdir -p "$deploy_node_modules_dir/.prisma" \
-  && cp -R "$src_prisma_dir"/. "$deploy_node_modules_dir/.prisma/"
 
 FROM node:22-slim AS runtime
 

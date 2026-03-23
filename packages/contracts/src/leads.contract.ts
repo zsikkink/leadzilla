@@ -102,6 +102,9 @@ export const GetLeadResponseSchema = z.object({
   businessCountry: z.string().nullable().optional(),
   businessCity: z.string().nullable().optional(),
   businessCategory: z.string().nullable().optional(),
+  latestIcpProfileId: z.string().nullable().optional(),
+  phoneSource: z.string().nullable().optional(),
+  businessEmail: z.string().nullable().optional(),
   contactDiscovery: LeadContactDiscoverySchema.nullable().optional(),
 });
 

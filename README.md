@@ -67,6 +67,13 @@ pnpm dev
 - API health: `http://localhost:5050/health`
 - API ready: `http://localhost:5050/ready`
 
+## Deployment Topology
+
+- Web app: Vercel
+- API: Railway
+- Worker: Railway
+- Database/Auth: Supabase
+
 ## Discovery Pipeline
 
 The discovery system uses Google Places to find businesses matching your Ideal Customer Profile (ICP). The pipeline runs as background jobs through pg-boss:

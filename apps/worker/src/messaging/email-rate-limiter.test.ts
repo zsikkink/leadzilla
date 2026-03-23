@@ -31,7 +31,7 @@ describe('EmailRateLimiter', () => {
       valueJson: '2026-03-01T00:00:00.000Z',
     });
 
-    const result = await EmailRateLimiter.loadWarmupStartDate({} as never);
+    const result = await EmailRateLimiter.loadWarmupStartDate();
 
     expect(dbMock.getPipelineSetting).toHaveBeenCalledWith('email_warmup_start_date');
     expect(result.toISOString()).toBe('2026-03-01T00:00:00.000Z');
@@ -40,7 +40,7 @@ describe('EmailRateLimiter', () => {
   it('falls back to now when the warmup setting lookup fails', async () => {
     dbMock.getPipelineSetting.mockRejectedValue(new Error('db unavailable'));
 
-    const result = await EmailRateLimiter.loadWarmupStartDate({} as never);
+    const result = await EmailRateLimiter.loadWarmupStartDate();
 
     expect(result.toISOString()).toBe('2026-03-14T12:00:00.000Z');
   });
@@ -54,7 +54,7 @@ describe('EmailRateLimiter', () => {
       .mockResolvedValueOnce({ rows: [{ count: 10 }] })
       .mockResolvedValueOnce({ rows: [{ count: 1 }] });
 
-    const limiter = new EmailRateLimiter({} as never);
+    const limiter = new EmailRateLimiter();
 
     await expect(limiter.computeDailyLimit()).resolves.toEqual({
       limit: 5,
@@ -73,7 +73,7 @@ describe('EmailRateLimiter', () => {
       .mockResolvedValueOnce({ rows: [{ count: 1 }] })
       .mockResolvedValueOnce({ rows: [{ count: 5 }] });
 
-    const limiter = new EmailRateLimiter({} as never);
+    const limiter = new EmailRateLimiter();
 
     await expect(limiter.canSend()).resolves.toEqual({
       allowed: false,

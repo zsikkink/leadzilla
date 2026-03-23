@@ -39,7 +39,6 @@ import {
 import { cn } from '../../../src/lib/utils.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
-import { getSupabaseBrowserClient } from '../../../src/lib/supabase-client.js';
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -68,7 +67,7 @@ interface DailyQualityRow {
 interface RecoverySummary {
   totalCandidates: number;
   openCount: number;
-  resolvedCount: number;
+  rejectedCount: number;
 }
 
 interface FollowUpSummary {
@@ -454,25 +453,59 @@ function IcpPerformanceTable({
 // ── Supabase data hooks ──────────────────────────────────────────────────
 
 function useLeadStatusCounts(): { data: LeadStatusRow[] | null; isLoading: boolean } {
+  const { apiClient, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [data, setData] = useState<LeadStatusRow[] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
 
+    if (isAuthLoading) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!isAuthenticated) {
+      setData(null);
+      setIsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsLoading(true);
+
     async function fetchData() {
       try {
-        const supabase = getSupabaseBrowserClient();
-        const { data: rows } = await supabase
-          .from('Lead')
-          .select('status');
-
-        if (cancelled || !rows) return;
-
         const counts = new Map<string, number>();
-        for (const r of rows as Array<{ status: string }>) {
-          counts.set(r.status, (counts.get(r.status) ?? 0) + 1);
-        }
+        let page = 1;
+        let fetched = 0;
+        let total = 0;
+
+        do {
+          const response = await apiClient.listLeads({
+            page,
+            pageSize: 100,
+            includeRejected: true,
+            includeQualityMetrics: false,
+          });
+
+          if (cancelled) return;
+
+          for (const item of response.items) {
+            counts.set(item.status, (counts.get(item.status) ?? 0) + 1);
+          }
+
+          fetched += response.items.length;
+          total = response.total;
+
+          if (response.items.length < response.pageSize) {
+            break;
+          }
+
+          page += 1;
+        } while (fetched < total);
 
         setData(
           Array.from(counts.entries()).map(([status, count]) => ({ status, count })),
@@ -488,99 +521,39 @@ function useLeadStatusCounts(): { data: LeadStatusRow[] | null; isLoading: boole
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [apiClient, isAuthenticated, isAuthLoading]);
 
   return { data, isLoading };
 }
 
 function useIcpPerformance(): { data: IcpLeadRow[] | null; isLoading: boolean } {
+  const { apiClient, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [data, setData] = useState<IcpLeadRow[] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
 
+    if (isAuthLoading) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!isAuthenticated) {
+      setData(null);
+      setIsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsLoading(true);
+
     async function fetchData() {
       try {
-        const supabase = getSupabaseBrowserClient();
-
-        // Get all score predictions grouped by ICP
-        const { data: predictions } = await supabase
-          .from('LeadScorePrediction')
-          .select('leadId, icpProfileId, blendedScore');
-
-        // Get all rejections
-        const { data: rejections } = await supabase
-          .from('lead_rejections')
-          .select('icpProfileId');
-
-        // Get lead statuses to accurately count qualified leads
-        const { data: leadRecords } = await supabase
-          .from('Lead')
-          .select('id, status')
-          .is('deletedAt', null);
-
-        if (cancelled) return;
-
-        const leadStatusMap = new Map<string, string>();
-        if (leadRecords) {
-          for (const l of leadRecords as Array<{ id: string; status: string }>) {
-            leadStatusMap.set(l.id, l.status);
-          }
-        }
-
-        const QUALIFIED_STATUSES = new Set(['qualified', 'drafted', 'messaged', 'replied', 'cold']);
-
-        // Group predictions by ICP
-        const icpMap = new Map<
-          string,
-          { scores: number[]; leadIds: Set<string> }
-        >();
-
-        if (predictions) {
-          for (const p of predictions as Array<{
-            leadId: string;
-            icpProfileId: string;
-            blendedScore: number;
-          }>) {
-            let entry = icpMap.get(p.icpProfileId);
-            if (!entry) {
-              entry = { scores: [], leadIds: new Set() };
-              icpMap.set(p.icpProfileId, entry);
-            }
-            entry.scores.push(p.blendedScore);
-            entry.leadIds.add(p.leadId);
-          }
-        }
-
-        // Count rejections per ICP
-        const rejPerIcp = new Map<string, number>();
-        if (rejections) {
-          for (const r of rejections as Array<{ icpProfileId: string | null }>) {
-            if (r.icpProfileId) {
-              rejPerIcp.set(r.icpProfileId, (rejPerIcp.get(r.icpProfileId) ?? 0) + 1);
-            }
-          }
-        }
-
-        const rows: IcpLeadRow[] = Array.from(icpMap.entries()).map(
-          ([icpProfileId, { scores, leadIds }]) => {
-            const avgScore =
-              scores.length > 0
-                ? scores.reduce((a, b) => a + b, 0) / scores.length
-                : null;
-            return {
-              icpProfileId,
-              leadCount: leadIds.size,
-              avgScore,
-              qualifiedCount: Array.from(leadIds).filter(id => QUALIFIED_STATUSES.has(leadStatusMap.get(id) ?? '')).length,
-              rejectedCount: rejPerIcp.get(icpProfileId) ?? 0,
-            };
-          },
-        );
-
-        rows.sort((a, b) => b.leadCount - a.leadCount);
-        if (!cancelled) setData(rows);
+        const result = await apiClient.getIcpPerformance();
+        if (!cancelled) setData(result.items);
       } catch {
         // leave null
       } finally {
@@ -592,7 +565,7 @@ function useIcpPerformance(): { data: IcpLeadRow[] | null; isLoading: boolean } 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [apiClient, isAuthenticated, isAuthLoading]);
 
   return { data, isLoading };
 }
@@ -601,84 +574,38 @@ function useDailyQualityTrends(days: number): {
   data: DailyQualityRow[] | null;
   isLoading: boolean;
 } {
+  const { apiClient, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [data, setData] = useState<DailyQualityRow[] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
 
+    if (isAuthLoading) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!isAuthenticated) {
+      setData(null);
+      setIsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsLoading(true);
+
     async function fetchData() {
       try {
-        const supabase = getSupabaseBrowserClient();
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - days);
+        const result = await apiClient.getDailyQualityTrends({
+          from: cutoff.toISOString(),
+        });
 
-        // Fetch leads created in window
-        const { data: leads } = await supabase
-          .from('Lead')
-          .select('id, status, createdAt')
-          .gte('createdAt', cutoff.toISOString());
-
-        // Fetch scores for those leads
-        const { data: scores } = await supabase
-          .from('LeadScorePrediction')
-          .select('leadId, blendedScore, predictedAt')
-          .gte('predictedAt', cutoff.toISOString());
-
-        if (cancelled) return;
-
-        // Group by day
-        const dayMap = new Map<
-          string,
-          { scores: number[]; created: number; rejected: number }
-        >();
-
-        if (leads) {
-          for (const l of leads as Array<{
-            id: string;
-            status: string;
-            createdAt: string;
-          }>) {
-            const day = l.createdAt.slice(0, 10);
-            let entry = dayMap.get(day);
-            if (!entry) {
-              entry = { scores: [], created: 0, rejected: 0 };
-              dayMap.set(day, entry);
-            }
-            entry.created++;
-            if (l.status === 'rejected') entry.rejected++;
-          }
-        }
-
-        if (scores) {
-          for (const s of scores as Array<{
-            leadId: string;
-            blendedScore: number;
-            predictedAt: string;
-          }>) {
-            const day = s.predictedAt.slice(0, 10);
-            let entry = dayMap.get(day);
-            if (!entry) {
-              entry = { scores: [], created: 0, rejected: 0 };
-              dayMap.set(day, entry);
-            }
-            entry.scores.push(s.blendedScore);
-          }
-        }
-
-        const rows: DailyQualityRow[] = Array.from(dayMap.entries())
-          .map(([day, entry]) => ({
-            day,
-            avgScore:
-              entry.scores.length > 0
-                ? entry.scores.reduce((a, b) => a + b, 0) / entry.scores.length
-                : 0,
-            totalCreated: entry.created,
-            rejectedCount: entry.rejected,
-          }))
-          .sort((a, b) => a.day.localeCompare(b.day));
-
-        if (!cancelled) setData(rows);
+        if (!cancelled) setData(result.items);
       } catch {
         // leave null
       } finally {
@@ -690,38 +617,57 @@ function useDailyQualityTrends(days: number): {
     return () => {
       cancelled = true;
     };
-  }, [days]);
+  }, [apiClient, days, isAuthenticated, isAuthLoading]);
 
   return { data, isLoading };
 }
 
-function useRecoverySummary(): { data: RecoverySummary | null; isLoading: boolean } {
+function useRecoverySummary(dateFilter: { from?: string; to?: string }): {
+  data: RecoverySummary | null;
+  isLoading: boolean;
+} {
+  const { apiClient, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [data, setData] = useState<RecoverySummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
 
+    if (isAuthLoading) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!isAuthenticated) {
+      setData(null);
+      setIsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsLoading(true);
+
     async function fetchData() {
       try {
-        const supabase = getSupabaseBrowserClient();
-        const { data: items } = await supabase
-          .from('contact_recovery_items')
-          .select('status');
+        const query = {
+          page: 1,
+          pageSize: 1,
+          ...dateFilter,
+        };
+        const [allItems, openItems, rejectedItems] = await Promise.all([
+          apiClient.listContactRecoveryItems(query),
+          apiClient.listContactRecoveryItems({ ...query, status: 'OPEN' }),
+          apiClient.listContactRecoveryItems({ ...query, status: 'REJECTED' }),
+        ]);
 
-        if (cancelled || !items) return;
-
-        let open = 0;
-        let resolved = 0;
-        for (const item of items as Array<{ status: string }>) {
-          if (item.status === 'OPEN') open++;
-          else if (item.status === 'RESOLVED') resolved++;
-        }
+        if (cancelled) return;
 
         setData({
-          totalCandidates: items.length,
-          openCount: open,
-          resolvedCount: resolved,
+          totalCandidates: allItems.total,
+          openCount: openItems.total,
+          rejectedCount: rejectedItems.total,
         });
       } catch {
         // leave null
@@ -734,30 +680,47 @@ function useRecoverySummary(): { data: RecoverySummary | null; isLoading: boolea
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [apiClient, dateFilter, isAuthenticated, isAuthLoading]);
 
   return { data, isLoading };
 }
 
 function useFollowUpSummary(): { data: FollowUpSummary | null; isLoading: boolean } {
+  const { apiClient, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [data, setData] = useState<FollowUpSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
 
+    if (isAuthLoading) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!isAuthenticated) {
+      setData(null);
+      setIsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsLoading(true);
+
     async function fetchData() {
       try {
-        const supabase = getSupabaseBrowserClient();
-        const { data: drafts, count } = await supabase
-          .from('MessageDraft')
-          .select('id', { count: 'exact' })
-          .gt('followUpNumber', 0);
+        const result = await apiClient.listDrafts({
+          followUpOnly: true,
+          page: 1,
+          pageSize: 1,
+        });
 
         if (cancelled) return;
 
         setData({
-          totalFollowUps: count ?? (drafts?.length ?? 0),
+          totalFollowUps: result.total,
         });
       } catch {
         // leave null
@@ -770,83 +733,42 @@ function useFollowUpSummary(): { data: FollowUpSummary | null; isLoading: boolea
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  return { data, isLoading };
-}
-
-function useCostData(): {
-  data: { totalCostCents: number; leadCount: number } | null;
-  isLoading: boolean;
-} {
-  const [data, setData] = useState<{
-    totalCostCents: number;
-    leadCount: number;
-  } | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function fetchData() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-
-        const [costResult, leadResult] = await Promise.all([
-          supabase.from('discovery_cost_events').select('costCents'),
-          supabase.from('Lead').select('id', { count: 'exact' }),
-        ]);
-
-        if (cancelled) return;
-
-        const totalCostCents = (costResult.data ?? []).reduce(
-          (sum: number, r: { costCents: number }) => sum + (r.costCents ?? 0),
-          0,
-        );
-
-        setData({
-          totalCostCents,
-          leadCount: leadResult.count ?? (leadResult.data?.length ?? 0),
-        });
-      } catch {
-        // leave null
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    }
-
-    void fetchData();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }, [apiClient, isAuthenticated, isAuthLoading]);
 
   return { data, isLoading };
 }
 
 function useAvgScore(): { data: number | null; isLoading: boolean } {
+  const { apiClient, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [data, setData] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
 
+    if (isAuthLoading) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!isAuthenticated) {
+      setData(null);
+      setIsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsLoading(true);
+
     async function fetchData() {
       try {
-        const supabase = getSupabaseBrowserClient();
-        const { data: scores } = await supabase
-          .from('LeadScorePrediction')
-          .select('blendedScore');
+        const result = await apiClient.getAvgScore();
 
-        if (cancelled || !scores || scores.length === 0) return;
-
-        const avg =
-          (scores as Array<{ blendedScore: number }>).reduce(
-            (sum, s) => sum + s.blendedScore,
-            0,
-          ) / scores.length;
-
-        setData(avg);
+        if (!cancelled) {
+          setData(result.avgScore);
+        }
       } catch {
         // leave null
       } finally {
@@ -858,7 +780,7 @@ function useAvgScore(): { data: number | null; isLoading: boolean } {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [apiClient, isAuthenticated, isAuthLoading]);
 
   return { data, isLoading };
 }
@@ -927,9 +849,8 @@ export default function AnalyticsPage() {
   const leadStatuses = useLeadStatusCounts();
   const icpPerformance = useIcpPerformance();
   const qualityTrends = useDailyQualityTrends(30);
-  const recoverySummary = useRecoverySummary();
+  const recoverySummary = useRecoverySummary(dateFilter);
   const followUpSummary = useFollowUpSummary();
-  const costData = useCostData();
   const avgScore = useAvgScore();
 
   // ── Derived values ─────────────────────────────────────
@@ -997,11 +918,12 @@ export default function AnalyticsPage() {
       ? Math.round((qualifiedFromFunnel / discoveredCount) * 100)
       : 0;
 
+  const totalCostCents = funnel.data?.totalCostCents ?? null;
   const costPerLead = useMemo(() => {
-    if (!costData.data) return null;
-    if (costData.data.leadCount === 0) return 0;
-    return costData.data.totalCostCents / costData.data.leadCount / 100;
-  }, [costData.data]);
+    if (totalCostCents === null) return null;
+    if (discoveredCount === 0) return 0;
+    return totalCostCents / discoveredCount / 100;
+  }, [discoveredCount, totalCostCents]);
 
   const distributionMax = Math.max(
     ...(scoreDistribution.data?.bands.map((b) => b.count) ?? [0]),
@@ -1060,8 +982,8 @@ export default function AnalyticsPage() {
           label="Cost per Lead"
           value={costPerLead !== null ? `$${costPerLead.toFixed(2)}` : '--'}
           sub={
-            costData.data
-              ? `$${(costData.data.totalCostCents / 100).toFixed(2)} total`
+            totalCostCents !== null
+              ? `$${(totalCostCents / 100).toFixed(2)} total`
               : undefined
           }
           icon={DollarSign}
@@ -1179,7 +1101,7 @@ export default function AnalyticsPage() {
           </p>
           <p className="relative mt-0.5 text-[11px] text-muted-foreground/40">
             {recoverySummary.data
-              ? `${recoverySummary.data.openCount} open, ${recoverySummary.data.resolvedCount} resolved`
+              ? `${recoverySummary.data.openCount} open, ${recoverySummary.data.rejectedCount} rejected`
               : 'Loading...'}
           </p>
         </div>

@@ -32,6 +32,7 @@ import {
   DEFAULT_MESSAGING_ROLE,
   DEFAULT_MESSAGING_SYSTEM_PROMPT,
 } from '../../src/lib/messaging-defaults.js';
+import { buildPipelineSettingsSavePlan } from '../../src/lib/pipeline-settings-save-plan.js';
 import { cn } from '../../src/lib/utils.js';
 
 // ── Setting types ──────────────────────────────────────────────────────
@@ -510,10 +511,6 @@ const ADDITIONAL_SETTING_LABELS: Record<string, string> = {
   messagingInstructions: 'Messaging Instructions',
 };
 
-function getSettingDisplayLabel(key: string): string {
-  return PIPELINE_SETTING_LABELS[key] ?? ADDITIONAL_SETTING_LABELS[key] ?? key;
-}
-
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
@@ -527,7 +524,7 @@ function getErrorMessage(error: unknown): string {
 // ── Main page ──────────────────────────────────────────────────────────
 
 export default function ControlsSettingsPage() {
-  const { apiClient } = useAuth();
+  const { apiClient, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [settings, setSettings] = useState<SettingsState>(getDefaultSettings);
   const [autoApproveEnabled, setAutoApproveEnabled] = useState(false);
   const [autoApproveScoreMin, setAutoApproveScoreMin] = useState(0.5);
@@ -538,61 +535,98 @@ export default function ControlsSettingsPage() {
   const [hasChanges, setHasChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingSettings, setIsLoadingSettings] = useState(true);
+  const [settingsLoadError, setSettingsLoadError] = useState<string | null>(null);
   const loadedRef = useRef(false);
+  const loadedSettingsRef = useRef<Record<string, unknown> | null>(null);
 
-  // Load all settings from API on mount
-  useEffect(() => {
-    if (loadedRef.current) return;
-    loadedRef.current = true;
+  const loadSettings = useCallback(async () => {
+    setIsLoadingSettings(true);
+    setSettingsLoadError(null);
 
-    apiClient
-      .listPipelineSettings()
-      .then(({ items }) => {
-        const newSettings = { ...getDefaultSettings() };
-        for (const item of items) {
-          if (item.key === 'auto_approve_enabled') {
-            setAutoApproveEnabled(item.value === true || item.value === 'true');
-          } else if (item.key === 'auto_approve_score_min') {
-            const n = Number(item.value);
-            if (!Number.isNaN(n)) setAutoApproveScoreMin(n);
-          } else if (item.key === 'auto_approve_score_max') {
-            const n = Number(item.value);
-            if (!Number.isNaN(n)) setAutoApproveScoreMax(n);
-          } else if (item.key === 'messagingRole') {
-            setMessagingRole(String(item.value ?? ''));
-          } else if (item.key === 'messagingSystemPrompt') {
-            setMessagingSystemPrompt(String(item.value ?? ''));
-          } else if (item.key === 'messagingInstructions') {
-            setMessagingInstructions(String(item.value ?? ''));
-          } else if (item.key === 'scoreTierBands') {
-            const val = item.value as {
-              low?: number | undefined;
-              med?: number | undefined;
-              high?: number | undefined;
-            } | null;
-            if (val && typeof val === 'object') {
-              newSettings.scoreTierBands = {
-                low: val.low ?? 0.34,
-                med: val.med ?? 0.67,
-                high: val.high ?? 0.67,
-              };
-            }
-          } else if (NUMERIC_SETTING_KEYS.has(item.key)) {
-            const num = Number(item.value);
-            if (!Number.isNaN(num)) {
-              (newSettings as Record<string, unknown>)[item.key] = num;
-            }
+    try {
+      const { items } = await apiClient.listPipelineSettings();
+      const newSettings = { ...getDefaultSettings() };
+      let nextAutoApproveEnabled = false;
+      let nextAutoApproveScoreMin = 0.5;
+      let nextAutoApproveScoreMax = 1.0;
+      let nextMessagingRole = '';
+      let nextMessagingSystemPrompt = '';
+      let nextMessagingInstructions = '';
+
+      for (const item of items) {
+        if (item.key === 'auto_approve_enabled') {
+          nextAutoApproveEnabled = item.value === true || item.value === 'true';
+        } else if (item.key === 'auto_approve_score_min') {
+          const value = Number(item.value);
+          if (!Number.isNaN(value)) {
+            nextAutoApproveScoreMin = value;
+          }
+        } else if (item.key === 'auto_approve_score_max') {
+          const value = Number(item.value);
+          if (!Number.isNaN(value)) {
+            nextAutoApproveScoreMax = value;
+          }
+        } else if (item.key === 'messagingRole') {
+          nextMessagingRole = String(item.value ?? '');
+        } else if (item.key === 'messagingSystemPrompt') {
+          nextMessagingSystemPrompt = String(item.value ?? '');
+        } else if (item.key === 'messagingInstructions') {
+          nextMessagingInstructions = String(item.value ?? '');
+        } else if (item.key === 'scoreTierBands') {
+          const val = item.value as {
+            low?: number | undefined;
+            med?: number | undefined;
+            high?: number | undefined;
+          } | null;
+          if (val && typeof val === 'object') {
+            newSettings.scoreTierBands = {
+              low: val.low ?? 0.34,
+              med: val.med ?? 0.67,
+              high: val.high ?? 0.67,
+            };
+          }
+        } else if (NUMERIC_SETTING_KEYS.has(item.key)) {
+          const num = Number(item.value);
+          if (!Number.isNaN(num)) {
+            (newSettings as Record<string, unknown>)[item.key] = num;
           }
         }
-        setSettings(newSettings);
-      })
-      .catch(() => {
-        // Use defaults if API fails
-      })
-      .finally(() => {
-        setIsLoadingSettings(false);
-      });
+      }
+
+      setSettings(newSettings);
+      setAutoApproveEnabled(nextAutoApproveEnabled);
+      setAutoApproveScoreMin(nextAutoApproveScoreMin);
+      setAutoApproveScoreMax(nextAutoApproveScoreMax);
+      setMessagingRole(nextMessagingRole);
+      setMessagingSystemPrompt(nextMessagingSystemPrompt);
+      setMessagingInstructions(nextMessagingInstructions);
+      setHasChanges(false);
+      loadedSettingsRef.current = {
+        ...newSettings,
+        auto_approve_enabled: nextAutoApproveEnabled,
+        auto_approve_score_min: nextAutoApproveScoreMin,
+        auto_approve_score_max: nextAutoApproveScoreMax,
+        messagingRole: nextMessagingRole,
+        messagingSystemPrompt: nextMessagingSystemPrompt,
+        messagingInstructions: nextMessagingInstructions,
+      };
+    } catch (error: unknown) {
+      loadedSettingsRef.current = null;
+      setSettingsLoadError(getErrorMessage(error));
+    } finally {
+      setIsLoadingSettings(false);
+    }
   }, [apiClient]);
+
+  // Load all settings from API on mount once auth is ready
+  useEffect(() => {
+    if (loadedRef.current || isAuthLoading || !isAuthenticated) {
+      return;
+    }
+
+    loadedRef.current = true;
+    void loadSettings();
+  }, [isAuthLoading, isAuthenticated, loadSettings]);
 
   // Real data queries for status cards
   const stats = useApiQuery(
@@ -614,34 +648,81 @@ export default function ControlsSettingsPage() {
   );
 
   const handleSave = useCallback(async () => {
+    if (autoApproveScoreMin > autoApproveScoreMax) {
+      toast.error('Auto-approve min score must be less than or equal to the max score.');
+      return;
+    }
+
+    const currentSettings = loadedSettingsRef.current;
+    if (!currentSettings) {
+      toast.error('Saved settings are unavailable. Retry loading before saving changes.');
+      return;
+    }
+
+    const nextSettings = {
+      ...settings,
+      auto_approve_enabled: autoApproveEnabled,
+      auto_approve_score_min: autoApproveScoreMin,
+      auto_approve_score_max: autoApproveScoreMax,
+      messagingRole,
+      messagingSystemPrompt,
+      messagingInstructions,
+    };
+
+    const saveTargets = buildPipelineSettingsSavePlan({
+      currentValues: currentSettings,
+      nextValues: nextSettings,
+      labels: {
+        ...PIPELINE_SETTING_LABELS,
+        ...ADDITIONAL_SETTING_LABELS,
+      },
+    });
+
+    if (saveTargets.length === 0) {
+      setHasChanges(false);
+      return;
+    }
+
     setIsSaving(true);
-    const saveTargets = [
-      ...(Object.entries(settings) as [string, unknown][]).map(([key, value]) => ({
-        key,
-        value,
-        label: getSettingDisplayLabel(key),
-      })),
-      { key: 'auto_approve_enabled', value: autoApproveEnabled, label: getSettingDisplayLabel('auto_approve_enabled') },
-      { key: 'auto_approve_score_min', value: autoApproveScoreMin, label: getSettingDisplayLabel('auto_approve_score_min') },
-      { key: 'auto_approve_score_max', value: autoApproveScoreMax, label: getSettingDisplayLabel('auto_approve_score_max') },
-      { key: 'messagingRole', value: messagingRole, label: getSettingDisplayLabel('messagingRole') },
-      { key: 'messagingSystemPrompt', value: messagingSystemPrompt, label: getSettingDisplayLabel('messagingSystemPrompt') },
-      { key: 'messagingInstructions', value: messagingInstructions, label: getSettingDisplayLabel('messagingInstructions') },
-    ];
+    const results: Array<
+      | { key: string; value: unknown; label: string; success: true }
+      | { key: string; value: unknown; label: string; success: false; errorMessage: string }
+    > = [];
 
-    const results = await Promise.all(
-      saveTargets.map(async (target) => {
-        try {
-          await apiClient.updatePipelineSetting(target.key, target.value);
-          return { ...target, success: true as const };
-        } catch (error: unknown) {
-          return { ...target, success: false as const, errorMessage: getErrorMessage(error) };
-        }
-      }),
+    for (const target of saveTargets) {
+      try {
+        await apiClient.updatePipelineSetting(target.key, target.value);
+        results.push({ ...target, success: true });
+      } catch (error: unknown) {
+        results.push({
+          ...target,
+          success: false,
+          errorMessage: getErrorMessage(error),
+        });
+      }
+    }
+
+    const successfulTargets = results.filter(
+      (result): result is { key: string; value: unknown; label: string; success: true } =>
+        result.success,
     );
+    if (successfulTargets.length > 0) {
+      loadedSettingsRef.current = {
+        ...currentSettings,
+        ...Object.fromEntries(successfulTargets.map((result) => [result.key, result.value])),
+      };
+    }
 
-    const failedSaves = results.filter((result) => !result.success);
-    const successfulSaveCount = results.length - failedSaves.length;
+    const failedSaves = results.filter(
+      (result): result is {
+        key: string;
+        value: unknown;
+        label: string;
+        success: false;
+        errorMessage: string;
+      } => !result.success,
+    );
+    const successfulSaveCount = successfulTargets.length;
 
     if (failedSaves.length === 0) {
       toast.success(`Saved ${successfulSaveCount} settings.`);
@@ -661,7 +742,16 @@ export default function ControlsSettingsPage() {
     }
     setHasChanges(true);
     setIsSaving(false);
-  }, [apiClient, settings, autoApproveEnabled, autoApproveScoreMin, autoApproveScoreMax, messagingRole, messagingSystemPrompt, messagingInstructions]);
+  }, [
+    apiClient,
+    autoApproveEnabled,
+    autoApproveScoreMax,
+    autoApproveScoreMin,
+    messagingInstructions,
+    messagingRole,
+    messagingSystemPrompt,
+    settings,
+  ]);
 
   const handleReset = useCallback(() => {
     setSettings(getDefaultSettings());
@@ -674,6 +764,10 @@ export default function ControlsSettingsPage() {
     setHasChanges(true);
     toast.info('Settings reset to defaults — click Save to persist');
   }, []);
+
+  const saveDisabled =
+    !hasChanges || isSaving || isLoadingSettings || settingsLoadError !== null;
+  const resetDisabled = isLoadingSettings || settingsLoadError !== null;
 
   return (
     <div className="space-y-6">
@@ -689,7 +783,13 @@ export default function ControlsSettingsPage() {
           <button
             type="button"
             onClick={handleReset}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3.5 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
+            disabled={resetDisabled}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-colors',
+              resetDisabled
+                ? 'cursor-not-allowed bg-muted/10 text-muted-foreground/40'
+                : 'bg-muted/20 text-muted-foreground hover:bg-muted/40',
+            )}
           >
             <RotateCcw className="h-3.5 w-3.5" />
             Reset Defaults
@@ -697,12 +797,12 @@ export default function ControlsSettingsPage() {
           <button
             type="button"
             onClick={handleSave}
-            disabled={!hasChanges || isSaving}
+            disabled={saveDisabled}
             className={cn(
               'inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold transition-all',
-              hasChanges && !isSaving
+              !saveDisabled
                 ? 'bg-zbooni-teal/20 text-zbooni-teal hover:bg-zbooni-teal/30'
-                : 'bg-muted/20 text-muted-foreground/60 cursor-not-allowed',
+                : 'cursor-not-allowed bg-muted/20 text-muted-foreground/60',
             )}
           >
             {isSaving ? (
@@ -714,6 +814,32 @@ export default function ControlsSettingsPage() {
           </button>
         </div>
       </div>
+
+      {settingsLoadError ? (
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-semibold text-red-300">Saved settings failed to load</p>
+              <p className="mt-1 text-red-100/80">
+                {settingsLoadError}. The values on this page may be defaults, so saving is disabled until a retry succeeds.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadSettings()}
+              disabled={isLoadingSettings}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/15 px-3 py-2 text-xs font-semibold text-red-100 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isLoadingSettings ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RotateCcw className="h-3.5 w-3.5" />
+              )}
+              Retry Load
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {/* ── System Status Cards (4-col grid) ────────────────────────── */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

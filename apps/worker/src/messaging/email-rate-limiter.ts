@@ -1,8 +1,6 @@
-import { getPipelineSetting, query, type prisma as prismaInstance } from '@lead-flood/db';
+import { getPipelineSetting, query } from '@lead-flood/db';
 
 import type { RateLimitResult } from './rate-limiter.js';
-
-type PrismaInstance = typeof prismaInstance;
 
 export interface EmailRateLimiterConfig {
   /** Base emails/day in week 1 (default: 5) */
@@ -87,8 +85,7 @@ export class EmailRateLimiter {
   private readonly maxDaily: number;
   private readonly bounceRateThreshold: number;
 
-  constructor(prisma: PrismaInstance, config?: EmailRateLimiterConfig) {
-    void prisma;
+  constructor(config?: EmailRateLimiterConfig) {
     this.baseDaily = config?.baseDaily ?? DEFAULT_BASE_DAILY;
     this.weeklyIncrement = config?.weeklyIncrement ?? DEFAULT_WEEKLY_INCREMENT;
     this.maxDaily = config?.maxDaily ?? DEFAULT_MAX_DAILY;
@@ -152,8 +149,7 @@ export class EmailRateLimiter {
    * Read warmup start date from PipelineSetting table.
    * Falls back to current date if not set (starts warmup from today).
    */
-  static async loadWarmupStartDate(prisma?: PrismaInstance): Promise<Date> {
-    void prisma;
+  static async loadWarmupStartDate(): Promise<Date> {
     try {
       const setting = await getPipelineSetting('email_warmup_start_date');
       if (setting?.valueJson && typeof setting.valueJson === 'string') {

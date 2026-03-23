@@ -51,6 +51,54 @@ export const ScoreDistributionResponseSchema = z
   })
   .strict();
 
+export const DailyQualityTrendsQuerySchema = z
+  .object({
+    from: z.string().datetime().optional(),
+    to: z.string().datetime().optional(),
+  })
+  .strict();
+
+export const DailyQualityTrendItemSchema = z
+  .object({
+    day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    avgScore: z.number().min(0).max(1),
+    totalCreated: z.number().int().min(0),
+    rejectedCount: z.number().int().min(0),
+  })
+  .strict();
+
+export const DailyQualityTrendsResponseSchema = z
+  .object({
+    items: z.array(DailyQualityTrendItemSchema),
+  })
+  .strict();
+
+export const AvgScoreQuerySchema = z.object({}).strict();
+
+export const AvgScoreResponseSchema = z
+  .object({
+    avgScore: z.number().min(0).max(1).nullable(),
+  })
+  .strict();
+
+export const IcpPerformanceQuerySchema = z.object({}).strict();
+
+export const IcpPerformanceItemSchema = z
+  .object({
+    icpProfileId: z.string().min(1),
+    leadCount: z.number().int().min(0),
+    avgScore: z.number().min(0).max(1).nullable(),
+    qualifiedCount: z.number().int().min(0),
+    rejectedCount: z.number().int().min(0),
+  })
+  .strict();
+
+export const IcpPerformanceResponseSchema = z
+  .object({
+    items: z.array(IcpPerformanceItemSchema),
+  })
+  .strict();
+
 export const ModelMetricsQuerySchema = z
   .object({
     modelVersionId: z.string().min(1).optional(),
@@ -120,6 +168,14 @@ export type FunnelQuery = z.infer<typeof FunnelQuerySchema>;
 export type FunnelResponse = z.infer<typeof FunnelResponseSchema>;
 export type ScoreDistributionQuery = z.infer<typeof ScoreDistributionQuerySchema>;
 export type ScoreDistributionResponse = z.infer<typeof ScoreDistributionResponseSchema>;
+export type DailyQualityTrendsQuery = z.infer<typeof DailyQualityTrendsQuerySchema>;
+export type DailyQualityTrendItem = z.infer<typeof DailyQualityTrendItemSchema>;
+export type DailyQualityTrendsResponse = z.infer<typeof DailyQualityTrendsResponseSchema>;
+export type AvgScoreQuery = z.infer<typeof AvgScoreQuerySchema>;
+export type AvgScoreResponse = z.infer<typeof AvgScoreResponseSchema>;
+export type IcpPerformanceQuery = z.infer<typeof IcpPerformanceQuerySchema>;
+export type IcpPerformanceItem = z.infer<typeof IcpPerformanceItemSchema>;
+export type IcpPerformanceResponse = z.infer<typeof IcpPerformanceResponseSchema>;
 export type ModelMetricsQuery = z.infer<typeof ModelMetricsQuerySchema>;
 export type ModelMetricsResponse = z.infer<typeof ModelMetricsResponseSchema>;
 export type RetrainStatusQuery = z.infer<typeof RetrainStatusQuerySchema>;

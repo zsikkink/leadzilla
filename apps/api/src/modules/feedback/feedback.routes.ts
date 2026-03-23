@@ -9,6 +9,7 @@ import {
   ListFeedbackEventsResponseSchema,
 } from '@lead-flood/contracts';
 
+import { requireAppAdminAccess } from '../../auth/guard.js';
 import { FeedbackNotImplementedError } from './feedback.errors.js';
 import { PrismaFeedbackRepository } from './feedback.repository.js';
 import { buildFeedbackService, FeedbackLeadNotFoundError } from './feedback.service.js';
@@ -48,8 +49,13 @@ function handleModuleError(error: unknown, request: FastifyRequest, reply: Fasti
 export function registerFeedbackRoutes(app: FastifyInstance): void {
   const repository = new PrismaFeedbackRepository();
   const service = buildFeedbackService(repository);
+  const requireAppAdmin = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await requireAppAdminAccess(request, reply))) {
+      return reply;
+    }
+  };
 
-  app.post('/v1/feedback/events', async (request, reply) => {
+  app.post('/v1/feedback/events', { preHandler: requireAppAdmin }, async (request, reply) => {
     const parsed = IngestFeedbackEventRequestSchema.safeParse(request.body);
     if (!parsed.success) {
       return sendValidationError(reply, request.id, 'Invalid feedback event payload');

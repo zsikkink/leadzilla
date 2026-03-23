@@ -1,7 +1,5 @@
 import type { EvaluationSplit } from '@lead-flood/contracts';
-import prismaClientPkg from '@prisma/client';
-import type { Prisma } from '@prisma/client';
-import { prisma } from '@lead-flood/db';
+import { Prisma, prisma } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
@@ -14,8 +12,6 @@ import {
 } from '../scoring/logistic.js';
 import { getModelActivationAuc } from '../utils/pipeline-settings.js';
 import { FEATURE_KEYS_FOR_TRAINING } from './model.train.job.js';
-
-const { Prisma: PrismaClient } = prismaClientPkg;
 
 export const MODEL_EVALUATE_JOB_NAME = 'model.evaluate';
 export const MODEL_EVALUATE_IDEMPOTENCY_KEY_PATTERN = 'model.evaluate:${modelVersionId}:${split}';
@@ -196,7 +192,7 @@ export async function handleModelEvaluateJob(
         recall: metrics.recall,
         f1: metrics.f1,
         brierScore: metrics.brierScore,
-        calibrationJson: PrismaClient.JsonNull,
+        calibrationJson: Prisma.JsonNull,
         confusionMatrixJson: JSON.parse(JSON.stringify(confusionMatrix)) as Prisma.InputJsonValue,
         evaluatedAt: new Date(),
       },

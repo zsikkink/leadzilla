@@ -38,15 +38,17 @@ You'll get these values from the team lead (shared securely, not in git).
 
 ### apps/api/.env.local
 ```
-DATABASE_URL=postgresql://postgres.<project-ref>:<PASSWORD>@aws-1-us-east-1.pooler.supabase.com:5432/postgres?connection_limit=3
-DIRECT_URL=postgresql://postgres.<project-ref>:<PASSWORD>@aws-1-us-east-1.pooler.supabase.com:5432/postgres?connection_limit=3
+DATABASE_URL=postgresql://postgres:<PASSWORD>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
+DIRECT_URL=postgresql://postgres:<PASSWORD>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
 SUPABASE_JWT_ISSUER=https://<project-ref>.supabase.co/auth/v1
 ```
 Keep the rest of the defaults from the example file.
+For Railway runtime, `DATABASE_URL` can use the Supabase pooled host with `sslmode=require&connection_limit=3`.
 
 ### apps/worker/.env.local
 ```
-DATABASE_URL=postgresql://postgres.<project-ref>:<PASSWORD>@aws-1-us-east-1.pooler.supabase.com:5432/postgres?connection_limit=3
+DATABASE_URL=postgresql://postgres:<PASSWORD>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
+DIRECT_URL=postgresql://postgres:<PASSWORD>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
 ```
 Discovery and enrichment API keys (Google Places, Hunter, OpenAI, etc.) are optional for basic dev work. Leave them blank unless you're working on the pipeline.
 
@@ -60,7 +62,9 @@ The Supabase URL and publishable key are safe client-side values — ask the tea
 
 ### Important env rules
 - **Never leave optional vars as empty strings** — some validators treat blank as invalid. Delete the line entirely if you don't need it.
-- **`?connection_limit=3`** is required on DATABASE_URL. The cloud DB has limited connections; without this cap the app crashes on startup.
+- **`?sslmode=require`** is required on remote Supabase DB URLs.
+- **Use the direct Supabase host for local dev** (`db.<project-ref>.supabase.co`) to avoid session-pool limits during `pnpm dev`.
+- **`?connection_limit=3`** is required on the pooled `DATABASE_URL` when you use the Supabase pooler in Railway.
 - **URL-encode special characters** in the DB password (e.g. `!` becomes `%21`).
 
 ## 4) Start the App
@@ -75,6 +79,20 @@ This starts three services concurrently:
 - **Worker** (pg-boss): runs in background
 
 Wait for `Server listening on 0.0.0.0:5050` in the terminal — that means the API is ready and the web app will load.
+
+If `certs/supabase-root-2021-ca.pem` exists, the API and worker dev scripts now pick it up automatically. That means the normal root dev command is enough:
+
+```bash
+pnpm dev
+```
+
+`npm run dev` also works from the repo root if you prefer npm’s script runner, but the repo itself is still pnpm-managed.
+
+To verify just the API against remote Supabase before starting the full stack:
+
+```bash
+pnpm --filter @lead-flood/api dev
+```
 
 ## 5) Log In
 

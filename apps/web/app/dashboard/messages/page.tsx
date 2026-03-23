@@ -1,7 +1,13 @@
 'use client';
 
-import type { GetLeadResponse, MessageApprovalStatus, MessageDraftResponse } from '@lead-flood/contracts';
+import type {
+  GetLeadResponse,
+  MessageApprovalStatus,
+  MessageDraftResponse,
+  MessageSendResponse,
+} from '@lead-flood/contracts';
 import { Check, CheckCheck, Minus, Square, X } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -19,6 +25,38 @@ const APPROVAL_OPTIONS = [
   { value: 'REJECTED', label: 'Rejected' },
   { value: 'AUTO_APPROVED', label: 'Auto-Approved' },
 ];
+
+interface ApprovalModeState {
+  isLoading: boolean;
+  error: string | null;
+  manualApprovalOnly: boolean;
+  autoApproveEnabled: boolean;
+  autoApproveScoreMin: number | null;
+  autoApproveScoreMax: number | null;
+}
+
+function parseBooleanSetting(value: unknown): boolean | null {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  return null;
+}
+
+function parseFractionSetting(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    return null;
+  }
+  return parsed;
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function getSendRecency(send: MessageSendResponse): number {
+  return new Date(send.updatedAt).getTime();
+}
 
 function BulkCheckbox({
   checked,
@@ -59,6 +97,8 @@ function BulkCheckbox({
 
 export default function MessagesPage() {
   const { apiClient, user } = useAuth();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<MessageApprovalStatus | undefined>(undefined);
   const [approving, setApproving] = useState(false);
@@ -68,6 +108,20 @@ export default function MessagesPage() {
   const [showRejectInput, setShowRejectInput] = useState(false);
   const [bulkRejectReason, setBulkRejectReason] = useState('');
   const rejectInputRef = useRef<HTMLInputElement>(null);
+  const [sendRefreshNonce, setSendRefreshNonce] = useState(0);
+  const [approvalMode, setApprovalMode] = useState<ApprovalModeState>({
+    isLoading: true,
+    error: null,
+    manualApprovalOnly: false,
+    autoApproveEnabled: false,
+    autoApproveScoreMin: null,
+    autoApproveScoreMax: null,
+  });
+  const [initialSendByDraftId, setInitialSendByDraftId] = useState<Record<string, MessageSendResponse>>({});
+  const [loadedInitialSendLeadIds, setLoadedInitialSendLeadIds] = useState<Set<string>>(new Set());
+
+  const leadIdFilter = searchParams.get('leadId')?.trim() || undefined;
+  const draftIdTarget = searchParams.get('draftId')?.trim() || undefined;
 
   const drafts = useApiQuery(
     useCallback(
@@ -75,11 +129,12 @@ export default function MessagesPage() {
         apiClient.listDrafts({
           page,
           pageSize: 10,
+          ...(leadIdFilter ? { leadId: leadIdFilter } : {}),
           ...(statusFilter ? { approvalStatus: statusFilter } : {}),
         }),
-      [apiClient, page, statusFilter],
+      [apiClient, leadIdFilter, page, statusFilter],
     ),
-    [page, statusFilter],
+    [leadIdFilter, page, statusFilter],
   );
 
   // Sort items newest first by createdAt
@@ -137,16 +192,138 @@ export default function MessagesPage() {
     };
   }, [leadIds, apiClient]);
 
-  const pendingDrafts: MessageDraftResponse[] =
-    sortedItems.filter((d) => d.approvalStatus === 'PENDING');
+  useEffect(() => {
+    let cancelled = false;
+
+    setApprovalMode((current) => ({
+      ...current,
+      isLoading: true,
+      error: null,
+    }));
+
+    void apiClient.listPipelineSettings().then(
+      ({ items }) => {
+        if (cancelled) return;
+
+        let manualApprovalOnly = false;
+        let autoApproveEnabled = false;
+        let autoApproveScoreMin: number | null = null;
+        let autoApproveScoreMax: number | null = null;
+
+        for (const item of items) {
+          if (item.key === 'messaging_manual_approval_only') {
+            manualApprovalOnly = parseBooleanSetting(item.value) ?? false;
+          } else if (item.key === 'auto_approve_enabled') {
+            autoApproveEnabled = parseBooleanSetting(item.value) ?? false;
+          } else if (item.key === 'auto_approve_score_min') {
+            autoApproveScoreMin = parseFractionSetting(item.value);
+          } else if (item.key === 'auto_approve_score_max') {
+            autoApproveScoreMax = parseFractionSetting(item.value);
+          }
+        }
+
+        setApprovalMode({
+          isLoading: false,
+          error: null,
+          manualApprovalOnly,
+          autoApproveEnabled,
+          autoApproveScoreMin,
+          autoApproveScoreMax,
+        });
+      },
+      (error: unknown) => {
+        if (cancelled) return;
+        setApprovalMode({
+          isLoading: false,
+          error: error instanceof Error ? error.message : 'Failed to load approval mode',
+          manualApprovalOnly: false,
+          autoApproveEnabled: false,
+          autoApproveScoreMin: null,
+          autoApproveScoreMax: null,
+        });
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiClient]);
+
+  const pendingDrafts: MessageDraftResponse[] = useMemo(
+    () => sortedItems.filter((d) => d.approvalStatus === 'PENDING'),
+    [sortedItems],
+  );
   // Use total from API when filtering by PENDING, otherwise count current page items
   const pendingCount = statusFilter === 'PENDING'
     ? (drafts.data?.total ?? pendingDrafts.length)
     : pendingDrafts.length;
 
   // Visible items (filter out optimistically hidden ones), already sorted newest first
-  const visibleItems: MessageDraftResponse[] =
-    sortedItems.filter((d) => !hiddenIds.has(d.id));
+  const visibleItems: MessageDraftResponse[] = useMemo(
+    () => sortedItems.filter((d) => !hiddenIds.has(d.id)),
+    [hiddenIds, sortedItems],
+  );
+
+  const initialDraftLeadIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const draft of visibleItems) {
+      if (draft.followUpNumber === 0) {
+        ids.add(draft.leadId);
+      }
+    }
+    return Array.from(ids);
+  }, [visibleItems]);
+
+  useEffect(() => {
+    if (initialDraftLeadIds.length === 0) {
+      setInitialSendByDraftId({});
+      setLoadedInitialSendLeadIds(new Set());
+      return;
+    }
+
+    let cancelled = false;
+    setInitialSendByDraftId({});
+    setLoadedInitialSendLeadIds(new Set());
+
+    void Promise.allSettled(
+      initialDraftLeadIds.map((leadId) =>
+        apiClient.listSends({ leadId, page: 1, pageSize: 100 }),
+      ),
+    ).then((results) => {
+      if (cancelled) return;
+
+      const nextSendMap: Record<string, MessageSendResponse> = {};
+      const nextLoadedLeadIds = new Set<string>();
+
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        const leadId = initialDraftLeadIds[i];
+        if (!result || !leadId || result.status !== 'fulfilled') {
+          continue;
+        }
+
+        nextLoadedLeadIds.add(leadId);
+
+        for (const send of result.value.items) {
+          if (send.followUpNumber !== 0) {
+            continue;
+          }
+
+          const existing = nextSendMap[send.messageDraftId];
+          if (!existing || getSendRecency(send) > getSendRecency(existing)) {
+            nextSendMap[send.messageDraftId] = send;
+          }
+        }
+      }
+
+      setInitialSendByDraftId(nextSendMap);
+      setLoadedInitialSendLeadIds(nextLoadedLeadIds);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiClient, initialDraftLeadIds, sendRefreshNonce]);
 
   // Selection helpers
   const pendingIds = new Set(pendingDrafts.map((d) => d.id));
@@ -199,6 +376,16 @@ export default function MessagesPage() {
     setBulkRejectReason('');
   };
 
+  const refreshQueueData = useCallback(() => {
+    drafts.refetch();
+    setSendRefreshNonce((current) => current + 1);
+  }, [drafts]);
+
+  useEffect(() => {
+    setPage(1);
+    clearSelection();
+  }, [leadIdFilter]);
+
   const handleAutoApproveAll = async () => {
     if (!drafts.data) return;
     const pending = drafts.data.items.filter((d) => d.approvalStatus === 'PENDING');
@@ -214,7 +401,7 @@ export default function MessagesPage() {
           selectedVariantId: firstVariant?.id,
         });
       }
-      drafts.refetch();
+      refreshQueueData();
     } catch {
       // Individual failures are tolerable
     } finally {
@@ -260,7 +447,7 @@ export default function MessagesPage() {
     clearSelection();
     setBulkAction(null);
     setHiddenIds(new Set());
-    drafts.refetch();
+    refreshQueueData();
   };
 
   const handleBulkReject = async () => {
@@ -302,7 +489,7 @@ export default function MessagesPage() {
     setHiddenIds(new Set());
     setShowRejectInput(false);
     setBulkRejectReason('');
-    drafts.refetch();
+    refreshQueueData();
   };
 
   const handleRejectClick = () => {
@@ -310,6 +497,62 @@ export default function MessagesPage() {
     // Focus the input after render
     setTimeout(() => rejectInputRef.current?.focus(), 50);
   };
+
+  const approvalModeSummary = useMemo(() => {
+    if (approvalMode.isLoading) {
+      return {
+        badge: 'Loading approval mode',
+        badgeClass: 'bg-muted/20 text-muted-foreground',
+        body: 'Loading runtime approval settings for initial outbound drafts.',
+      };
+    }
+
+    if (approvalMode.error) {
+      return {
+        badge: 'Approval mode unavailable',
+        badgeClass: 'bg-amber-500/15 text-amber-300',
+        body: `Approval mode could not be loaded: ${approvalMode.error}`,
+      };
+    }
+
+    if (approvalMode.manualApprovalOnly) {
+      return {
+        badge: 'Manual approval only',
+        badgeClass: 'bg-amber-500/15 text-amber-300',
+        body: 'Runtime override is on. Initial drafts require explicit approval, and auto-approval is currently suppressed.',
+      };
+    }
+
+    if (
+      approvalMode.autoApproveEnabled &&
+      approvalMode.autoApproveScoreMin !== null &&
+      approvalMode.autoApproveScoreMax !== null
+    ) {
+      return {
+        badge: 'Auto-approval active',
+        badgeClass: 'bg-zbooni-green/15 text-zbooni-green',
+        body: `Initial drafts auto-approve and queue their send when score is between ${formatPercent(approvalMode.autoApproveScoreMin)} and ${formatPercent(approvalMode.autoApproveScoreMax)}. Drafts outside that range stay pending approval.`,
+      };
+    }
+
+    if (approvalMode.autoApproveEnabled) {
+      return {
+        badge: 'Auto-approve misconfigured',
+        badgeClass: 'bg-amber-500/15 text-amber-300',
+        body: 'Auto-approve is enabled, but the score range is unavailable here. Treat initial drafts as pending approval until that setting is corrected.',
+      };
+    }
+
+    return {
+      badge: 'Manual approval',
+      badgeClass: 'bg-blue-500/15 text-blue-300',
+      body: 'Auto-approve is off. Initial drafts stay pending until an operator approves them, then the initial send is queued automatically.',
+    };
+  }, [approvalMode]);
+
+  const filteredLeadLabel = leadIdFilter
+    ? leadDataMap[leadIdFilter]?.name ?? `Lead ${leadIdFilter.slice(0, 8)}`
+    : null;
 
   return (
     <div className="space-y-5 pb-24">
@@ -348,6 +591,33 @@ export default function MessagesPage() {
         </div>
       </div>
 
+      <div className="rounded-xl border border-border/40 bg-card/70 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className={cn(
+              'inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold',
+              approvalModeSummary.badgeClass,
+            )}
+          >
+            {approvalModeSummary.badge}
+          </span>
+          {leadIdFilter ? (
+            <>
+              <span className="text-xs text-muted-foreground/70">Filtered to</span>
+              <span className="text-xs font-medium text-foreground">{filteredLeadLabel}</span>
+              <button
+                type="button"
+                onClick={() => router.push('/dashboard/messages')}
+                className="rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted/20 hover:text-foreground"
+              >
+                Clear filter
+              </button>
+            </>
+          ) : null}
+        </div>
+        <p className="mt-2 text-sm text-muted-foreground">{approvalModeSummary.body}</p>
+      </div>
+
       {/* Select-all row */}
       {visiblePendingIds.size > 0 ? (
         <div className="flex items-center gap-3 rounded-xl border border-border/30 bg-card/50 px-4 py-2.5">
@@ -382,6 +652,7 @@ export default function MessagesPage() {
         {visibleItems.map((draft) => {
           const isPending = draft.approvalStatus === 'PENDING';
           const isSelected = selectedIds.has(draft.id);
+          const isTargetDraft = draftIdTarget === draft.id;
 
           return (
             <div
@@ -400,12 +671,22 @@ export default function MessagesPage() {
                   />
                 </div>
               ) : null}
-              <div className={cn('min-w-0 flex-1', isSelected && 'rounded-2xl ring-1 ring-zbooni-green/30')}>
+              <div
+                className={cn(
+                  'min-w-0 flex-1',
+                  isSelected && 'rounded-2xl ring-1 ring-zbooni-green/30',
+                  isTargetDraft && 'rounded-2xl ring-1 ring-zbooni-teal/40',
+                )}
+              >
                 <MessageDraftCard
                   draft={draft}
                   leadName={leadDataMap[draft.leadId]?.name}
                   companyName={leadDataMap[draft.leadId]?.company}
-                  onAction={drafts.refetch}
+                  initialSend={draft.followUpNumber === 0 ? initialSendByDraftId[draft.id] ?? null : null}
+                  initialSendLoaded={
+                    draft.followUpNumber > 0 || loadedInitialSendLeadIds.has(draft.leadId)
+                  }
+                  onAction={refreshQueueData}
                 />
               </div>
             </div>
@@ -416,10 +697,17 @@ export default function MessagesPage() {
       {!drafts.isLoading && visibleItems.length === 0 ? (
         <div className="rounded-2xl border border-border/50 bg-card p-8 text-center shadow-sm">
           <p className="text-muted-foreground/60">
-            {statusFilter === 'PENDING'
-              ? 'No pending messages to review.'
-              : 'No messages found.'}
+            {leadIdFilter
+              ? 'No message drafts found for this lead.'
+              : statusFilter === 'PENDING'
+                ? 'No pending messages to review.'
+                : 'No messages found.'}
           </p>
+          {leadIdFilter ? (
+            <p className="mt-2 text-xs text-muted-foreground/50">
+              If draft generation was just queued from Leads, refresh here in a moment.
+            </p>
+          ) : null}
         </div>
       ) : null}
 

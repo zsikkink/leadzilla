@@ -1,5 +1,4 @@
-import type { Prisma } from '@prisma/client';
-import { getPipelineSetting, prisma, toInputJson, upsertPipelineSetting } from '@lead-flood/db';
+import { type Prisma, getPipelineSetting, prisma, toInputJson, upsertPipelineSetting } from '@lead-flood/db';
 import type { SendOptions } from 'pg-boss';
 
 import { getQualificationThreshold } from '../scoring/shared.js';

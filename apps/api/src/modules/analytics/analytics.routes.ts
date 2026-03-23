@@ -1,9 +1,14 @@
-import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
+  AvgScoreQuerySchema,
+  AvgScoreResponseSchema,
+  DailyQualityTrendsQuerySchema,
+  DailyQualityTrendsResponseSchema,
   ErrorResponseSchema,
   FunnelQuerySchema,
   FunnelResponseSchema,
+  IcpPerformanceQuerySchema,
+  IcpPerformanceResponseSchema,
   ManagerRecommendationsQuerySchema,
   ManagerRecommendationsResponseSchema,
   ModelMetricsQuerySchema,
@@ -19,8 +24,9 @@ import {
   StoredRecommendationSchema,
 } from '@lead-flood/contracts';
 
+import { requireAppAdminAccess } from '../../auth/guard.js';
 import { AnalyticsNotImplementedError } from './analytics.errors.js';
-import { PrismaAnalyticsRepository } from './analytics.repository.js';
+import { HybridAnalyticsRepository } from './analytics.repository.js';
 import { buildAnalyticsService, type AnalyticsRollupJobPayload } from './analytics.service.js';
 
 export interface AnalyticsRouteDependencies {
@@ -54,10 +60,15 @@ export function registerAnalyticsRoutes(
   app: FastifyInstance,
   dependencies?: AnalyticsRouteDependencies,
 ): void {
-  const repository = new PrismaAnalyticsRepository();
+  const repository = new HybridAnalyticsRepository();
   const service = buildAnalyticsService(repository, {
     enqueueAnalyticsRollup: dependencies?.enqueueAnalyticsRollup,
   });
+  const requireAppAdmin = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await requireAppAdminAccess(request, reply))) {
+      return reply;
+    }
+  };
 
   app.get('/v1/analytics/funnel', async (request, reply) => {
     const parsedQuery = FunnelQuerySchema.safeParse(request.query);
@@ -85,6 +96,57 @@ export function registerAnalyticsRoutes(
     try {
       const result = await service.getScoreDistribution(parsedQuery.data);
       return ScoreDistributionResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.get('/v1/analytics/daily-quality-trends', async (request, reply) => {
+    const parsedQuery = DailyQualityTrendsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid daily quality trends query');
+    }
+
+    try {
+      const result = await service.getDailyQualityTrends(parsedQuery.data);
+      return DailyQualityTrendsResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.get('/v1/analytics/avg-score', async (request, reply) => {
+    const parsedQuery = AvgScoreQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid avg score query');
+    }
+
+    try {
+      const result = await service.getAvgScore(parsedQuery.data);
+      return AvgScoreResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.get('/v1/analytics/icp-performance', async (request, reply) => {
+    const parsedQuery = IcpPerformanceQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid ICP performance query');
+    }
+
+    try {
+      const result = await service.getIcpPerformance(parsedQuery.data);
+      return IcpPerformanceResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;
@@ -181,34 +243,7 @@ export function registerAnalyticsRoutes(
     }
   });
 
-  app.post('/v1/analytics/rollups/recompute', async (request, reply) => {
-    // Admin-only: verify x-admin-key header
-    const adminKey = dependencies?.adminApiKey;
-    if (!adminKey) {
-      reply.status(503).send(
-        ErrorResponseSchema.parse({
-          error: 'Admin API key not configured',
-          requestId: request.id,
-        }),
-      );
-      return;
-    }
-
-    const provided = request.headers['x-admin-key'];
-    const candidate = Array.isArray(provided) ? (provided[0] ?? '') : (provided ?? '');
-    if (
-      candidate.length !== adminKey.length ||
-      !timingSafeEqual(Buffer.from(candidate, 'utf8'), Buffer.from(adminKey, 'utf8'))
-    ) {
-      reply.status(401).send(
-        ErrorResponseSchema.parse({
-          error: 'Unauthorized',
-          requestId: request.id,
-        }),
-      );
-      return;
-    }
-
+  app.post('/v1/analytics/rollups/recompute', { preHandler: requireAppAdmin }, async (request, reply) => {
     const parsedBody = RecomputeRollupRequestSchema.safeParse(request.body);
     if (!parsedBody.success) {
       return sendValidationError(reply, request.id, 'Invalid rollup recompute payload');

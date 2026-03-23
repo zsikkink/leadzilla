@@ -11,8 +11,7 @@ import type {
   ListJobRunsResponse,
   MessageSendStatus,
 } from '@lead-flood/contracts';
-import type { Prisma } from '@prisma/client';
-import { prisma } from '@lead-flood/db';
+import { prisma, type Prisma } from '@lead-flood/db';
 
 import { DiscoveryAdminBadRequestError, DiscoveryAdminNotFoundError } from './discovery-admin.errors.js';
 

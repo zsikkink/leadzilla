@@ -1,6 +1,10 @@
 'use client';
 
-import type { MessageDraftResponse, MessageVariantResponse } from '@lead-flood/contracts';
+import type {
+  MessageDraftResponse,
+  MessageSendResponse,
+  MessageVariantResponse,
+} from '@lead-flood/contracts';
 import { Check, ChevronDown, ChevronUp, Send } from 'lucide-react';
 import { useState } from 'react';
 
@@ -10,20 +14,157 @@ interface MessageDraftCardProps {
   draft: MessageDraftResponse;
   leadName?: string | undefined;
   companyName?: string | undefined;
+  initialSend?: MessageSendResponse | null;
+  initialSendLoaded?: boolean | undefined;
   onAction: () => void;
+}
+
+function getApprovalBadge(draft: MessageDraftResponse): { label: string; className: string } {
+  switch (draft.approvalStatus) {
+    case 'AUTO_APPROVED':
+      return {
+        label: 'Auto-Approved',
+        className: 'bg-zbooni-green/15 text-zbooni-green',
+      };
+    case 'APPROVED':
+      return {
+        label: 'Approved',
+        className: 'bg-blue-500/15 text-blue-300',
+      };
+    case 'REJECTED':
+      return {
+        label: 'Rejected',
+        className: 'bg-red-500/15 text-red-400',
+      };
+    default:
+      return {
+        label: 'Pending Approval',
+        className: 'bg-yellow-500/15 text-yellow-400',
+      };
+  }
+}
+
+function getInitialSendBadge(
+  draft: MessageDraftResponse,
+  initialSend: MessageSendResponse | null,
+  initialSendLoaded: boolean,
+): { label: string; className: string; detail?: string | undefined } | null {
+  if (draft.followUpNumber !== 0 || !initialSendLoaded) {
+    return null;
+  }
+
+  if (!initialSend) {
+    if (
+      draft.approvalStatus === 'APPROVED' ||
+      draft.approvalStatus === 'AUTO_APPROVED'
+    ) {
+      return {
+        label: 'No Send Record Yet',
+        className: 'bg-muted/20 text-muted-foreground',
+      };
+    }
+    return null;
+  }
+
+  if (initialSend.status === 'FAILED' && initialSend.failureCode === 'SUPPRESSED') {
+    return {
+      label: 'Suppressed',
+      className: 'bg-orange-500/15 text-orange-300',
+      detail: initialSend.failureReason ?? undefined,
+    };
+  }
+
+  switch (initialSend.status) {
+    case 'QUEUED':
+      return {
+        label: 'Queued To Send',
+        className: 'bg-blue-500/15 text-blue-300',
+      };
+    case 'SENDING':
+      return {
+        label: 'Sending',
+        className: 'bg-blue-500/15 text-blue-300',
+      };
+    case 'UNRESOLVED':
+      return {
+        label: 'Send Unresolved',
+        className: 'bg-amber-500/15 text-amber-300',
+        detail: initialSend.failureReason ?? undefined,
+      };
+    case 'SENT':
+      return {
+        label: 'Sent',
+        className: 'bg-zbooni-green/15 text-zbooni-green',
+      };
+    case 'DELIVERED':
+      return {
+        label: 'Delivered',
+        className: 'bg-zbooni-green/15 text-zbooni-green',
+      };
+    case 'REPLIED':
+      return {
+        label: 'Replied',
+        className: 'bg-zbooni-green/20 text-zbooni-green',
+      };
+    case 'BOUNCED':
+      return {
+        label: 'Bounced',
+        className: 'bg-red-500/15 text-red-400',
+        detail: initialSend.failureReason ?? undefined,
+      };
+    case 'FAILED':
+      return {
+        label: 'Failed',
+        className: 'bg-red-500/15 text-red-400',
+        detail: initialSend.failureReason ?? undefined,
+      };
+  }
+
+  return null;
+}
+
+function getSendActionLabel(
+  draft: MessageDraftResponse,
+  initialSend: MessageSendResponse | null,
+  initialSendLoaded: boolean,
+): string | null {
+  const isApproved =
+    draft.approvalStatus === 'APPROVED' || draft.approvalStatus === 'AUTO_APPROVED';
+
+  if (!isApproved) {
+    return null;
+  }
+
+  if (draft.followUpNumber !== 0) {
+    return 'Send';
+  }
+
+  if (!initialSendLoaded) {
+    return null;
+  }
+
+  if (!initialSend) {
+    return 'Send';
+  }
+
+  if (initialSend.status === 'FAILED' && initialSend.failureCode !== 'SUPPRESSED') {
+    return 'Retry Send';
+  }
+
+  return null;
 }
 
 function VariantEditor({
   variant,
   isPending,
-  isApproved,
+  sendActionLabel,
   actionInProgress,
   onApprove,
   onSend,
 }: {
   variant: MessageVariantResponse;
   isPending: boolean;
-  isApproved: boolean;
+  sendActionLabel: string | null;
   actionInProgress: string | null;
   onApprove: (variantId: string) => void;
   onSend: (variantId: string) => void;
@@ -65,14 +206,14 @@ function VariantEditor({
             <Check className="h-3 w-3" /> Approve
           </button>
         ) : null}
-        {isApproved ? (
+        {sendActionLabel ? (
           <button
             type="button"
             disabled={!!actionInProgress}
             onClick={() => onSend(variant.id)}
             className="zbooni-gradient-bg inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold text-zbooni-dark transition-opacity hover:opacity-90 disabled:opacity-50"
           >
-            <Send className="h-3 w-3" /> Send
+            <Send className="h-3 w-3" /> {sendActionLabel}
           </button>
         ) : null}
       </div>
@@ -80,7 +221,14 @@ function VariantEditor({
   );
 }
 
-export function MessageDraftCard({ draft, leadName, companyName, onAction }: MessageDraftCardProps) {
+export function MessageDraftCard({
+  draft,
+  leadName,
+  companyName,
+  initialSend = null,
+  initialSendLoaded = false,
+  onAction,
+}: MessageDraftCardProps) {
   const { apiClient, user } = useAuth();
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -122,7 +270,9 @@ export function MessageDraftCard({ draft, leadName, companyName, onAction }: Mes
   };
 
   const isPending = draft.approvalStatus === 'PENDING';
-  const isApproved = draft.approvalStatus === 'APPROVED' || draft.approvalStatus === 'AUTO_APPROVED';
+  const approvalBadge = getApprovalBadge(draft);
+  const initialSendBadge = getInitialSendBadge(draft, initialSend, initialSendLoaded);
+  const sendActionLabel = getSendActionLabel(draft, initialSend, initialSendLoaded);
 
   // Determine primary channel from first variant
   const primaryChannel = draft.variants[0]?.channel ?? 'EMAIL';
@@ -130,19 +280,6 @@ export function MessageDraftCard({ draft, leadName, companyName, onAction }: Mes
   const channelColorClass = primaryChannel === 'WHATSAPP'
     ? 'bg-[#25D366]/15 text-[#25D366]'
     : 'bg-[#3B82F6]/15 text-[#3B82F6]';
-
-  // Status display
-  const statusLabel =
-    draft.approvalStatus === 'AUTO_APPROVED' ? 'Auto-Approved'
-      : draft.approvalStatus === 'APPROVED' ? 'Approved'
-        : draft.approvalStatus === 'REJECTED' ? 'Rejected'
-          : 'Pending';
-  const statusColorClass =
-    isPending
-      ? 'bg-yellow-500/15 text-yellow-400'
-      : isApproved
-        ? 'bg-zbooni-green/15 text-zbooni-green'
-        : 'bg-red-500/15 text-red-400';
 
   // Build display name
   const displayName = leadName || 'Unknown Lead';
@@ -170,15 +307,22 @@ export function MessageDraftCard({ draft, leadName, companyName, onAction }: Mes
               {displayName}{companyDisplay}
             </p>
             <span
-              className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${statusColorClass}`}
+              className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${approvalBadge.className}`}
             >
-              {statusLabel}
+              {approvalBadge.label}
             </span>
             <span
               className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${channelColorClass}`}
             >
               {channelLabel}
             </span>
+            {initialSendBadge ? (
+              <span
+                className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${initialSendBadge.className}`}
+              >
+                {initialSendBadge.label}
+              </span>
+            ) : null}
           </div>
           {!expanded ? (
             <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground/80">{previewText}</p>
@@ -192,13 +336,18 @@ export function MessageDraftCard({ draft, leadName, companyName, onAction }: Mes
       {/* Expanded content */}
       {expanded ? (
         <div className="border-t border-border/30 p-5 pt-4">
+          {initialSendBadge?.detail ? (
+            <div className="mb-4 rounded-xl border border-border/40 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
+              {initialSendBadge.detail}
+            </div>
+          ) : null}
           <div className="space-y-4">
             {draft.variants.map((variant) => (
               <VariantEditor
                 key={variant.id}
                 variant={variant}
                 isPending={isPending}
-                isApproved={isApproved}
+                sendActionLabel={sendActionLabel}
                 actionInProgress={actionInProgress}
                 onApprove={handleApprove}
                 onSend={handleSend}

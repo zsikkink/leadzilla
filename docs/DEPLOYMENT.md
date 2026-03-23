@@ -76,6 +76,41 @@ File: `.github/workflows/deploy.yml`
 - Optional smoke check:
   - `PRODUCTION_SMOKE_URL`
 
+## Railway API Service
+
+The intended API runtime is Railway backed by remote Supabase Postgres.
+
+Repo deployment surface:
+
+- Railway config: `railway.toml`
+- Docker build: `infra/docker/Dockerfile.api`
+- Process health endpoint: `/health`
+- Railway healthcheck endpoint: `/ready`
+
+Required runtime env on Railway:
+
+- `DATABASE_URL`
+- `DIRECT_URL`
+- `SUPABASE_PROJECT_REF` or `SUPABASE_JWT_ISSUER`
+- `CORS_ORIGIN`
+
+Recommended first deploy:
+
+```bash
+railway login
+railway link
+railway up --service <api-service>
+```
+
+In the Railway service settings:
+
+- connect the repo to the API service
+- keep the repo root as the source directory
+- set `DATABASE_URL`, `DIRECT_URL`, `SUPABASE_PROJECT_REF` or `SUPABASE_JWT_ISSUER`, and `CORS_ORIGIN`
+- configure the healthcheck path as `/ready` if the service does not pick up `railway.toml`
+
+Do not add a Railway pre-deploy or release command for Prisma migrations. Production schema changes stay SQL-first via Supabase CLI as documented in `docs/PROD_REMOTE_DB_STRATEGY.md`.
+
 ## Required Repository Secrets (if deployment hooks are used)
 
 - `STAGING_DEPLOY_WEBHOOK`

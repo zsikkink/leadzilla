@@ -11,10 +11,8 @@ import {
   ExternalLink,
   Globe,
   Inbox,
-  Instagram,
   Linkedin,
   Loader2,
-  Camera,
   Mail,
   MapPin,
   Monitor,
@@ -135,7 +133,7 @@ interface TeamMember {
   source: string | null;
   fromBusinessContacts: boolean;
 }
-interface InstagramPost {
+interface _InstagramPost {
   caption: string;
   likes: number;
   comments: number;
@@ -196,13 +194,13 @@ function isExecutiveOrDirector(member: Pick<TeamMember, 'seniority' | 'jobTitle'
   return getTeamMemberTier(member.seniority, member.jobTitle) <= 1;
 }
 
-function getInstagramPostType(raw: unknown): 'image' | 'video' | 'carousel' {
+function _getInstagramPostType(raw: unknown): 'image' | 'video' | 'carousel' {
   if (raw === 'video') return 'video';
   if (raw === 'carousel') return 'carousel';
   return 'image';
 }
 
-function getInstagramPostTypeLabel(postType: 'image' | 'video' | 'carousel'): string {
+function _getInstagramPostTypeLabel(postType: 'image' | 'video' | 'carousel'): string {
   if (postType === 'video') return 'Video';
   if (postType === 'carousel') return 'Carousel';
   return 'Image';
@@ -335,7 +333,7 @@ function mergeSocialLinks(
   return links;
 }
 
-function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
+function _IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
   const ws = data.websiteScrape;
   const ig = data.instagramScrape;
 

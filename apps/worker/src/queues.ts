@@ -25,6 +25,10 @@ import {
   MESSAGE_APPROVAL_RECOVERY_JOB_NAME,
   MESSAGE_APPROVAL_RECOVERY_RETRY_OPTIONS,
 } from './jobs/message.approval.recovery.job.js';
+import {
+  MESSAGE_SEND_RECOVERY_JOB_NAME,
+  MESSAGE_SEND_RECOVERY_RETRY_OPTIONS,
+} from './jobs/message.send.recovery.job.js';
 import { NOTIFY_SALES_JOB_NAME, NOTIFY_SALES_RETRY_OPTIONS } from './jobs/notify.sales.job.js';
 import { MODEL_EVALUATE_JOB_NAME, MODEL_EVALUATE_RETRY_OPTIONS } from './jobs/model.evaluate.job.js';
 import { MODEL_TRAIN_JOB_NAME, MODEL_TRAIN_RETRY_OPTIONS } from './jobs/model.train.job.js';
@@ -195,6 +199,13 @@ export const WORKER_QUEUE_DEFINITIONS: readonly WorkerQueueDefinition[] = [
     retryOptions: normalizeRetryOptions(
       MESSAGE_APPROVAL_RECOVERY_JOB_NAME,
       MESSAGE_APPROVAL_RECOVERY_RETRY_OPTIONS,
+    ),
+  },
+  {
+    name: MESSAGE_SEND_RECOVERY_JOB_NAME,
+    retryOptions: normalizeRetryOptions(
+      MESSAGE_SEND_RECOVERY_JOB_NAME,
+      MESSAGE_SEND_RECOVERY_RETRY_OPTIONS,
     ),
   },
   {

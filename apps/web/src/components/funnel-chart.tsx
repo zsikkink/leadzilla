@@ -7,8 +7,8 @@ import { PipelineTimeSeriesChart } from './pipeline-time-series-chart.js';
  * The old aggregate horizontal bar chart has been replaced with daily bucketed lines
  * for: Discovered, Qualified, Rejected, Messaged, Replied.
  *
- * The `data` prop (FunnelResponse) is still accepted for backwards compatibility
- * but the chart fetches its own daily data from Supabase directly.
+ * The chart keeps its own data loading, now through the existing authenticated API
+ * boundary rather than a browser-direct Supabase read.
  */
 export function FunnelChart() {
   return <PipelineTimeSeriesChart />;

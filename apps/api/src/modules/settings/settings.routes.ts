@@ -6,6 +6,8 @@ import {
   upsertPipelineSetting,
 } from '@lead-flood/db';
 
+import { requireAppAdminAccess } from '../../auth/guard.js';
+
 const ErrorResponseSchema = z.object({
   error: z.string(),
   requestId: z.string(),
@@ -26,6 +28,12 @@ const UpdatePipelineSettingBodySchema = z.object({
 });
 
 export function registerSettingsRoutes(app: FastifyInstance) {
+  const requireAppAdmin = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await requireAppAdminAccess(request, reply))) {
+      return reply;
+    }
+  };
+
   // GET /v1/settings/pipeline — list all pipeline settings
   app.get('/v1/settings/pipeline', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
@@ -79,7 +87,7 @@ export function registerSettingsRoutes(app: FastifyInstance) {
   });
 
   // PUT /v1/settings/pipeline/:key — upsert a pipeline setting
-  app.put('/v1/settings/pipeline/:key', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.put('/v1/settings/pipeline/:key', { preHandler: requireAppAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { key } = request.params as { key: string };
     const parseResult = UpdatePipelineSettingBodySchema.safeParse(request.body);
 

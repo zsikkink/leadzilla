@@ -16,6 +16,11 @@ import {
   MESSAGE_APPROVAL_RECOVERY_RETRY_OPTIONS,
 } from './jobs/message.approval.recovery.job.js';
 import {
+  MESSAGE_SEND_RECOVERY_JOB_NAME,
+  type MessageSendRecoveryJobPayload,
+  MESSAGE_SEND_RECOVERY_RETRY_OPTIONS,
+} from './jobs/message.send.recovery.job.js';
+import {
   type HeartbeatJobPayload,
 } from './jobs/heartbeat.job.js';
 import {
@@ -215,6 +220,18 @@ export async function registerWorkerSchedules(
     {
       singletonKey: 'schedule:message.approval.recovery',
       ...MESSAGE_APPROVAL_RECOVERY_RETRY_OPTIONS,
+    },
+  );
+
+  await boss.schedule(
+    MESSAGE_SEND_RECOVERY_JOB_NAME,
+    '*/5 * * * *',
+    {
+      correlationId: 'scheduler:message.send.recovery',
+    } satisfies MessageSendRecoveryJobPayload,
+    {
+      singletonKey: 'schedule:message.send.recovery',
+      ...MESSAGE_SEND_RECOVERY_RETRY_OPTIONS,
     },
   );
 

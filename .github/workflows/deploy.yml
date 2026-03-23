@@ -115,6 +115,7 @@ jobs:
     environment: staging
     env:
       STAGING_DEPLOY_WEBHOOK: ${{ secrets.STAGING_DEPLOY_WEBHOOK }}
+      STAGING_API_READY_URL: ${{ secrets.STAGING_API_READY_URL }}
       STAGING_SMOKE_URL: ${{ secrets.STAGING_SMOKE_URL }}
     steps:
       - name: Trigger staging deployment webhook
@@ -125,7 +126,19 @@ jobs:
         if: ${{ env.STAGING_DEPLOY_WEBHOOK == '' }}
         run: echo "STAGING_DEPLOY_WEBHOOK is not set; images were published only."
 
-      - name: Run staging smoke check
+      - name: Run staging API readiness check
+        if: ${{ env.STAGING_API_READY_URL != '' }}
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -fsS "$STAGING_API_READY_URL" > /dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Staging API /ready check timed out: $STAGING_API_READY_URL"
+          exit 1
+
+      - name: Run staging supplemental smoke check
         if: ${{ env.STAGING_SMOKE_URL != '' }}
         run: curl -fsS "$STAGING_SMOKE_URL"
 
@@ -197,6 +210,7 @@ jobs:
     environment: production
     env:
       PRODUCTION_DEPLOY_WEBHOOK: ${{ secrets.PRODUCTION_DEPLOY_WEBHOOK }}
+      PRODUCTION_API_READY_URL: ${{ secrets.PRODUCTION_API_READY_URL }}
       PRODUCTION_SMOKE_URL: ${{ secrets.PRODUCTION_SMOKE_URL }}
     steps:
       - name: Trigger production deployment webhook
@@ -207,6 +221,18 @@ jobs:
         if: ${{ env.PRODUCTION_DEPLOY_WEBHOOK == '' }}
         run: echo "PRODUCTION_DEPLOY_WEBHOOK is not set; images were published only."
 
-      - name: Run production smoke check
+      - name: Run production API readiness check
+        if: ${{ env.PRODUCTION_API_READY_URL != '' }}
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -fsS "$PRODUCTION_API_READY_URL" > /dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Production API /ready check timed out: $PRODUCTION_API_READY_URL"
+          exit 1
+
+      - name: Run production supplemental smoke check
         if: ${{ env.PRODUCTION_SMOKE_URL != '' }}
         run: curl -fsS "$PRODUCTION_SMOKE_URL"

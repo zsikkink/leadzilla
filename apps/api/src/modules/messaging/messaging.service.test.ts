@@ -33,6 +33,7 @@ function buildDraftResponse() {
     approvedByUserId: 'user_1',
     approvedAt: '2026-03-20T00:00:00.000Z',
     rejectedReason: null,
+    followUpNumber: 0,
     variants: [
       {
         id: 'variant_1',
