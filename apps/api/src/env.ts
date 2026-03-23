@@ -114,7 +114,7 @@ function validateRuntimeDatabaseUrl(
   value: string,
   source: Pick<ApiEnv, 'APP_ENV' | 'NODE_ENV'>,
 ): void {
-  if (source.APP_ENV === 'test' || source.NODE_ENV === 'test') {
+  if (source.APP_ENV === 'test' || source.APP_ENV === 'ci' || source.NODE_ENV === 'test') {
     return;
   }
 

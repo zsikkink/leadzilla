@@ -1,6 +1,6 @@
 import type PgBoss from 'pg-boss';
 import { prisma } from '@lead-flood/db';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { dispatchPendingOutboxEvents } from '../../src/outbox-dispatcher.js';
 
@@ -8,6 +8,16 @@ describe('outbox retry recovery integration', () => {
   const createdOutboxIds: string[] = [];
   const createdJobIds: string[] = [];
   const createdLeadIds: string[] = [];
+
+  beforeEach(async () => {
+    await prisma.outboxEvent.deleteMany({
+      where: {
+        status: {
+          in: ['pending', 'failed', 'processing'],
+        },
+      },
+    });
+  });
 
   afterEach(async () => {
     if (createdOutboxIds.length > 0) {

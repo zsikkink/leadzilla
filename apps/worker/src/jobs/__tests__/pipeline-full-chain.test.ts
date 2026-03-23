@@ -559,30 +559,48 @@ describe('pipeline full chain: features.compute → message.send', () => {
 
     await handleMessageGenerateJob(noopLogger, makeJob(genPayload, 'message.generate'), genDeps);
 
-    // Verify WhatsApp draft was created and auto-approved
+    // Verify WhatsApp draft was created and remains pending review
     const waDraft = await prisma.messageDraft.findFirst({
       where: { leadId: discoveredLeadId, followUpNumber: 1 },
       include: { variants: true },
     });
     expect(waDraft).toBeTruthy();
-    expect(waDraft!.approvalStatus).toBe('AUTO_APPROVED');
+    expect(waDraft!.approvalStatus).toBe('PENDING');
     expect(waDraft!.variants[0]!.channel).toBe('WHATSAPP');
 
-    // Auto-approve should have created a QUEUED MessageSend
-    const waSend = await prisma.messageSend.findFirst({
-      where: { leadId: discoveredLeadId, followUpNumber: 1, status: 'QUEUED' },
+    const selectedWaVariant = waDraft!.variants[0]!;
+    await prisma.messageVariant.update({
+      where: { id: selectedWaVariant.id },
+      data: { isSelected: true },
     });
-    expect(waSend).toBeTruthy();
-    expect(waSend!.channel).toBe('WHATSAPP');
+    await prisma.messageDraft.update({
+      where: { id: waDraft!.id },
+      data: { approvalStatus: 'APPROVED' },
+    });
+
+    const waIdempotencyKey = `manual-approve:${discoveredLeadId}:${waDraft!.id}:${selectedWaVariant.id}`;
+    const waSend = await prisma.messageSend.create({
+      data: {
+        leadId: discoveredLeadId,
+        messageDraftId: waDraft!.id,
+        messageVariantId: selectedWaVariant.id,
+        channel: 'WHATSAPP',
+        provider: 'TRENGO',
+        status: 'QUEUED',
+        idempotencyKey: waIdempotencyKey,
+        followUpNumber: 1,
+      },
+    });
+    expect(waSend.channel).toBe('WHATSAPP');
 
     // Send via Trengo
     bossSendSpy.mockClear();
     const sendPayload: MessageSendJobPayload = {
       runId: `msgsend-wa-${RUN_ID}`,
-      sendId: waSend!.id,
-      messageDraftId: waSend!.messageDraftId,
-      messageVariantId: waSend!.messageVariantId,
-      idempotencyKey: waSend!.idempotencyKey,
+      sendId: waSend.id,
+      messageDraftId: waSend.messageDraftId,
+      messageVariantId: waSend.messageVariantId,
+      idempotencyKey: waSend.idempotencyKey,
       channel: 'WHATSAPP',
       followUpNumber: 1,
       correlationId: `corr-${RUN_ID}`,
@@ -597,7 +615,7 @@ describe('pipeline full chain: features.compute → message.send', () => {
 
     // Verify WhatsApp send was marked SENT
     const updatedWaSend = await prisma.messageSend.findUniqueOrThrow({
-      where: { id: waSend!.id },
+      where: { id: waSend.id },
     });
     expect(updatedWaSend.status).toBe('SENT');
     expect(updatedWaSend.providerMessageId).toBeTruthy();
@@ -636,7 +654,7 @@ describe('pipeline full chain: features.compute → message.send', () => {
     expect(scores.length).toBeGreaterThanOrEqual(1);
     expect(scores[0]!.blendedScore).toBeGreaterThanOrEqual(0.5);
 
-    // Message drafts: initial email (APPROVED) + follow-up WhatsApp (AUTO_APPROVED)
+    // Message drafts: initial email (APPROVED) + follow-up WhatsApp (APPROVED)
     const drafts = await prisma.messageDraft.findMany({
       where: { leadId: discoveredLeadId },
       orderBy: { followUpNumber: 'asc' },
@@ -645,7 +663,7 @@ describe('pipeline full chain: features.compute → message.send', () => {
     expect(drafts[0]!.followUpNumber).toBe(0);
     expect(drafts[0]!.approvalStatus).toBe('APPROVED');
     expect(drafts[1]!.followUpNumber).toBe(1);
-    expect(drafts[1]!.approvalStatus).toBe('AUTO_APPROVED');
+    expect(drafts[1]!.approvalStatus).toBe('APPROVED');
 
     // Feature rotation: initial=Payment Links, follow-up=Order Management
     expect(drafts[0]!.pitchedFeature).toBe('Payment Links');

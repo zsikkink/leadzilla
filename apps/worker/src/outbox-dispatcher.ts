@@ -105,7 +105,6 @@ export async function dispatchPendingOutboxEvents(
   logger: OutboxDispatchLogger,
 ): Promise<number> {
   const now = new Date();
-  const staleProcessingCutoff = new Date(now.getTime() - STALE_PROCESSING_WINDOW_MS);
 
   // Atomically claim a batch of outbox events using FOR UPDATE SKIP LOCKED
   // to prevent TOCTOU races between concurrent dispatchers
@@ -126,8 +125,11 @@ export async function dispatchPendingOutboxEvents(
     WHERE id IN (
       SELECT id FROM "OutboxEvent"
       WHERE status = 'pending'
-         OR (status = 'failed' AND "nextAttemptAt" <= ${now})
-         OR (status = 'processing' AND "updatedAt" <= ${staleProcessingCutoff})
+         OR (status = 'failed' AND "nextAttemptAt" <= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'))
+         OR (
+           status = 'processing'
+           AND "updatedAt" <= ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - (${STALE_PROCESSING_WINDOW_MS} * INTERVAL '1 millisecond'))
+         )
       ORDER BY "createdAt" ASC
       LIMIT ${DISPATCH_BATCH_SIZE}
       FOR UPDATE SKIP LOCKED

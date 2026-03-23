@@ -43,7 +43,6 @@ describe('dispatchPendingOutboxEvents', () => {
   beforeEach(async () => {
     await prisma.outboxEvent.deleteMany({
       where: {
-        type: 'lead.enrich.stub',
         status: {
           in: ['pending', 'failed', 'processing'],
         },

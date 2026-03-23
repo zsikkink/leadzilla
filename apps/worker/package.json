@@ -11,7 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm test:unit && pnpm test:integration",
     "test:unit": "vitest run src --exclude src/outbox-dispatcher.test.ts --exclude src/jobs/__tests__/pipeline-e2e.test.ts --exclude src/jobs/__tests__/pipeline-full-chain.test.ts",
-    "test:integration": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5434/lead_flood} DIRECT_URL=${DIRECT_URL:-postgresql://postgres:postgres@localhost:5434/lead_flood} vitest run test/integration src/outbox-dispatcher.test.ts src/jobs/__tests__/pipeline-e2e.test.ts src/jobs/__tests__/pipeline-full-chain.test.ts"
+    "test:integration": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5434/lead_flood} DIRECT_URL=${DIRECT_URL:-postgresql://postgres:postgres@localhost:5434/lead_flood} vitest run --no-file-parallelism test/integration src/outbox-dispatcher.test.ts src/jobs/__tests__/pipeline-e2e.test.ts src/jobs/__tests__/pipeline-full-chain.test.ts"
   },
   "dependencies": {
     "@lead-flood/contracts": "workspace:*",

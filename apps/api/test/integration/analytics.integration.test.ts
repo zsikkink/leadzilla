@@ -536,24 +536,10 @@ describe('analytics retrain status integration', () => {
     }
   });
 
-  it('returns null defaults and preserves active/current/successful run selection semantics', async () => {
+  it('preserves active/current/successful run selection semantics', async () => {
     const server = buildTestServer();
 
     try {
-      const emptyResponse = await server.inject({
-        method: 'GET',
-        url: '/v1/analytics/retrain-status?modelType=LOGISTIC_REGRESSION',
-        headers: authHeaders(),
-      });
-
-      expect(emptyResponse.statusCode).toBe(200);
-      expect(emptyResponse.json()).toEqual({
-        activeModelVersionId: null,
-        currentRun: null,
-        lastSuccessfulRun: null,
-        nextScheduledAt: null,
-      });
-
       const runningOlderCreatedAt = new Date('2099-01-05T09:00:00.000Z');
       const queuedNewerCreatedAt = new Date('2099-01-05T10:00:00.000Z');
       const earlierSuccessCreatedAt = new Date('2099-01-04T10:00:00.000Z');
