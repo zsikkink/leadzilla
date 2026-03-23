@@ -400,20 +400,14 @@ describe('pipeline full chain: features.compute → message.send', () => {
   it('stage 4: message.generate creates drafts with PENDING approval', async () => {
     bossSendSpy.mockClear();
 
-    const prediction = await prisma.leadScorePrediction.findFirst({
-      where: { leadId: discoveredLeadId, icpProfileId: ICP_ID },
-    });
-
     const payload: MessageGenerateJobPayload = {
       runId: `msggen-${RUN_ID}`,
       leadId: discoveredLeadId,
       icpProfileId: ICP_ID,
-      scorePredictionId: prediction?.id,
       knowledgeEntryIds: [],
       promptVersion: 'v1',
       channel: 'EMAIL',
       correlationId: `corr-${RUN_ID}`,
-      autoApprove: false, // PENDING approval — tests manual approval flow
     };
 
     const deps: MessageGenerateJobDependencies = {
@@ -440,7 +434,7 @@ describe('pipeline full chain: features.compute → message.send', () => {
     expect(variantA!.channel).toBe('EMAIL');
     expect(variantA!.bodyText).toBeTruthy();
 
-    // No MessageSend should be created (autoApprove=false)
+    // No MessageSend should be created for the pending approval flow
     const sends = await prisma.messageSend.findMany({
       where: { leadId: discoveredLeadId },
     });
@@ -535,10 +529,6 @@ describe('pipeline full chain: features.compute → message.send', () => {
     bossSendSpy.mockClear();
 
     // Generate a WhatsApp follow-up message (auto-approved)
-    const prediction = await prisma.leadScorePrediction.findFirst({
-      where: { leadId: discoveredLeadId, icpProfileId: ICP_ID },
-    });
-
     const emailSend = await prisma.messageSend.findFirst({
       where: { leadId: discoveredLeadId, followUpNumber: 0, status: 'SENT' },
     });
@@ -548,11 +538,9 @@ describe('pipeline full chain: features.compute → message.send', () => {
       runId: `followup:${emailSend!.id}:1`,
       leadId: discoveredLeadId,
       icpProfileId: ICP_ID,
-      scorePredictionId: prediction?.id,
       followUpNumber: 1,
       parentMessageSendId: emailSend!.id,
       previouslyPitchedFeatures: [ICP_FEATURES[0]!],
-      autoApprove: true, // Auto-approved for this stage
       channel: 'WHATSAPP',
       knowledgeEntryIds: [],
       promptVersion: 'v1-followup',

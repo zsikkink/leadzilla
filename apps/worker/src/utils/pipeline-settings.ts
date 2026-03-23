@@ -69,6 +69,14 @@ async function loadPipelineSettingValue(key: string): Promise<unknown | null> {
   }
 }
 
+function parseFractionSettingValue(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    return null;
+  }
+  return parsed;
+}
+
 /**
  * Batch-loads all PipelineSetting rows and merges with defaults.
  * Call once at the start of a job handler for runtime-configurable behavior.
@@ -206,13 +214,32 @@ export async function loadSearchEfficiency(icpProfileId: string): Promise<number
  */
 export async function getScoreQualificationThreshold(): Promise<number> {
   const valueJson = await loadPipelineSettingValue('scoreQualificationThreshold');
-  if (valueJson !== null && valueJson !== undefined) {
-    const val = typeof valueJson === 'number' ? valueJson : Number(valueJson);
-    if (Number.isFinite(val) && val >= 0 && val <= 1) {
-      return val;
-    }
+  const threshold = parseFractionSettingValue(valueJson);
+  if (threshold !== null) {
+    return threshold;
   }
   return 0.4;
+}
+
+/**
+ * Strict qualification threshold loader for worker flows that must not proceed
+ * on fallback values when eligibility truth is unavailable.
+ */
+export async function loadVerifiedScoreQualificationThreshold(): Promise<number> {
+  let setting: Awaited<ReturnType<typeof getPipelineSetting>>;
+  try {
+    setting = await getPipelineSetting('scoreQualificationThreshold');
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to load scoreQualificationThreshold: ${message}`);
+  }
+
+  const threshold = parseFractionSettingValue(setting?.valueJson);
+  if (threshold === null) {
+    throw new Error('scoreQualificationThreshold is missing or invalid in pipeline settings');
+  }
+
+  return threshold;
 }
 
 /**

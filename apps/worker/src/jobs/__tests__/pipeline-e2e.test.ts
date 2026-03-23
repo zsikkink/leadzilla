@@ -407,20 +407,14 @@ describe('pipeline full lifecycle', () => {
   it('stage 3: message.generate creates initial draft + auto-approved variants', async () => {
     bossSendSpy.mockClear();
 
-    const prediction = await prisma.leadScorePrediction.findFirst({
-      where: { leadId: LEAD_ID, icpProfileId: ICP_ID },
-    });
-
     const payload: MessageGenerateJobPayload = {
       runId: `msggen-${RUN_ID}`,
       leadId: LEAD_ID,
       icpProfileId: ICP_ID,
-      scorePredictionId: prediction?.id,
       knowledgeEntryIds: [],
       promptVersion: 'v1',
       channel: 'EMAIL',
       correlationId: `corr-${RUN_ID}`,
-      autoApprove: true,
     };
 
     const deps: MessageGenerateJobDependencies = {
@@ -521,7 +515,6 @@ describe('pipeline full lifecycle', () => {
     const generatePayload = extractBossPayload<MessageGenerateJobPayload>('message.generate');
     expect(generatePayload.leadId).toBe(LEAD_ID);
     expect(generatePayload.followUpNumber).toBe(1);
-    expect(generatePayload.autoApprove).toBe(true);
     expect(generatePayload.channel).toBe('EMAIL');
     expect(generatePayload.parentMessageSendId).toBe(initialSend!.id);
 
@@ -545,7 +538,6 @@ describe('pipeline full lifecycle', () => {
       followUpNumber: 1,
       parentMessageSendId: initialSend!.id,
       previouslyPitchedFeatures: [ICP_FEATURES[0]!], // 'Payment Links' was pitched initially
-      autoApprove: true,
       channel: 'WHATSAPP',
       knowledgeEntryIds: [],
       promptVersion: 'v1-followup',
@@ -656,7 +648,6 @@ describe('pipeline full lifecycle', () => {
       followUpNumber: 2,
       parentMessageSendId: fu1Send!.id,
       previouslyPitchedFeatures: [ICP_FEATURES[0]!, 'Order Management'],
-      autoApprove: true,
       channel: 'WHATSAPP',
       knowledgeEntryIds: [],
       promptVersion: 'v1-followup',
@@ -749,7 +740,6 @@ describe('pipeline full lifecycle', () => {
       followUpNumber: 3,
       parentMessageSendId: fu2Send!.id,
       previouslyPitchedFeatures: [ICP_FEATURES[0]!, 'Order Management', 'WhatsApp Commerce'],
-      autoApprove: true,
       channel: 'WHATSAPP',
       knowledgeEntryIds: [],
       promptVersion: 'v1-followup',

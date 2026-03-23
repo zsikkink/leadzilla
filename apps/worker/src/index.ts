@@ -735,7 +735,6 @@ async function main(): Promise<void> {
               runId: job.data.runId,
               leadId: payload.leadId,
               icpProfileId: payload.icpProfileId,
-              scorePredictionId: payload.scorePredictionId,
               knowledgeEntryIds: [],
               promptVersion: 'v1',
               correlationId: job.data.correlationId ?? job.id,
