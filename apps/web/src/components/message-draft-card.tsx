@@ -1,7 +1,7 @@
 'use client';
 
 import type { MessageDraftResponse, MessageVariantResponse } from '@lead-flood/contracts';
-import { Check, ChevronDown, ChevronUp, Pencil, Send } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Send } from 'lucide-react';
 import { useState } from 'react';
 
 import { useAuth } from '../hooks/use-auth.js';
@@ -28,27 +28,6 @@ function VariantEditor({
   onApprove: (variantId: string) => void;
   onSend: (variantId: string) => void;
 }) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [editSubject, setEditSubject] = useState(variant.subject ?? '');
-  const [editBody, setEditBody] = useState(variant.bodyText);
-  const [savedSubject, setSavedSubject] = useState(variant.subject ?? '');
-  const [savedBody, setSavedBody] = useState(variant.bodyText);
-
-  const handleSave = () => {
-    setSavedSubject(editSubject);
-    setSavedBody(editBody);
-    setIsEditing(false);
-  };
-
-  const handleCancel = () => {
-    setEditSubject(savedSubject);
-    setEditBody(savedBody);
-    setIsEditing(false);
-  };
-
-  const displaySubject = isEditing ? editSubject : savedSubject;
-  const displayBody = isEditing ? editBody : savedBody;
-
   return (
     <div className="rounded-xl border border-border/50 bg-zbooni-dark/40 p-4 transition-colors hover:border-border/70">
       <div className="mb-3 flex items-center justify-between">
@@ -66,90 +45,37 @@ function VariantEditor({
             {variant.channel}
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          {!isEditing ? (
-            <button
-              type="button"
-              onClick={() => setIsEditing(true)}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground/60 transition-colors hover:bg-muted/20 hover:text-muted-foreground"
-            >
-              <Pencil className="h-3 w-3" /> Edit
-            </button>
-          ) : null}
-        </div>
       </div>
 
-      {isEditing ? (
-        <div className="space-y-3">
-          {variant.channel === 'EMAIL' ? (
-            <div>
-              <label className="mb-1 block text-[11px] font-medium text-muted-foreground/60">Subject</label>
-              <input
-                value={editSubject}
-                onChange={(e) => setEditSubject(e.target.value)}
-                className="w-full rounded-lg border border-border/50 bg-background/60 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/20"
-              />
-            </div>
-          ) : null}
-          <div>
-            <label className="mb-1 block text-[11px] font-medium text-muted-foreground/60">Body</label>
-            <textarea
-              value={editBody}
-              onChange={(e) => setEditBody(e.target.value)}
-              rows={6}
-              className="w-full resize-y rounded-lg border border-border/50 bg-background/60 px-3 py-2 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground/40 focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/20"
-            />
-          </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={handleSave}
-              className="inline-flex items-center gap-1 rounded-lg bg-zbooni-green/20 px-3 py-1.5 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/30"
-            >
-              <Check className="h-3 w-3" /> Save
-            </button>
-            <button
-              type="button"
-              onClick={handleCancel}
-              className="inline-flex items-center gap-1 rounded-lg bg-muted/20 px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/30"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : (
-        <>
-          {displaySubject ? (
-            <p className="mb-1.5 text-sm font-medium text-foreground/90">Subject: {displaySubject}</p>
-          ) : null}
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{displayBody}</p>
-        </>
-      )}
+      <>
+        {variant.subject ? (
+          <p className="mb-1.5 text-sm font-medium text-foreground/90">Subject: {variant.subject}</p>
+        ) : null}
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{variant.bodyText}</p>
+      </>
 
-      {!isEditing ? (
-        <div className="mt-3 flex gap-2">
-          {isPending ? (
-            <button
-              type="button"
-              disabled={!!actionInProgress}
-              onClick={() => onApprove(variant.id)}
-              className="inline-flex items-center gap-1 rounded-lg bg-zbooni-green/20 px-3 py-1.5 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/30 disabled:opacity-50"
-            >
-              <Check className="h-3 w-3" /> Approve
-            </button>
-          ) : null}
-          {isApproved ? (
-            <button
-              type="button"
-              disabled={!!actionInProgress}
-              onClick={() => onSend(variant.id)}
-              className="zbooni-gradient-bg inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold text-zbooni-dark transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              <Send className="h-3 w-3" /> Send
-            </button>
-          ) : null}
-        </div>
-      ) : null}
+      <div className="mt-3 flex gap-2">
+        {isPending ? (
+          <button
+            type="button"
+            disabled={!!actionInProgress}
+            onClick={() => onApprove(variant.id)}
+            className="inline-flex items-center gap-1 rounded-lg bg-zbooni-green/20 px-3 py-1.5 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/30 disabled:opacity-50"
+          >
+            <Check className="h-3 w-3" /> Approve
+          </button>
+        ) : null}
+        {isApproved ? (
+          <button
+            type="button"
+            disabled={!!actionInProgress}
+            onClick={() => onSend(variant.id)}
+            className="zbooni-gradient-bg inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold text-zbooni-dark transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            <Send className="h-3 w-3" /> Send
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

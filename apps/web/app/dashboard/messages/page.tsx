@@ -320,7 +320,7 @@ export default function MessagesPage() {
             {drafts.data ? `${drafts.data.total} drafts` : 'Loading...'}
           </p>
           <p className="mt-1 text-xs text-muted-foreground/60">
-            Drafts appear here only after an operator triggers generation from a qualified lead. Sending then depends on approval or auto-approval settings.
+            Drafts appear here only after an operator triggers generation from a qualified lead. Review them here, then approve or reject; approved initial drafts queue their send automatically unless auto-approval already handled it.
           </p>
         </div>
         <div className="flex items-center gap-3">
