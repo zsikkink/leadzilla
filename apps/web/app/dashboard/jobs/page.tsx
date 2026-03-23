@@ -13,11 +13,8 @@ import {
   Clock,
   Globe,
   Loader2,
-  MapPin,
   Play,
-  RefreshCw,
-  Search,
-  Target,
+  Users,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -28,6 +25,18 @@ import { useAuth } from '../../../src/hooks/use-auth.js';
 // ── Constants ────────────────────────────────────────────────────────────
 const AUTO_REFRESH_MS = 10_000;
 const PAGE_SIZE = 12;
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+function formatDuration(startedAt: string | null, finishedAt: string | null): string {
+  if (!startedAt) return '';
+  const start = new Date(startedAt).getTime();
+  const end = finishedAt ? new Date(finishedAt).getTime() : Date.now();
+  const totalSeconds = Math.round((end - start) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
+}
 
 // ── Status config ────────────────────────────────────────────────────────
 const STATUS_CONFIG: Record<
@@ -97,10 +106,25 @@ function RunCard({
 }) {
   const createdDate = new Date(run.createdAt);
   const isActive = run.status === 'RUNNING' || run.status === 'QUEUED';
-  const progressPct =
-    run.totalItems > 0
-      ? Math.round((run.processedItems / run.totalItems) * 100)
+  const isTerminal = run.status === 'SUCCEEDED' || run.status === 'FAILED' || run.status === 'PARTIAL' || run.status === 'CANCELLED';
+  const leadsFound = run.converted ?? 0;
+  const leadsTarget = run.limit;
+  const leadProgressPct =
+    leadsTarget > 0
+      ? Math.min(Math.round((leadsFound / leadsTarget) * 100), 100)
       : 0;
+
+  // Country display: show "All countries" when 3+ countries
+  const countryLabel = run.countries.length > 3
+    ? `All countries (${run.countries.length})`
+    : run.countries.join(', ');
+
+  // Duration display
+  const duration = isTerminal
+    ? formatDuration(run.startedAt, run.finishedAt)
+    : isActive && run.startedAt
+      ? formatDuration(run.startedAt, null)
+      : '';
 
   return (
     <button
@@ -138,7 +162,7 @@ function RunCard({
         <div className="mt-2.5 flex items-center gap-1.5">
           <Globe className="h-3 w-3 shrink-0 text-muted-foreground/30" />
           <p className="truncate text-[11px] text-muted-foreground/50">
-            {run.countries.join(', ')}
+            {countryLabel}
           </p>
         </div>
       )}
@@ -150,7 +174,7 @@ function RunCard({
             <div
               className="h-full rounded-full bg-blue-400 transition-all duration-500 ease-out"
               style={{
-                width: `${Math.max(progressPct, run.processedItems > 0 ? 3 : 0)}%`,
+                width: `${Math.max(leadProgressPct, leadsFound > 0 ? 3 : 0)}%`,
               }}
             />
           </div>
@@ -159,7 +183,9 @@ function RunCard({
               ? 'Searching\u2026'
               : run.currentStage === 'processing'
                 ? 'Processing pipeline\u2026'
-                : `${progressPct}% complete`}
+                : leadsTarget > 0
+                  ? `${leadsFound} / ${leadsTarget} leads`
+                  : `${leadProgressPct}% complete`}
           </p>
         </div>
       )}
@@ -167,18 +193,16 @@ function RunCard({
       {/* Metrics row */}
       <div className="mt-3 flex items-center gap-4 border-t border-border/20 pt-3">
         <div className="flex items-center gap-1.5">
-          <Search className="h-3 w-3 text-blue-400/60" />
-          <span className="text-[11px] text-muted-foreground/50">Tasks</span>
-          <span className="font-mono text-xs font-bold tabular-nums">
-            {run.totalItems}
-          </span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <Target className="h-3 w-3 text-zbooni-green/60" />
-          <span className="text-[11px] text-muted-foreground/50">Done</span>
+          <Users className="h-3 w-3 text-zbooni-green/60" />
+          <span className="text-[11px] text-muted-foreground/50">Leads</span>
           <span className="font-mono text-xs font-bold tabular-nums text-zbooni-green">
-            {run.processedItems}
+            {leadsFound}
           </span>
+          {leadsTarget > 0 && (
+            <span className="font-mono text-[10px] tabular-nums text-muted-foreground/40">
+              / {leadsTarget}
+            </span>
+          )}
         </div>
         {run.failedItems > 0 && (
           <div className="flex items-center gap-1.5">
@@ -189,11 +213,11 @@ function RunCard({
             </span>
           </div>
         )}
-        {run.limit > 0 && (
+        {duration && (
           <div className="ml-auto flex items-center gap-1">
-            <MapPin className="h-3 w-3 text-muted-foreground/25" />
-            <span className="text-[10px] text-muted-foreground/35">
-              limit {run.limit}
+            <Clock className="h-3 w-3 text-muted-foreground/25" />
+            <span className="text-[10px] tabular-nums text-muted-foreground/35">
+              {duration}
             </span>
           </div>
         )}
@@ -247,7 +271,6 @@ export default function DiscoveryRunsPage() {
   const { apiClient } = useAuth();
   const router = useRouter();
   const [page, setPage] = useState(1);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Fetch discovery runs
@@ -303,12 +326,6 @@ export default function DiscoveryRunsPage() {
     };
   }, [hasActiveRun, runs.refetch]);
 
-  const handleManualRefresh = useCallback(() => {
-    setIsRefreshing(true);
-    runs.refetch();
-    setTimeout(() => setIsRefreshing(false), 800);
-  }, [runs.refetch]);
-
   // Pagination
   const totalPages = runs.data
     ? Math.max(1, Math.ceil(runs.data.total / PAGE_SIZE))
@@ -326,25 +343,12 @@ export default function DiscoveryRunsPage() {
             Track and monitor your automated lead discovery campaigns
           </p>
         </div>
-        <div className="flex items-center gap-3 shrink-0">
-          {hasActiveRun && (
-            <span className="flex items-center gap-1.5 text-[11px] font-semibold text-blue-400">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              Live
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={handleManualRefresh}
-            disabled={runs.isLoading}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-border/30 bg-zbooni-dark/40 text-muted-foreground/60 transition-colors hover:border-border/50 hover:text-foreground disabled:opacity-50"
-            title="Refresh now"
-          >
-            <RefreshCw
-              className={`h-3.5 w-3.5 ${isRefreshing || runs.isLoading ? 'animate-spin' : ''}`}
-            />
-          </button>
-        </div>
+        {hasActiveRun && (
+          <span className="flex items-center gap-1.5 text-[11px] font-semibold text-blue-400 shrink-0">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Live
+          </span>
+        )}
       </div>
 
       {/* Error state */}

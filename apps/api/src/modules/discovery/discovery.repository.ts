@@ -386,6 +386,10 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
             ? [icpProfileId]
             : [];
 
+        const converted = typeof rowResultJson.converted === 'number'
+          ? rowResultJson.converted
+          : undefined;
+
         return {
           runId: row.id,
           status,
@@ -399,6 +403,7 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
           icpProfileIds,
           countries,
           limit,
+          ...(converted !== undefined ? { converted } : {}),
           errorMessage: row.error,
           currentStage: deriveCurrentStage(rowResultJson, row.status),
         };
