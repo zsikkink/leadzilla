@@ -2,7 +2,6 @@
 
 import {
   AlertTriangle,
-  CheckCircle2,
   DollarSign,
   FileText,
   Gauge,
@@ -748,29 +747,21 @@ export default function ControlsSettingsPage() {
           icon={Zap}
           iconColor="text-zbooni-green"
           bgColor="bg-zbooni-green/10"
-          label="Provider Status"
+          label="Provider Status Notes"
         >
           <div className="space-y-2">
-            {[
-              { name: 'SerpAPI', configured: true },
-              { name: 'Hunter', configured: true },
-              { name: 'Apollo', configured: false },
-            ].map((provider) => (
-              <div key={provider.name} className="flex items-center justify-between">
+            <p className="text-[10px] font-medium text-muted-foreground/40">
+              Static reference only. Live provider probes are not wired on this screen.
+            </p>
+            {['SerpAPI', 'Hunter', 'Apollo'].map((provider) => (
+              <div key={provider} className="flex items-center justify-between">
                 <span className="text-[11px] font-medium text-muted-foreground/60">
-                  {provider.name}
+                  {provider}
                 </span>
-                {provider.configured ? (
-                  <div className="flex items-center gap-1">
-                    <CheckCircle2 className="h-3 w-3 text-zbooni-green" />
-                    <span className="text-[10px] font-semibold text-zbooni-green">Active</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1">
-                    <AlertTriangle className="h-3 w-3 text-muted-foreground/40" />
-                    <span className="text-[10px] font-semibold text-muted-foreground/40">Not configured</span>
-                  </div>
-                )}
+                <div className="flex items-center gap-1">
+                  <AlertTriangle className="h-3 w-3 text-muted-foreground/40" />
+                  <span className="text-[10px] font-semibold text-muted-foreground/40">Not probed here</span>
+                </div>
               </div>
             ))}
           </div>
@@ -781,15 +772,15 @@ export default function ControlsSettingsPage() {
           icon={AlertTriangle}
           iconColor="text-yellow-400"
           bgColor="bg-yellow-500/10"
-          label="DLQ Depth"
+          label="DLQ Depth Placeholder"
         >
           <div className="flex flex-col items-center py-2">
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-zbooni-green" />
-              <span className="text-2xl font-extrabold tracking-tight text-zbooni-green">0</span>
+              <AlertTriangle className="h-5 w-5 text-muted-foreground/40" />
+              <span className="text-2xl font-extrabold tracking-tight text-muted-foreground/60">--</span>
             </div>
             <p className="mt-1 text-[10px] font-medium text-muted-foreground/40">
-              All queues healthy
+              Live queue depth is not wired on this screen
             </p>
           </div>
         </StatusCard>
@@ -806,10 +797,14 @@ export default function ControlsSettingsPage() {
               {stats.data?.pendingApprovals ?? pendingDrafts.data?.total ?? 0}
             </span>
             <p className="mt-1 text-[10px] font-medium text-muted-foreground/40">
-              Message drafts awaiting review
+              Operator-generated drafts awaiting approval
             </p>
           </div>
         </StatusCard>
+      </div>
+
+      <div className="rounded-2xl border border-border/50 bg-card/60 px-4 py-3 text-xs text-muted-foreground/70 shadow-sm">
+        Qualified leads do not auto-enter messaging. Operators generate drafts from Leads, and sending then depends on approval or auto-approval settings.
       </div>
 
       {/* ── AI Role / Identity ──────────────────────────────────────── */}

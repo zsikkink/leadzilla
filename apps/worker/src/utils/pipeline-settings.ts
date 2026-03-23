@@ -307,7 +307,7 @@ export async function getWhatsappDailyLimit(): Promise<number> {
 }
 
 /**
- * Email daily send cap (overrides warmup maxDaily). Default: 100.
+ * Email daily send cap (overrides warmup maxDaily). Default: 10.
  */
 export async function getEmailDailyLimit(): Promise<number> {
   const valueJson = await loadPipelineSettingValue('emailDailyLimit');
@@ -317,7 +317,7 @@ export async function getEmailDailyLimit(): Promise<number> {
       return val;
     }
   }
-  return 100;
+  return 10;
 }
 
 /**

@@ -553,8 +553,8 @@ The weights shift dynamically based on how good the ML model is:
 | Band | Score Range | What Happens |
 |------|-----------|--------------|
 | **LOW** | Below 0.34 (34%) | Lead is **rejected** — not worth pursuing. No further processing. |
-| **MEDIUM** | 0.34 – 0.66 | Lead is **qualified**. Gets post-scoring Apollo enrichment (email only). Moves to message generation. |
-| **HIGH** | 0.67+ (67%) | Lead is **qualified**. Gets full Apollo enrichment (email + phone). Auto-approved for messaging if that setting is on. |
+| **MEDIUM** | 0.34 – 0.66 | Lead is **qualified**. Gets post-scoring Apollo enrichment (email only) and stays in the manual draft queue until an operator triggers message generation. |
+| **HIGH** | 0.67+ (67%) | Lead is **qualified**. Gets full Apollo enrichment (email + phone) and stays in the manual draft queue until an operator triggers message generation. Auto-approval still applies only after a draft exists and that setting is on. |
 
 The **qualification threshold** (minimum score to not be rejected) defaults to 0.40 but is configurable via pipeline settings. Note this is different from the band thresholds — a lead can be in the LOW band (below 0.34) but still above 0.40 if you've customized the settings.
 
@@ -571,7 +571,7 @@ For MEDIUM and HIGH leads only. This is where Apollo's **paid** data gets used s
 
 If Apollo isn't configured, or if the lead already has both email and phone, this step is skipped.
 
-After enrichment, the system updates the lead's contact information and enqueues `message.generate`.
+After enrichment, the system updates the lead's contact information and keeps the lead in the qualified/manual draft-generation flow. An operator or API call must explicitly trigger `message.generate`.
 
 ---
 
@@ -579,7 +579,7 @@ After enrichment, the system updates the lead's contact information and enqueues
 
 **Job**: `message.generate`
 
-For each qualified lead, the system uses **GPT-4o** to write a personalized outreach message. Here's what the AI receives as context:
+When an operator explicitly triggers draft generation for a qualified lead, the system uses **GPT-4o** to write a personalized outreach message. Here's what the AI receives as context:
 
 **Lead context**:
 - Contact name, email, company name, industry, country
@@ -633,7 +633,7 @@ Delivers the approved message through the appropriate channel.
 - **Provider idempotency**: Email via Resend also carries an `Idempotency-Key`. WhatsApp via Trengo does not have an equivalent provider token, so the persisted `SENDING` claim is the primary duplicate-prevention boundary there.
 
 #### Email (via Resend)
-- **Daily limit**: Configurable (`emailDailyLimit` setting, default 100/day). The rate limiter tracks sends per 24-hour rolling window.
+- **Daily limit**: Configurable (`emailDailyLimit` setting, default 10/day). The rate limiter tracks sends per 24-hour rolling window.
 - **When rate-limited**: The job doesn't fail — it re-enqueues itself with a `startAfter` timestamp set to when the next sending window opens. This means emails smoothly spread across days instead of piling up.
 - **Bounce handling**: Resend sends webhook events when emails bounce. These create `FeedbackEvent` records with type `BOUNCED`. Bounced leads are suppressed from all future sends.
 

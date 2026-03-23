@@ -76,7 +76,7 @@ The discovery system uses Google Places to find businesses matching your Ideal C
 3. **Pre-qualify** — filters results against minimum criteria (reviews, country)
 4. **Convert** — enriches qualified businesses into leads (website scraping, contact discovery)
 5. **Score** — ML + rule-based scoring against ICP fit
-6. **Message** — generates personalized outreach for qualified leads
+6. **Message** — operators trigger draft generation for qualified leads, and approval gates sending
 
 Required worker env for discovery:
 

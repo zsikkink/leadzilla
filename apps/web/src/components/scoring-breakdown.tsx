@@ -61,23 +61,15 @@ export function ScoringBreakdown({
 
     async function fetchScoring() {
       try {
-        // Fetch both endpoints in parallel using the same base URL pattern as apiClient
-        const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:5050';
-        const token = localStorage.getItem('auth_token');
-        const headers: Record<string, string> = {
-          'content-type': 'application/json',
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
-        };
-
         const [snapRes, detRes] = await Promise.allSettled([
-          fetch(`${baseUrl}/v1/scoring/leads/${leadId}/latest-feature-snapshot`, { headers }),
-          fetch(`${baseUrl}/v1/scoring/leads/${leadId}/latest-deterministic`, { headers }),
+          apiClient.getLatestLeadFeatureSnapshot(leadId),
+          apiClient.getLatestLeadDeterministicScore(leadId),
         ]);
 
         if (cancelled) return;
 
-        if (snapRes.status === 'fulfilled' && snapRes.value.ok) {
-          const data = await snapRes.value.json() as {
+        if (snapRes.status === 'fulfilled') {
+          const data = snapRes.value as {
             snapshot: {
               id: string;
               featuresJson: unknown;
@@ -95,8 +87,8 @@ export function ScoringBreakdown({
           }
         }
 
-        if (detRes.status === 'fulfilled' && detRes.value.ok) {
-          const data = await detRes.value.json() as {
+        if (detRes.status === 'fulfilled') {
+          const data = detRes.value as {
             deterministicScore: number | null;
             ruleEvaluation: RuleEval[];
             predictionId: string | null;

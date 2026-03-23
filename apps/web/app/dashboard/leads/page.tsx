@@ -284,6 +284,9 @@ export default function LeadsPage() {
         <p className="mt-0.5 text-sm text-muted-foreground">
           {leads.data ? `${leads.data.total} total leads` : 'Loading...'}
         </p>
+        <p className="mt-1 text-xs text-muted-foreground/60">
+          Qualified leads stay in operator review until you generate the initial draft. Sending then depends on approval or auto-approval settings.
+        </p>
       </div>
 
       <LeadsNav active={activeTab === 'rejected' ? 'rejected' : 'main'} />
@@ -450,7 +453,7 @@ export default function LeadsPage() {
                                   {lead.latestIcpProfileId ? (
                                     <button
                                       type="button"
-                                      title="Generate message draft"
+                                      title="Generate the initial draft for this qualified lead. Sending then depends on approval or auto-approval settings."
                                       disabled={generatingForLead === lead.id}
                                       className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-zbooni-teal/15 hover:text-zbooni-teal disabled:opacity-50"
                                       onClick={() => handleGenerateMessage(lead.id, lead.latestIcpProfileId!, lead.firstName ?? '', lead.latestScorePredictionId ?? null)}
