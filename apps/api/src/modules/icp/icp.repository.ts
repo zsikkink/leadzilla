@@ -13,7 +13,7 @@ import type {
   UpdateIcpProfileRequest,
   UpdateQualificationRuleRequest,
 } from '@lead-flood/contracts';
-import { PrismaRuntime, prisma, toInputJson, type Prisma } from '@lead-flood/db';
+import { PrismaRuntime, prisma, toInputJson } from '@lead-flood/db';
 
 import { IcpNotFoundError, IcpNotImplementedError } from './icp.errors.js';
 

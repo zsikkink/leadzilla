@@ -407,10 +407,6 @@ describe('pipeline full lifecycle', () => {
   it('stage 3: message.generate creates initial draft + auto-approved variants', async () => {
     bossSendSpy.mockClear();
 
-    const prediction = await prisma.leadScorePrediction.findFirst({
-      where: { leadId: LEAD_ID, icpProfileId: ICP_ID },
-    });
-
     const payload: MessageGenerateJobPayload = {
       runId: `msggen-${RUN_ID}`,
       leadId: LEAD_ID,

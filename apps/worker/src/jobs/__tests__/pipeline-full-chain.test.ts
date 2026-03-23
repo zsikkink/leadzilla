@@ -400,10 +400,6 @@ describe('pipeline full chain: features.compute → message.send', () => {
   it('stage 4: message.generate creates drafts with PENDING approval', async () => {
     bossSendSpy.mockClear();
 
-    const prediction = await prisma.leadScorePrediction.findFirst({
-      where: { leadId: discoveredLeadId, icpProfileId: ICP_ID },
-    });
-
     const payload: MessageGenerateJobPayload = {
       runId: `msggen-${RUN_ID}`,
       leadId: discoveredLeadId,
@@ -531,11 +527,6 @@ describe('pipeline full chain: features.compute → message.send', () => {
   // -----------------------------------------------------------------------
   it('stage 6: message.generate (WhatsApp) + message.send delivers via Trengo', async () => {
     bossSendSpy.mockClear();
-
-    // Generate a WhatsApp follow-up message (auto-approved)
-    const prediction = await prisma.leadScorePrediction.findFirst({
-      where: { leadId: discoveredLeadId, icpProfileId: ICP_ID },
-    });
 
     const emailSend = await prisma.messageSend.findFirst({
       where: { leadId: discoveredLeadId, followUpNumber: 0, status: 'SENT' },
