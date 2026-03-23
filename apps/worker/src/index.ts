@@ -85,6 +85,12 @@ import {
   type MessageSendJobPayload,
 } from './jobs/message.send.job.js';
 import {
+  MESSAGE_APPROVAL_RECOVERY_JOB_NAME,
+  handleMessageApprovalRecoveryJob,
+  recoverApprovedInitialDraftsMissingMessageSends,
+  type MessageApprovalRecoveryJobPayload,
+} from './jobs/message.approval.recovery.job.js';
+import {
   MODEL_EVALUATE_JOB_NAME,
   handleModelEvaluateJob,
   type ModelEvaluateJobPayload,
@@ -415,6 +421,9 @@ async function main(): Promise<void> {
   };
 
   await runOutboxDispatch();
+  await recoverApprovedInitialDraftsMissingMessageSends(logger, { boss }).catch((error: unknown) => {
+    logger.warn({ error }, 'Failed manual approval MessageSend recovery on worker startup');
+  });
   await sweepStaleDiscoveryPipelineJobs({
     boss: {
       cancel: (name, id) => boss.cancel(name, id),
@@ -777,6 +786,12 @@ async function main(): Promise<void> {
         emailRateLimiter,
         boss,
       }),
+  );
+  await registerWorker<MessageApprovalRecoveryJobPayload>(
+    boss,
+    logger,
+    MESSAGE_APPROVAL_RECOVERY_JOB_NAME,
+    (jobLogger, job) => handleMessageApprovalRecoveryJob(jobLogger, job, { boss }),
   );
   await registerWorker<AnalyticsRollupJobPayload>(
     boss,

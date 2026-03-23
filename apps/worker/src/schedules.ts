@@ -11,6 +11,11 @@ import {
   FOLLOWUP_CHECK_RETRY_OPTIONS,
 } from './jobs/followup.check.job.js';
 import {
+  MESSAGE_APPROVAL_RECOVERY_JOB_NAME,
+  type MessageApprovalRecoveryJobPayload,
+  MESSAGE_APPROVAL_RECOVERY_RETRY_OPTIONS,
+} from './jobs/message.approval.recovery.job.js';
+import {
   type HeartbeatJobPayload,
 } from './jobs/heartbeat.job.js';
 import {
@@ -198,6 +203,18 @@ export async function registerWorkerSchedules(
     {
       singletonKey: 'schedule:manager.analyze',
       ...MANAGER_ANALYZE_RETRY_OPTIONS,
+    },
+  );
+
+  await boss.schedule(
+    MESSAGE_APPROVAL_RECOVERY_JOB_NAME,
+    '*/5 * * * *',
+    {
+      correlationId: 'scheduler:message.approval.recovery',
+    } satisfies MessageApprovalRecoveryJobPayload,
+    {
+      singletonKey: 'schedule:message.approval.recovery',
+      ...MESSAGE_APPROVAL_RECOVERY_RETRY_OPTIONS,
     },
   );
 

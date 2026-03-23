@@ -7,5 +7,8 @@ describe('WORKER_QUEUE_DEFINITIONS', () => {
     expect(WORKER_QUEUE_DEFINITIONS.some((queue) => queue.name === 'search-task.recovery')).toBe(
       true,
     );
+    expect(WORKER_QUEUE_DEFINITIONS.some((queue) => queue.name === 'message.approval.recovery')).toBe(
+      true,
+    );
   });
 });
