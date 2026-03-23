@@ -10,122 +10,142 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { TrendingUp } from 'lucide-react';
 
-import { getSupabaseBrowserClient } from '@/lib/supabase-client.js';
+import { getSupabaseBrowserClient } from '../lib/supabase-client.js';
 
-// ── Types ──────────────────────────────────────────────────────────────────
-type DateRange = '7d' | '30d' | '90d' | 'all';
-
-interface DailyBucket {
+// ── Types ────────────────────────────────────────────────────
+interface TimeSeriesRow {
   date: string;
-  Discovered: number;
-  Qualified: number;
-  Rejected: number;
-  Messaged: number;
-  Replied: number;
+  discovered: number;
+  scored: number;
+  messaged: number;
 }
 
-interface LeadRow {
-  createdAt: string;
-  status: string;
+interface PipelineTimeSeriesChartProps {
+  icpProfileId?: string | undefined;
 }
 
-// ── Chart line config ──────────────────────────────────────────────────────
+// ── Supabase query helpers ───────────────────────────────────
 
-// Premium palette — each color chosen for WCAG contrast on dark backgrounds
-// and visual distinction from its neighbors on screen.
-const LINES = [
-  { key: 'Discovered', color: '#60A5FA', label: 'Discovered' },   // blue-400
-  { key: 'Qualified', color: '#3CC8E0', label: 'Qualified' },     // teal (zbooni-teal)
-  { key: 'Rejected', color: '#F87171', label: 'Rejected' },       // red-400
-  { key: 'Messaged', color: '#7BFF6B', label: 'Messaged' },       // zbooni-green
-  { key: 'Replied', color: '#C084FC', label: 'Replied' },         // purple-400
-] as const;
+/**
+ * Fetches lead counts grouped by creation date.
+ * When icpProfileId is provided, joins through business_conversions to filter.
+ */
+async function fetchTimeSeriesData(
+  icpProfileId?: string | undefined,
+): Promise<TimeSeriesRow[]> {
+  const supabase = getSupabaseBrowserClient();
 
-// ── Date range helpers ─────────────────────────────────────────────────────
-function getStartDate(range: DateRange): Date | null {
-  if (range === 'all') return null;
-  const now = new Date();
-  const days = range === '7d' ? 7 : range === '30d' ? 30 : 90;
-  return new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-}
+  // Query leads grouped by date, using Lead table (PascalCase in Supabase)
+  // We'll get all non-deleted leads and group by date
+  let leadsQuery = supabase
+    .from('Lead')
+    .select('id, status, createdAt')
+    .is('deletedAt', null);
 
-function toDateKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
+  // When ICP filter is set, get lead IDs from business_conversions first
+  let filteredLeadIds: string[] | null = null;
+  if (icpProfileId) {
+    const { data: conversions } = await supabase
+      .from('business_conversions')
+      .select('leadId')
+      .eq('icpProfileId', icpProfileId);
 
-function formatLabel(dateStr: string, range: DateRange): string {
-  const d = new Date(dateStr + 'T00:00:00');
-  if (range === '7d') {
-    return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-  }
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
-// Statuses that count as "qualified or later" (passed the quality gate)
-const QUALIFIED_OR_LATER = new Set([
-  'qualified',
-  'drafted',
-  'messaged',
-  'replied',
-  'cold',
-]);
-
-const MESSAGED_OR_LATER = new Set(['messaged', 'replied', 'cold']);
-const REPLIED_OR_LATER = new Set(['replied']);
-
-// ── Bucketing ──────────────────────────────────────────────────────────────
-function bucketByDay(rows: LeadRow[], range: DateRange): DailyBucket[] {
-  const startDate = getStartDate(range);
-  const buckets = new Map<string, DailyBucket>();
-
-  // Pre-fill every day in the range so we get continuous lines
-  const end = new Date();
-  const start = startDate ?? (rows.length > 0 ? new Date(rows[rows.length - 1]!.createdAt) : end);
-  const cursor = new Date(start);
-  cursor.setHours(0, 0, 0, 0);
-
-  while (cursor <= end) {
-    const key = toDateKey(cursor);
-    buckets.set(key, { date: key, Discovered: 0, Qualified: 0, Rejected: 0, Messaged: 0, Replied: 0 });
-    cursor.setDate(cursor.getDate() + 1);
-  }
-
-  for (const row of rows) {
-    const day = toDateKey(new Date(row.createdAt));
-    let bucket = buckets.get(day);
-    if (!bucket) {
-      bucket = { date: day, Discovered: 0, Qualified: 0, Rejected: 0, Messaged: 0, Replied: 0 };
-      buckets.set(day, bucket);
+    if (conversions && conversions.length > 0) {
+      filteredLeadIds = conversions.map((c: { leadId: string }) => c.leadId);
+      leadsQuery = leadsQuery.in('id', filteredLeadIds);
+    } else {
+      // No leads for this ICP
+      return [];
     }
-
-    // Every lead counts as "discovered" on its creation date
-    bucket.Discovered += 1;
-
-    const s = row.status;
-    if (QUALIFIED_OR_LATER.has(s)) bucket.Qualified += 1;
-    if (s === 'rejected') bucket.Rejected += 1;
-    if (MESSAGED_OR_LATER.has(s)) bucket.Messaged += 1;
-    if (REPLIED_OR_LATER.has(s)) bucket.Replied += 1;
   }
 
-  return Array.from(buckets.values()).sort((a, b) => a.date.localeCompare(b.date));
+  const { data: leads, error } = await leadsQuery;
+
+  if (error || !leads) {
+    console.error('Failed to fetch leads for time series:', error);
+    return [];
+  }
+
+  // Also fetch score predictions for "scored" counts
+  let predictionsQuery = supabase
+    .from('LeadScorePrediction')
+    .select('leadId, predictedAt');
+
+  if (icpProfileId) {
+    predictionsQuery = predictionsQuery.eq('icpProfileId', icpProfileId);
+  }
+
+  const { data: predictions } = await predictionsQuery;
+
+  // Also fetch message sends for "messaged" counts
+  let sendsQuery = supabase
+    .from('MessageSend')
+    .select('id, sentAt')
+    .in('status', ['SENT', 'DELIVERED', 'REPLIED']);
+
+  // For ICP filtering on sends, we'd need to join through MessageDraft
+  // but Supabase doesn't support multi-level joins well.
+  // Instead, if ICP-filtered, use the lead IDs we already have.
+  if (icpProfileId && filteredLeadIds && filteredLeadIds.length > 0) {
+    // Get drafts for these leads
+    const { data: drafts } = await supabase
+      .from('MessageDraft')
+      .select('id')
+      .in('leadId', filteredLeadIds);
+
+    if (drafts && drafts.length > 0) {
+      const draftIds = drafts.map((d: { id: string }) => d.id);
+      sendsQuery = sendsQuery.in('messageDraftId', draftIds);
+    } else {
+      // No drafts means no sends
+      sendsQuery = sendsQuery.eq('id', 'IMPOSSIBLE_ID_NO_MATCH');
+    }
+  }
+
+  const { data: sends } = await sendsQuery;
+
+  // Group by date
+  const dateMap = new Map<string, { discovered: number; scored: number; messaged: number }>();
+
+  for (const lead of leads) {
+    const date = new Date(lead.createdAt).toISOString().slice(0, 10);
+    const entry = dateMap.get(date) ?? { discovered: 0, scored: 0, messaged: 0 };
+    entry.discovered += 1;
+    dateMap.set(date, entry);
+  }
+
+  for (const pred of predictions ?? []) {
+    const date = new Date(pred.predictedAt).toISOString().slice(0, 10);
+    const entry = dateMap.get(date) ?? { discovered: 0, scored: 0, messaged: 0 };
+    entry.scored += 1;
+    dateMap.set(date, entry);
+  }
+
+  for (const send of sends ?? []) {
+    if (!send.sentAt) continue;
+    const date = new Date(send.sentAt).toISOString().slice(0, 10);
+    const entry = dateMap.get(date) ?? { discovered: 0, scored: 0, messaged: 0 };
+    entry.messaged += 1;
+    dateMap.set(date, entry);
+  }
+
+  // Convert to sorted array
+  return Array.from(dateMap.entries())
+    .map(([date, counts]) => ({ date, ...counts }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-// ── Custom tooltip ─────────────────────────────────────────────────────────
-interface TooltipEntry {
-  name: string;
-  value: number;
-  color: string;
-}
+// ── Tooltip ──────────────────────────────────────────────────
 
-function GlassTooltip({
+function ChartTooltip({
   active,
   payload,
   label,
 }: {
   active?: boolean | undefined;
-  payload?: TooltipEntry[] | undefined;
+  payload?: { name: string; value: number; color: string }[] | undefined;
   label?: string | undefined;
 }) {
   if (!active || !payload || payload.length === 0) return null;
@@ -133,278 +153,186 @@ function GlassTooltip({
   return (
     <div
       style={{
-        background: 'rgba(28, 28, 46, 0.85)',
-        backdropFilter: 'blur(16px)',
-        WebkitBackdropFilter: 'blur(16px)',
-        border: '1px solid rgba(60, 200, 224, 0.25)',
-        borderRadius: '12px',
-        padding: '12px 16px',
-        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255,255,255,0.05)',
+        backgroundColor: 'hsl(240 15% 12%)',
+        border: '1px solid hsl(240 8% 22%)',
+        borderRadius: '0.75rem',
+        padding: '10px 14px',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
       }}
     >
-      <p style={{ fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.6)', marginBottom: '8px' }}>
+      <p style={{ fontSize: '12px', fontWeight: 600, color: 'hsl(240 5% 65%)', marginBottom: '6px' }}>
         {label}
       </p>
       {payload.map((entry) => (
-        <div key={entry.name} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
-          <span
-            style={{
-              width: '8px',
-              height: '8px',
-              borderRadius: '50%',
-              background: entry.color,
-              boxShadow: `0 0 6px ${entry.color}60`,
-              flexShrink: 0,
-            }}
-          />
-          <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.7)', minWidth: '70px' }}>
-            {entry.name}
-          </span>
-          <span style={{ fontSize: '13px', fontWeight: 700, color: '#fff' }}>
-            {entry.value}
-          </span>
-        </div>
+        <p key={entry.name} style={{ fontSize: '13px', fontWeight: 600, color: entry.color }}>
+          {entry.name}: {entry.value}
+        </p>
       ))}
     </div>
   );
 }
 
-// ── Main component ─────────────────────────────────────────────────────────
-export function PipelineTimeSeriesChart() {
-  const [range, setRange] = useState<DateRange>('30d');
-  const [rows, setRows] = useState<LeadRow[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+// ── Component ────────────────────────────────────────────────
 
-  // Fetch leads from Supabase directly
+export function PipelineTimeSeriesChart({ icpProfileId }: PipelineTimeSeriesChartProps) {
+  const [data, setData] = useState<TimeSeriesRow[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
   useEffect(() => {
     let cancelled = false;
     setIsLoading(true);
-    setError(null);
 
-    async function fetchLeads() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-        let query = supabase
-          .from('Lead')
-          .select('createdAt, status')
-          .is('deletedAt', null)
-          .order('createdAt', { ascending: true });
-
-        const startDate = getStartDate(range);
-        if (startDate) {
-          query = query.gte('createdAt', startDate.toISOString());
-        }
-
-        const { data, error: sbError } = await query;
-
-        if (cancelled) return;
-
-        if (sbError) {
-          setError(sbError.message);
-          setIsLoading(false);
-          return;
-        }
-
-        setRows((data ?? []) as LeadRow[]);
-        setIsLoading(false);
-      } catch (err: unknown) {
+    fetchTimeSeriesData(icpProfileId)
+      .then((rows) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Failed to load chart data');
+          setData(rows);
           setIsLoading(false);
         }
-      }
-    }
+      })
+      .catch((err) => {
+        console.error('Time series fetch error:', err);
+        if (!cancelled) {
+          setData([]);
+          setIsLoading(false);
+        }
+      });
 
-    void fetchLeads();
-    return () => { cancelled = true; };
-  }, [range]);
+    return () => {
+      cancelled = true;
+    };
+  }, [icpProfileId]);
 
-  const chartData = useMemo(() => bucketByDay(rows, range), [rows, range]);
+  const totals = useMemo(() => {
+    return data.reduce(
+      (acc, row) => ({
+        discovered: acc.discovered + row.discovered,
+        scored: acc.scored + row.scored,
+        messaged: acc.messaged + row.messaged,
+      }),
+      { discovered: 0, scored: 0, messaged: 0 },
+    );
+  }, [data]);
 
-  const rangeButtons: { value: DateRange; label: string }[] = [
-    { value: '7d', label: '7d' },
-    { value: '30d', label: '30d' },
-    { value: '90d', label: '90d' },
-    { value: 'all', label: 'All' },
-  ];
+  if (isLoading) {
+    return (
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="flex items-center gap-2">
+          <TrendingUp className="h-4 w-4 text-zbooni-teal" />
+          <h2 className="text-base font-bold tracking-tight">Pipeline Activity Over Time</h2>
+        </div>
+        <div className="mt-6 flex items-center justify-center py-12">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
+          <span className="ml-2 text-sm text-muted-foreground">Loading chart data...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (data.length === 0) {
+    return (
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="flex items-center gap-2">
+          <TrendingUp className="h-4 w-4 text-zbooni-teal" />
+          <h2 className="text-base font-bold tracking-tight">Pipeline Activity Over Time</h2>
+        </div>
+        <div className="mt-6 flex flex-col items-center py-8 text-center">
+          <TrendingUp className="h-8 w-8 text-muted-foreground/20" />
+          <p className="mt-3 text-sm text-muted-foreground/50">No pipeline activity data yet</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div
-      className="relative overflow-hidden rounded-2xl border border-white/[0.08] p-6 shadow-xl"
-      style={{
-        background: 'linear-gradient(135deg, rgba(28,28,46,0.7) 0%, rgba(37,37,64,0.5) 50%, rgba(28,28,46,0.7) 100%)',
-        backdropFilter: 'blur(24px)',
-        WebkitBackdropFilter: 'blur(24px)',
-        boxShadow: '0 8px 40px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04)',
-      }}
-    >
-      {/* Glass shimmer overlay */}
-      <div
-        className="pointer-events-none absolute inset-0 rounded-2xl"
-        style={{
-          background: 'linear-gradient(135deg, rgba(60,200,224,0.04) 0%, transparent 40%, rgba(123,255,107,0.03) 100%)',
-        }}
-      />
-
-      {/* Header */}
-      <div className="relative z-10 mb-5 flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-bold tracking-tight text-white">Pipeline Trends</h2>
-          <p className="mt-0.5 text-[11px] text-white/40">
-            Daily lead flow across pipeline stages
-          </p>
+    <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+      <div className="mb-1 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <TrendingUp className="h-4 w-4 text-zbooni-teal" />
+          <h2 className="text-base font-bold tracking-tight">Pipeline Activity Over Time</h2>
         </div>
-
-        {/* Date range selector */}
-        <div className="flex gap-1 rounded-lg border border-white/[0.08] bg-white/[0.04] p-0.5">
-          {rangeButtons.map((btn) => (
-            <button
-              key={btn.value}
-              onClick={() => setRange(btn.value)}
-              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all duration-200 ${
-                range === btn.value
-                  ? 'bg-gradient-to-r from-[#3CC8E0]/30 to-[#7BFF6B]/20 text-white shadow-sm shadow-[#3CC8E0]/20'
-                  : 'text-white/50 hover:text-white/80 hover:bg-white/[0.06]'
-              }`}
-            >
-              {btn.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-4 text-[11px] text-muted-foreground/50">
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full bg-blue-400" />
+            Discovered ({totals.discovered})
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full bg-yellow-400" />
+            Scored ({totals.scored})
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: '#7BFF6B' }} />
+            Messaged ({totals.messaged})
+          </span>
         </div>
       </div>
-
-      {/* Legend */}
-      <div className="relative z-10 mb-4 flex flex-wrap gap-4">
-        {LINES.map((line) => (
-          <div key={line.key} className="flex items-center gap-2">
-            <span
-              className="h-2 w-2 rounded-full"
-              style={{
-                background: line.color,
-                boxShadow: `0 0 8px ${line.color}50`,
-              }}
-            />
-            <span className="text-[11px] font-medium text-white/60">{line.label}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* Chart */}
-      <div className="relative z-10">
-        {isLoading ? (
-          <div className="flex h-[320px] items-center justify-center">
-            <div className="flex items-center gap-2 text-sm text-white/40">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-[#3CC8E0]" />
-              Loading chart data...
-            </div>
-          </div>
-        ) : error ? (
-          <div className="flex h-[320px] items-center justify-center">
-            <p className="text-sm text-red-400/80">{error}</p>
-          </div>
-        ) : (
-          <>
-            <style>{`
-              .recharts-wrapper { outline: none !important; }
-              .recharts-surface { outline: none !important; }
-              .recharts-surface:focus { outline: none !important; }
-            `}</style>
-            <ResponsiveContainer width="100%" height={320}>
-              <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                <defs>
-                  {LINES.map((line) => (
-                    <linearGradient key={line.key} id={`gradient-${line.key}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={line.color} stopOpacity={0.35} />
-                      <stop offset="60%" stopColor={line.color} stopOpacity={0.08} />
-                      <stop offset="100%" stopColor={line.color} stopOpacity={0} />
-                    </linearGradient>
-                  ))}
-                </defs>
-
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  stroke="rgba(255,255,255,0.04)"
-                  vertical={false}
-                />
-
-                <XAxis
-                  dataKey="date"
-                  tick={{ fontSize: 10, fontWeight: 500, fill: 'rgba(255,255,255,0.35)' }}
-                  axisLine={false}
-                  tickLine={false}
-                  tickFormatter={(val: string) => formatLabel(val, range)}
-                  interval="preserveStartEnd"
-                  minTickGap={40}
-                />
-
-                <YAxis
-                  tick={{ fontSize: 10, fontWeight: 500, fill: 'rgba(255,255,255,0.35)' }}
-                  axisLine={false}
-                  tickLine={false}
-                  allowDecimals={false}
-                  width={35}
-                />
-
-                <Tooltip
-                  content={<GlassTooltip />}
-                  cursor={{
-                    stroke: 'rgba(60,200,224,0.2)',
-                    strokeWidth: 1,
-                    strokeDasharray: '4 4',
-                  }}
-                />
-
-                {LINES.map((line) => (
-                  <Area
-                    key={line.key}
-                    type="monotone"
-                    dataKey={line.key}
-                    stroke={line.color}
-                    strokeWidth={2.5}
-                    fill={`url(#gradient-${line.key})`}
-                    fillOpacity={1}
-                    dot={false}
-                    activeDot={{
-                      r: 5,
-                      strokeWidth: 2,
-                      stroke: line.color,
-                      fill: '#1C1C2E',
-                      style: {
-                        filter: `drop-shadow(0 0 6px ${line.color}80)`,
-                      },
-                    }}
-                    isAnimationActive={true}
-                    animationBegin={0}
-                    animationDuration={1500}
-                    animationEasing="ease-out"
-                  />
-                ))}
-              </AreaChart>
-            </ResponsiveContainer>
-          </>
-        )}
-      </div>
-
-      {/* Summary row — total counts for current range */}
-      {!isLoading && !error && chartData.length > 0 ? (
-        <div className="relative z-10 mt-4 grid grid-cols-5 gap-3">
-          {LINES.map((line) => {
-            const total = chartData.reduce((sum, d) => sum + (d[line.key as keyof DailyBucket] as number), 0);
-            return (
-              <div
-                key={line.key}
-                className="rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-2 text-center transition-all duration-200 hover:bg-white/[0.06]"
-              >
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">{line.label}</p>
-                <p className="mt-0.5 text-lg font-bold tabular-nums" style={{ color: line.color }}>
-                  {total.toLocaleString()}
-                </p>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
+      <p className="mb-4 text-[11px] text-muted-foreground/40">
+        Daily lead pipeline throughput{icpProfileId ? ' (filtered by ICP)' : ''}
+      </p>
+      <style>{`
+        .recharts-wrapper { outline: none !important; }
+        .recharts-surface { outline: none !important; }
+        .recharts-surface:focus { outline: none !important; }
+      `}</style>
+      <ResponsiveContainer width="100%" height={240}>
+        <AreaChart data={data} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+          <defs>
+            <linearGradient id="colorDiscovered" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#60A5FA" stopOpacity={0.3} />
+              <stop offset="95%" stopColor="#60A5FA" stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id="colorScored" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#FACC15" stopOpacity={0.3} />
+              <stop offset="95%" stopColor="#FACC15" stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id="colorMessaged" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#7BFF6B" stopOpacity={0.3} />
+              <stop offset="95%" stopColor="#7BFF6B" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke="hsl(240 8% 18%)" />
+          <XAxis
+            dataKey="date"
+            tick={{ fontSize: 10, fontWeight: 500, fill: 'hsl(240 5% 55%)' }}
+            axisLine={false}
+            tickLine={false}
+            tickFormatter={(v: string) => {
+              const d = new Date(v + 'T00:00:00');
+              return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            }}
+          />
+          <YAxis
+            tick={{ fontSize: 10, fontWeight: 500, fill: 'hsl(240 5% 55%)' }}
+            axisLine={false}
+            tickLine={false}
+            allowDecimals={false}
+          />
+          <Tooltip content={<ChartTooltip />} />
+          <Area
+            type="monotone"
+            dataKey="discovered"
+            name="Discovered"
+            stroke="#60A5FA"
+            strokeWidth={2}
+            fill="url(#colorDiscovered)"
+          />
+          <Area
+            type="monotone"
+            dataKey="scored"
+            name="Scored"
+            stroke="#FACC15"
+            strokeWidth={2}
+            fill="url(#colorScored)"
+          />
+          <Area
+            type="monotone"
+            dataKey="messaged"
+            name="Messaged"
+            stroke="#7BFF6B"
+            strokeWidth={2}
+            fill="url(#colorMessaged)"
+          />
+        </AreaChart>
+      </ResponsiveContainer>
     </div>
   );
 }

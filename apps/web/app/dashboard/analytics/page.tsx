@@ -1,81 +1,35 @@
 'use client';
 
-import type {
-  FeedbackSummaryResponse,
-  FunnelResponse,
-  ListDiscoveryRunsResponse,
-  ListIcpProfilesResponse,
-  ScoreDistributionResponse,
-} from '@lead-flood/contracts';
+import type { FunnelResponse, ListDiscoveryRunsResponse } from '@lead-flood/contracts';
 import {
-  Activity,
+  AlertTriangle,
   BarChart3,
+  CalendarCheck,
   Clock,
-  DollarSign,
+  Cpu,
+  Database,
   ExternalLink,
-  Layers,
   MessageSquare,
-  RefreshCcw,
   Search,
   Send,
-  Shield,
+  Tag,
   Target,
   ThumbsDown,
+  ThumbsUp,
   TrendingUp,
+  Unplug,
   Users,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
 
 import { cn } from '../../../src/lib/utils.js';
+import { CustomSelect } from '../../../src/components/custom-select.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 import { getSupabaseBrowserClient } from '../../../src/lib/supabase-client.js';
 
-// ── Types ────────────────────────────────────────────────────────────────
-
 type DateRange = '7d' | '30d' | '90d' | 'all';
-
-interface LeadStatusRow {
-  status: string;
-  count: number;
-}
-
-interface IcpLeadRow {
-  icpProfileId: string;
-  leadCount: number;
-  avgScore: number | null;
-  qualifiedCount: number;
-  rejectedCount: number;
-}
-
-interface DailyQualityRow {
-  day: string;
-  avgScore: number;
-  totalCreated: number;
-  rejectedCount: number;
-}
-
-interface RecoverySummary {
-  totalCandidates: number;
-  openCount: number;
-  resolvedCount: number;
-}
-
-interface FollowUpSummary {
-  totalFollowUps: number;
-}
-
-// ── Constants ────────────────────────────────────────────────────────────
 
 const DATE_RANGE_LABELS: Record<DateRange, string> = {
   '7d': '7 Days',
@@ -86,6 +40,15 @@ const DATE_RANGE_LABELS: Record<DateRange, string> = {
 
 const DATE_RANGE_OPTIONS: readonly DateRange[] = ['7d', '30d', '90d', 'all'] as const;
 
+const LABEL_CARDS = [
+  { key: 'repliedCount' as const, label: 'Replied', Icon: ThumbsUp, color: 'text-emerald-400', bg: 'bg-emerald-500/15', border: 'border-emerald-500/25' },
+  { key: 'meetingBookedCount' as const, label: 'Meeting Booked', Icon: CalendarCheck, color: 'text-zbooni-teal', bg: 'bg-zbooni-teal/15', border: 'border-zbooni-teal/25' },
+  { key: 'dealWonCount' as const, label: 'Deal Won', Icon: ThumbsUp, color: 'text-zbooni-green', bg: 'bg-zbooni-green/15', border: 'border-zbooni-green/25' },
+  { key: 'dealLostCount' as const, label: 'Deal Lost', Icon: ThumbsDown, color: 'text-red-400', bg: 'bg-red-500/15', border: 'border-red-500/25' },
+  { key: 'unsubscribedCount' as const, label: 'Unsubscribed', Icon: Unplug, color: 'text-slate-400', bg: 'bg-slate-500/15', border: 'border-slate-500/25' },
+  { key: 'bouncedCount' as const, label: 'Bounced', Icon: AlertTriangle, color: 'text-slate-500', bg: 'bg-slate-600/15', border: 'border-slate-600/25' },
+];
+
 const EVENT_TYPE_BADGES: Record<string, { className: string; label: string }> = {
   REPLIED: { className: 'bg-emerald-500/15 text-emerald-400', label: 'Replied' },
   MEETING_BOOKED: { className: 'bg-zbooni-teal/15 text-zbooni-teal', label: 'Meeting' },
@@ -95,757 +58,149 @@ const EVENT_TYPE_BADGES: Record<string, { className: string; label: string }> = 
   BOUNCED: { className: 'bg-slate-600/15 text-slate-500', label: 'Bounced' },
 };
 
-// ── Glass card wrapper ───────────────────────────────────────────────────
+// ── Sub-components ───────────────────────────────────────────────────────
 
-function GlassCard({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string | undefined;
-}) {
-  return (
-    <div
-      className={cn(
-        'relative overflow-hidden rounded-2xl border border-white/[0.08] bg-gradient-to-br from-white/[0.06] to-white/[0.02] p-6 shadow-xl shadow-black/20 backdrop-blur-xl',
-        className,
-      )}
-    >
-      {/* Subtle inner glow */}
-      <div className="pointer-events-none absolute inset-0 rounded-2xl bg-gradient-to-br from-zbooni-teal/[0.04] to-zbooni-green/[0.02]" />
-      <div className="relative">{children}</div>
-    </div>
-  );
-}
-
-// ── Section header ───────────────────────────────────────────────────────
-
-function SectionHeader({
-  icon: Icon,
-  title,
-  subtitle,
-  trailing,
-}: {
-  icon: React.ComponentType<{ className?: string | undefined }>;
-  title: string;
-  subtitle?: string | undefined;
-  trailing?: React.ReactNode | undefined;
-}) {
-  return (
-    <div className="mb-5 flex items-start justify-between">
-      <div className="flex items-center gap-2.5">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-zbooni-teal/20 to-zbooni-green/10 ring-1 ring-white/[0.08]">
-          <Icon className="h-4 w-4 text-zbooni-teal" />
-        </div>
-        <div>
-          <h2 className="text-sm font-bold tracking-tight">{title}</h2>
-          {subtitle ? (
-            <p className="mt-0.5 text-[11px] text-muted-foreground/50">{subtitle}</p>
-          ) : null}
-        </div>
-      </div>
-      {trailing ?? null}
-    </div>
-  );
-}
-
-// ── KPI Metric card ──────────────────────────────────────────────────────
-
-function MetricCard({
+function StatCard({
   label,
   value,
   sub,
-  icon: Icon,
-  accent = 'text-foreground',
-  gradient,
+  accent,
 }: {
   label: string;
   value: string;
   sub?: string | undefined;
-  icon: React.ComponentType<{ className?: string | undefined }>;
-  accent?: string | undefined;
-  gradient?: string | undefined;
+  accent: string;
 }) {
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-white/[0.07] bg-gradient-to-br from-white/[0.05] to-white/[0.01] p-4 shadow-lg shadow-black/15 backdrop-blur-lg transition-all duration-200 hover:-translate-y-0.5 hover:border-white/[0.12] hover:shadow-xl hover:shadow-black/25">
-      {gradient ? (
-        <div
-          className={cn(
-            'pointer-events-none absolute -right-4 -top-4 h-20 w-20 rounded-full opacity-20 blur-2xl transition-opacity duration-300 group-hover:opacity-30',
-            gradient,
-          )}
-        />
-      ) : null}
-      <div className="relative flex items-center gap-2">
-        <Icon className="h-3.5 w-3.5 text-muted-foreground/50" />
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-          {label}
-        </p>
-      </div>
-      <p className={cn('relative mt-2 text-2xl font-extrabold tracking-tight', accent)}>
-        {value}
-      </p>
-      {sub ? (
-        <p className="relative mt-0.5 text-[11px] text-muted-foreground/40">{sub}</p>
-      ) : null}
+    <div className="rounded-xl border border-border/30 bg-zbooni-dark/40 p-4">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">{label}</p>
+      <p className={`mt-1 text-2xl font-extrabold tracking-tight ${accent}`}>{value}</p>
+      {sub ? <p className="mt-0.5 text-xs text-muted-foreground/50">{sub}</p> : null}
     </div>
   );
 }
 
-// ── Pipeline Funnel ──────────────────────────────────────────────────────
-
-interface FunnelStage {
+// ── Pipeline stage definitions ──────────────────────────────────────────
+interface PipelineStage {
   key: string;
   label: string;
-  count: number;
-  color: string;
+  icon: React.ComponentType<{ className?: string | undefined }>;
+  colorClass: string;
+  bgClass: string;
+  barClass: string;
+  getProcessed: (d: FunnelResponse) => number;
+  getPending: (d: FunnelResponse) => number;
 }
 
-function PipelineFunnel({
-  stages,
-  rejectedCount,
-}: {
-  stages: FunnelStage[];
-  rejectedCount: number;
-}) {
-  const maxCount = Math.max(...stages.map((s) => s.count), 1);
+const PIPELINE_STAGES: PipelineStage[] = [
+  {
+    key: 'discovery',
+    label: 'Discovery',
+    icon: Search,
+    colorClass: 'text-blue-400',
+    bgClass: 'bg-blue-500/15',
+    barClass: 'bg-blue-400',
+    getProcessed: (d) => d.discoveredCount,
+    getPending: () => 0,
+  },
+  {
+    key: 'enrichment',
+    label: 'Enrichment',
+    icon: Database,
+    colorClass: 'text-zbooni-teal',
+    bgClass: 'bg-zbooni-teal/15',
+    barClass: 'bg-zbooni-teal',
+    getProcessed: (d) => d.enrichedCount,
+    getPending: (d) => Math.max(0, d.discoveredCount - d.enrichedCount),
+  },
+  {
+    key: 'features',
+    label: 'Feature Extraction',
+    icon: Cpu,
+    colorClass: 'text-purple-400',
+    bgClass: 'bg-purple-500/15',
+    barClass: 'bg-purple-400',
+    getProcessed: (d) => d.qualifiedCount,
+    getPending: (d) => Math.max(0, d.enrichedCount - d.qualifiedCount),
+  },
+  {
+    key: 'scoring',
+    label: 'Scoring',
+    icon: TrendingUp,
+    colorClass: 'text-yellow-400',
+    bgClass: 'bg-yellow-500/15',
+    barClass: 'bg-yellow-400',
+    getProcessed: (d) => d.scoredCount,
+    getPending: (d) => Math.max(0, d.enrichedCount - d.scoredCount),
+  },
+  {
+    key: 'messaging',
+    label: 'Messaging',
+    icon: Send,
+    colorClass: 'text-zbooni-green',
+    bgClass: 'bg-zbooni-green/15',
+    barClass: 'bg-zbooni-green',
+    getProcessed: (d) => d.messagesSentCount,
+    getPending: (d) => Math.max(0, d.scoredCount - d.messagesSentCount),
+  },
+  {
+    key: 'followups',
+    label: 'Follow-ups',
+    icon: MessageSquare,
+    colorClass: 'text-emerald-400',
+    bgClass: 'bg-emerald-500/15',
+    barClass: 'bg-emerald-400',
+    getProcessed: (d) => d.repliesCount,
+    getPending: (d) => Math.max(0, d.messagesSentCount - d.repliesCount),
+  },
+];
+
+function PipelineStageCard({ stage, data }: { stage: PipelineStage; data: FunnelResponse }) {
+  const Icon = stage.icon;
+  const processed = stage.getProcessed(data);
+  const pending = stage.getPending(data);
+  const total = processed + pending;
+  const progressPct = total > 0 ? Math.round((processed / total) * 100) : 100;
+  const isComplete = pending === 0;
 
   return (
-    <div className="space-y-3">
-      {stages.map((stage, i) => {
-        const prevCount = i > 0 ? stages[i - 1]!.count : 0;
-        const conversionPct =
-          i > 0 && prevCount > 0 ? Math.round((stage.count / prevCount) * 100) : null;
-        const barWidthPct = Math.max((stage.count / maxCount) * 100, stage.count > 0 ? 4 : 0);
-
-        return (
-          <div key={stage.key} className="group">
-            <div className="mb-1.5 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div
-                  className="h-2.5 w-2.5 rounded-full ring-2 ring-black/20"
-                  style={{ backgroundColor: stage.color }}
-                />
-                <span className="text-xs font-semibold text-foreground/90">{stage.label}</span>
-              </div>
-              <div className="flex items-center gap-3">
-                {conversionPct !== null ? (
-                  <span className="text-[10px] font-medium text-muted-foreground/50">
-                    {conversionPct}% from prev
-                  </span>
-                ) : null}
-                <span
-                  className="text-sm font-bold tabular-nums"
-                  style={{ color: stage.color }}
-                >
-                  {stage.count.toLocaleString()}
-                </span>
-              </div>
-            </div>
-            <div className="h-7 w-full overflow-hidden rounded-lg bg-white/[0.04]">
-              <div
-                className="h-full rounded-lg transition-all duration-700 ease-out"
-                style={{
-                  width: `${barWidthPct}%`,
-                  background: `linear-gradient(90deg, ${stage.color}50, ${stage.color}90)`,
-                  boxShadow: `0 0 12px ${stage.color}30`,
-                }}
-              />
-            </div>
+    <div className="rounded-xl border border-border/30 bg-zbooni-dark/40 px-5 py-6 transition-colors hover:border-border/50">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className={`flex h-12 w-12 items-center justify-center rounded-lg ${stage.bgClass}`}>
+            <Icon className={`h-6 w-6 ${stage.colorClass}`} />
           </div>
-        );
-      })}
-
-      {/* Rejected branch */}
-      {rejectedCount > 0 ? (
-        <div className="mt-2 flex items-center gap-3 rounded-lg border border-red-500/15 bg-red-500/[0.05] px-3 py-2">
-          <ThumbsDown className="h-3.5 w-3.5 text-red-400/70" />
-          <span className="text-xs font-medium text-red-400/70">Rejected</span>
-          <span className="ml-auto text-sm font-bold tabular-nums text-red-400">
-            {rejectedCount.toLocaleString()}
-          </span>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-// ── Quality Trends Chart ─────────────────────────────────────────────────
-
-function QualityTrendsChart({ data }: { data: DailyQualityRow[] }) {
-  if (data.length < 2) {
-    return (
-      <div className="flex flex-col items-center py-10 text-center">
-        <TrendingUp className="h-8 w-8 text-muted-foreground/20" />
-        <p className="mt-3 text-sm font-medium text-muted-foreground/50">Not enough data yet</p>
-        <p className="mt-1 text-[11px] text-muted-foreground/30">
-          Quality trends will appear after a few days of lead creation
-        </p>
-      </div>
-    );
-  }
-
-  const chartData = data.map((d) => ({
-    day: new Date(d.day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    avgScore: Math.round(d.avgScore * 100) / 100,
-    rejectionRate:
-      d.totalCreated > 0 ? Math.round((d.rejectedCount / d.totalCreated) * 100) : 0,
-  }));
-
-  return (
-    <div>
-      <style>{`
-        .recharts-wrapper { outline: none !important; }
-        .recharts-surface { outline: none !important; }
-        .recharts-surface:focus { outline: none !important; }
-      `}</style>
-      <ResponsiveContainer width="100%" height={220}>
-        <AreaChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-          <defs>
-            <linearGradient id="scoreGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#3CC8E0" stopOpacity={0.3} />
-              <stop offset="95%" stopColor="#3CC8E0" stopOpacity={0} />
-            </linearGradient>
-            <linearGradient id="rejGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#f87171" stopOpacity={0.3} />
-              <stop offset="95%" stopColor="#f87171" stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="hsl(240 8% 16%)" />
-          <XAxis
-            dataKey="day"
-            tick={{ fontSize: 10, fill: 'hsl(240 5% 50%)' }}
-            axisLine={false}
-            tickLine={false}
-          />
-          <YAxis
-            yAxisId="score"
-            tick={{ fontSize: 10, fill: 'hsl(240 5% 50%)' }}
-            axisLine={false}
-            tickLine={false}
-            domain={[0, 1]}
-            width={35}
-          />
-          <YAxis
-            yAxisId="rate"
-            orientation="right"
-            tick={{ fontSize: 10, fill: 'hsl(240 5% 50%)' }}
-            axisLine={false}
-            tickLine={false}
-            domain={[0, 100]}
-            width={35}
-            tickFormatter={(v: number) => `${v}%`}
-          />
-          <Tooltip
-            contentStyle={{
-              backgroundColor: 'hsl(240 15% 12%)',
-              border: '1px solid hsl(240 8% 22%)',
-              borderRadius: '0.75rem',
-              padding: '10px 14px',
-              boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-              fontSize: '12px',
-            }}
-            labelStyle={{ color: 'hsl(0 0% 80%)', fontWeight: 600, marginBottom: '4px' }}
-            itemStyle={{ padding: '2px 0' }}
-          />
-          <Area
-            yAxisId="score"
-            type="monotone"
-            dataKey="avgScore"
-            name="Avg Score"
-            stroke="#3CC8E0"
-            fill="url(#scoreGrad)"
-            strokeWidth={2}
-          />
-          <Area
-            yAxisId="rate"
-            type="monotone"
-            dataKey="rejectionRate"
-            name="Rejection %"
-            stroke="#f87171"
-            fill="url(#rejGrad)"
-            strokeWidth={2}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
-      <div className="mt-3 flex items-center justify-center gap-6">
-        <div className="flex items-center gap-1.5">
-          <div className="h-2 w-6 rounded-full bg-zbooni-teal" />
-          <span className="text-[10px] font-medium text-muted-foreground/50">Avg Score (left)</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="h-2 w-6 rounded-full bg-red-400" />
-          <span className="text-[10px] font-medium text-muted-foreground/50">
-            Rejection % (right)
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── ICP Performance table ────────────────────────────────────────────────
-
-function IcpPerformanceTable({
-  rows,
-  icpNames,
-}: {
-  rows: IcpLeadRow[];
-  icpNames: Map<string, string>;
-}) {
-  if (rows.length === 0) {
-    return (
-      <div className="flex flex-col items-center py-8 text-center">
-        <Users className="h-6 w-6 text-muted-foreground/20" />
-        <p className="mt-2 text-sm text-muted-foreground/50">No ICP data yet</p>
-      </div>
-    );
-  }
-
-  const maxLeads = Math.max(...rows.map((r) => r.leadCount), 1);
-
-  return (
-    <div className="space-y-3">
-      {rows.map((row) => {
-        const name = icpNames.get(row.icpProfileId) ?? row.icpProfileId.slice(0, 12);
-        const convRate =
-          row.leadCount > 0
-            ? Math.round((row.qualifiedCount / row.leadCount) * 100)
-            : 0;
-        const barPct = Math.max((row.leadCount / maxLeads) * 100, row.leadCount > 0 ? 5 : 0);
-
-        return (
-          <div key={row.icpProfileId} className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-3.5 transition-colors hover:border-white/[0.1]">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-bold text-zbooni-teal">{name}</span>
-              <span className="text-[10px] font-medium text-muted-foreground/40">
-                {row.leadCount} lead{row.leadCount !== 1 ? 's' : ''}
-              </span>
-            </div>
-            <div className="mb-2.5 h-2 w-full overflow-hidden rounded-full bg-white/[0.04]">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-zbooni-teal/60 to-zbooni-green/60"
-                style={{ width: `${barPct}%` }}
-              />
-            </div>
-            <div className="grid grid-cols-3 gap-3 text-center">
-              <div>
-                <p className="text-[10px] text-muted-foreground/40">Avg Score</p>
-                <p className="text-xs font-bold tabular-nums text-foreground/80">
-                  {row.avgScore !== null ? row.avgScore.toFixed(2) : '--'}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] text-muted-foreground/40">Conversion</p>
-                <p className="text-xs font-bold tabular-nums text-zbooni-green">{convRate}%</p>
-              </div>
-              <div>
-                <p className="text-[10px] text-muted-foreground/40">Rejected</p>
-                <p className="text-xs font-bold tabular-nums text-red-400">{row.rejectedCount}</p>
-              </div>
-            </div>
+          <div>
+            <p className="text-base font-bold tracking-tight">{stage.label}</p>
+            <p className="text-[10px] text-muted-foreground/40 uppercase tracking-wider font-medium">Stage</p>
           </div>
-        );
-      })}
+        </div>
+        <div
+          className={`h-2.5 w-2.5 rounded-full ${isComplete ? 'bg-zbooni-green' : 'bg-yellow-400 animate-pulse'}`}
+          title={isComplete ? 'All caught up' : `${pending} pending`}
+        />
+      </div>
+      <div className="mt-6 flex items-end justify-between">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Processed</p>
+          <p className={`text-3xl font-extrabold tracking-tight ${stage.colorClass}`}>{processed.toLocaleString()}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Pending</p>
+          <p className={`text-2xl font-bold tracking-tight ${pending > 0 ? 'text-yellow-400' : 'text-muted-foreground/30'}`}>
+            {pending.toLocaleString()}
+          </p>
+        </div>
+      </div>
+      <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-border/30">
+        <div
+          className={`h-full rounded-full transition-all duration-500 ease-out ${stage.barClass}`}
+          style={{ width: `${Math.max(progressPct, processed > 0 ? 3 : 0)}%` }}
+        />
+      </div>
+      <p className="mt-2 text-[11px] text-muted-foreground/40 font-medium">{progressPct}% complete</p>
     </div>
   );
-}
-
-// ── Supabase data hooks ──────────────────────────────────────────────────
-
-function useLeadStatusCounts(): { data: LeadStatusRow[] | null; isLoading: boolean } {
-  const [data, setData] = useState<LeadStatusRow[] | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function fetchData() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-        const { data: rows } = await supabase
-          .from('Lead')
-          .select('status');
-
-        if (cancelled || !rows) return;
-
-        const counts = new Map<string, number>();
-        for (const r of rows as Array<{ status: string }>) {
-          counts.set(r.status, (counts.get(r.status) ?? 0) + 1);
-        }
-
-        setData(
-          Array.from(counts.entries()).map(([status, count]) => ({ status, count })),
-        );
-      } catch {
-        // Supabase query failed — leave data null
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    }
-
-    void fetchData();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return { data, isLoading };
-}
-
-function useIcpPerformance(): { data: IcpLeadRow[] | null; isLoading: boolean } {
-  const [data, setData] = useState<IcpLeadRow[] | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function fetchData() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-
-        // Get all score predictions grouped by ICP
-        const { data: predictions } = await supabase
-          .from('LeadScorePrediction')
-          .select('leadId, icpProfileId, blendedScore');
-
-        // Get all rejections
-        const { data: rejections } = await supabase
-          .from('lead_rejections')
-          .select('icpProfileId');
-
-        if (cancelled) return;
-
-        // Group predictions by ICP
-        const icpMap = new Map<
-          string,
-          { scores: number[]; leadIds: Set<string> }
-        >();
-
-        if (predictions) {
-          for (const p of predictions as Array<{
-            leadId: string;
-            icpProfileId: string;
-            blendedScore: number;
-          }>) {
-            let entry = icpMap.get(p.icpProfileId);
-            if (!entry) {
-              entry = { scores: [], leadIds: new Set() };
-              icpMap.set(p.icpProfileId, entry);
-            }
-            entry.scores.push(p.blendedScore);
-            entry.leadIds.add(p.leadId);
-          }
-        }
-
-        // Count rejections per ICP
-        const rejPerIcp = new Map<string, number>();
-        if (rejections) {
-          for (const r of rejections as Array<{ icpProfileId: string | null }>) {
-            if (r.icpProfileId) {
-              rejPerIcp.set(r.icpProfileId, (rejPerIcp.get(r.icpProfileId) ?? 0) + 1);
-            }
-          }
-        }
-
-        const rows: IcpLeadRow[] = Array.from(icpMap.entries()).map(
-          ([icpProfileId, { scores, leadIds }]) => {
-            const avgScore =
-              scores.length > 0
-                ? scores.reduce((a, b) => a + b, 0) / scores.length
-                : null;
-            return {
-              icpProfileId,
-              leadCount: leadIds.size,
-              avgScore,
-              qualifiedCount: leadIds.size, // all leads with scores passed qualification
-              rejectedCount: rejPerIcp.get(icpProfileId) ?? 0,
-            };
-          },
-        );
-
-        rows.sort((a, b) => b.leadCount - a.leadCount);
-        if (!cancelled) setData(rows);
-      } catch {
-        // leave null
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    }
-
-    void fetchData();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return { data, isLoading };
-}
-
-function useDailyQualityTrends(days: number): {
-  data: DailyQualityRow[] | null;
-  isLoading: boolean;
-} {
-  const [data, setData] = useState<DailyQualityRow[] | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function fetchData() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-        const cutoff = new Date();
-        cutoff.setDate(cutoff.getDate() - days);
-
-        // Fetch leads created in window
-        const { data: leads } = await supabase
-          .from('Lead')
-          .select('id, status, createdAt')
-          .gte('createdAt', cutoff.toISOString());
-
-        // Fetch scores for those leads
-        const { data: scores } = await supabase
-          .from('LeadScorePrediction')
-          .select('leadId, blendedScore, predictedAt')
-          .gte('predictedAt', cutoff.toISOString());
-
-        if (cancelled) return;
-
-        // Group by day
-        const dayMap = new Map<
-          string,
-          { scores: number[]; created: number; rejected: number }
-        >();
-
-        if (leads) {
-          for (const l of leads as Array<{
-            id: string;
-            status: string;
-            createdAt: string;
-          }>) {
-            const day = l.createdAt.slice(0, 10);
-            let entry = dayMap.get(day);
-            if (!entry) {
-              entry = { scores: [], created: 0, rejected: 0 };
-              dayMap.set(day, entry);
-            }
-            entry.created++;
-            if (l.status === 'rejected') entry.rejected++;
-          }
-        }
-
-        if (scores) {
-          for (const s of scores as Array<{
-            leadId: string;
-            blendedScore: number;
-            predictedAt: string;
-          }>) {
-            const day = s.predictedAt.slice(0, 10);
-            let entry = dayMap.get(day);
-            if (!entry) {
-              entry = { scores: [], created: 0, rejected: 0 };
-              dayMap.set(day, entry);
-            }
-            entry.scores.push(s.blendedScore);
-          }
-        }
-
-        const rows: DailyQualityRow[] = Array.from(dayMap.entries())
-          .map(([day, entry]) => ({
-            day,
-            avgScore:
-              entry.scores.length > 0
-                ? entry.scores.reduce((a, b) => a + b, 0) / entry.scores.length
-                : 0,
-            totalCreated: entry.created,
-            rejectedCount: entry.rejected,
-          }))
-          .sort((a, b) => a.day.localeCompare(b.day));
-
-        if (!cancelled) setData(rows);
-      } catch {
-        // leave null
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    }
-
-    void fetchData();
-    return () => {
-      cancelled = true;
-    };
-  }, [days]);
-
-  return { data, isLoading };
-}
-
-function useRecoverySummary(): { data: RecoverySummary | null; isLoading: boolean } {
-  const [data, setData] = useState<RecoverySummary | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function fetchData() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-        const { data: items } = await supabase
-          .from('contact_recovery_items')
-          .select('status');
-
-        if (cancelled || !items) return;
-
-        let open = 0;
-        let resolved = 0;
-        for (const item of items as Array<{ status: string }>) {
-          if (item.status === 'OPEN') open++;
-          else if (item.status === 'RESOLVED') resolved++;
-        }
-
-        setData({
-          totalCandidates: items.length,
-          openCount: open,
-          resolvedCount: resolved,
-        });
-      } catch {
-        // leave null
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    }
-
-    void fetchData();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return { data, isLoading };
-}
-
-function useFollowUpSummary(): { data: FollowUpSummary | null; isLoading: boolean } {
-  const [data, setData] = useState<FollowUpSummary | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function fetchData() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-        const { data: drafts, count } = await supabase
-          .from('MessageDraft')
-          .select('id', { count: 'exact' })
-          .gt('followUpNumber', 0);
-
-        if (cancelled) return;
-
-        setData({
-          totalFollowUps: count ?? (drafts?.length ?? 0),
-        });
-      } catch {
-        // leave null
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    }
-
-    void fetchData();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return { data, isLoading };
-}
-
-function useCostData(): {
-  data: { totalCostCents: number; leadCount: number } | null;
-  isLoading: boolean;
-} {
-  const [data, setData] = useState<{
-    totalCostCents: number;
-    leadCount: number;
-  } | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function fetchData() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-
-        const [costResult, leadResult] = await Promise.all([
-          supabase.from('discovery_cost_events').select('costCents'),
-          supabase.from('Lead').select('id', { count: 'exact' }),
-        ]);
-
-        if (cancelled) return;
-
-        const totalCostCents = (costResult.data ?? []).reduce(
-          (sum: number, r: { costCents: number }) => sum + (r.costCents ?? 0),
-          0,
-        );
-
-        setData({
-          totalCostCents,
-          leadCount: leadResult.count ?? (leadResult.data?.length ?? 0),
-        });
-      } catch {
-        // leave null
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    }
-
-    void fetchData();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return { data, isLoading };
-}
-
-function useAvgScore(): { data: number | null; isLoading: boolean } {
-  const [data, setData] = useState<number | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function fetchData() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-        const { data: scores } = await supabase
-          .from('LeadScorePrediction')
-          .select('blendedScore');
-
-        if (cancelled || !scores || scores.length === 0) return;
-
-        const avg =
-          (scores as Array<{ blendedScore: number }>).reduce(
-            (sum, s) => sum + s.blendedScore,
-            0,
-          ) / scores.length;
-
-        setData(avg);
-      } catch {
-        // leave null
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    }
-
-    void fetchData();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return { data, isLoading };
 }
 
 // ── Main page ────────────────────────────────────────────────────────────
@@ -853,457 +208,272 @@ function useAvgScore(): { data: number | null; isLoading: boolean } {
 export default function AnalyticsPage() {
   const { apiClient } = useAuth();
   const [dateRange, setDateRange] = useState<DateRange>('all');
+  const [icpFilter, setIcpFilter] = useState<string | undefined>(undefined);
 
-  // ── API queries ────────────────────────────────────────
-  const icps = useApiQuery<ListIcpProfilesResponse>(
+  // Discovery runs for yield display
+  const icps = useApiQuery(
     useCallback(() => apiClient.listIcps({ page: 1, pageSize: 50 }), [apiClient]),
   );
-
-  // B1 FIX: pageSize was 200 but the API contract (ListDiscoveryRunsQuerySchema)
-  // caps pageSize at max(50). The request was failing validation server-side, so
-  // discoveryRuns.data was always null, which triggered the "No discovery runs yet"
-  // empty state. Fixed by requesting pageSize: 50.
   const discoveryRuns = useApiQuery<ListDiscoveryRunsResponse>(
-    useCallback(
-      () => apiClient.listDiscoveryRuns({ page: 1, pageSize: 50 }),
-      [apiClient],
-    ),
+    useCallback(() => apiClient.listDiscoveryRuns({ page: 1, pageSize: 200 }), [apiClient]),
   );
 
-  const dateFilter = useMemo(() => {
-    if (dateRange === 'all') return {};
-    const now = new Date();
-    const from = new Date();
-    if (dateRange === '7d') from.setDate(now.getDate() - 7);
-    if (dateRange === '30d') from.setDate(now.getDate() - 30);
-    if (dateRange === '90d') from.setDate(now.getDate() - 90);
-    return { from: from.toISOString(), to: now.toISOString() };
-  }, [dateRange]);
+  const icpOptions = [
+    { value: '', label: 'All ICPs' },
+    ...(icps.data?.items.map((icp) => ({ value: icp.id, label: icp.name })) ?? []),
+  ];
 
-  const funnel = useApiQuery<FunnelResponse>(
+  const dateFilter = useMemo(() => {
+    const base: Record<string, string> = {};
+    if (dateRange !== 'all') {
+      const now = new Date();
+      const from = new Date();
+      if (dateRange === '7d') from.setDate(now.getDate() - 7);
+      if (dateRange === '30d') from.setDate(now.getDate() - 30);
+      if (dateRange === '90d') from.setDate(now.getDate() - 90);
+      base.from = from.toISOString();
+      base.to = now.toISOString();
+    }
+    if (icpFilter) {
+      base.icpProfileId = icpFilter;
+    }
+    return base;
+  }, [dateRange, icpFilter]);
+
+  const funnel = useApiQuery(
     useCallback(() => apiClient.getFunnel(dateFilter), [apiClient, dateFilter]),
     [dateFilter],
   );
 
-  const feedback = useApiQuery<FeedbackSummaryResponse>(
-    useCallback(
-      () => apiClient.getFeedbackSummary(dateFilter),
-      [apiClient, dateFilter],
-    ),
+  const feedback = useApiQuery(
+    useCallback(() => apiClient.getFeedbackSummary(dateFilter), [apiClient, dateFilter]),
     [dateFilter],
   );
 
-  const scoreDistribution = useApiQuery<ScoreDistributionResponse>(
-    useCallback(
-      () => apiClient.getScoreDistribution(dateFilter),
-      [apiClient, dateFilter],
-    ),
+  const scoreDistribution = useApiQuery(
+    useCallback(() => apiClient.getScoreDistribution(dateFilter), [apiClient, dateFilter]),
     [dateFilter],
   );
 
   const feedbackEvents = useApiQuery(
-    useCallback(
-      () => apiClient.listFeedbackEvents({ page: 1, pageSize: 10 }),
-      [apiClient],
-    ),
+    useCallback(() => apiClient.listFeedbackEvents({ page: 1, pageSize: 10 }), [apiClient]),
   );
 
-  // ── Supabase queries ───────────────────────────────────
-  const leadStatuses = useLeadStatusCounts();
-  const icpPerformance = useIcpPerformance();
-  const qualityTrends = useDailyQualityTrends(30);
-  const recoverySummary = useRecoverySummary();
-  const followUpSummary = useFollowUpSummary();
-  const costData = useCostData();
-  const avgScore = useAvgScore();
+  // D8: Fetch rejected lead count via direct Supabase query
+  // The funnel API doesn't include rejected leads, so we query directly
+  const [rejectedCount, setRejectedCount] = useState<number>(0);
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchRejectedCount() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        let query = supabase
+          .from('Lead')
+          .select('id', { count: 'exact', head: true })
+          .eq('status', 'rejected')
+          .is('deletedAt', null);
 
-  // ── Derived values ─────────────────────────────────────
-  const icpNameMap = useMemo(() => {
-    const m = new Map<string, string>();
-    if (icps.data?.items) {
-      for (const icp of icps.data.items) {
-        m.set(icp.id, icp.name);
+        // ICP filtering: join through business_conversions
+        if (icpFilter) {
+          const { data: conversions } = await supabase
+            .from('business_conversions')
+            .select('leadId')
+            .eq('icpProfileId', icpFilter);
+          const leadIds = conversions?.map((c: { leadId: string }) => c.leadId) ?? [];
+          if (leadIds.length > 0) {
+            query = query.in('id', leadIds);
+          } else {
+            if (!cancelled) setRejectedCount(0);
+            return;
+          }
+        }
+
+        // Date filtering on rejectedAt via LeadRejection table is complex;
+        // for simplicity we count all rejected leads matching the ICP filter
+        // (status='rejected' already means they were rejected).
+        const { count } = await query;
+        if (!cancelled) {
+          setRejectedCount(count ?? 0);
+        }
+      } catch (err) {
+        console.error('Failed to fetch rejected count:', err);
       }
     }
-    return m;
-  }, [icps.data]);
+    void fetchRejectedCount();
+    return () => { cancelled = true; };
+  }, [icpFilter, dateFilter]);
 
-  // Build funnel stages from lead status counts + API funnel data
-  const funnelStages = useMemo((): FunnelStage[] => {
-    const statusMap = new Map<string, number>();
-    if (leadStatuses.data) {
-      for (const row of leadStatuses.data) {
-        statusMap.set(row.status, row.count);
+  // D7: Fetch total scored leads count via Supabase for independent verification
+  const [totalScoredLeads, setTotalScoredLeads] = useState<number>(0);
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchTotalScored() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        let query = supabase
+          .from('LeadScorePrediction')
+          .select('id', { count: 'exact', head: true });
+
+        if (icpFilter) {
+          query = query.eq('icpProfileId', icpFilter);
+        }
+
+        const { count } = await query;
+        if (!cancelled) {
+          setTotalScoredLeads(count ?? 0);
+        }
+      } catch (err) {
+        console.error('Failed to fetch total scored:', err);
       }
     }
+    void fetchTotalScored();
+    return () => { cancelled = true; };
+  }, [icpFilter]);
 
-    const allLeadCount = Array.from(statusMap.values()).reduce((a, b) => a + b, 0);
-    const discoveredFromApi = funnel.data?.discoveredCount ?? allLeadCount;
-
-    const qualifiedCount = (statusMap.get('qualified') ?? 0) +
-      (statusMap.get('drafted') ?? 0) +
-      (statusMap.get('messaged') ?? 0) +
-      (statusMap.get('replied') ?? 0) +
-      (statusMap.get('cold') ?? 0);
-
-    const messagedCount = funnel.data?.messagesSentCount ??
-      ((statusMap.get('messaged') ?? 0) + (statusMap.get('replied') ?? 0) + (statusMap.get('cold') ?? 0));
-    const repliedCount = funnel.data?.repliesCount ?? (statusMap.get('replied') ?? 0);
-    const wonCount = funnel.data?.dealsWonCount ?? 0;
-
-    // Pre-qualified = all leads that passed pre-qualification (not rejected)
-    const preQualifiedCount = allLeadCount;
-
-    return [
-      { key: 'discovered', label: 'Discovered', count: discoveredFromApi, color: '#60A5FA' },
-      { key: 'prequalified', label: 'Pre-qualified', count: preQualifiedCount, color: '#A78BFA' },
-      { key: 'qualified', label: 'Qualified', count: qualifiedCount, color: '#3CC8E0' },
-      { key: 'messaged', label: 'Messaged', count: messagedCount, color: '#7BFF6B' },
-      { key: 'replied', label: 'Replied', count: repliedCount, color: '#34D399' },
-      { key: 'won', label: 'Won', count: wonCount, color: '#FACC15' },
-    ];
-  }, [leadStatuses.data, funnel.data]);
-
-  const rejectedCount = useMemo(() => {
-    if (!leadStatuses.data) return 0;
-    return leadStatuses.data.find((r) => r.status === 'rejected')?.count ?? 0;
-  }, [leadStatuses.data]);
-
-  // Key metrics
   const totalMessaged = funnel.data?.messagesSentCount ?? 0;
   const totalReplied = funnel.data?.repliesCount ?? 0;
-  const overallReplyRate =
-    totalMessaged > 0 ? Math.round((totalReplied / totalMessaged) * 100) : 0;
+  const overallReplyRate = totalMessaged > 0 ? Math.round((totalReplied / totalMessaged) * 100) : 0;
+  const totalMeetings = funnel.data?.meetingsCount ?? 0;
+  const meetingRate = totalReplied > 0 ? Math.round((totalMeetings / totalReplied) * 100) : 0;
 
-  const discoveredCount = funnel.data?.discoveredCount ?? 0;
-  const qualifiedFromFunnel = funnel.data?.qualifiedCount ?? 0;
-  const pipelineConversion =
-    discoveredCount > 0
-      ? Math.round((qualifiedFromFunnel / discoveredCount) * 100)
-      : 0;
+  const distributionMax = Math.max(...(scoreDistribution.data?.bands.map((band) => band.count) ?? [0]), 1);
 
-  const costPerLead = useMemo(() => {
-    if (!costData.data) return null;
-    if (costData.data.leadCount === 0) return 0;
-    return costData.data.totalCostCents / costData.data.leadCount / 100;
-  }, [costData.data]);
-
-  const distributionMax = Math.max(
-    ...(scoreDistribution.data?.bands.map((b) => b.count) ?? [0]),
-    1,
-  );
-
-  const sortedRuns = useMemo(() => {
-    const runs = discoveryRuns.data?.runs ?? [];
-    return [...runs].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-    );
-  }, [discoveryRuns.data]);
+  // D10: Score distribution summary stats
+  const totalScored = scoreDistribution.data?.bands.reduce((sum, b) => sum + b.count, 0) ?? 0;
+  const rejectionRate = totalScored > 0 ? Math.round((rejectedCount / (totalScored + rejectedCount)) * 100) : 0;
 
   return (
     <div className="space-y-6">
-      {/* ── Page header + date range ────────────────────────────── */}
+      {/* ── Page header + filters ──────────────────────────────── */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-2xl font-extrabold tracking-tight">Agent Analytics</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground/70">
-            Pipeline performance, lead quality, and cost intelligence
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            Live analytics from your current database state
           </p>
         </div>
-        <div className="flex gap-1 rounded-full border border-white/[0.08] bg-white/[0.03] p-1 backdrop-blur-sm">
-          {DATE_RANGE_OPTIONS.map((range) => (
-            <button
-              key={range}
-              type="button"
-              onClick={() => setDateRange(range)}
-              className={cn(
-                'rounded-full px-4 py-1.5 text-xs font-semibold transition-all duration-200',
-                dateRange === range
-                  ? 'bg-gradient-to-r from-zbooni-teal to-zbooni-green text-black shadow-lg shadow-zbooni-teal/20'
-                  : 'text-muted-foreground/60 hover:text-foreground/80',
-              )}
-            >
-              {DATE_RANGE_LABELS[range]}
-            </button>
-          ))}
+        <div className="flex items-center gap-3">
+          <div className="relative shrink-0">
+            <CustomSelect
+              value={icpFilter ?? ''}
+              onChange={(v) => setIcpFilter(v || undefined)}
+              options={icpOptions}
+              placeholder="All ICPs"
+              className="[&>div:last-child]:right-0 [&>div:last-child]:left-auto"
+            />
+          </div>
+          <div className="flex gap-1.5">
+            {DATE_RANGE_OPTIONS.map((range) => (
+              <button
+                key={range}
+                type="button"
+                onClick={() => setDateRange(range)}
+                className={`rounded-full px-4 py-1.5 text-xs font-semibold transition-colors ${
+                  dateRange === range
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted/20 text-muted-foreground hover:bg-muted/40'
+                }`}
+              >
+                {DATE_RANGE_LABELS[range]}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* ── Error banner ────────────────────────────────────────── */}
+      {/* ── Error banner ──────────────────────────────────────────── */}
       {funnel.error || feedback.error || scoreDistribution.error ? (
-        <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive backdrop-blur-sm">
+        <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {funnel.error ?? feedback.error ?? scoreDistribution.error}
         </div>
       ) : null}
 
-      {/* ── B3: Key Metrics Row ─────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <MetricCard
-          label="Cost per Lead"
-          value={costPerLead !== null ? `$${costPerLead.toFixed(2)}` : '--'}
-          sub={
-            costData.data
-              ? `$${(costData.data.totalCostCents / 100).toFixed(2)} total`
-              : undefined
-          }
-          icon={DollarSign}
-          accent="text-zbooni-green"
-          gradient="bg-zbooni-green"
-        />
-        <MetricCard
-          label="Avg Lead Score"
-          value={avgScore.data !== null ? avgScore.data.toFixed(2) : '--'}
-          sub={
-            scoreDistribution.data
-              ? `${scoreDistribution.data.bands.reduce((s, b) => s + b.count, 0)} scored`
-              : undefined
-          }
-          icon={TrendingUp}
-          accent="text-zbooni-teal"
-          gradient="bg-zbooni-teal"
-        />
-        <MetricCard
-          label="Reply Rate"
-          value={`${overallReplyRate}%`}
-          sub={`${totalReplied} of ${totalMessaged} messaged`}
-          icon={MessageSquare}
-          accent="text-emerald-400"
-          gradient="bg-emerald-400"
-        />
-        <MetricCard
-          label="Pipeline Conversion"
-          value={`${pipelineConversion}%`}
-          sub={`${qualifiedFromFunnel} qualified of ${discoveredCount}`}
-          icon={Target}
-          accent="text-purple-400"
-          gradient="bg-purple-400"
-        />
-      </div>
-
-      {/* ── B2: Pipeline Funnel ─────────────────────────────────── */}
-      <GlassCard>
-        <SectionHeader
-          icon={Layers}
-          title="Pipeline Funnel"
-          subtitle="Lead progression from discovery to close"
-          trailing={
-            <div className="flex items-center gap-2 text-[10px] text-muted-foreground/40">
-              <div className="h-2 w-2 rounded-full bg-zbooni-green animate-pulse" />
-              <span>Live</span>
+      {/* ── Pipeline Overview ───────────────────────────────────────── */}
+      {funnel.data ? (
+        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+          <div className="mb-4 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="h-1.5 w-1.5 rounded-full bg-zbooni-green animate-pulse" />
+              <h2 className="text-base font-bold tracking-tight">Pipeline Overview</h2>
             </div>
-          }
-        />
-        {funnel.data || leadStatuses.data ? (
-          <PipelineFunnel stages={funnelStages} rejectedCount={rejectedCount} />
-        ) : funnel.isLoading || leadStatuses.isLoading ? (
-          <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground/50">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-zbooni-teal" />
-            Loading funnel...
+            <div className="flex items-center gap-4 text-[11px] text-muted-foreground/50">
+              <span>
+                Total Processed:{' '}
+                <strong className="text-foreground">
+                  {PIPELINE_STAGES.reduce((sum, s) => sum + s.getProcessed(funnel.data!), 0).toLocaleString()}
+                </strong>
+              </span>
+              <span>
+                Total Pending:{' '}
+                <strong className="text-yellow-400">
+                  {PIPELINE_STAGES.reduce((sum, s) => sum + s.getPending(funnel.data!), 0).toLocaleString()}
+                </strong>
+              </span>
+              <span>
+                Healthy:{' '}
+                <strong className="text-zbooni-green">
+                  {PIPELINE_STAGES.filter((s) => s.getPending(funnel.data!) === 0).length}/{PIPELINE_STAGES.length}
+                </strong>
+              </span>
+            </div>
           </div>
-        ) : (
-          <p className="py-6 text-center text-sm text-muted-foreground/50">
-            No pipeline data yet
-          </p>
-        )}
-      </GlassCard>
 
-      {/* ── Two-column layout: ICP Performance + Quality Trends ── */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* B4: ICP Performance Comparison */}
-        <GlassCard>
-          <SectionHeader
-            icon={Users}
-            title="ICP Performance"
-            subtitle="Lead count, scores, and conversion by segment"
-          />
-          {icpPerformance.isLoading ? (
-            <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground/50">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-zbooni-teal" />
-              Loading...
-            </div>
-          ) : (
-            <IcpPerformanceTable
-              rows={icpPerformance.data ?? []}
-              icpNames={icpNameMap}
-            />
-          )}
-        </GlassCard>
-
-        {/* B5: Quality Trends */}
-        <GlassCard>
-          <SectionHeader
-            icon={Activity}
-            title="Quality Trends"
-            subtitle="30-day lead score and rejection rate"
-          />
-          {qualityTrends.isLoading ? (
-            <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground/50">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-zbooni-teal" />
-              Loading...
-            </div>
-          ) : (
-            <QualityTrendsChart data={qualityTrends.data ?? []} />
-          )}
-        </GlassCard>
-      </div>
-
-      {/* ── B7: Recovery & Follow-up Summary ────────────────────── */}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <div className="group relative overflow-hidden rounded-xl border border-white/[0.07] bg-gradient-to-br from-white/[0.05] to-white/[0.01] p-4 shadow-lg shadow-black/15 backdrop-blur-lg transition-all duration-200 hover:-translate-y-0.5 hover:border-white/[0.12]">
-          <div className="pointer-events-none absolute -right-4 -top-4 h-20 w-20 rounded-full bg-orange-400 opacity-15 blur-2xl" />
-          <div className="relative flex items-center gap-2">
-            <Shield className="h-3.5 w-3.5 text-orange-400/70" />
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-              Recovery Candidates
-            </p>
+          {/* Stage cards grid */}
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+            {PIPELINE_STAGES.map((stage) => (
+              <PipelineStageCard key={stage.key} stage={stage} data={funnel.data!} />
+            ))}
           </div>
-          <p className="relative mt-2 text-2xl font-extrabold tabular-nums tracking-tight text-orange-400">
-            {recoverySummary.data?.totalCandidates ?? '--'}
-          </p>
-          <p className="relative mt-0.5 text-[11px] text-muted-foreground/40">
-            {recoverySummary.data
-              ? `${recoverySummary.data.openCount} open, ${recoverySummary.data.resolvedCount} resolved`
-              : 'Loading...'}
-          </p>
         </div>
+      ) : null}
 
-        <div className="group relative overflow-hidden rounded-xl border border-white/[0.07] bg-gradient-to-br from-white/[0.05] to-white/[0.01] p-4 shadow-lg shadow-black/15 backdrop-blur-lg transition-all duration-200 hover:-translate-y-0.5 hover:border-white/[0.12]">
-          <div className="pointer-events-none absolute -right-4 -top-4 h-20 w-20 rounded-full bg-blue-400 opacity-15 blur-2xl" />
-          <div className="relative flex items-center gap-2">
-            <RefreshCcw className="h-3.5 w-3.5 text-blue-400/70" />
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-              Follow-ups Sent
-            </p>
-          </div>
-          <p className="relative mt-2 text-2xl font-extrabold tabular-nums tracking-tight text-blue-400">
-            {followUpSummary.data?.totalFollowUps ?? '--'}
-          </p>
-          <p className="relative mt-0.5 text-[11px] text-muted-foreground/40">
-            Total follow-up drafts generated
-          </p>
-        </div>
+      {/* ── Discovery Yield — All Runs ────────────────────────────── */}
+      {(() => {
+        const runs = discoveryRuns.data?.runs ?? [];
+        const sortedRuns = [...runs].sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        );
 
-        <div className="group relative overflow-hidden rounded-xl border border-white/[0.07] bg-gradient-to-br from-white/[0.05] to-white/[0.01] p-4 shadow-lg shadow-black/15 backdrop-blur-lg transition-all duration-200 hover:-translate-y-0.5 hover:border-white/[0.12]">
-          <div className="pointer-events-none absolute -right-4 -top-4 h-20 w-20 rounded-full bg-emerald-400 opacity-15 blur-2xl" />
-          <div className="relative flex items-center gap-2">
-            <Send className="h-3.5 w-3.5 text-emerald-400/70" />
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-              Follow-up Response
-            </p>
-          </div>
-          <p className="relative mt-2 text-2xl font-extrabold tabular-nums tracking-tight text-emerald-400">
-            {totalMessaged > 0 ? `${overallReplyRate}%` : '--'}
-          </p>
-          <p className="relative mt-0.5 text-[11px] text-muted-foreground/40">
-            Overall response rate across outreach
-          </p>
-        </div>
-      </div>
-
-      {/* ── Two-column: Score Distribution + Discovery Yield ───── */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Score Distribution */}
-        <GlassCard>
-          <SectionHeader
-            icon={BarChart3}
-            title="Score Distribution"
-            subtitle="Lead scores grouped by band"
-          />
-          {scoreDistribution.data && scoreDistribution.data.bands.length > 0 ? (
-            <div className="space-y-3">
-              {scoreDistribution.data.bands.map((band) => {
-                const pct = Math.round((band.count / distributionMax) * 100);
-                const bandColor =
-                  band.scoreBand === 'HIGH'
-                    ? '#7BFF6B'
-                    : band.scoreBand === 'MEDIUM'
-                      ? '#FACC15'
-                      : '#f87171';
-                return (
-                  <div key={band.scoreBand} className="flex items-center gap-3">
-                    <p className="w-16 text-xs font-semibold text-muted-foreground/70">
-                      {band.scoreBand}
-                    </p>
-                    <div className="h-6 flex-1 overflow-hidden rounded-lg bg-white/[0.04]">
-                      <div
-                        className="h-full rounded-lg transition-all duration-500 ease-out"
-                        style={{
-                          width: `${Math.max(pct, band.count > 0 ? 5 : 0)}%`,
-                          background: `linear-gradient(90deg, ${bandColor}50, ${bandColor}90)`,
-                          boxShadow: `0 0 8px ${bandColor}25`,
-                        }}
-                      />
-                    </div>
-                    <p className="w-12 text-right text-sm font-bold tabular-nums">
-                      {band.count}
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="py-4 text-center text-sm text-muted-foreground/50">
-              No score data yet
-            </p>
-          )}
-        </GlassCard>
-
-        {/* B1 FIX: Discovery Yield — now shows runs correctly */}
-        <GlassCard>
-          <SectionHeader
-            icon={Search}
-            title="Discovery Yield"
-            subtitle="Leads generated per discovery run"
-            trailing={
-              sortedRuns.length > 0 ? (
-                <span className="text-[10px] text-muted-foreground/40">
-                  {sortedRuns.length} run{sortedRuns.length !== 1 ? 's' : ''}
-                </span>
-              ) : undefined
-            }
-          />
-          {discoveryRuns.isLoading ? (
-            <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground/50">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-zbooni-teal" />
-              Loading runs...
-            </div>
-          ) : sortedRuns.length === 0 ? (
-            <div className="flex flex-col items-center py-8 text-center">
-              <Target className="h-8 w-8 text-muted-foreground/20" />
-              <p className="mt-3 text-sm font-medium text-muted-foreground/50">
-                No discovery runs yet
-              </p>
-              <p className="mt-1 text-[11px] text-muted-foreground/30">
-                Start a discovery run to track yield rates
+        if (sortedRuns.length === 0) {
+          return (
+            <div className="rounded-2xl border border-border/30 bg-card/50 px-4 py-6 text-center">
+              <Target className="h-6 w-6 text-muted-foreground/30 mx-auto mb-2" />
+              <p className="text-sm font-medium text-muted-foreground/60">No discovery runs yet</p>
+              <p className="mt-1 text-xs text-muted-foreground/40">
+                Start a discovery run to track yield rates.
               </p>
             </div>
-          ) : (
-            <div className="max-h-[300px] space-y-2 overflow-y-auto pr-1">
+          );
+        }
+
+        return (
+          <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+            <div className="mb-4 flex items-center gap-2">
+              <Target className="h-4 w-4 text-zbooni-green" />
+              <h2 className="text-base font-bold tracking-tight">Discovery Yield</h2>
+              <span className="ml-auto text-xs text-muted-foreground/50">
+                {sortedRuns.length} run{sortedRuns.length !== 1 ? 's' : ''} — leads / businesses
+              </span>
+            </div>
+            <div className="max-h-[320px] overflow-y-auto pr-1 space-y-2">
               {sortedRuns.map((run) => {
                 const yieldRate =
                   run.totalItems > 0
                     ? Math.round((run.processedItems / run.totalItems) * 100)
                     : 0;
-                const icpNames = (
-                  run.icpProfileIds ??
-                  (run.icpProfileId ? [run.icpProfileId] : [])
-                )
-                  .map(
-                    (id) =>
-                      icps.data?.items.find((i) => i.id === id)?.name ??
-                      id.slice(0, 8),
-                  )
+                const icpNames = (run.icpProfileIds ?? (run.icpProfileId ? [run.icpProfileId] : []))
+                  .map((id) => icps.data?.items.find((i) => i.id === id)?.name ?? id.slice(0, 8))
                   .join(', ');
 
                 return (
                   <Link
                     key={run.runId}
                     href={`/dashboard/jobs/${run.runId}`}
-                    className="flex items-center gap-4 rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-3 transition-all duration-200 hover:border-zbooni-teal/30 hover:bg-white/[0.06]"
+                    className="flex items-center gap-4 rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 transition-colors hover:border-zbooni-teal/40 hover:bg-zbooni-dark/60"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-[10px] text-muted-foreground/50">
+                        <span className="font-mono text-xs text-muted-foreground/60">
                           {run.runId.slice(0, 8)}
                         </span>
                         {icpNames ? (
@@ -1324,7 +494,7 @@ export default function AnalyticsPage() {
                           {run.status}
                         </span>
                       </div>
-                      <div className="mt-1 flex items-center gap-3 text-[10px] text-muted-foreground/40">
+                      <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground/50">
                         <span>
                           {new Date(run.createdAt).toLocaleDateString('en-US', {
                             month: 'short',
@@ -1334,56 +504,172 @@ export default function AnalyticsPage() {
                           })}
                         </span>
                         <span>
-                          {run.totalItems} businesses &rarr; {run.processedItems}{' '}
-                          leads
+                          {run.totalItems} businesses &rarr; {run.processedItems} leads
                         </span>
                       </div>
                     </div>
                     <div className="shrink-0 text-right">
-                      <p className="text-lg font-extrabold tabular-nums text-zbooni-green">
+                      <p className="text-xl font-extrabold tabular-nums text-zbooni-green">
                         {yieldRate}%
                       </p>
-                      <p className="text-[10px] text-muted-foreground/30">yield</p>
+                      <p className="text-[10px] text-muted-foreground/40">yield</p>
                     </div>
-                    <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground/25" />
+                    <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground/30" />
                   </Link>
                 );
               })}
             </div>
-          )}
-        </GlassCard>
+          </div>
+        );
+      })()}
+
+      {/* ── Top-level KPI cards ───────────────────────────────────── */}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <StatCard label="Total Messaged" value={String(totalMessaged)} accent="text-foreground" />
+        <StatCard label="Total Replies" value={String(totalReplied)} accent="text-zbooni-green" />
+        <StatCard label="Reply Rate" value={`${overallReplyRate}%`} accent="text-zbooni-teal" />
+        <StatCard label="Meeting Rate" value={`${meetingRate}%`} sub="of replies -> meetings" accent="text-purple-400" />
       </div>
 
-      {/* ── Recent Feedback Events ──────────────────────────────── */}
-      <GlassCard>
-        <SectionHeader
-          icon={Clock}
-          title="Recent Feedback Events"
-          subtitle="Latest pipeline outcomes and user interactions"
-          trailing={
-            feedback.data ? (
-              <span className="text-[10px] text-muted-foreground/40">
-                {feedback.data.totalEvents} total events
-              </span>
-            ) : undefined
-          }
-        />
+      {/* ── Funnel Stages ─────────────────────────────────────────── */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <Users className="h-4 w-4 text-zbooni-teal" />
+          <h2 className="text-base font-bold tracking-tight">Funnel Stages</h2>
+        </div>
+        {funnel.data ? (
+          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-6">
+            <StatCard label="Discovered" value={String(funnel.data.discoveredCount)} accent="text-foreground" />
+            <StatCard label="Feature Extraction" value={String(funnel.data.qualifiedCount)} accent="text-zbooni-teal" />
+            <StatCard label="Enriched" value={String(funnel.data.enrichedCount)} accent="text-zbooni-green" />
+            <StatCard label="Scored" value={String(funnel.data.scoredCount)} accent="text-yellow-400" />
+            <StatCard label="Rejected" value={String(rejectedCount)} accent="text-red-400" sub="Lead.status = rejected" />
+            <StatCard label="Deals Won" value={String(funnel.data.dealsWonCount)} accent="text-purple-400" />
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground/60">Loading funnel metrics...</p>
+        )}
+      </div>
+
+      {/* ── Score Distribution ────────────────────────────────────── */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="h-4 w-4 text-zbooni-green" />
+            <h2 className="text-base font-bold tracking-tight">Score Distribution</h2>
+          </div>
+          {totalScoredLeads > 0 ? (
+            <span className="text-xs text-muted-foreground/50">
+              {totalScoredLeads} total scored leads (all time)
+            </span>
+          ) : null}
+        </div>
+        {scoreDistribution.data && scoreDistribution.data.bands.length > 0 ? (
+          <>
+            <div className="space-y-3">
+              {scoreDistribution.data.bands.map((band) => {
+                const pct = Math.round((band.count / distributionMax) * 100);
+                const bandPct = totalScored > 0 ? Math.round((band.count / totalScored) * 100) : 0;
+                return (
+                  <div key={band.scoreBand} className="flex items-center gap-3">
+                    <p className="w-16 text-xs font-semibold text-muted-foreground">{band.scoreBand}</p>
+                    <div className="h-6 flex-1 overflow-hidden rounded-full bg-zbooni-dark/60">
+                      <div
+                        className="h-full rounded-full bg-zbooni-teal/70"
+                        style={{ width: `${Math.max(pct, band.count > 0 ? 5 : 0)}%` }}
+                      />
+                    </div>
+                    <p className="w-20 text-right text-sm">
+                      <span className="font-bold">{band.count}</span>
+                      <span className="ml-1 text-muted-foreground/50 text-xs">({bandPct}%)</span>
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+            {/* D10: Summary row to reduce whitespace */}
+            <div className="mt-4 grid grid-cols-3 gap-3 rounded-xl border border-border/20 bg-zbooni-dark/30 p-3">
+              <div className="text-center">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Total Scored</p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums">{totalScored}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Rejected</p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums text-red-400">
+                  {rejectedCount}
+                  {rejectionRate > 0 ? <span className="ml-1 text-xs text-muted-foreground/50">({rejectionRate}%)</span> : null}
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Pass Rate</p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums text-zbooni-green">
+                  {totalScored + rejectedCount > 0 ? 100 - rejectionRate : 0}%
+                </p>
+              </div>
+            </div>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground/60">No score distribution rows yet.</p>
+        )}
+      </div>
+
+      {/* ── Training Label Summaries ──────────────────────────────── */}
+      {feedback.data ? (
+        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+          <div className="mb-4 flex items-center gap-2">
+            <Tag className="h-4 w-4 text-zbooni-teal" />
+            <h2 className="text-base font-bold tracking-tight">Training Label Summaries</h2>
+            <span className="ml-auto text-xs text-muted-foreground/50">
+              {feedback.data.totalEvents} total events
+            </span>
+          </div>
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+            {LABEL_CARDS.map((item) => {
+              const count = feedback.data![item.key];
+              return (
+                <div
+                  key={item.key}
+                  className={cn(
+                    'rounded-xl border px-4 py-4 transition-colors',
+                    item.bg,
+                    item.border,
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <item.Icon className={cn('h-4 w-4', item.color)} />
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      {item.label}
+                    </span>
+                  </div>
+                  <p className={cn('mt-2 text-3xl font-extrabold tabular-nums tracking-tight', item.color)}>
+                    {count}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Recent Feedback Events ────────────────────────────────── */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <Clock className="h-4 w-4 text-zbooni-teal" />
+          <h2 className="text-base font-bold tracking-tight">Recent Feedback Events</h2>
+        </div>
         {feedbackEvents.isLoading ? (
-          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground/50">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-zbooni-teal" />
+          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
             Loading events...
           </div>
         ) : feedbackEvents.data && feedbackEvents.data.items.length > 0 ? (
           <div className="space-y-2">
             {feedbackEvents.data.items.map((event) => {
-              const badge = EVENT_TYPE_BADGES[event.eventType] ?? {
-                className: 'bg-slate-700/40 text-slate-300',
-                label: event.eventType,
-              };
+              const badge = EVENT_TYPE_BADGES[event.eventType] ?? { className: 'bg-slate-700/40 text-slate-300', label: event.eventType };
               return (
                 <div
                   key={event.id}
-                  className="flex items-center gap-3 rounded-lg border border-white/[0.05] bg-white/[0.02] px-4 py-2.5 transition-colors hover:border-white/[0.08]"
+                  className="flex items-center gap-3 rounded-lg border border-border/20 bg-zbooni-dark/30 px-4 py-2.5"
                 >
                   <span
                     className={cn(
@@ -1393,16 +679,11 @@ export default function AnalyticsPage() {
                   >
                     {badge.label}
                   </span>
-                  <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground/50">
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
                     {event.leadId.slice(0, 16)}...
                   </span>
-                  <span className="shrink-0 text-[11px] text-muted-foreground/40">
-                    {new Date(event.occurredAt).toLocaleDateString('en-AE', {
-                      month: 'short',
-                      day: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
+                  <span className="shrink-0 text-[11px] text-muted-foreground/50">
+                    {new Date(event.occurredAt).toLocaleDateString('en-AE', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </div>
               );
@@ -1410,23 +691,25 @@ export default function AnalyticsPage() {
           </div>
         ) : (
           <div className="flex flex-col items-center py-6 text-center">
-            <Clock className="h-6 w-6 text-muted-foreground/15" />
-            <p className="mt-2 text-sm text-muted-foreground/40">No feedback events yet</p>
+            <Clock className="h-6 w-6 text-muted-foreground/20" />
+            <p className="mt-2 text-sm text-muted-foreground/50">No feedback events yet</p>
           </div>
         )}
-      </GlassCard>
+      </div>
 
-      {/* ── Loading state ───────────────────────────────────────── */}
+      {/* Auto-Approve Settings moved to /dashboard/settings */}
+
+      {/* ── Loading state ─────────────────────────────────────────── */}
       {funnel.isLoading && !funnel.data ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground/50">
-          <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-zbooni-teal" />
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
           Loading analytics data...
         </div>
       ) : null}
 
-      {/* ── Empty state ─────────────────────────────────────────── */}
+      {/* ── Empty state ───────────────────────────────────────────── */}
       {!funnel.data && !funnel.isLoading && !funnel.error ? (
-        <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-3 text-sm text-muted-foreground/50 backdrop-blur-sm">
+        <div className="rounded-xl border border-border/30 bg-card px-4 py-3 text-sm text-muted-foreground/70">
           No analytics data found in the current database.
         </div>
       ) : null}
