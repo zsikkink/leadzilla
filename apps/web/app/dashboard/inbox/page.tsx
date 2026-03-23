@@ -17,6 +17,7 @@ import {
   Phone,
   Search,
 } from 'lucide-react';
+import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
@@ -39,19 +40,32 @@ function channelBadge(channel: string): string {
     : 'bg-blue-500/15 text-blue-400';
 }
 
+function activityTimestampMs(timestamp: string | null | undefined): number {
+  return timestamp ? new Date(timestamp).getTime() : 0;
+}
+
 // ── Types ────────────────────────────────────────────
+interface LeadReplyOutcomeSummary {
+  occurredAt: string;
+  classification: string | null;
+  channel: MessageSendResponse['channel'] | null;
+}
+
 interface LeadConversationSummary {
   leadId: string;
   leadName: string;
   leadEmail: string;
   lastMessage: string;
-  lastTimestamp: string;
-  channel: string;
+  lastActivityAt: string;
+  channel: MessageSendResponse['channel'];
   replyCount: number;
+  latestReply: LeadReplyOutcomeSummary | null;
 }
 
 export default function InboxPage() {
   const { apiClient } = useAuth();
+  const searchParams = useSearchParams();
+  const requestedLeadId = searchParams.get('leadId');
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [channelFilter, setChannelFilter] = useState<string>('ALL');
@@ -73,6 +87,7 @@ export default function InboxPage() {
 
   // Batch-fetch lead details for display names
   const [leadNameMap, setLeadNameMap] = useState<Record<string, string>>({});
+  const [replyOutcomeMap, setReplyOutcomeMap] = useState<Record<string, LeadReplyOutcomeSummary>>({});
 
   const leadIds = useMemo(() => {
     if (!sends.data?.items) return [];
@@ -82,6 +97,30 @@ export default function InboxPage() {
     }
     return Array.from(ids);
   }, [sends.data]);
+
+  const repliedLeadIds = useMemo(() => {
+    if (!sends.data?.items) return [];
+    const ids = new Set<string>();
+    for (const send of sends.data.items) {
+      if (send.status === 'REPLIED' || send.repliedAt) {
+        ids.add(send.leadId);
+      }
+    }
+    return Array.from(ids).sort();
+  }, [sends.data]);
+
+  const sendChannelById = useMemo(() => {
+    const channels: Record<string, MessageSendResponse['channel']> = {};
+    for (const send of sends.data?.items ?? []) {
+      channels[send.id] = send.channel;
+    }
+    return channels;
+  }, [sends.data]);
+
+  useEffect(() => {
+    if (!requestedLeadId) return;
+    setSelectedLeadId(requestedLeadId);
+  }, [requestedLeadId]);
 
   useEffect(() => {
     if (leadIds.length === 0) return;
@@ -123,6 +162,54 @@ export default function InboxPage() {
     };
   }, [leadIds, apiClient]);
 
+  useEffect(() => {
+    if (repliedLeadIds.length === 0) {
+      setReplyOutcomeMap({});
+      return;
+    }
+
+    let cancelled = false;
+
+    void Promise.allSettled(
+      repliedLeadIds.map(async (leadId) => {
+        const response = await apiClient.listFeedbackEvents({
+          leadId,
+          eventType: 'REPLIED',
+          page: 1,
+          pageSize: 1,
+        });
+
+        const latestReply = response.items[0];
+        if (!latestReply) {
+          return null;
+        }
+
+        return {
+          leadId,
+          outcome: {
+            occurredAt: latestReply.occurredAt,
+            classification: latestReply.replyClassification,
+            channel: latestReply.messageSendId ? sendChannelById[latestReply.messageSendId] ?? null : null,
+          },
+        };
+      }),
+    ).then((results) => {
+      if (cancelled) return;
+
+      const nextReplyOutcomeMap: Record<string, LeadReplyOutcomeSummary> = {};
+      for (const result of results) {
+        if (result.status !== 'fulfilled' || !result.value) continue;
+        nextReplyOutcomeMap[result.value.leadId] = result.value.outcome;
+      }
+
+      setReplyOutcomeMap(nextReplyOutcomeMap);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiClient, repliedLeadIds, sendChannelById]);
+
   // Build conversation summaries grouped by lead
   const summaries = useMemo((): LeadConversationSummary[] => {
     if (!sends.data?.items) return [];
@@ -136,29 +223,61 @@ export default function InboxPage() {
 
     const result: LeadConversationSummary[] = [];
     for (const [leadId, leadSends] of byLead) {
-      const sorted = leadSends.sort((a, b) =>
-        new Date(b.sentAt ?? b.createdAt).getTime() - new Date(a.sentAt ?? a.createdAt).getTime(),
+      const sorted = [...leadSends].sort((a, b) =>
+        activityTimestampMs(b.sentAt ?? b.createdAt) - activityTimestampMs(a.sentAt ?? a.createdAt),
       );
       const latest = sorted[0];
       if (!latest) continue;
 
-      const replyCount = leadSends.filter((s) => s.status === 'REPLIED').length;
+      const latestReplyFromSends = leadSends.reduce<string | null>((currentLatest, send) => {
+        if (!send.repliedAt) return currentLatest;
+        return activityTimestampMs(send.repliedAt) > activityTimestampMs(currentLatest)
+          ? send.repliedAt
+          : currentLatest;
+      }, null);
+
+      const latestReply = replyOutcomeMap[leadId] ?? (
+        latestReplyFromSends
+          ? {
+              occurredAt: latestReplyFromSends,
+              classification: null,
+              channel: null,
+            }
+          : null
+      );
+
+      const latestSendAt = latest.sentAt ?? latest.createdAt;
+      const lastActivityIsReply = latestReply !== null
+        && activityTimestampMs(latestReply.occurredAt) >= activityTimestampMs(latestSendAt);
+      const lastActivityAt = lastActivityIsReply ? latestReply.occurredAt : latestSendAt;
+      const replyCount = leadSends.filter((s) => s.status === 'REPLIED' || s.repliedAt).length;
+      const lastMessage = lastActivityIsReply && latestReply
+        ? latestReply.classification
+          ? `${latestReply.channel === 'WHATSAPP' ? 'WhatsApp' : 'Lead'} reply — ${latestReply.classification}`
+          : latestReply.channel === 'WHATSAPP'
+            ? 'WhatsApp reply received'
+            : 'Reply received'
+        : `${latest.channel} — ${latest.status}`;
+      const channel = lastActivityIsReply && latestReply
+        ? latestReply.channel ?? latest.channel
+        : latest.channel;
 
       result.push({
         leadId,
         leadName: leadNameMap[leadId] ?? leadId.slice(0, 8),
         leadEmail: '',
-        lastMessage: `${latest.channel} — ${latest.status}`,
-        lastTimestamp: latest.sentAt ?? latest.createdAt,
-        channel: latest.channel,
+        lastMessage,
+        lastActivityAt,
+        channel,
         replyCount,
+        latestReply,
       });
     }
 
     return result.sort((a, b) =>
-      new Date(b.lastTimestamp).getTime() - new Date(a.lastTimestamp).getTime(),
+      activityTimestampMs(b.lastActivityAt) - activityTimestampMs(a.lastActivityAt),
     );
-  }, [sends.data, leadNameMap]);
+  }, [sends.data, leadNameMap, replyOutcomeMap]);
 
   // Filter summaries
   const filtered = useMemo(() => {
@@ -230,23 +349,36 @@ export default function InboxPage() {
                   selectedLeadId === summary.leadId ? 'bg-muted/15' : ''
                 }`}
               >
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium truncate">{summary.leadName}</p>
-                  <div className="flex items-center gap-1.5">
-                    {summary.replyCount > 0 ? (
-                      <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-zbooni-green/20 px-1.5 text-[10px] font-bold text-zbooni-green">
-                        {summary.replyCount}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{summary.leadName}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${channelBadge(summary.channel)}`}>
+                        {summary.channel === 'WHATSAPP' ? <Phone className="h-2.5 w-2.5" /> : <Mail className="h-2.5 w-2.5" />}
+                        {summary.channel === 'WHATSAPP' ? 'WhatsApp' : 'Email'}
                       </span>
-                    ) : null}
-                    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${channelBadge(summary.channel)}`}>
-                      {summary.channel === 'WHATSAPP' ? <Phone className="h-2.5 w-2.5" /> : <Mail className="h-2.5 w-2.5" />}
-                    </span>
+                      {summary.latestReply ? (
+                        <span className="inline-flex items-center rounded-full bg-zbooni-green/15 px-1.5 py-0.5 text-[10px] font-semibold text-zbooni-green">
+                          {summary.latestReply.channel === 'WHATSAPP' ? 'WhatsApp reply' : 'Reply received'}
+                        </span>
+                      ) : null}
+                      {summary.latestReply?.classification ? (
+                        <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${classificationColor(summary.latestReply.classification)}`}>
+                          {summary.latestReply.classification}
+                        </span>
+                      ) : null}
+                      {summary.replyCount > 1 ? (
+                        <span className="inline-flex items-center rounded-full bg-muted/20 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                          {summary.replyCount} replies
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
+                  <p className="shrink-0 text-[10px] text-muted-foreground/40">
+                    {new Date(summary.lastActivityAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                  </p>
                 </div>
-                <p className="mt-0.5 truncate text-xs text-muted-foreground/60">{summary.lastMessage}</p>
-                <p className="mt-0.5 text-[10px] text-muted-foreground/40">
-                  {new Date(summary.lastTimestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                </p>
+                <p className="mt-1 truncate text-xs text-muted-foreground/60">{summary.lastMessage}</p>
               </button>
             ))
           )}

@@ -10,6 +10,7 @@ import {
   Building2,
   ExternalLink,
   Globe,
+  Inbox,
   Instagram,
   Linkedin,
   Loader2,
@@ -24,6 +25,7 @@ import {
   User,
   Users,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useMemo, useState, type CSSProperties } from 'react';
 
@@ -636,6 +638,7 @@ export default function LeadDetailPage() {
   const hasReply = sends.data?.items.some((s) => s.status === 'REPLIED') ?? false;
   const showBackupBanner = maxFollowUpNumber >= 3 && !hasReply && backupContacts.length > 0;
   const nextBackup = backupContacts[0];
+  const hasConversationHistory = (sends.data?.items.length ?? 0) > 0;
   const sortedTeamMembers = useMemo(
     () => (l ? sortTeamMembers(teamMembers, l.email).ordered : []),
     [teamMembers, l],
@@ -1059,10 +1062,21 @@ export default function LeadDetailPage() {
 
       {/* Message History */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-          <Mail className="h-4 w-4 text-zbooni-green" />
-          Message History
-        </h2>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-base font-bold tracking-tight flex items-center gap-2">
+            <Mail className="h-4 w-4 text-zbooni-green" />
+            Message History
+          </h2>
+          {hasConversationHistory ? (
+            <Link
+              href={`/dashboard/inbox?leadId=${encodeURIComponent(id)}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border/50 px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+            >
+              <Inbox className="h-3.5 w-3.5" />
+              Open in Inbox
+            </Link>
+          ) : null}
+        </div>
 
         {sends.isLoading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
