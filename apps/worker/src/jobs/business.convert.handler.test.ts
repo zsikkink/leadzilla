@@ -76,6 +76,17 @@ vi.mock('@lead-flood/db', () => ({
       }
     },
   },
+  PrismaRuntime: {
+    JsonNull: null,
+    PrismaClientKnownRequestError: class PrismaClientKnownRequestError extends Error {
+      code: string;
+
+      constructor(code: string) {
+        super(code);
+        this.code = code;
+      }
+    },
+  },
 }));
 
 vi.mock('../utils/pipeline-settings.js', () => ({

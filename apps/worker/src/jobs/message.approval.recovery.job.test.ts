@@ -31,6 +31,7 @@ const { dbMock } = vi.hoisted(() => {
 
 vi.mock('@lead-flood/db', () => ({
   Prisma: dbMock.Prisma,
+  PrismaRuntime: dbMock.Prisma,
   prisma: dbMock.prisma,
 }));
 
