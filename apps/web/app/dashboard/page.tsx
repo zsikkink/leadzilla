@@ -4,7 +4,6 @@ import { Calendar, DollarSign, MessageSquare, TrendingUp, Users, Zap } from 'luc
 import { useCallback, useState } from 'react';
 
 import { CustomSelect } from '../../src/components/custom-select.js';
-import { FunnelChart } from '../../src/components/funnel-chart.js';
 import { KpiCard } from '../../src/components/kpi-card.js';
 import { PipelineTimeSeriesChart } from '../../src/components/pipeline-time-series-chart.js';
 import { useAuth } from '../../src/hooks/use-auth.js';
@@ -178,9 +177,6 @@ export default function DashboardPage() {
           </div>
         </div>
       ) : null}
-
-      {/* Pipeline Time-Series Chart */}
-      <FunnelChart />
 
       {/* Pipeline Time Series Chart — wired to ICP filter */}
       <PipelineTimeSeriesChart icpProfileId={icpFilter} />
