@@ -1,4 +1,4 @@
-import { Prisma, prisma, toInputJson } from '@lead-flood/db';
+import { PrismaRuntime, prisma, toInputJson, type Prisma } from '@lead-flood/db';
 import type {
   ContactRecoveryAttempt,
   ContactRecoveryCandidate,
@@ -2248,10 +2248,10 @@ export async function handleBusinessConvertJob(
           icpProfileId,
           apolloContactJson: apolloContactJson
             ? toInputJson(apolloContactJson)
-            : Prisma.JsonNull,
+            : PrismaRuntime.JsonNull,
           hunterContactJson: hunterContactJson
             ? toInputJson(hunterContactJson)
-            : Prisma.JsonNull,
+            : PrismaRuntime.JsonNull,
           apolloHasEmail,
           apolloHasDirectPhone,
           metadata: toInputJson({
@@ -2306,7 +2306,7 @@ export async function handleBusinessConvertJob(
         },
       }).catch((err: unknown) => {
         if (
-          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err instanceof PrismaRuntime.PrismaClientKnownRequestError &&
           err.code === 'P2002'
         ) {
           logger.info(
@@ -2392,10 +2392,10 @@ export async function handleBusinessConvertJob(
           icpProfileId,
           apolloContactJson: apolloContactJson
             ? toInputJson(apolloContactJson)
-            : Prisma.JsonNull,
+            : PrismaRuntime.JsonNull,
           hunterContactJson: hunterContactJson
             ? toInputJson(hunterContactJson)
-            : Prisma.JsonNull,
+            : PrismaRuntime.JsonNull,
           apolloHasEmail,
           apolloHasDirectPhone,
               metadata: toInputJson({
@@ -2447,7 +2447,7 @@ export async function handleBusinessConvertJob(
             },
           }).catch((err: unknown) => {
         if (
-          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err instanceof PrismaRuntime.PrismaClientKnownRequestError &&
           err.code === 'P2002'
         ) {
           logger.info(
@@ -2543,10 +2543,10 @@ export async function handleBusinessConvertJob(
         icpProfileId,
         apolloContactJson: apolloContactJson
           ? toInputJson(apolloContactJson)
-          : Prisma.JsonNull,
+          : PrismaRuntime.JsonNull,
         hunterContactJson: hunterContactJson
           ? toInputJson(hunterContactJson)
-          : Prisma.JsonNull,
+          : PrismaRuntime.JsonNull,
         apolloHasEmail,
         apolloHasDirectPhone,
         metadata: toInputJson({

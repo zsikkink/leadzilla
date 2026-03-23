@@ -15,7 +15,7 @@ import type {
   RejectMessageDraftRequest,
   SendMessageRequest,
 } from '@lead-flood/contracts';
-import { Prisma, prisma } from '@lead-flood/db';
+import { PrismaRuntime, prisma, type Prisma } from '@lead-flood/db';
 
 import {
   MessagingNotFoundError,
@@ -306,7 +306,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
         promptVersion: input.promptVersion,
         generatedByModel: 'stub',
         groundingKnowledgeIds: input.knowledgeEntryIds,
-        groundingContextJson: Prisma.JsonNull,
+        groundingContextJson: PrismaRuntime.JsonNull,
         approvalStatus: 'PENDING',
         variants: {
           create: [
@@ -503,7 +503,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
 
       return mapDraftToResponse(draft);
     } catch (error: unknown) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+      if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2025') {
         throw new MessagingNotFoundError('Message draft not found');
       }
       throw error;
@@ -525,7 +525,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
       });
       return mapDraftToResponse(draft);
     } catch (error: unknown) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+      if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2025') {
         throw new MessagingNotFoundError('Message draft not found');
       }
       throw error;

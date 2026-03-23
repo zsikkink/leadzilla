@@ -1,4 +1,4 @@
-import { Prisma, prisma } from '@lead-flood/db';
+import { PrismaRuntime, prisma } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
@@ -132,7 +132,7 @@ async function findSendByIdempotencyKey(idempotencyKey: string): Promise<Recover
 }
 
 function isUniqueIdempotencyConflict(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+  return error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
 export async function recoverApprovedInitialDraftsMissingMessageSends(

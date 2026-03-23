@@ -1,4 +1,4 @@
-import { Prisma, prisma } from '@lead-flood/db';
+import { PrismaRuntime, prisma } from '@lead-flood/db';
 
 import { normalizePhoneE164 } from '../../packages/discovery/src/normalization/phone.js';
 
@@ -122,7 +122,7 @@ async function main(): Promise<void> {
         updated += 1;
       } catch (error: unknown) {
         if (
-          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error instanceof PrismaRuntime.PrismaClientKnownRequestError &&
           error.code === 'P2002'
         ) {
           skippedConflicts += 1;

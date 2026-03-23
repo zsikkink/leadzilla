@@ -7,7 +7,7 @@ import type {
   ListFeedbackEventsQuery,
   ListFeedbackEventsResponse,
 } from '@lead-flood/contracts';
-import { Prisma, prisma } from '@lead-flood/db';
+import { PrismaRuntime, prisma, type Prisma } from '@lead-flood/db';
 
 import { FeedbackNotImplementedError } from './feedback.errors.js';
 
@@ -91,7 +91,7 @@ export class PrismaFeedbackRepository extends StubFeedbackRepository {
       dedupeKey,
       payloadJson: input.payloadJson !== undefined
         ? (JSON.parse(JSON.stringify(input.payloadJson)) as Prisma.InputJsonValue)
-        : Prisma.JsonNull,
+        : PrismaRuntime.JsonNull,
       occurredAt: new Date(input.occurredAt),
     };
 

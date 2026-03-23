@@ -1,5 +1,10 @@
+import prismaClientPkg from '@prisma/client';
+
+const { Prisma: PrismaRuntime } = prismaClientPkg;
+
 export { prisma } from './client.js';
-export { Prisma } from '@prisma/client';
+export { PrismaRuntime };
+export type { Prisma } from '@prisma/client';
 export {
   getPipelineSetting,
   getScoreQualificationThresholdSetting,

@@ -1,12 +1,13 @@
 import PgBoss from 'pg-boss';
 
 import {
-  Prisma,
+  PrismaRuntime,
   assertDatabaseConnection,
   checkPipelineSchemaHealth,
   prisma,
   query,
   toInputJson,
+  type Prisma,
 } from '@lead-flood/db';
 import { createLogger } from '@lead-flood/observability';
 import type {
@@ -444,7 +445,7 @@ async function main(): Promise<void> {
           jobId: jobExecution.id,
         };
       } catch (error: unknown) {
-        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2002') {
           throw new LeadAlreadyExistsError('Lead already exists for this email');
         }
 

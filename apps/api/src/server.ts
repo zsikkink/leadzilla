@@ -45,7 +45,7 @@ import {
   ReadyResponseSchema,
   type ReadySchemaHealth,
 } from '@lead-flood/contracts';
-import { Prisma, getScoreQualificationThresholdSetting, prisma } from '@lead-flood/db';
+import { PrismaRuntime, getScoreQualificationThresholdSetting, prisma, type Prisma } from '@lead-flood/db';
 
 import {
   buildAuthGuard,
@@ -534,7 +534,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 
       const metadataValue = parsedBody.data.metadata
         ? JSON.parse(JSON.stringify(parsedBody.data.metadata)) as Prisma.InputJsonValue
-        : Prisma.JsonNull;
+        : PrismaRuntime.JsonNull;
 
       const [rejection] = await prisma.$transaction([
         prisma.leadRejection.upsert({

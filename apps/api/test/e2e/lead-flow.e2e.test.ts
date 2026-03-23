@@ -1,6 +1,6 @@
 import PgBoss from 'pg-boss';
 
-import { Prisma, prisma } from '@lead-flood/db';
+import { PrismaRuntime, prisma } from '@lead-flood/db';
 import { createLogger } from '@lead-flood/observability';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -179,7 +179,7 @@ describe('lead pipeline e2e', () => {
             jobId: jobExecution.id,
           };
         } catch (error: unknown) {
-          if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+          if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2002') {
             throw new LeadAlreadyExistsError('Lead already exists for this email');
           }
 

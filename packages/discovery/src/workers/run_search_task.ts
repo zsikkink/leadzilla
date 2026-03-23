@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { Prisma, prisma, withPoolRetry } from '@lead-flood/db';
+import { PrismaRuntime, prisma, withPoolRetry, type Prisma } from '@lead-flood/db';
 
 import type { DiscoveryRuntimeConfig } from '../config.js';
 import { normalizeQuery } from '../dedupe/normalize.js';
@@ -392,11 +392,11 @@ async function lockNextRunnableTask(
 ): Promise<SearchTaskRow | null> {
   return prisma.$transaction(async (tx) => {
     const timeBucketFilter = options.timeBucket
-      ? Prisma.sql`AND "time_bucket" = ${options.timeBucket}`
-      : Prisma.empty;
+      ? PrismaRuntime.sql`AND "time_bucket" = ${options.timeBucket}`
+      : PrismaRuntime.empty;
     const discoveryRunFilter = options.discoveryRunId
-      ? Prisma.sql`AND "discovery_run_id" = ${options.discoveryRunId}`
-      : Prisma.sql`AND "discovery_run_id" IS NULL`;
+      ? PrismaRuntime.sql`AND "discovery_run_id" = ${options.discoveryRunId}`
+      : PrismaRuntime.sql`AND "discovery_run_id" IS NULL`;
     const rows = await tx.$queryRaw<SearchTaskRow[]>`
       SELECT
         id,

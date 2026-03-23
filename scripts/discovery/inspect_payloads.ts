@@ -1,4 +1,4 @@
-import { Prisma, prisma } from '@lead-flood/db';
+import { prisma, type Prisma } from '@lead-flood/db';
 
 const TASK_TYPES = ['SERP_GOOGLE', 'SERP_GOOGLE_LOCAL', 'SERP_MAPS_LOCAL'] as const;
 

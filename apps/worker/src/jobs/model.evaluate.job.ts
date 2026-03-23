@@ -1,5 +1,5 @@
 import type { EvaluationSplit } from '@lead-flood/contracts';
-import { Prisma, prisma } from '@lead-flood/db';
+import { PrismaRuntime, prisma, type Prisma } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
@@ -192,7 +192,7 @@ export async function handleModelEvaluateJob(
         recall: metrics.recall,
         f1: metrics.f1,
         brierScore: metrics.brierScore,
-        calibrationJson: Prisma.JsonNull,
+        calibrationJson: PrismaRuntime.JsonNull,
         confusionMatrixJson: JSON.parse(JSON.stringify(confusionMatrix)) as Prisma.InputJsonValue,
         evaluatedAt: new Date(),
       },
