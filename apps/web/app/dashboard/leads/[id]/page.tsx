@@ -172,7 +172,8 @@ function getInstagramPostTypeLabel(postType: 'image' | 'video' | 'carousel'): st
   return 'Image';
 }
 
-function extractBusinessDecisionMakers(scrape: Record<string, unknown>): DecisionMaker[] {
+// Retained for potential future use — Decision Makers rendering removed (redundant with Team Members)
+function _extractBusinessDecisionMakers(scrape: Record<string, unknown>): DecisionMaker[] {
   const raw = scrape.decisionMakers;
   if (!Array.isArray(raw)) return [];
   return raw
@@ -220,18 +221,28 @@ function extractBusinessCertifications(scrape: Record<string, unknown>): string[
   return raw.filter((c): c is string => typeof c === 'string').slice(0, 8);
 }
 
+const IMAGE_ARTIFACT_PATTERN = /\.(png|jpg|jpeg|gif|svg|webp|bmp|ico)\b|^https?:\/\/|^data:/i;
+
+function isCleanContactValue(value: string): boolean {
+  return !IMAGE_ARTIFACT_PATTERN.test(value);
+}
+
 function extractContactEmails(scrape: Record<string, unknown>): ContactEmail[] {
   // New format: contactInfo.emails
   const ci = scrape.contactInfo;
   if (ci && typeof ci === 'object') {
     const c = ci as Record<string, unknown>;
     if (Array.isArray(c.emails)) {
-      return c.emails.filter((e): e is ContactEmail => e && typeof e.email === 'string').slice(0, 5);
+      return c.emails
+        .filter((e): e is ContactEmail => e && typeof e.email === 'string' && isCleanContactValue(e.email))
+        .slice(0, 5);
     }
   }
   // Legacy: emails at top level
   if (Array.isArray(scrape.emails)) {
-    return scrape.emails.filter((e): e is ContactEmail => e && typeof e.email === 'string').slice(0, 5);
+    return scrape.emails
+      .filter((e): e is ContactEmail => e && typeof e.email === 'string' && isCleanContactValue(e.email))
+      .slice(0, 5);
   }
   return [];
 }
@@ -241,24 +252,34 @@ function extractContactPhones(scrape: Record<string, unknown>): ContactPhone[] {
   if (ci && typeof ci === 'object') {
     const c = ci as Record<string, unknown>;
     if (Array.isArray(c.phones)) {
-      return c.phones.filter((p): p is ContactPhone => p && typeof p.number === 'string').slice(0, 5);
+      return c.phones
+        .filter((p): p is ContactPhone => p && typeof p.number === 'string' && isCleanContactValue(p.number))
+        .slice(0, 5);
     }
   }
   if (Array.isArray(scrape.phones)) {
-    return scrape.phones.filter((p): p is ContactPhone => p && typeof p.number === 'string').slice(0, 5);
+    return scrape.phones
+      .filter((p): p is ContactPhone => p && typeof p.number === 'string' && isCleanContactValue(p.number))
+      .slice(0, 5);
   }
   return [];
 }
 
+const ADDRESS_PROMO_KEYWORDS = /\b(parking|available|locations|directions|visit us|click here|find us|get directions|see map)\b/i;
+
 function extractContactAddresses(scrape: Record<string, unknown>): ContactAddress[] {
   const ci = scrape.contactInfo;
+  let raw: ContactAddress[] = [];
   if (ci && typeof ci === 'object') {
     const c = ci as Record<string, unknown>;
     if (Array.isArray(c.addresses)) {
-      return c.addresses.filter((a): a is ContactAddress => a && typeof a.text === 'string').slice(0, 3);
+      raw = c.addresses.filter((a): a is ContactAddress => a && typeof a.text === 'string');
     }
   }
-  return [];
+  // Filter out garbage: too short, promotional text, or non-address content
+  return raw
+    .filter((a) => a.text.length >= 10 && !ADDRESS_PROMO_KEYWORDS.test(a.text))
+    .slice(0, 2);
 }
 
 function mergeSocialLinks(
@@ -299,11 +320,34 @@ function mergeSocialLinks(
   return links;
 }
 
+function InstagramThumbnail({ thumbnailUrl, postType }: { thumbnailUrl: string | null; postType: 'image' | 'video' | 'carousel' }) {
+  const [failed, setFailed] = useState(false);
+
+  if (!thumbnailUrl || failed) {
+    return (
+      <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-md border border-dashed border-border/40 bg-zbooni-dark/50 text-muted-foreground/60">
+        <Camera className="h-4 w-4" />
+        <span className="mt-1 text-[9px] font-semibold uppercase tracking-wide">
+          {getInstagramPostTypeLabel(postType)}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={thumbnailUrl}
+      alt="Instagram post preview"
+      className="h-16 w-16 shrink-0 rounded-md border border-border/30 object-cover"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
   const ws = data.websiteScrape;
   const ig = data.instagramScrape;
 
-  const decisionMakers = ws ? extractBusinessDecisionMakers(ws) : [];
   const techStack = ws ? extractBusinessTechStack(ws) : [];
   const mergedSocialLinks = mergeSocialLinks(ws, data.instagramHandle, ig);
   const certs = ws ? extractBusinessCertifications(ws) : [];
@@ -326,7 +370,7 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
   const igMediaCount = ig && typeof ig.mediaCount === 'number' ? ig.mediaCount : null;
 
   const hasAnyData =
-    decisionMakers.length > 0 || techStack.length > 0 || mergedSocialLinks.length > 0 ||
+    techStack.length > 0 || mergedSocialLinks.length > 0 ||
     certs.length > 0 || allEmails.length > 0 || allPhones.length > 0 || addresses.length > 0;
 
   if (!hasAnyData) {
@@ -414,38 +458,6 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
               >
                 <MapPin className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
                 <span className="truncate">{a.text}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Decision Makers */}
-      {decisionMakers.length > 0 && (
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">
-            <Users className="mr-1 inline h-3 w-3" />Decision Makers ({decisionMakers.length})
-          </p>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {decisionMakers.map((dm, i) => (
-              <div key={i} className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2">
-                <div className="flex h-7 w-7 items-center justify-center rounded-md bg-amber-500/10 text-[10px] font-bold text-amber-400">{dm.name.charAt(0)}</div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-semibold truncate">{dm.name}</p>
-                  <p className="text-[10px] text-muted-foreground/50 truncate">{dm.title}</p>
-                </div>
-                <div className="flex shrink-0 gap-1">
-                  {dm.email && (
-                    <a href={`mailto:${dm.email}`} title={dm.email} className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
-                      <Mail className="h-3 w-3" />
-                    </a>
-                  )}
-                  {dm.linkedinUrl && (
-                    <a href={dm.linkedinUrl} target="_blank" rel="noopener noreferrer" title="LinkedIn" className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
-                      <Linkedin className="h-3 w-3" />
-                    </a>
-                  )}
-                </div>
               </div>
             ))}
           </div>
@@ -864,15 +876,16 @@ export default function LeadDetailPage() {
             <p className="mt-0.5 text-sm text-muted-foreground">{l.email}</p>
             {businessData ? (
               <div className="mt-1 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => router.push(`/dashboard/leads/businesses?selected=${businessId ?? ''}`)}
+                <a
+                  href={businessData.websiteDomain ? `https://${businessData.websiteDomain}` : '#'}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:text-zbooni-green"
                 >
                   <Building2 className="h-3 w-3" />
                   {businessData.name}
                   <ExternalLink className="h-2.5 w-2.5" />
-                </button>
+                </a>
                 {(() => {
                   const apolloCountry = typeof conversionMetadata?.apolloOrgEnrichment === 'object' && conversionMetadata.apolloOrgEnrichment !== null
                     ? (conversionMetadata.apolloOrgEnrichment as Record<string, unknown>).country
@@ -1204,15 +1217,14 @@ export default function LeadDetailPage() {
             {businessData.name ? (
               <span className="ml-2 text-sm font-normal text-muted-foreground/60">— {businessData.name}</span>
             ) : null}
-            {businessData.websiteDomain ? (
-              <a
-                href={`https://${businessData.websiteDomain}`}
-                target="_blank"
-                rel="noopener noreferrer"
+            {businessId ? (
+              <button
+                type="button"
+                onClick={() => router.push(`/dashboard/leads/businesses?selected=${businessId}`)}
                 className="ml-auto text-xs text-zbooni-teal hover:text-zbooni-green transition-colors flex items-center gap-1"
               >
-                {businessData.websiteDomain} <ExternalLink className="h-3 w-3" />
-              </a>
+                View in Business Intel <ExternalLink className="h-3 w-3" />
+              </button>
             ) : null}
           </h2>
           <IntelligenceGathered data={businessData} />
@@ -1355,20 +1367,7 @@ export default function LeadDetailPage() {
             {instagramPosts.map((post, i) => (
               <div key={i} className="rounded-lg border border-border/20 bg-zbooni-dark/30 px-4 py-3">
                 <div className="flex gap-3">
-                  {post.thumbnailUrl ? (
-                    <img
-                      src={post.thumbnailUrl}
-                      alt="Instagram post preview"
-                      className="h-16 w-16 shrink-0 rounded-md border border-border/30 object-cover"
-                    />
-                  ) : (
-                    <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-md border border-dashed border-border/40 bg-zbooni-dark/50 text-muted-foreground/60">
-                      <Camera className="h-4 w-4" />
-                      <span className="mt-1 text-[9px] font-semibold uppercase tracking-wide">
-                        {getInstagramPostTypeLabel(post.postType)}
-                      </span>
-                    </div>
-                  )}
+                  <InstagramThumbnail thumbnailUrl={post.thumbnailUrl} postType={post.postType} />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm text-muted-foreground/80 line-clamp-3">{post.caption || 'No caption'}</p>
                     <div className="mt-2 flex items-center gap-4 text-[11px] text-muted-foreground/50">
