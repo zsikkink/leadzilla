@@ -876,16 +876,23 @@ export default function LeadDetailPage() {
             <p className="mt-0.5 text-sm text-muted-foreground">{l.email}</p>
             {businessData ? (
               <div className="mt-1 flex items-center gap-2">
-                <a
-                  href={businessData.websiteDomain ? `https://${businessData.websiteDomain}` : '#'}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:text-zbooni-green"
-                >
-                  <Building2 className="h-3 w-3" />
-                  {businessData.name}
-                  <ExternalLink className="h-2.5 w-2.5" />
-                </a>
+                {businessData.websiteDomain ? (
+                  <a
+                    href={`https://${businessData.websiteDomain}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:text-zbooni-green"
+                  >
+                    <Building2 className="h-3 w-3" />
+                    {businessData.name}
+                    <ExternalLink className="h-2.5 w-2.5" />
+                  </a>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <Building2 className="h-3 w-3" />
+                    {businessData.name}
+                  </span>
+                )}
                 {(() => {
                   const apolloCountry = typeof conversionMetadata?.apolloOrgEnrichment === 'object' && conversionMetadata.apolloOrgEnrichment !== null
                     ? (conversionMetadata.apolloOrgEnrichment as Record<string, unknown>).country

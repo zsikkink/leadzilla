@@ -206,15 +206,15 @@ function buildHook(extra: FallbackExtra | undefined): string {
 }
 
 /** Build social proof line. */
-function buildSocialProof(): string {
+function buildSocialProof(name: string, company: string): string {
   // Rotate between a few social proof variants
   const proofs = [
     'Over 200 merchants across the UAE already use Zbooni, with an average 81% payment completion rate.',
     'We work with 200+ UAE merchants who process high-value orders through WhatsApp daily.',
     'Similar businesses using Zbooni see 30% more repeat customers in their first month.',
   ];
-  // Use current minute to rotate — gives different proof across messages sent at different times
-  const idx = new Date().getMinutes() % proofs.length;
+  // Use stable hash for consistent per-lead rotation
+  const idx = simpleHash(name + company) % proofs.length;
   return proofs[idx] as string;
 }
 
@@ -233,7 +233,7 @@ export function getWhatsAppFallback(
 
   const observation = buildObservation(company, context, extra);
   const hook = buildHook(extra);
-  const socialProof = buildSocialProof();
+  const socialProof = buildSocialProof(name, company);
 
   const templateIndex = simpleHash(name + company) % WHATSAPP_TEMPLATES.length;
   const template = WHATSAPP_TEMPLATES[templateIndex] as TemplateBuilder;
@@ -259,7 +259,7 @@ export function getEmailFallback(
 
   const observation = buildObservation(company, context, extra);
   const hook = buildHook(extra);
-  const socialProof = buildSocialProof();
+  const socialProof = buildSocialProof(name, company);
 
   const templateIndex = simpleHash(name + company) % EMAIL_TEMPLATES.length;
   const template = EMAIL_TEMPLATES[templateIndex] as TemplateBuilder;

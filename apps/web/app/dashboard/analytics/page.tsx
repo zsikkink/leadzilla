@@ -215,7 +215,7 @@ export default function AnalyticsPage() {
     useCallback(() => apiClient.listIcps({ page: 1, pageSize: 50 }), [apiClient]),
   );
   const discoveryRuns = useApiQuery<ListDiscoveryRunsResponse>(
-    useCallback(() => apiClient.listDiscoveryRuns({ page: 1, pageSize: 200 }), [apiClient]),
+    useCallback(() => apiClient.listDiscoveryRuns({ page: 1, pageSize: 50 }), [apiClient]),
   );
 
   const icpOptions = [
@@ -281,7 +281,7 @@ export default function AnalyticsPage() {
             .eq('icpProfileId', icpFilter)
             .not('leadId', 'is', null);
           const leadIds = (conversions?.map((c: { leadId: string }) => c.leadId) ?? []).filter(Boolean);
-          if (leadIds.length > 0) {
+          if (leadIds.length > 0 && leadIds.length <= 200) {
             query = query.in('id', leadIds);
           } else {
             if (!cancelled) setRejectedCount(0);

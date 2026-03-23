@@ -141,6 +141,10 @@ async function fetchLeadRows(
 
     if (conversions && conversions.length > 0) {
       const leadIds = conversions.map((c: { leadId: string }) => c.leadId).filter(Boolean);
+      if (leadIds.length > 200) {
+        // Too many IDs for Supabase .in() URL limit — skip ICP filter
+        return [];
+      }
       if (leadIds.length > 0) {
         query = query.in('id', leadIds);
       } else {

@@ -54,6 +54,7 @@ export interface MessageGenerateJobPayload
 
 export interface MessageGenerateLogger {
   info: (object: Record<string, unknown>, message: string) => void;
+  debug?: ((object: Record<string, unknown>, message: string) => void) | undefined;
   warn: (object: Record<string, unknown>, message: string) => void;
   error: (object: Record<string, unknown>, message: string) => void;
 }
@@ -529,9 +530,9 @@ export async function handleMessageGenerateJob(
     // Every call returned 400 → terminal_error → stub body → hard rejection → fallback.
 
     if (deps?.openAiAdapter?.isConfigured) {
-      logger.info(
+      logger.debug?.(
         { jobId: job.id, leadId, openAiConfigured: true },
-        '[A1-DIAG] OpenAI adapter is configured, proceeding with AI generation',
+        'OpenAI adapter is configured, proceeding with AI generation',
       );
 
       let systemPromptOverride: string | undefined;
@@ -554,9 +555,8 @@ export async function handleMessageGenerateJob(
         ? { ...groundingContext, icpDescription: systemPromptOverride }
         : groundingContext;
 
-      // [A4-DIAG] Log the assembled prompt at debug level so we can verify
-      // sales hook, custom settings, and business intelligence reach OpenAI
-      logger.info(
+      // Log assembled prompt context at debug level for troubleshooting
+      logger.debug?.(
         {
           jobId: job.id,
           leadId,
@@ -570,7 +570,7 @@ export async function handleMessageGenerateJob(
           customSystemPromptPreview: generateContext.customSystemPrompt?.slice(0, 80) ?? '(default)',
           messagingInstructionsPreview: generateContext.messagingInstructions?.slice(0, 80) ?? '(none)',
         },
-        '[A4-DIAG] Assembled message generation context',
+        'Assembled message generation context',
       );
 
       // First attempt
