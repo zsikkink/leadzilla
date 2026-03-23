@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { Prisma, getScoreQualificationThresholdSetting, prisma } from '@lead-flood/db';
+import { Prisma } from '@prisma/client';
+import { getScoreQualificationThresholdSetting, prisma } from '@lead-flood/db';
 import type { DeterministicRule } from './deterministic.js';
 import type { LogisticModel } from './logistic.js';
 

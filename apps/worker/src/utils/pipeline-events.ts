@@ -1,4 +1,5 @@
-import { type Prisma, prisma } from '@lead-flood/db';
+import type { Prisma } from '@prisma/client';
+import { prisma } from '@lead-flood/db';
 
 /**
  * Record a pipeline stage transition for a lead.

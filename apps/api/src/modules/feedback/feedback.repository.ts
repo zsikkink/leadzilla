@@ -7,7 +7,8 @@ import type {
   ListFeedbackEventsQuery,
   ListFeedbackEventsResponse,
 } from '@lead-flood/contracts';
-import { Prisma, prisma } from '@lead-flood/db';
+import { Prisma } from '@prisma/client';
+import { prisma } from '@lead-flood/db';
 
 import { FeedbackNotImplementedError } from './feedback.errors.js';
 

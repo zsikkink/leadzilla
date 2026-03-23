@@ -3,6 +3,7 @@ import { promises as dns } from 'node:dns';
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyPluginAsync } from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import {
   ContactRecoveryDetailResponseSchema,
@@ -39,7 +40,7 @@ import {
   ReadyResponseSchema,
   type ReadySchemaHealth,
 } from '@lead-flood/contracts';
-import { Prisma, getScoreQualificationThresholdSetting, prisma } from '@lead-flood/db';
+import { getScoreQualificationThresholdSetting, prisma } from '@lead-flood/db';
 
 import { buildAuthGuard, type AuthGuardOptions, type VerifyAccessToken } from './auth/guard.js';
 import type { ApiEnv } from './env.js';

@@ -1,6 +1,7 @@
 import PgBoss from 'pg-boss';
+import { Prisma } from '@prisma/client';
 
-import { Prisma, prisma } from '@lead-flood/db';
+import { prisma } from '@lead-flood/db';
 import { createLogger } from '@lead-flood/observability';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 

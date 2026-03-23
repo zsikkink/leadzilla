@@ -24,7 +24,8 @@
     "seed": "node --import tsx src/cli/seed.ts"
   },
   "dependencies": {
-    "@lead-flood/db": "workspace:*"
+    "@lead-flood/db": "workspace:*",
+    "@prisma/client": "^6.2.1"
   },
   "devDependencies": {
     "tsx": "^4.19.2"

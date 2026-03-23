@@ -10,8 +10,9 @@
  *   → message.send (Resend for email, Trengo for WhatsApp)
  */
 import { randomUUID } from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 
-import { type Prisma, prisma } from '@lead-flood/db';
+import { prisma } from '@lead-flood/db';
 import {
   OpenAiAdapter,
   ResendAdapter,

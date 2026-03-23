@@ -1,4 +1,5 @@
-import { Prisma, prisma } from '@lead-flood/db';
+import { Prisma } from '@prisma/client';
+import { prisma } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 

@@ -56,6 +56,9 @@ importers:
       '@lead-flood/observability':
         specifier: workspace:*
         version: link:../../packages/observability
+      '@prisma/client':
+        specifier: ^6.2.1
+        version: 6.19.2(prisma@6.19.2(typescript@5.9.3))(typescript@5.9.3)
       fastify:
         specifier: ^5.2.1
         version: 5.7.4
@@ -163,6 +166,9 @@ importers:
       '@lead-flood/providers':
         specifier: workspace:*
         version: link:../../packages/providers
+      '@prisma/client':
+        specifier: ^6.2.1
+        version: 6.19.2(prisma@6.19.2(typescript@5.9.3))(typescript@5.9.3)
       pg-boss:
         specifier: ^10.3.0
         version: 10.4.2
@@ -206,6 +212,9 @@ importers:
       '@lead-flood/db':
         specifier: workspace:*
         version: link:../db
+      '@prisma/client':
+        specifier: ^6.2.1
+        version: 6.19.2(prisma@6.19.2(typescript@5.9.3))(typescript@5.9.3)
     devDependencies:
       tsx:
         specifier: ^4.19.2

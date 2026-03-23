@@ -10,7 +10,8 @@ import {
   type DiscoveryRuntimeConfig,
   type SearchTaskType,
 } from '@lead-flood/discovery';
-import { prisma, toInputJson, type Prisma } from '@lead-flood/db';
+import type { Prisma } from '@prisma/client';
+import { prisma, toInputJson } from '@lead-flood/db';
 
 const COUNTRY_SET = new Set<DiscoveryCountryCode>(['JO', 'SA', 'AE', 'EG']);
 const LANGUAGE_SET = new Set<DiscoveryLanguageCode>(['en', 'ar']);

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 
-import { Prisma, prisma, withPoolRetry } from '@lead-flood/db';
+import { prisma, withPoolRetry } from '@lead-flood/db';
 
 import type { DiscoveryRuntimeConfig } from '../config.js';
 import { normalizeQuery } from '../dedupe/normalize.js';

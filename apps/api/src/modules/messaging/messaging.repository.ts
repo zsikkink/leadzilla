@@ -15,7 +15,8 @@ import type {
   RejectMessageDraftRequest,
   SendMessageRequest,
 } from '@lead-flood/contracts';
-import { Prisma, prisma } from '@lead-flood/db';
+import { Prisma } from '@prisma/client';
+import { prisma } from '@lead-flood/db';
 
 import {
   MessagingNotFoundError,

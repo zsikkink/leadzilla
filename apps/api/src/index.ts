@@ -1,7 +1,7 @@
 import PgBoss from 'pg-boss';
+import { Prisma } from '@prisma/client';
 
 import {
-  Prisma,
   assertDatabaseConnection,
   checkPipelineSchemaHealth,
   prisma,

@@ -1,6 +1,7 @@
 import type { CreateRetrainRunRequest, TrainingTrigger } from '@lead-flood/contracts';
 import { createHash } from 'node:crypto';
-import { type Prisma, prisma } from '@lead-flood/db';
+import type { Prisma } from '@prisma/client';
+import { prisma } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 

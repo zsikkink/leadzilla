@@ -1,5 +1,6 @@
 import type { ReplyClassifyJobPayload, ResendWebhookPayload, TrengoWebhookPayload } from '@lead-flood/contracts';
-import { type Prisma, prisma } from '@lead-flood/db';
+import type { Prisma } from '@prisma/client';
+import { prisma } from '@lead-flood/db';
 
 export interface WebhookProcessResult {
   feedbackEventId: string | null;
