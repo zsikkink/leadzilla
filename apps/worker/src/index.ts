@@ -243,7 +243,7 @@ async function main(): Promise<void> {
   // ── Connection Budget Documentation ────────────────────────────────────
   // Cloud Supabase free tier has ~15 max connections. This worker process uses:
   //   - Prisma connection pool: 3 connections (connection_limit=3 in DATABASE_URL)
-  //   - pg-boss pool: 2 connections (max: 2 below)
+  //   - pg-boss pool: 1 connection (max: 1 below)
   //   - Total per worker: ~5 connections
   //
   // During peak demand (e.g., 3 concurrent search tasks via batchSize=3),
@@ -259,7 +259,7 @@ async function main(): Promise<void> {
   const boss = new PgBoss({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
-    max: 2,
+    max: 1,
   });
   let stopJobRequestDispatcher: (() => void) | null = null;
   const workerSchedulesEnabled =
