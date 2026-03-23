@@ -532,16 +532,28 @@ export class OpenAiAdapter {
 }
 
 // ---------- JSON Schema helper (minimal zodToJsonSchema for structured output) ----------
+//
+// OpenAI strict structured output has specific requirements:
+// 1. Nullable types must use `type: ["string", "null"]`, NOT `anyOf`
+// 2. ALL properties must be listed in `required` (even nullable ones)
+// 3. `additionalProperties: false` is mandatory
+//
+// The previous implementation used `anyOf` for nullable types and omitted nullable
+// properties from `required`. This caused OpenAI to reject the schema with a 400
+// error on every call, sending ALL messages to the fallback path.
 
 function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
   if (schema instanceof z.ZodObject) {
     const shape = schema.shape as Record<string, z.ZodType>;
     const properties: Record<string, unknown> = {};
+    // OpenAI strict mode: ALL properties must be required (including nullable ones)
     const required: string[] = [];
 
     for (const [key, value] of Object.entries(shape)) {
       properties[key] = zodToJsonSchema(value);
-      if (!(value instanceof z.ZodNullable) && !(value instanceof z.ZodOptional)) {
+      // In strict mode, every property must be in required.
+      // Optional properties are not used in our schemas, but skip them if present.
+      if (!(value instanceof z.ZodOptional)) {
         required.push(key);
       }
     }
@@ -573,9 +585,17 @@ function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
     };
   }
 
+  // OpenAI strict mode: nullable types must use array type notation, not anyOf.
+  // e.g. `type: ["string", "null"]` instead of `anyOf: [{type: "string"}, {type: "null"}]`
   if (schema instanceof z.ZodNullable) {
-    const inner = zodToJsonSchema(schema.unwrap() as z.ZodType);
-    return { anyOf: [inner, { type: 'null' }] };
+    const inner = schema.unwrap() as z.ZodType;
+    const innerSchema = zodToJsonSchema(inner);
+    const innerType = innerSchema.type as string | undefined;
+    if (innerType) {
+      return { type: [innerType, 'null'] };
+    }
+    // Fallback for complex inner types: use anyOf (non-strict would still work)
+    return { anyOf: [innerSchema, { type: 'null' }] };
   }
 
   return { type: 'string' };
