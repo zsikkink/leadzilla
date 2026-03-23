@@ -1024,6 +1024,9 @@ export default function AnalyticsPage() {
           <p className="mt-0.5 text-sm text-muted-foreground/70">
             Pipeline performance, lead quality, and cost intelligence
           </p>
+          <p className="mt-1 text-[11px] text-muted-foreground/45">
+            Pipeline-state views below are directional unless labeled otherwise. Outreach and feedback sections use recorded sends, replies, and feedback events.
+          </p>
         </div>
         <div className="flex gap-1 rounded-full border border-white/[0.08] bg-white/[0.03] p-1 backdrop-blur-sm">
           {DATE_RANGE_OPTIONS.map((range) => (
@@ -1088,7 +1091,7 @@ export default function AnalyticsPage() {
         <MetricCard
           label="Pipeline Conversion"
           value={`${pipelineConversion}%`}
-          sub={`${qualifiedFromFunnel} qualified of ${discoveredCount}`}
+          sub={`${qualifiedFromFunnel} qualified of ${discoveredCount} (directional view)`}
           icon={Target}
           accent="text-purple-400"
           gradient="bg-purple-400"
@@ -1100,12 +1103,11 @@ export default function AnalyticsPage() {
         <SectionHeader
           icon={Layers}
           title="Pipeline Funnel"
-          subtitle="Lead progression from discovery to close"
+          subtitle="Directional progression reconstructed from current lead status plus outreach totals"
           trailing={
-            <div className="flex items-center gap-2 text-[10px] text-muted-foreground/40">
-              <div className="h-2 w-2 rounded-full bg-zbooni-green animate-pulse" />
-              <span>Live</span>
-            </div>
+            <span className="rounded-full border border-yellow-400/20 bg-yellow-400/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-yellow-300">
+              Directional
+            </span>
           }
         />
         {funnel.data || leadStatuses.data ? (
@@ -1374,13 +1376,18 @@ export default function AnalyticsPage() {
         <SectionHeader
           icon={Clock}
           title="Recent Feedback Events"
-          subtitle="Latest pipeline outcomes and user interactions"
+          subtitle="Recorded outreach outcomes and user interactions"
           trailing={
-            feedback.data ? (
-              <span className="text-[10px] text-muted-foreground/40">
-                {feedback.data.totalEvents} total events
+            <div className="flex items-center gap-2">
+              <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-300">
+                Event-backed
               </span>
-            ) : undefined
+              {feedback.data ? (
+                <span className="text-[10px] text-muted-foreground/40">
+                  {feedback.data.totalEvents} total events
+                </span>
+              ) : null}
+            </div>
           }
         />
         {feedbackEvents.isLoading ? (

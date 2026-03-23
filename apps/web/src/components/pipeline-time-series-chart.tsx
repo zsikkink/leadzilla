@@ -250,9 +250,14 @@ export function PipelineTimeSeriesChart() {
       {/* Header */}
       <div className="relative z-10 mb-5 flex items-center justify-between">
         <div>
-          <h2 className="text-base font-bold tracking-tight text-white">Pipeline Trends</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-bold tracking-tight text-white">Pipeline Trends</h2>
+            <span className="rounded-full border border-yellow-300/20 bg-yellow-300/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-yellow-200">
+              Directional
+            </span>
+          </div>
           <p className="mt-0.5 text-[11px] text-white/40">
-            Daily lead flow across pipeline stages
+            Bucketed from lead creation dates and current status, not canonical event timestamps.
           </p>
         </div>
 

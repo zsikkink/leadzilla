@@ -364,11 +364,11 @@ function TimelineStage({
             </div>
             {stage.timestamp ? (
               <p className="mt-0.5 font-mono text-[11px] text-muted-foreground/50">
-                {new Date(stage.timestamp).toLocaleString()}
+                Approx. {new Date(stage.timestamp).toLocaleString()}
               </p>
             ) : (
               <p className="mt-0.5 text-[11px] text-muted-foreground/30 italic">
-                Not started
+                No inferred timestamp
               </p>
             )}
           </div>
@@ -512,6 +512,20 @@ export default function LeadLifecyclePage() {
 
   return (
     <div className="space-y-4">
+      <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 className="text-xl font-extrabold tracking-tight">Lead Lifecycle</h1>
+            <p className="mt-1 text-sm text-muted-foreground/60">
+              Reconstructed from current lead state, enrichment payloads, and latest record timestamps. This is not a canonical event log.
+            </p>
+          </div>
+          <span className="inline-flex items-center rounded-full border border-yellow-400/20 bg-yellow-400/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-yellow-300">
+            Inferred View
+          </span>
+        </div>
+      </div>
+
       {/* ── Search bar ──────────────────────────────────────────────── */}
       <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
         <div className="flex items-center gap-3">
@@ -674,7 +688,7 @@ export default function LeadLifecyclePage() {
                 No lead selected
               </h3>
               <p className="mt-1.5 max-w-xs text-center text-[12px] text-muted-foreground/35">
-                Select a lead from the list to view the full pipeline trace from discovery through feedback.
+                Select a lead from the list to view the reconstructed lifecycle from discovery through feedback.
               </p>
             </div>
           )}
