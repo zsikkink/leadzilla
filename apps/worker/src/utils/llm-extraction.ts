@@ -1,20 +1,12 @@
 // ── LLM Decision Maker Extraction & Validation ──────────────────────
-// Uses OpenAI (GPT-4o-mini) to extract and validate decision maker contacts
-// from website HTML. Only called as a fallback when rule-based extraction
-// finds zero valid team members.
+// Uses OpenAI (GPT-4o-mini) to validate decision maker candidates
+// from Google CSE LinkedIn search results and adjudicate among them.
 
-export interface ExtractedContact {
+export interface GoogleCseValidatedPerson {
   name: string;
   title: string | null;
-  email: string | null;
-  phone: string | null;
-}
-
-export interface ValidatedContact {
-  name: string;
-  title: string | null;
-  isRealPerson: boolean;
-  reason: string | null;
+  linkedinUrl: string | null;
+  confidence: number;
 }
 
 export interface CandidateForAdjudication {
@@ -99,112 +91,76 @@ async function callOpenAiChat(
 }
 
 /**
- * Strip HTML tags and normalize whitespace for sending to the LLM.
- * Keeps only text content to reduce token usage.
+ * Validate Google CSE LinkedIn search results using GPT-4o-mini.
+ * Filters results to LinkedIn profile URLs, asks the LLM to identify
+ * CEO/founder/owner-level people at the specified business, and returns
+ * the top 3 validated persons sorted by confidence.
  */
-function stripHtml(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 8000); // Limit to ~2000 tokens
-}
-
-/**
- * Extract decision makers from website HTML using GPT-4o-mini.
- * Only called when rule-based extraction finds zero valid team members.
- */
-export async function extractDecisionMakers(
-  html: string,
-  businessName: string,
+export async function validateGoogleCseResults(
+  input: {
+    businessName: string;
+    city: string | null;
+    results: Array<{ title: string; snippet: string; link: string }>;
+  },
   config: LlmExtractionConfig,
-): Promise<ExtractedContact[]> {
-  const cleanText = stripHtml(html);
-  if (cleanText.length < 50) return [];
+): Promise<GoogleCseValidatedPerson[]> {
+  if (!config.openAiApiKey || input.results.length === 0) return [];
+
+  const formatted = input.results
+    .map(
+      (r, i) =>
+        `${i + 1}. Title: "${r.title}"\n   Snippet: "${r.snippet}"\n   URL: ${r.link}`,
+    )
+    .join('\n\n');
 
   const result = await callOpenAiChat(config, [
     {
       role: 'system',
       content:
-        'You extract contact information from website text. Return a JSON object with a "contacts" array. Each contact has: name (string), title (string or null), email (string or null), phone (string or null). Only include real people — ignore role descriptions, company names, service lists, and non-person text. If no people are found, return {"contacts": []}.',
+        'You identify the CEO/founder/owner of a business from web search results. Return JSON with a "persons" array. Each item: name (string), title (string or null), linkedinUrl (string or null — only if the URL is a LinkedIn profile), confidence (number 0-1). Include people who appear to be CEO, founder, owner, managing director, president, general manager, or principal of the specified business. Exclude people at other companies. Extract names from LinkedIn profiles, company about pages, news articles, or any credible source. Prefer the highest-authority person: CEO/founder/owner/president > managing director/general manager > VP/head of > director. If multiple people match, assign higher confidence to the highest-authority title.',
     },
     {
       role: 'user',
-      content: `Extract all people mentioned on the ${businessName} website:\n\n${cleanText}`,
+      content: `Find the CEO/owner of "${input.businessName}" in ${input.city ?? 'unknown city'}:\n\n${formatted}`,
     },
   ]);
 
   if (!result) return [];
 
   try {
-    const parsed = JSON.parse(result) as { contacts?: ExtractedContact[] };
-    if (!Array.isArray(parsed.contacts)) return [];
-    return parsed.contacts.filter(
-      (c) => typeof c.name === 'string' && c.name.length > 0,
-    );
+    const parsed = JSON.parse(result) as {
+      persons?: GoogleCseValidatedPerson[];
+    };
+    if (!Array.isArray(parsed.persons)) return [];
+
+    // Simple authority tier for sorting: higher authority = lower number = sorted first
+    const titleTier = (title: string | null | undefined): number => {
+      if (!title) return 5;
+      const t = title.toLowerCase();
+      if (/\b(ceo|founder|co-?founder|owner|president|chair)/i.test(t)) return 0;
+      if (/\b(cfo|coo|cto|cio|cmo|managing director|general manager)/i.test(t)) return 1;
+      if (/\b(vp|vice\s*president|head\s+of)/i.test(t)) return 2;
+      if (/\bdirector\b/i.test(t)) return 3;
+      if (/\b(manager|lead|supervisor)\b/i.test(t)) return 4;
+      return 5;
+    };
+
+    return parsed.persons
+      .filter(
+        (p) =>
+          typeof p.name === 'string' &&
+          p.name.length > 0 &&
+          typeof p.confidence === 'number' &&
+          p.confidence >= 0.5,
+      )
+      .sort((a, b) => {
+        const tierDiff = titleTier(a.title) - titleTier(b.title);
+        if (tierDiff !== 0) return tierDiff;
+        return b.confidence - a.confidence;
+      })
+      .slice(0, 3);
   } catch {
     return [];
-  }
-}
-
-/**
- * Validate extracted contacts using GPT-4o-mini.
- * Filters out company names, role descriptions, and non-person text.
- * Called on EVERY lead to filter garbage from both rule-based and LLM extraction.
- */
-export async function validateExtractedContacts(
-  contacts: Array<{ name: string; title: string | null }>,
-  businessName: string,
-  config: LlmExtractionConfig,
-): Promise<ValidatedContact[]> {
-  if (contacts.length === 0) return [];
-
-  const contactList = contacts
-    .map((c, i) => `${i + 1}. Name: "${c.name}", Title: "${c.title ?? 'unknown'}"`)
-    .join('\n');
-
-  const result = await callOpenAiChat(config, [
-    {
-      role: 'system',
-      content:
-        'You validate whether names represent real people or are company names, role descriptions, or nonsense. Return a JSON object with a "validated" array. Each item has: name (string), title (string or null), isRealPerson (boolean), reason (string or null explaining why not a real person). The business name is provided for context — names matching it are NOT real people.',
-    },
-    {
-      role: 'user',
-      content: `Business name: "${businessName}"\n\nValidate these contacts:\n${contactList}`,
-    },
-  ]);
-
-  if (!result) {
-    // If LLM fails, return all as validated (rule-based validation will still catch obvious fakes)
-    return contacts.map((c) => ({
-      name: c.name,
-      title: c.title,
-      isRealPerson: true,
-      reason: null,
-    }));
-  }
-
-  try {
-    const parsed = JSON.parse(result) as { validated?: ValidatedContact[] };
-    if (!Array.isArray(parsed.validated)) {
-      return contacts.map((c) => ({
-        name: c.name,
-        title: c.title,
-        isRealPerson: true,
-        reason: null,
-      }));
-    }
-    return parsed.validated;
-  } catch {
-    return contacts.map((c) => ({
-      name: c.name,
-      title: c.title,
-      isRealPerson: true,
-      reason: null,
-    }));
   }
 }
 

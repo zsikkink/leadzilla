@@ -4,6 +4,7 @@ import { countryName } from '../lib/countries.js';
 
 interface AboutBusinessCardProps {
   category: string | null;
+  websiteDescription: string | null;
   metaDescription: string | null;
   instagramBio: string | null;
   countryCode: string | null;
@@ -14,6 +15,7 @@ interface AboutBusinessCardProps {
 
 export function AboutBusinessCard({
   category,
+  websiteDescription,
   metaDescription,
   instagramBio,
   countryCode,
@@ -42,9 +44,9 @@ export function AboutBusinessCard({
           </div>
         )}
 
-        {/* Description */}
+        {/* Description — website about page text is primary, Google Places meta is fallback */}
         <p className="text-sm text-muted-foreground/70 leading-relaxed">
-          {metaDescription ?? 'No description available'}
+          {websiteDescription ?? metaDescription ?? 'No description available'}
         </p>
 
         {/* Instagram Bio */}

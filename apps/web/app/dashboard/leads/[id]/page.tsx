@@ -1002,6 +1002,11 @@ export default function LeadDetailPage() {
       {businessData ? (
         <AboutBusinessCard
           category={businessData.category}
+          websiteDescription={
+            conversionMetadata
+              ? ((conversionMetadata.websiteDescription as string) ?? null)
+              : null
+          }
           metaDescription={
             businessData.websiteScrape
               ? ((businessData.websiteScrape.metaDescription as string) ?? null)

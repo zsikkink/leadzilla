@@ -1,10 +1,13 @@
-// ── Google Custom Search Adapter ─────────────────────────────────────
-// Wraps the Google Custom Search JSON API to return parsed search results.
-// Used by the LinkedIn search adapter to find LinkedIn profiles.
+// ── Web Search Adapter (Brave Search) ────────────────────────────────
+// Wraps the Brave Search API to return parsed web search results.
+// Used by the LinkedIn search step to find CEO/founder LinkedIn profiles.
+// NOTE: Originally used Google Custom Search JSON API, but Google shut down
+// new customer access in Jan 2026. Brave Search is the drop-in replacement.
+// Interface kept as GoogleCustomSearch* for backwards compatibility.
 
 export interface GoogleCustomSearchConfig {
   apiKey: string | undefined;
-  engineId: string | undefined;
+  engineId?: string | undefined; // Not used by Brave, kept for backwards compat
   baseUrl?: string | undefined;
   timeoutMs?: number | undefined;
   fetchImpl?: typeof fetch | undefined;
@@ -28,7 +31,7 @@ export type GoogleCustomSearchResponse =
   | { status: 'retryable_error'; failure: GoogleCustomSearchFailure }
   | { status: 'terminal_error'; failure: GoogleCustomSearchFailure };
 
-const DEFAULT_BASE_URL = 'https://www.googleapis.com/customsearch/v1';
+const DEFAULT_BASE_URL = 'https://api.search.brave.com/res/v1/web/search';
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 function classifyStatus(statusCode: number): 'retryable' | 'terminal' {
@@ -38,31 +41,29 @@ function classifyStatus(statusCode: number): 'retryable' | 'terminal' {
 
 export class GoogleCustomSearchAdapter {
   private readonly apiKey: string | undefined;
-  private readonly engineId: string | undefined;
   private readonly baseUrl: string;
   private readonly timeout: number;
   private readonly fetchFn: typeof fetch;
 
   constructor(config: GoogleCustomSearchConfig) {
     this.apiKey = config.apiKey;
-    this.engineId = config.engineId;
     this.baseUrl = config.baseUrl ?? DEFAULT_BASE_URL;
     this.timeout = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.fetchFn = config.fetchImpl ?? fetch;
   }
 
   get isConfigured(): boolean {
-    return Boolean(this.apiKey) && Boolean(this.engineId);
+    return Boolean(this.apiKey);
   }
 
   async search(query: string, numResults = 5): Promise<GoogleCustomSearchResponse> {
-    if (!this.apiKey || !this.engineId) {
+    if (!this.apiKey) {
       return {
         status: 'terminal_error',
         failure: {
           classification: 'terminal',
           statusCode: null,
-          message: 'Google Custom Search API key or Engine ID not configured',
+          message: 'Brave Search API key not configured',
           raw: null,
         },
       };
@@ -73,14 +74,16 @@ export class GoogleCustomSearchAdapter {
 
     try {
       const url = new URL(this.baseUrl);
-      url.searchParams.set('key', this.apiKey);
-      url.searchParams.set('cx', this.engineId);
       url.searchParams.set('q', query);
-      url.searchParams.set('num', String(Math.min(numResults, 10)));
+      url.searchParams.set('count', String(Math.min(numResults, 20)));
 
       const response = await this.fetchFn(url.toString(), {
         signal: controller.signal,
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          'Accept-Encoding': 'gzip',
+          'X-Subscription-Token': this.apiKey,
+        },
       });
 
       if (!response.ok) {
@@ -91,26 +94,28 @@ export class GoogleCustomSearchAdapter {
           failure: {
             classification,
             statusCode: response.status,
-            message: `Google Custom Search returned ${response.status}`,
+            message: `Brave Search returned ${response.status}`,
             raw: text,
           },
         };
       }
 
       const json = (await response.json()) as {
-        items?: Array<{
-          title?: string;
-          snippet?: string;
-          link?: string;
-        }>;
+        web?: {
+          results?: Array<{
+            title?: string;
+            description?: string;
+            url?: string;
+          }>;
+        };
       };
 
-      const results: GoogleSearchResult[] = (json.items ?? [])
-        .filter((item) => item.title && item.link)
+      const results: GoogleSearchResult[] = (json.web?.results ?? [])
+        .filter((item) => item.title && item.url)
         .map((item) => ({
           title: item.title ?? '',
-          snippet: item.snippet ?? '',
-          link: item.link ?? '',
+          snippet: item.description ?? '',
+          link: item.url ?? '',
         }));
 
       return { status: 'success', data: results };
@@ -121,7 +126,7 @@ export class GoogleCustomSearchAdapter {
           failure: {
             classification: 'retryable',
             statusCode: null,
-            message: 'Google Custom Search request timed out',
+            message: 'Brave Search request timed out',
             raw: null,
           },
         };

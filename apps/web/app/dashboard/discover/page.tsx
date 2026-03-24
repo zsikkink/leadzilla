@@ -83,6 +83,18 @@ const LIMIT_OPTIONS = [
   { value: '1000', label: '1000' },
 ];
 
+// ── Helpers ──────────────────────────────────────────────
+function formatDuration(startedAt: string | null, finishedAt: string | null): string {
+  if (!startedAt) return 'Queued';
+  const start = new Date(startedAt).getTime();
+  const end = finishedAt ? new Date(finishedAt).getTime() : Date.now();
+  const totalSeconds = Math.round((end - start) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
+}
+
 // ── Sub-components ──────────────────────────────────────
 
 function StatusIcon({ status }: { status: PipelineRunStatus }) {
@@ -226,6 +238,7 @@ interface RunBatch {
     totalItems: number;
     processedItems: number;
     failedItems: number;
+    converted?: number | undefined;
     startedAt: string | null;
     finishedAt: string | null;
     createdAt: string;
@@ -237,6 +250,7 @@ interface RunBatch {
   totalItems: number;
   totalProcessed: number;
   totalFailed: number;
+  totalConverted: number;
   overallStatus: PipelineRunStatus;
   createdAt: string;
   startedAt: string | null;
@@ -303,6 +317,7 @@ function buildBatch(
     totalItems: runs.reduce((sum, r) => sum + r.totalItems, 0),
     totalProcessed: runs.reduce((sum, r) => sum + r.processedItems, 0),
     totalFailed: runs.reduce((sum, r) => sum + r.failedItems, 0),
+    totalConverted: runs.reduce((sum, r) => sum + (r.converted ?? 0), 0),
     overallStatus,
     createdAt: runs[0]!.createdAt,
     startedAt,
@@ -738,7 +753,7 @@ export default function DiscoverPage() {
               .filter((r): r is number => r !== undefined);
             const avgLeadRate = selectedLeadRates.length > 0
               ? selectedLeadRates.reduce((a, b) => a + b, 0) / selectedLeadRates.length
-              : 0.015; // default fallback: ~1.5% leads per search task
+              : 0.10; // default fallback: ~10% leads per search task (conservative based on pipeline data)
             const hasHistoricalData = selectedLeadRates.length > 0;
             const searchBudget = Math.ceil(desiredLeads / avgLeadRate * 1.5);
             // ~50% of discovered businesses pass prequalification and reach Hunter
@@ -771,7 +786,7 @@ export default function DiscoverPage() {
                   <p className="text-xs text-muted-foreground/70">
                     Est. cost: <strong className="text-foreground">~${totalCost.toFixed(2)}</strong>
                     <span className="text-muted-foreground/50">
-                      {' '}(Google Places ${googlePlacesCost.toFixed(2)} + Hunter ${hunterCost.toFixed(2)})
+                      {' '}(Google Places ${googlePlacesCost.toFixed(2)} + Web Search free + Hunter ${hunterCost.toFixed(2)})
                     </span>
                   </p>
                 </div>
@@ -817,14 +832,12 @@ export default function DiscoverPage() {
             <Zap className="h-4 w-4 text-zbooni-green" />
             Discovery Runs
           </h2>
-          <button
-            type="button"
-            onClick={() => setRunsRefreshKey((k) => k + 1)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/40"
-          >
-            <Loader2 className={cn('h-3 w-3', discoveryRuns.isLoading && 'animate-spin')} />
-            Refresh
-          </button>
+          {hasActiveRuns ? (
+            <span className="flex items-center gap-1.5 text-[11px] font-semibold text-zbooni-teal">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Live
+            </span>
+          ) : null}
         </div>
 
         {discoveryRuns.isLoading && !discoveryRuns.data ? (
@@ -857,19 +870,24 @@ export default function DiscoverPage() {
                 PARTIAL: 'bg-yellow-500/15 text-yellow-400',
               };
               const isTerminal = batch.overallStatus === 'SUCCEEDED' || batch.overallStatus === 'FAILED' || batch.overallStatus === 'PARTIAL';
-              const duration = batch.startedAt
-                ? batch.finishedAt
-                  ? `${Math.round((new Date(batch.finishedAt).getTime() - new Date(batch.startedAt).getTime()) / 1000)}s`
-                  : isTerminal
-                    ? 'Completed'
-                    : 'Running...'
-                : 'Queued';
+              const duration = isTerminal
+                ? formatDuration(batch.startedAt, batch.finishedAt)
+                : batch.startedAt
+                  ? 'Running...'
+                  : 'Queued';
               const firstWords = batch.icpNames.map((n) => n.split(/\s+/)[0] ?? n);
               const icpLabel = firstWords.length <= 3
                 ? firstWords.join(' & ')
                 : `${firstWords.slice(0, 2).join(' & ')} +${firstWords.length - 2}`;
 
               const primaryRunId = batch.runs[0]?.runId;
+              const leadsFound = batch.totalConverted;
+              const leadsTarget = batch.totalLimit;
+
+              // Country display: show "All countries" when 3+ countries
+              const countryLabel = batch.countries.length > 3
+                ? `All countries (${batch.countries.length})`
+                : batch.countries.map((c) => countryName(c)).join(', ');
 
               return (
                 <Link
@@ -908,33 +926,39 @@ export default function DiscoverPage() {
                     </div>
                     {batch.countries.length > 0 ? (
                       <div className="flex flex-wrap gap-1">
-                        {batch.countries.map((c) => (
-                          <span key={c} className="rounded bg-zbooni-teal/10 px-1.5 py-0.5 text-[10px] text-zbooni-teal">
-                            {countryName(c)}
-                          </span>
-                        ))}
-                        {batch.totalLimit > 0 ? (
+                        <span className="flex items-center gap-1 rounded bg-zbooni-teal/10 px-1.5 py-0.5 text-[10px] text-zbooni-teal">
+                          <Globe className="h-2.5 w-2.5" />
+                          {countryLabel}
+                        </span>
+                        {leadsTarget > 0 ? (
                           <span className="rounded bg-muted/20 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                            {batch.totalLimit} leads
+                            {leadsTarget} lead target
                           </span>
                         ) : null}
                       </div>
                     ) : null}
                   </div>
 
-                  {/* Progress bar — shows search task progress, not lead count */}
-                  {batch.totalItems > 0 || batch.overallStatus === 'RUNNING' ? (
+                  {/* Progress bar — shows leads found / target */}
+                  {leadsTarget > 0 ? (
                     <ProgressBar
-                      processed={batch.totalProcessed}
-                      total={batch.totalItems || 1}
-                      label="tasks"
+                      processed={leadsFound}
+                      total={leadsTarget}
+                      label="leads"
+                    />
+                  ) : batch.totalItems > 0 || batch.overallStatus === 'RUNNING' ? (
+                    <ProgressBar
+                      processed={leadsFound}
+                      total={Math.max(leadsFound, 1)}
+                      label="leads"
                     />
                   ) : null}
 
                   {/* Stats row */}
                   <div className="mt-2 flex items-center gap-3 text-[10px] text-muted-foreground/60">
                     <span>
-                      Processed: <strong className="text-foreground">{batch.totalProcessed}</strong>
+                      Leads: <strong className="text-zbooni-green">{leadsFound}</strong>
+                      {leadsTarget > 0 ? <span> / {leadsTarget}</span> : null}
                     </span>
                     {batch.totalFailed > 0 ? (
                       <span>

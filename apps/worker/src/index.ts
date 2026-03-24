@@ -11,6 +11,7 @@ import {
 import { createLogger } from '@lead-flood/observability';
 import {
   ApolloDiscoveryAdapter,
+  GoogleCustomSearchAdapter,
   HunterEnrichmentAdapter,
   InstagramScraperAdapter,
   OpenAiAdapter,
@@ -315,6 +316,12 @@ async function main(): Promise<void> {
       ? { rateLimitPerMinute: env.INSTAGRAM_RATE_LIMIT_PER_MIN }
       : {}),
   });
+
+  const googleCseAdapter = new GoogleCustomSearchAdapter({
+    apiKey: env.GOOGLE_CUSTOM_SEARCH_API_KEY,
+    engineId: env.GOOGLE_CUSTOM_SEARCH_ENGINE_ID,
+  });
+
   let discoveryRuntimeConfig: DiscoveryRuntimeConfig | null = null;
   let v2SearchProvider: V2DiscoveryProvider | null = null;
   try {
@@ -612,12 +619,18 @@ async function main(): Promise<void> {
         apolloAdapter: {
           searchContactsByDomain: (domain) => apolloAdapter.searchContactsByDomain(domain),
           preScreenDomain: (domain) => apolloAdapter.preScreenDomain(domain),
+          revealContactEmail: (params) => apolloAdapter.revealContactEmail(params),
+          enrichOrganization: (domain) => apolloAdapter.enrichOrganization(domain),
           isConfigured: Boolean(env.APOLLO_API_KEY),
         },
         hunterAdapter: {
           searchDomainContacts: (domain) => hunterAdapter.searchDomainContacts(domain),
           isConfigured: Boolean(env.HUNTER_API_KEY),
         },
+        googleCseAdapter: googleCseAdapter.isConfigured ? {
+          search: (query, numResults) => googleCseAdapter.search(query, numResults),
+          isConfigured: true,
+        } : undefined,
         websiteScraperAdapter,
         instagramScraperAdapter,
         smtpVerifier: new SmtpVerifier(),
@@ -719,7 +732,7 @@ async function main(): Promise<void> {
     (jobLogger, job) =>
       handleApolloEnrichJob(jobLogger, job, {
         apolloAdapter: {
-          searchContactsByDomain: (d) => apolloAdapter.searchContactsByDomain(d),
+          searchContactsByDomain: (domain: string) => apolloAdapter.searchContactsByDomain(domain),
           isConfigured: Boolean(env.APOLLO_API_KEY),
         },
         enqueueMessageGenerate: async (payload) => {

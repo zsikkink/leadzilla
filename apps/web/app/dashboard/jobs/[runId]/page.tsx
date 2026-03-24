@@ -326,10 +326,12 @@ function aggregateCosts(events: CostEventData[]) {
     map.set(provider, { calls: 0, costCents: 0 });
   }
   for (const e of events) {
-    const existing = map.get(e.provider) ?? { calls: 0, costCents: 0 };
+    // Normalize legacy SERPAPI events to GOOGLE_PLACES to avoid duplicate rows
+    const normalizedProvider = e.provider === 'SERPAPI' ? 'GOOGLE_PLACES' : e.provider;
+    const existing = map.get(normalizedProvider) ?? { calls: 0, costCents: 0 };
     existing.calls += 1;
     existing.costCents += e.creditCost;
-    map.set(e.provider, existing);
+    map.set(normalizedProvider, existing);
   }
   return Array.from(map.entries()).map(([provider, data]) => ({
     provider,
@@ -338,8 +340,19 @@ function aggregateCosts(events: CostEventData[]) {
 }
 
 function formatProviderName(provider: string): string {
-  if (provider === 'SERPAPI') return 'GOOGLE_PLACES';
-  return provider;
+  switch (provider) {
+    case 'SERPAPI':
+    case 'GOOGLE_PLACES':
+      return 'Google Places';
+    case 'GOOGLE_CUSTOM_SEARCH':
+      return 'Web Search (Brave)';
+    case 'HUNTER':
+      return 'Hunter';
+    case 'APOLLO':
+      return 'Apollo';
+    default:
+      return provider.replace(/_/g, ' ');
+  }
 }
 
 // ── Main page ────────────────────────────────────────────────────────────

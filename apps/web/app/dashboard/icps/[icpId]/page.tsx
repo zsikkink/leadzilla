@@ -1284,7 +1284,7 @@ export default function IcpDetailPage() {
 
         {/* Positive Weighted Rules */}
         <div className="mb-4">
-          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-zbooni-green/80">Positive Signals (total weight: 19)</h3>
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-zbooni-green/80">Positive Signals (total weight: 21)</h3>
           <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
             {[
               { field: 'has_whatsapp', label: 'WhatsApp presence', weight: 3 },
@@ -1294,6 +1294,7 @@ export default function IcpDetailPage() {
               { field: 'has_booking_or_contact_form', label: 'Booking/contact form', weight: 2 },
               { field: 'high_ticket_signals', label: 'High-ticket signals', weight: 2 },
               { field: 'icp_segment_priority', label: 'P1 priority segment', weight: 2 },
+              { field: 'found_csuite_decision_maker', label: 'C-suite decision maker identified via web search', weight: 2 },
               { field: 'recent_activity', label: 'Recent activity', weight: 1 },
               { field: 'apify_payment_widget_count', label: 'Payment widgets', weight: 1 },
               { field: 'apify_has_pricing_tiers', label: 'Has pricing tiers', weight: 1 },
