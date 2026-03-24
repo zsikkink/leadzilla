@@ -170,6 +170,13 @@ export class LeadAlreadyExistsError extends Error {
   }
 }
 
+export class LeadContextUnavailableError extends Error {
+  constructor(message = 'Lead does not have enough business qualification context') {
+    super(message);
+    this.name = 'LeadContextUnavailableError';
+  }
+}
+
 export interface LeadRecord {
   id: string;
   firstName: string;
@@ -215,6 +222,7 @@ export interface BuildServerOptions {
   checkEmailDeliverability?: ((email: string) => Promise<{ ok: boolean; reason?: string | undefined }>) | undefined;
   authenticateUser?: ((input: LoginRequest) => Promise<LoginResponse | null>) | undefined;
   createLeadAndEnqueue: (input: CreateLeadRequest) => Promise<{ leadId: string; jobId: string }>;
+  createBackupLeadAndEnqueue?: ((sourceLeadId: string, input: CreateLeadRequest) => Promise<{ leadId: string; jobId: string }>) | undefined;
   enqueueDiscoveryRun?: (payload: DiscoveryRunJobPayload) => Promise<void>;
   enqueueScoringRun?: (payload: ScoringRunJobPayload) => Promise<void>;
   enqueueMessageSend?: (payload: MessagingSendJobPayload) => Promise<void>;
@@ -376,6 +384,84 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       } catch (error: unknown) {
         if (error instanceof LeadAlreadyExistsError) {
           reply.status(409);
+          return ErrorResponseSchema.parse({
+            error: error.message,
+            requestId: request.id,
+          });
+        }
+
+        throw error;
+      }
+    });
+
+    api.post('/v1/leads/:id/backup-contact', async (request, reply) => {
+      const parsedParams = z.object({ id: z.string().min(1) }).safeParse(request.params);
+      if (!parsedParams.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'Invalid source lead id',
+          requestId: request.id,
+        });
+      }
+
+      const parsedRequest = CreateLeadRequestSchema.safeParse(request.body);
+      if (!parsedRequest.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'Invalid backup contact payload',
+          requestId: request.id,
+        });
+      }
+
+      const sourceLead = await options.getLeadById(parsedParams.data.id);
+      if (!sourceLead) {
+        reply.status(404);
+        return ErrorResponseSchema.parse({
+          error: 'Source lead not found',
+          requestId: request.id,
+        });
+      }
+
+      if (!options.createBackupLeadAndEnqueue) {
+        reply.status(501);
+        return ErrorResponseSchema.parse({
+          error: 'Backup contact staging is not configured',
+          requestId: request.id,
+        });
+      }
+
+      if (isGenericEmail(parsedRequest.data.email)) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'Generic email addresses (info@, contact@, etc.) are not accepted. Please provide a personal email.',
+          requestId: request.id,
+        });
+      }
+
+      const deliverability = await checkEmailDeliverability(parsedRequest.data.email);
+      if (!deliverability.ok) {
+        reply.status(422);
+        return ErrorResponseSchema.parse({
+          error: `Undeliverable email: ${deliverability.reason}`,
+          requestId: request.id,
+        });
+      }
+
+      try {
+        const created = await options.createBackupLeadAndEnqueue(parsedParams.data.id, parsedRequest.data);
+        reply.status(201);
+        return CreateLeadResponseSchema.parse(created);
+      } catch (error: unknown) {
+        if (error instanceof LeadAlreadyExistsError) {
+          reply.status(409);
+          return ErrorResponseSchema.parse({
+            error: error.message,
+            requestId: request.id,
+          });
+        }
+
+        if (error instanceof LeadContextUnavailableError) {
+          reply.status(422);
           return ErrorResponseSchema.parse({
             error: error.message,
             requestId: request.id,

@@ -21,7 +21,7 @@ vi.mock('@lead-flood/db', async () => {
   };
 });
 
-import { buildServer, type BuildServerOptions } from './server.js';
+import { LeadContextUnavailableError, buildServer, type BuildServerOptions } from './server.js';
 
 // Mock dns for isEmailDeliverable tests
 vi.mock('node:dns', () => ({
@@ -313,6 +313,96 @@ describe('buildServer', () => {
 
     expect(response.statusCode).toBe(400);
     expect(body.error).toBe('Invalid lead payload');
+  });
+
+  it('creates backup lead from source lead context and returns leadId/jobId', async () => {
+    const createBackupLeadAndEnqueue = vi.fn(async () => ({
+      leadId: 'backup_lead_1',
+      jobId: 'backup_job_1',
+    }));
+    const server = buildServer({
+      ...makeDefaultOptions(),
+      getLeadById: async () => ({
+        id: 'lead_1',
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+        email: 'ada@example.com',
+        phone: null,
+        source: 'google_local',
+        status: 'qualified',
+        enrichmentData: null,
+        error: null,
+        createdAt: new Date('2026-03-08T00:00:00.000Z'),
+        updatedAt: new Date('2026-03-08T00:00:00.000Z'),
+      }),
+      createBackupLeadAndEnqueue,
+    });
+    servers.push(server);
+
+    const payload = {
+      firstName: 'Grace',
+      lastName: 'Hopper',
+      email: 'grace@example.com',
+      source: 'BACKUP_CONTACT_ROTATION',
+    };
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/leads/lead_1/backup-contact',
+      headers: authHeaders(),
+      payload,
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual({
+      leadId: 'backup_lead_1',
+      jobId: 'backup_job_1',
+    });
+    expect(createBackupLeadAndEnqueue).toHaveBeenCalledWith('lead_1', payload);
+  });
+
+  it('returns 422 when source lead lacks backup staging context', async () => {
+    const server = buildServer({
+      ...makeDefaultOptions(),
+      getLeadById: async () => ({
+        id: 'lead_1',
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+        email: 'ada@example.com',
+        phone: null,
+        source: 'google_local',
+        status: 'qualified',
+        enrichmentData: null,
+        error: null,
+        createdAt: new Date('2026-03-08T00:00:00.000Z'),
+        updatedAt: new Date('2026-03-08T00:00:00.000Z'),
+      }),
+      createBackupLeadAndEnqueue: async () => {
+        throw new LeadContextUnavailableError(
+          'Source lead does not have enough business qualification context to stage a backup contact',
+        );
+      },
+    });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/leads/lead_1/backup-contact',
+      headers: authHeaders(),
+      payload: {
+        firstName: 'Grace',
+        lastName: 'Hopper',
+        email: 'grace@example.com',
+        source: 'BACKUP_CONTACT_ROTATION',
+      },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        error: 'Source lead does not have enough business qualification context to stage a backup contact',
+      }),
+    );
   });
 
   it('returns 404 for missing lead', async () => {

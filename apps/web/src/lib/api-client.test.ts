@@ -93,6 +93,26 @@ describe('ApiClient', () => {
     ).rejects.toThrow('Unable to reach API');
   });
 
+  it('requests backup lead creation using the source lead route', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ leadId: 'backup_lead_1', jobId: 'job_1' }), { status: 201 }),
+    );
+
+    await client.createBackupLead('lead_1', {
+      firstName: 'Grace',
+      lastName: 'Hopper',
+      email: 'grace@example.com',
+      source: 'BACKUP_CONTACT_ROTATION',
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      `${baseUrl}/v1/leads/lead_1/backup-contact`,
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    );
+  });
+
   it('requests contact recovery list with query params', async () => {
     const mockResponse = { items: [], page: 1, pageSize: 20, total: 0 };
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(

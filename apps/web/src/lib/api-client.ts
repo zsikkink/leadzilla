@@ -163,6 +163,13 @@ export class ApiClient {
     });
   }
 
+  createBackupLead(sourceLeadId: string, data: CreateLeadRequest): Promise<CreateLeadResponse> {
+    return this.request(`/v1/leads/${sourceLeadId}/backup-contact`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   // ── ICPs ──────────────────────────────────────────
   listIcps(query?: ListIcpProfilesQuery): Promise<ListIcpProfilesResponse> {
     const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';

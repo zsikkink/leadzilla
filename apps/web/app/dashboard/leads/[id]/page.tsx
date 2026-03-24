@@ -595,13 +595,13 @@ export default function LeadDetailPage() {
       const nameParts = contact.fullName.split(' ');
       const firstName = nameParts[0] ?? contact.fullName;
       const lastName = nameParts.slice(1).join(' ') || 'Unknown';
-      await apiClient.createLead({
+      await apiClient.createBackupLead(id, {
         firstName,
         lastName,
         email: contact.email,
         source: 'BACKUP_CONTACT_ROTATION',
       });
-      setBackupSuccess(`New lead created for ${contact.fullName}. Message generation will start automatically.`);
+      setBackupSuccess(`New lead created for ${contact.fullName}. It will re-enter qualification using the source business context.`);
     } catch (err) {
       setBackupSuccess(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {

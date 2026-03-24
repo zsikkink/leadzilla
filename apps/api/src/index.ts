@@ -32,7 +32,7 @@ import type { AnalyticsRollupJobPayload } from './modules/analytics/analytics.se
 import type { DiscoveryRunJobPayload } from './modules/discovery/discovery.service.js';
 import type { MessageGenerateJobPayload, MessagingSendJobPayload } from './modules/messaging/messaging.service.js';
 import type { ScoringRunJobPayload } from './modules/scoring/scoring.service.js';
-import { buildServer, LeadAlreadyExistsError } from './server.js';
+import { buildServer, LeadAlreadyExistsError, LeadContextUnavailableError } from './server.js';
 
 function toDayStart(value: string): Date {
   const source = new Date(value);
@@ -148,6 +148,67 @@ async function main(): Promise<void> {
       retryBackoff: true,
       deadLetter: 'reply.classify.dead_letter',
     });
+  };
+
+  const publishFeaturesCompute = async (input: {
+    leadId: string;
+    icpProfileId: string;
+    jobId: string;
+    outboxEventId: string;
+  }): Promise<void> => {
+    try {
+      await boss.send(
+        'features.compute',
+        {
+          leadId: input.leadId,
+          icpProfileId: input.icpProfileId,
+          snapshotVersion: 1,
+          runId: input.jobId,
+        },
+        {
+          singletonKey: buildFeaturesComputeSingletonKey({
+            leadId: input.leadId,
+            icpProfileId: input.icpProfileId,
+            snapshotVersion: 1,
+          }),
+          retryLimit: 3,
+          retryDelay: 5,
+          retryBackoff: true,
+        },
+      );
+
+      await prisma.outboxEvent.update({
+        where: { id: input.outboxEventId },
+        data: {
+          status: 'sent',
+          attempts: {
+            increment: 1,
+          },
+          processedAt: new Date(),
+          nextAttemptAt: null,
+          lastError: null,
+        },
+      });
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Failed to enqueue features.compute job';
+      logger.error(
+        { error, leadId: input.leadId, outboxEventId: input.outboxEventId },
+        'Immediate queue publish failed; outbox retry will handle dispatch',
+      );
+
+      await prisma.outboxEvent.update({
+        where: { id: input.outboxEventId },
+        data: {
+          status: 'failed',
+          attempts: {
+            increment: 1,
+          },
+          lastError: errorMessage,
+          nextAttemptAt: new Date(Date.now() + 5000),
+        },
+      });
+    }
   };
 
   const triggerDiscoverySeedJob = async (
@@ -386,59 +447,255 @@ async function main(): Promise<void> {
           };
         });
 
-        try {
-          await boss.send(
-            'features.compute',
-            {
-              leadId: lead.id,
-              icpProfileId,
-              snapshotVersion: 1,
-              runId: jobExecution.id,
-            },
-            {
-              singletonKey: buildFeaturesComputeSingletonKey({
-                leadId: lead.id,
-                icpProfileId: icpProfileId!,
-                snapshotVersion: 1,
-              }),
-              retryLimit: 3,
-              retryDelay: 5,
-              retryBackoff: true,
-            },
-          );
+        await publishFeaturesCompute({
+          leadId: lead.id,
+          icpProfileId: icpProfileId!,
+          jobId: jobExecution.id,
+          outboxEventId: outboxEvent.id,
+        });
 
-          await prisma.outboxEvent.update({
-            where: { id: outboxEvent.id },
-            data: {
-              status: 'sent',
-              attempts: {
-                increment: 1,
-              },
-              processedAt: new Date(),
-              nextAttemptAt: null,
-              lastError: null,
-            },
-          });
-        } catch (error: unknown) {
-          const errorMessage =
-            error instanceof Error ? error.message : 'Failed to enqueue features.compute job';
-          logger.error(
-            { error, leadId: lead.id, outboxEventId: outboxEvent.id },
-            'Immediate queue publish failed; outbox retry will handle dispatch',
-          );
-
-          await prisma.outboxEvent.update({
-            where: { id: outboxEvent.id },
-            data: {
-              status: 'failed',
-              attempts: {
-                increment: 1,
-              },
-              lastError: errorMessage,
-              nextAttemptAt: new Date(Date.now() + 5000),
-            },
-          });
+        return {
+          leadId: lead.id,
+          jobId: jobExecution.id,
+        };
+      } catch (error: unknown) {
+        if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2002') {
+          throw new LeadAlreadyExistsError('Lead already exists for this email');
         }
+
+        throw error;
+      }
+    },
+    createBackupLeadAndEnqueue: async (sourceLeadId, input) => {
+      try {
+        const sourceLead = await prisma.lead.findFirst({
+          where: { id: sourceLeadId, deletedAt: null },
+          select: {
+            id: true,
+            businessId: true,
+            enrichmentData: true,
+            scorePredictions: {
+              orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+              take: 1,
+              select: { icpProfileId: true },
+            },
+            discoveryRecords: {
+              orderBy: [{ discoveredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+              take: 1,
+              select: { icpProfileId: true },
+            },
+            businessConversions: {
+              orderBy: [{ convertedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+              take: 1,
+              select: { businessId: true, icpProfileId: true },
+            },
+          },
+        });
+
+        const resolvedIcpProfileId =
+          input.icpProfileId
+          ?? sourceLead?.scorePredictions[0]?.icpProfileId
+          ?? sourceLead?.businessConversions[0]?.icpProfileId
+          ?? sourceLead?.discoveryRecords[0]?.icpProfileId
+          ?? undefined;
+        const resolvedBusinessId =
+          sourceLead?.businessId
+          ?? sourceLead?.businessConversions[0]?.businessId
+          ?? null;
+
+        const [latestDiscovery, latestEnrichment, latestBusinessConversion] = await Promise.all([
+          resolvedIcpProfileId
+            ? prisma.leadDiscoveryRecord.findFirst({
+                where: {
+                  leadId: sourceLeadId,
+                  icpProfileId: resolvedIcpProfileId,
+                },
+                orderBy: [{ discoveredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+              })
+            : null,
+          prisma.leadEnrichmentRecord.findFirst({
+            where: { leadId: sourceLeadId },
+            orderBy: [{ enrichedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          }),
+          resolvedBusinessId
+            ? prisma.businessConversion.findFirst({
+                where: {
+                  leadId: sourceLeadId,
+                  businessId: resolvedBusinessId,
+                  ...(resolvedIcpProfileId ? { icpProfileId: resolvedIcpProfileId } : {}),
+                },
+                orderBy: [{ convertedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+              })
+            : null,
+        ]);
+        const hasReusableEnrichmentContext = Boolean(
+          latestEnrichment
+          && (latestEnrichment.normalizedPayload !== null || latestEnrichment.rawPayload !== null),
+        );
+
+        if (!resolvedIcpProfileId) {
+          throw new LeadContextUnavailableError(
+            'Source lead is missing ICP context for backup contact staging',
+          );
+        }
+
+        if (!resolvedBusinessId && !latestDiscovery && !hasReusableEnrichmentContext && !latestBusinessConversion) {
+          throw new LeadContextUnavailableError(
+            'Source lead does not have enough business qualification context to stage a backup contact',
+          );
+        }
+
+        const inheritedEnrichmentData =
+          sourceLead?.enrichmentData
+          ?? latestEnrichment?.normalizedPayload
+          ?? latestEnrichment?.rawPayload
+          ?? null;
+
+        const { lead, jobExecution, outboxEvent } = await prisma.$transaction(async (tx) => {
+          const lead = await tx.lead.create({
+            data: {
+              firstName: input.firstName,
+              lastName: input.lastName,
+              email: input.email,
+              source: input.source,
+              status: 'new',
+              ...(resolvedBusinessId ? { businessId: resolvedBusinessId } : {}),
+              ...(inheritedEnrichmentData !== null
+                ? { enrichmentData: toInputJson(inheritedEnrichmentData) }
+                : {}),
+            },
+          });
+
+          if (latestDiscovery) {
+            await tx.leadDiscoveryRecord.create({
+              data: {
+                leadId: lead.id,
+                icpProfileId: resolvedIcpProfileId,
+                provider: latestDiscovery.provider,
+                ...(latestDiscovery.providerSource
+                  ? { providerSource: latestDiscovery.providerSource }
+                  : {}),
+                ...(latestDiscovery.providerConfidence !== null
+                  ? { providerConfidence: latestDiscovery.providerConfidence }
+                  : {}),
+                providerRecordId: latestDiscovery.providerRecordId,
+                ...(latestDiscovery.providerCursor
+                  ? { providerCursor: latestDiscovery.providerCursor }
+                  : {}),
+                queryHash: latestDiscovery.queryHash,
+                status: latestDiscovery.status,
+                rawPayload: toInputJson(latestDiscovery.rawPayload),
+                ...(latestDiscovery.provenanceJson !== null
+                  ? { provenanceJson: toInputJson(latestDiscovery.provenanceJson) }
+                  : {}),
+                ...(latestDiscovery.errorMessage
+                  ? { errorMessage: latestDiscovery.errorMessage }
+                  : {}),
+                discoveredAt: latestDiscovery.discoveredAt,
+              },
+            });
+          }
+
+          if (latestEnrichment && hasReusableEnrichmentContext) {
+            await tx.leadEnrichmentRecord.create({
+              data: {
+                leadId: lead.id,
+                provider: latestEnrichment.provider,
+                status: latestEnrichment.status,
+                attempt: latestEnrichment.attempt,
+                ...(latestEnrichment.providerRecordId
+                  ? { providerRecordId: latestEnrichment.providerRecordId }
+                  : {}),
+                ...(latestEnrichment.normalizedPayload !== null
+                  ? { normalizedPayload: toInputJson(latestEnrichment.normalizedPayload) }
+                  : {}),
+                ...(latestEnrichment.rawPayload !== null
+                  ? { rawPayload: toInputJson(latestEnrichment.rawPayload) }
+                  : {}),
+                ...(latestEnrichment.errorCode
+                  ? { errorCode: latestEnrichment.errorCode }
+                  : {}),
+                ...(latestEnrichment.errorMessage
+                  ? { errorMessage: latestEnrichment.errorMessage }
+                  : {}),
+                ...(latestEnrichment.enrichedAt
+                  ? { enrichedAt: latestEnrichment.enrichedAt }
+                  : {}),
+                requestKey: `backup-contact:${sourceLeadId}:${lead.id}:${latestEnrichment.id}`,
+              },
+            });
+          }
+
+          if (latestBusinessConversion && resolvedBusinessId) {
+            await tx.businessConversion.create({
+              data: {
+                businessId: resolvedBusinessId,
+                leadId: lead.id,
+                icpProfileId: latestBusinessConversion.icpProfileId ?? resolvedIcpProfileId,
+                ...(latestBusinessConversion.apolloContactJson !== null
+                  ? { apolloContactJson: toInputJson(latestBusinessConversion.apolloContactJson) }
+                  : {}),
+                ...(latestBusinessConversion.hunterContactJson !== null
+                  ? { hunterContactJson: toInputJson(latestBusinessConversion.hunterContactJson) }
+                  : {}),
+                ...(latestBusinessConversion.metadata !== null
+                  ? { metadata: toInputJson(latestBusinessConversion.metadata) }
+                  : {}),
+                ...(latestBusinessConversion.businessInsights
+                  ? { businessInsights: latestBusinessConversion.businessInsights }
+                  : {}),
+                ...(latestBusinessConversion.apolloHasEmail !== null
+                  ? { apolloHasEmail: latestBusinessConversion.apolloHasEmail }
+                  : {}),
+                ...(latestBusinessConversion.apolloHasDirectPhone !== null
+                  ? { apolloHasDirectPhone: latestBusinessConversion.apolloHasDirectPhone }
+                  : {}),
+                convertedAt: latestBusinessConversion.convertedAt,
+              },
+            });
+          }
+
+          const jobExecution = await tx.jobExecution.create({
+            data: {
+              type: 'features.compute',
+              status: 'queued',
+              payload: {
+                leadId: lead.id,
+                icpProfileId: resolvedIcpProfileId,
+                snapshotVersion: 1,
+                sourceLeadId,
+              },
+              leadId: lead.id,
+            },
+          });
+
+          const outboxEvent = await tx.outboxEvent.create({
+            data: {
+              type: 'features.compute',
+              payload: {
+                leadId: lead.id,
+                icpProfileId: resolvedIcpProfileId,
+                snapshotVersion: 1,
+                runId: jobExecution.id,
+                sourceLeadId,
+              },
+              status: 'pending',
+            },
+          });
+
+          return {
+            lead,
+            jobExecution,
+            outboxEvent,
+          };
+        });
+
+        await publishFeaturesCompute({
+          leadId: lead.id,
+          icpProfileId: resolvedIcpProfileId,
+          jobId: jobExecution.id,
+          outboxEventId: outboxEvent.id,
+        });
 
         return {
           leadId: lead.id,
