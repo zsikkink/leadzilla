@@ -24,6 +24,7 @@ import { getWebEnv } from '@/lib/env.js';
 import { useAuth } from '@/hooks/use-auth.js';
 import { useApiQuery } from '@/hooks/use-api-query.js';
 import { KNOWN_SCORING_FIELD_KEYS } from '@/lib/discovery-admin.js';
+import { toScoreTier, parseTierBands, DEFAULT_TIER_BANDS, type TierBands } from '@/lib/score-tier-utils.js';
 
 import type {
   QualificationRuleResponse,
@@ -54,7 +55,7 @@ interface SimFormState {
   hasPricingTiers: boolean;
   highTicketSignals: boolean;
   decisionMakerCount: number;
-  hasExecutiveContact: boolean;
+  foundCsuiteDecisionMaker: boolean;
   socialLinkCount: number;
   hasLinkedin: boolean;
   recentActivity: boolean;
@@ -97,7 +98,7 @@ const DEFAULT_SIM: SimFormState = {
   hasPricingTiers: false,
   highTicketSignals: false,
   decisionMakerCount: 2,
-  hasExecutiveContact: true,
+  foundCsuiteDecisionMaker: false,
   socialLinkCount: 4,
   hasLinkedin: true,
   recentActivity: true,
@@ -148,7 +149,7 @@ const FIELD_KEY_MAP: Record<string, (form: SimFormState) => unknown> = {
   avg_rating: (f) => f.avgRating,
   // V2.1 scraper features
   decision_maker_count: (f) => f.decisionMakerCount,
-  has_executive_contact: (f) => f.hasExecutiveContact,
+  found_csuite_decision_maker: (f) => f.foundCsuiteDecisionMaker ? 1 : 0,
   website_email_count: (f) => f.websiteEmailCount,
   website_phone_count: (f) => f.websitePhoneCount,
   social_link_count: (f) => f.socialLinkCount,
@@ -207,6 +208,7 @@ const FIELD_KEY_CATEGORY_MAP: Record<string, string> = {
   apify_has_shopify: 'GENERAL',
   apify_has_product_catalog: 'GENERAL',
   instagram_is_business_account: 'GENERAL',
+  found_csuite_decision_maker: 'CONTACT_QUALITY',
 };
 
 /* ------------------------------------------------------------------ */
@@ -226,9 +228,10 @@ function formatValue(val: unknown): string {
   return String(val);
 }
 
-function scoreTier(score: number): { label: string; className: string } {
-  if (score >= 0.7) return { label: 'HIGH', className: 'tier high' };
-  if (score >= 0.4) return { label: 'MEDIUM', className: 'tier medium' };
+function scoreTier(score: number, bands: TierBands = DEFAULT_TIER_BANDS): { label: string; className: string } {
+  const tier = toScoreTier(score, bands);
+  if (tier === 'HIGH') return { label: 'HIGH', className: 'tier high' };
+  if (tier === 'MEDIUM') return { label: 'MEDIUM', className: 'tier medium' };
   return { label: 'LOW', className: 'tier low' };
 }
 
@@ -445,7 +448,6 @@ function simulateScore(
     SALES_MOTION_FIT: 'Sales Motion Fit',
     PAYMENT_COMPLEXITY: 'Payment Complexity',
     RISK_URGENCY: 'Risk & Urgency',
-    OPERATIONAL_PAIN: 'Operational Pain',
     SWITCHING_WILLINGNESS: 'Switching Willingness',
   };
 
@@ -527,6 +529,7 @@ export default function ICPRulesPage() {
   const [showSimulation, setShowSimulation] = useState(false);
   const [blendWeights, setBlendWeights] = useState({ deterministic: 0.6, ai: 0.4 });
   const [qualificationThreshold, setQualificationThreshold] = useState(0.4);
+  const [tierBands, setTierBands] = useState<TierBands>(DEFAULT_TIER_BANDS);
 
   // Add Rule state
   const [showAddRule, setShowAddRule] = useState(false);
@@ -607,6 +610,7 @@ export default function ICPRulesPage() {
     void apiClient.listPipelineSettings().then((res) => {
       const blend = res.items.find((i) => i.key === 'deterministicAiBlend');
       const threshold = res.items.find((i) => i.key === 'scoreQualificationThreshold');
+      const bands = res.items.find((i) => i.key === 'scoreTierBands');
       const d = typeof blend?.value === 'number' ? blend.value : Number(blend?.value);
       if (Number.isFinite(d) && d >= 0 && d <= 1) {
         setBlendWeights({ deterministic: d, ai: 1 - d });
@@ -614,6 +618,9 @@ export default function ICPRulesPage() {
       const t = typeof threshold?.value === 'number' ? threshold.value : Number(threshold?.value);
       if (Number.isFinite(t) && t >= 0 && t <= 1) {
         setQualificationThreshold(t);
+      }
+      if (bands) {
+        setTierBands(parseTierBands(bands.value));
       }
     }).catch(() => undefined);
   }, [apiClient]);
@@ -623,7 +630,7 @@ export default function ICPRulesPage() {
     [selectedProfile, rules, simForm, blendWeights],
   );
 
-  const tier = simResult ? scoreTier(simResult.score) : null;
+  const tier = simResult ? scoreTier(simResult.score, tierBands) : null;
 
   if (icpQuery.isLoading) {
     return (
@@ -1026,8 +1033,8 @@ export default function ICPRulesPage() {
                   High-Ticket Signals
                 </label>
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
-                  <input type="checkbox" checked={simForm.hasExecutiveContact} onChange={(e) => setSimForm((prev) => ({ ...prev, hasExecutiveContact: e.target.checked }))} />
-                  Has Executive Contact
+                  <input type="checkbox" checked={simForm.foundCsuiteDecisionMaker} onChange={(e) => setSimForm((prev) => ({ ...prev, foundCsuiteDecisionMaker: e.target.checked }))} />
+                  Found C-Suite Decision Maker
                 </label>
                 <label className="inline-flex items-center gap-1.5 text-[13px]">
                   <input type="checkbox" checked={simForm.hasLinkedin} onChange={(e) => setSimForm((prev) => ({ ...prev, hasLinkedin: e.target.checked }))} />

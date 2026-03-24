@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  checkDiscoveryAdminAccess,
   fetchAdminLeadDetail,
   fetchAdminLeads,
   fetchAdminSearchTaskDetail,
@@ -326,43 +325,8 @@ describe('discovery admin job proxy', () => {
     expect(fromMock).not.toHaveBeenCalled();
   });
 
-  it('probes discovery admin access through the admin proxy', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          items: [],
-          page: 1,
-          pageSize: 1,
-          total: 0,
-        }),
-        { status: 200 },
-      ),
-    );
-
-    await expect(checkDiscoveryAdminAccess()).resolves.toBeUndefined();
-
-    const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe('/api/admin/search-tasks?page=1&pageSize=1&sortBy=updated_desc');
-    const headers = new Headers((init as RequestInit | undefined)?.headers);
-    expect(headers.get('authorization')).toBe('Bearer session-token');
-    expect(fromMock).not.toHaveBeenCalled();
-  });
-
-  it('surfaces forbidden admin access probes with status information', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({ error: 'Forbidden' }),
-        { status: 403 },
-      ),
-    );
-
-    await expect(checkDiscoveryAdminAccess()).rejects.toMatchObject({
-      name: 'AdminProxyError',
-      message: 'Forbidden',
-      status: 403,
-    });
-    expect(fromMock).not.toHaveBeenCalled();
-  });
+  // NOTE: checkDiscoveryAdminAccess tests were removed — the function moved to
+  // use-discovery-admin-access.ts as a private helper and is tested through the hook.
 
   it('prefers the live session token over the stored token when both exist', async () => {
     vi.stubGlobal('localStorage', createStorageMock('stored-token'));

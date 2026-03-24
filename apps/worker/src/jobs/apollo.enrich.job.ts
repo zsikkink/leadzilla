@@ -149,19 +149,14 @@ export async function handleApolloEnrichJob(
   ): void => {
     if (!emailAvailable) return;
 
-    const channel: 'EMAIL' | 'WHATSAPP' = scoreBand === 'HIGH' && phoneAvailable ? 'WHATSAPP' : 'EMAIL';
+    const channel: 'EMAIL' | 'WHATSAPP' = phoneAvailable ? 'WHATSAPP' : 'EMAIL';
     logger.info(
       { ...logCtx, reason, channel, emailAvailable, phoneAvailable },
       'Qualified lead remains ready for manual draft generation after apollo.enrich',
     );
   };
 
-  // LOW → skip entirely, do not advance to draft generation
-  if (scoreBand === 'LOW') {
-    logger.info(logCtx, 'LOW score band — skipping apollo.enrich entirely');
-    await tryFinalizeDiscoveryRun(runId, logger);
-    return;
-  }
+  // Score tier bands are visual only — enrichment threshold below is the sole gatekeeper
 
   // Enrichment threshold gate: skip paid Apollo reveal if score is too low
   const enrichmentThreshold = await getEnrichmentThreshold();
@@ -191,17 +186,13 @@ export async function handleApolloEnrichJob(
   let needsEmailReveal = false;
   let needsPhoneReveal = false;
 
-  if (scoreBand === 'MEDIUM') {
-    // MEDIUM → reveal email only if missing + Apollo has it. NEVER reveal phone.
+  // Phone availability determines channel, not score band.
+  // Enrichment threshold already gates who reaches this point.
+  {
     if (!hasEmail && apolloHasEmail) {
       needsEmailReveal = true;
     }
-  } else if (scoreBand === 'HIGH') {
-    // HIGH → reveal what's missing
-    if (!hasEmail && apolloHasEmail) {
-      needsEmailReveal = true;
-    }
-    if (hasEmail && !hasPhone && apolloHasDirectPhone) {
+    if (!hasPhone && apolloHasDirectPhone) {
       needsPhoneReveal = true;
     }
     if (!hasEmail && apolloHasEmail) {

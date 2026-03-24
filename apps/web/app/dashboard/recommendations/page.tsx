@@ -421,8 +421,14 @@ export default function RecommendationsPage() {
     useCallback(() => apiClient.getStoredRecommendations(), [apiClient]),
   );
 
-  const hasRealData = data && data.items.length > 0;
-  const showPlaceholders = !isLoading && (!data || data.items.length === 0);
+  // Dedup by type+title — the manager.analyze job can create duplicate records
+  const uniqueItems = data
+    ? Array.from(
+        new Map(data.items.map((r) => [`${r.type}:${r.title}`, r])).values(),
+      )
+    : [];
+  const hasRealData = uniqueItems.length > 0;
+  const showPlaceholders = !isLoading && uniqueItems.length === 0;
 
   async function handleStatusChange(id: string, status: StoredRecommendation['status']) {
     try {
@@ -477,11 +483,11 @@ export default function RecommendationsPage() {
             <Lightbulb className="h-4 w-4 text-yellow-400" />
             <h3 className="text-sm font-bold tracking-tight">Active Recommendations</h3>
             <span className="rounded-md bg-yellow-500/10 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-yellow-400">
-              {data.items.length}
+              {uniqueItems.length}
             </span>
           </div>
           <div className="space-y-3">
-            {data.items.map((rec) => (
+            {uniqueItems.map((rec) => (
               <RecommendationCard
                 key={rec.id}
                 rec={rec}

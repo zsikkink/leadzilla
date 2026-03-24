@@ -244,6 +244,7 @@ export async function handleBusinessPrequalifyJob(
       data: {
         preQualified: true,
         disqualificationReason: null,
+        discoveryRunId,
       },
     });
 

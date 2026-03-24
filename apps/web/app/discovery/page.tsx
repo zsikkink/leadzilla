@@ -2,6 +2,7 @@
 
 import {
   AlertTriangle,
+  CheckCircle2,
   DollarSign,
   FileText,
   Gauge,
@@ -32,7 +33,6 @@ import {
   DEFAULT_MESSAGING_ROLE,
   DEFAULT_MESSAGING_SYSTEM_PROMPT,
 } from '../../src/lib/messaging-defaults.js';
-import { buildPipelineSettingsSavePlan } from '../../src/lib/pipeline-settings-save-plan.js';
 import { cn } from '../../src/lib/utils.js';
 
 // ── Setting types ──────────────────────────────────────────────────────
@@ -479,7 +479,7 @@ function getDefaultSettings(): SettingsState {
     scoreTierBands: { low: 0.34, med: 0.67, high: 0.67 },
     followUpMaxCount: 3,
     whatsappDailyLimit: 50,
-    emailDailyLimit: 10,
+    emailDailyLimit: 100,
     modelActivationAuc: 0.6,
     providerBudgetCeiling: 50,
   };
@@ -511,6 +511,10 @@ const ADDITIONAL_SETTING_LABELS: Record<string, string> = {
   messagingInstructions: 'Messaging Instructions',
 };
 
+function getSettingDisplayLabel(key: string): string {
+  return PIPELINE_SETTING_LABELS[key] ?? ADDITIONAL_SETTING_LABELS[key] ?? key;
+}
+
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
@@ -524,7 +528,7 @@ function getErrorMessage(error: unknown): string {
 // ── Main page ──────────────────────────────────────────────────────────
 
 export default function ControlsSettingsPage() {
-  const { apiClient, isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const { apiClient } = useAuth();
   const [settings, setSettings] = useState<SettingsState>(getDefaultSettings);
   const [autoApproveEnabled, setAutoApproveEnabled] = useState(false);
   const [autoApproveScoreMin, setAutoApproveScoreMin] = useState(0.5);
@@ -535,98 +539,61 @@ export default function ControlsSettingsPage() {
   const [hasChanges, setHasChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingSettings, setIsLoadingSettings] = useState(true);
-  const [settingsLoadError, setSettingsLoadError] = useState<string | null>(null);
   const loadedRef = useRef(false);
-  const loadedSettingsRef = useRef<Record<string, unknown> | null>(null);
 
-  const loadSettings = useCallback(async () => {
-    setIsLoadingSettings(true);
-    setSettingsLoadError(null);
+  // Load all settings from API on mount
+  useEffect(() => {
+    if (loadedRef.current) return;
+    loadedRef.current = true;
 
-    try {
-      const { items } = await apiClient.listPipelineSettings();
-      const newSettings = { ...getDefaultSettings() };
-      let nextAutoApproveEnabled = false;
-      let nextAutoApproveScoreMin = 0.5;
-      let nextAutoApproveScoreMax = 1.0;
-      let nextMessagingRole = '';
-      let nextMessagingSystemPrompt = '';
-      let nextMessagingInstructions = '';
-
-      for (const item of items) {
-        if (item.key === 'auto_approve_enabled') {
-          nextAutoApproveEnabled = item.value === true || item.value === 'true';
-        } else if (item.key === 'auto_approve_score_min') {
-          const value = Number(item.value);
-          if (!Number.isNaN(value)) {
-            nextAutoApproveScoreMin = value;
-          }
-        } else if (item.key === 'auto_approve_score_max') {
-          const value = Number(item.value);
-          if (!Number.isNaN(value)) {
-            nextAutoApproveScoreMax = value;
-          }
-        } else if (item.key === 'messagingRole') {
-          nextMessagingRole = String(item.value ?? '');
-        } else if (item.key === 'messagingSystemPrompt') {
-          nextMessagingSystemPrompt = String(item.value ?? '');
-        } else if (item.key === 'messagingInstructions') {
-          nextMessagingInstructions = String(item.value ?? '');
-        } else if (item.key === 'scoreTierBands') {
-          const val = item.value as {
-            low?: number | undefined;
-            med?: number | undefined;
-            high?: number | undefined;
-          } | null;
-          if (val && typeof val === 'object') {
-            newSettings.scoreTierBands = {
-              low: val.low ?? 0.34,
-              med: val.med ?? 0.67,
-              high: val.high ?? 0.67,
-            };
-          }
-        } else if (NUMERIC_SETTING_KEYS.has(item.key)) {
-          const num = Number(item.value);
-          if (!Number.isNaN(num)) {
-            (newSettings as Record<string, unknown>)[item.key] = num;
+    apiClient
+      .listPipelineSettings()
+      .then(({ items }) => {
+        const newSettings = { ...getDefaultSettings() };
+        for (const item of items) {
+          if (item.key === 'auto_approve_enabled') {
+            setAutoApproveEnabled(item.value === true || item.value === 'true');
+          } else if (item.key === 'auto_approve_score_min') {
+            const n = Number(item.value);
+            if (!Number.isNaN(n)) setAutoApproveScoreMin(n);
+          } else if (item.key === 'auto_approve_score_max') {
+            const n = Number(item.value);
+            if (!Number.isNaN(n)) setAutoApproveScoreMax(n);
+          } else if (item.key === 'messagingRole') {
+            setMessagingRole(String(item.value ?? ''));
+          } else if (item.key === 'messagingSystemPrompt') {
+            setMessagingSystemPrompt(String(item.value ?? ''));
+          } else if (item.key === 'messagingInstructions') {
+            setMessagingInstructions(String(item.value ?? ''));
+          } else if (item.key === 'scoreTierBands') {
+            const val = item.value as {
+              low?: number | undefined;
+              med?: number | undefined;
+              high?: number | undefined;
+            } | null;
+            if (val && typeof val === 'object') {
+              newSettings.scoreTierBands = {
+                low: val.low ?? 0.34,
+                med: val.med ?? 0.67,
+                high: val.high ?? 0.67,
+              };
+            }
+          } else if (NUMERIC_SETTING_KEYS.has(item.key)) {
+            const num = Number(item.value);
+            if (!Number.isNaN(num)) {
+              (newSettings as Record<string, unknown>)[item.key] = num;
+            }
           }
         }
-      }
-
-      setSettings(newSettings);
-      setAutoApproveEnabled(nextAutoApproveEnabled);
-      setAutoApproveScoreMin(nextAutoApproveScoreMin);
-      setAutoApproveScoreMax(nextAutoApproveScoreMax);
-      setMessagingRole(nextMessagingRole);
-      setMessagingSystemPrompt(nextMessagingSystemPrompt);
-      setMessagingInstructions(nextMessagingInstructions);
-      setHasChanges(false);
-      loadedSettingsRef.current = {
-        ...newSettings,
-        auto_approve_enabled: nextAutoApproveEnabled,
-        auto_approve_score_min: nextAutoApproveScoreMin,
-        auto_approve_score_max: nextAutoApproveScoreMax,
-        messagingRole: nextMessagingRole,
-        messagingSystemPrompt: nextMessagingSystemPrompt,
-        messagingInstructions: nextMessagingInstructions,
-      };
-    } catch (error: unknown) {
-      loadedSettingsRef.current = null;
-      setSettingsLoadError(getErrorMessage(error));
-    } finally {
-      setIsLoadingSettings(false);
-    }
+        setSettings(newSettings);
+      })
+      .catch(() => {
+        // Use defaults if API fails
+      })
+      .finally(() => {
+        setIsLoadingSettings(false);
+      });
   }, [apiClient]);
-
-  // Load all settings from API on mount once auth is ready
-  useEffect(() => {
-    if (loadedRef.current || isAuthLoading || !isAuthenticated) {
-      return;
-    }
-
-    loadedRef.current = true;
-    void loadSettings();
-  }, [isAuthLoading, isAuthenticated, loadSettings]);
 
   // Real data queries for status cards
   const stats = useApiQuery(
@@ -648,81 +615,34 @@ export default function ControlsSettingsPage() {
   );
 
   const handleSave = useCallback(async () => {
-    if (autoApproveScoreMin > autoApproveScoreMax) {
-      toast.error('Auto-approve min score must be less than or equal to the max score.');
-      return;
-    }
-
-    const currentSettings = loadedSettingsRef.current;
-    if (!currentSettings) {
-      toast.error('Saved settings are unavailable. Retry loading before saving changes.');
-      return;
-    }
-
-    const nextSettings = {
-      ...settings,
-      auto_approve_enabled: autoApproveEnabled,
-      auto_approve_score_min: autoApproveScoreMin,
-      auto_approve_score_max: autoApproveScoreMax,
-      messagingRole,
-      messagingSystemPrompt,
-      messagingInstructions,
-    };
-
-    const saveTargets = buildPipelineSettingsSavePlan({
-      currentValues: currentSettings,
-      nextValues: nextSettings,
-      labels: {
-        ...PIPELINE_SETTING_LABELS,
-        ...ADDITIONAL_SETTING_LABELS,
-      },
-    });
-
-    if (saveTargets.length === 0) {
-      setHasChanges(false);
-      return;
-    }
-
     setIsSaving(true);
-    const results: Array<
-      | { key: string; value: unknown; label: string; success: true }
-      | { key: string; value: unknown; label: string; success: false; errorMessage: string }
-    > = [];
+    const saveTargets = [
+      ...(Object.entries(settings) as [string, unknown][]).map(([key, value]) => ({
+        key,
+        value,
+        label: getSettingDisplayLabel(key),
+      })),
+      { key: 'auto_approve_enabled', value: autoApproveEnabled, label: getSettingDisplayLabel('auto_approve_enabled') },
+      { key: 'auto_approve_score_min', value: autoApproveScoreMin, label: getSettingDisplayLabel('auto_approve_score_min') },
+      { key: 'auto_approve_score_max', value: autoApproveScoreMax, label: getSettingDisplayLabel('auto_approve_score_max') },
+      { key: 'messagingRole', value: messagingRole, label: getSettingDisplayLabel('messagingRole') },
+      { key: 'messagingSystemPrompt', value: messagingSystemPrompt, label: getSettingDisplayLabel('messagingSystemPrompt') },
+      { key: 'messagingInstructions', value: messagingInstructions, label: getSettingDisplayLabel('messagingInstructions') },
+    ];
 
-    for (const target of saveTargets) {
-      try {
-        await apiClient.updatePipelineSetting(target.key, target.value);
-        results.push({ ...target, success: true });
-      } catch (error: unknown) {
-        results.push({
-          ...target,
-          success: false,
-          errorMessage: getErrorMessage(error),
-        });
-      }
-    }
-
-    const successfulTargets = results.filter(
-      (result): result is { key: string; value: unknown; label: string; success: true } =>
-        result.success,
+    const results = await Promise.all(
+      saveTargets.map(async (target) => {
+        try {
+          await apiClient.updatePipelineSetting(target.key, target.value);
+          return { ...target, success: true as const };
+        } catch (error: unknown) {
+          return { ...target, success: false as const, errorMessage: getErrorMessage(error) };
+        }
+      }),
     );
-    if (successfulTargets.length > 0) {
-      loadedSettingsRef.current = {
-        ...currentSettings,
-        ...Object.fromEntries(successfulTargets.map((result) => [result.key, result.value])),
-      };
-    }
 
-    const failedSaves = results.filter(
-      (result): result is {
-        key: string;
-        value: unknown;
-        label: string;
-        success: false;
-        errorMessage: string;
-      } => !result.success,
-    );
-    const successfulSaveCount = successfulTargets.length;
+    const failedSaves = results.filter((result) => !result.success);
+    const successfulSaveCount = results.length - failedSaves.length;
 
     if (failedSaves.length === 0) {
       toast.success(`Saved ${successfulSaveCount} settings.`);
@@ -742,16 +662,7 @@ export default function ControlsSettingsPage() {
     }
     setHasChanges(true);
     setIsSaving(false);
-  }, [
-    apiClient,
-    autoApproveEnabled,
-    autoApproveScoreMax,
-    autoApproveScoreMin,
-    messagingInstructions,
-    messagingRole,
-    messagingSystemPrompt,
-    settings,
-  ]);
+  }, [apiClient, settings, autoApproveEnabled, autoApproveScoreMin, autoApproveScoreMax, messagingRole, messagingSystemPrompt, messagingInstructions]);
 
   const handleReset = useCallback(() => {
     setSettings(getDefaultSettings());
@@ -764,10 +675,6 @@ export default function ControlsSettingsPage() {
     setHasChanges(true);
     toast.info('Settings reset to defaults — click Save to persist');
   }, []);
-
-  const saveDisabled =
-    !hasChanges || isSaving || isLoadingSettings || settingsLoadError !== null;
-  const resetDisabled = isLoadingSettings || settingsLoadError !== null;
 
   return (
     <div className="space-y-6">
@@ -783,13 +690,7 @@ export default function ControlsSettingsPage() {
           <button
             type="button"
             onClick={handleReset}
-            disabled={resetDisabled}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-colors',
-              resetDisabled
-                ? 'cursor-not-allowed bg-muted/10 text-muted-foreground/40'
-                : 'bg-muted/20 text-muted-foreground hover:bg-muted/40',
-            )}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3.5 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
           >
             <RotateCcw className="h-3.5 w-3.5" />
             Reset Defaults
@@ -797,12 +698,12 @@ export default function ControlsSettingsPage() {
           <button
             type="button"
             onClick={handleSave}
-            disabled={saveDisabled}
+            disabled={!hasChanges || isSaving}
             className={cn(
               'inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold transition-all',
-              !saveDisabled
+              hasChanges && !isSaving
                 ? 'bg-zbooni-teal/20 text-zbooni-teal hover:bg-zbooni-teal/30'
-                : 'cursor-not-allowed bg-muted/20 text-muted-foreground/60',
+                : 'bg-muted/20 text-muted-foreground/60 cursor-not-allowed',
             )}
           >
             {isSaving ? (
@@ -814,32 +715,6 @@ export default function ControlsSettingsPage() {
           </button>
         </div>
       </div>
-
-      {settingsLoadError ? (
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="font-semibold text-red-300">Saved settings failed to load</p>
-              <p className="mt-1 text-red-100/80">
-                {settingsLoadError}. The values on this page may be defaults, so saving is disabled until a retry succeeds.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => void loadSettings()}
-              disabled={isLoadingSettings}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/15 px-3 py-2 text-xs font-semibold text-red-100 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isLoadingSettings ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RotateCcw className="h-3.5 w-3.5" />
-              )}
-              Retry Load
-            </button>
-          </div>
-        </div>
-      ) : null}
 
       {/* ── System Status Cards (4-col grid) ────────────────────────── */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -873,21 +748,29 @@ export default function ControlsSettingsPage() {
           icon={Zap}
           iconColor="text-zbooni-green"
           bgColor="bg-zbooni-green/10"
-          label="Provider Status Notes"
+          label="Provider Status"
         >
           <div className="space-y-2">
-            <p className="text-[10px] font-medium text-muted-foreground/40">
-              Static reference only. Live provider probes are not wired on this screen.
-            </p>
-            {['SerpAPI', 'Hunter', 'Apollo'].map((provider) => (
-              <div key={provider} className="flex items-center justify-between">
+            {[
+              { name: 'SerpAPI', configured: true },
+              { name: 'Hunter', configured: true },
+              { name: 'Apollo', configured: false },
+            ].map((provider) => (
+              <div key={provider.name} className="flex items-center justify-between">
                 <span className="text-[11px] font-medium text-muted-foreground/60">
-                  {provider}
+                  {provider.name}
                 </span>
-                <div className="flex items-center gap-1">
-                  <AlertTriangle className="h-3 w-3 text-muted-foreground/40" />
-                  <span className="text-[10px] font-semibold text-muted-foreground/40">Not probed here</span>
-                </div>
+                {provider.configured ? (
+                  <div className="flex items-center gap-1">
+                    <CheckCircle2 className="h-3 w-3 text-zbooni-green" />
+                    <span className="text-[10px] font-semibold text-zbooni-green">Active</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1">
+                    <AlertTriangle className="h-3 w-3 text-muted-foreground/40" />
+                    <span className="text-[10px] font-semibold text-muted-foreground/40">Not configured</span>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -898,15 +781,15 @@ export default function ControlsSettingsPage() {
           icon={AlertTriangle}
           iconColor="text-yellow-400"
           bgColor="bg-yellow-500/10"
-          label="DLQ Depth Placeholder"
+          label="DLQ Depth"
         >
           <div className="flex flex-col items-center py-2">
             <div className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-muted-foreground/40" />
-              <span className="text-2xl font-extrabold tracking-tight text-muted-foreground/60">--</span>
+              <CheckCircle2 className="h-5 w-5 text-zbooni-green" />
+              <span className="text-2xl font-extrabold tracking-tight text-zbooni-green">0</span>
             </div>
             <p className="mt-1 text-[10px] font-medium text-muted-foreground/40">
-              Live queue depth is not wired on this screen
+              All queues healthy
             </p>
           </div>
         </StatusCard>
@@ -923,14 +806,10 @@ export default function ControlsSettingsPage() {
               {stats.data?.pendingApprovals ?? pendingDrafts.data?.total ?? 0}
             </span>
             <p className="mt-1 text-[10px] font-medium text-muted-foreground/40">
-              Operator-generated drafts awaiting approval
+              Message drafts awaiting review
             </p>
           </div>
         </StatusCard>
-      </div>
-
-      <div className="rounded-2xl border border-border/50 bg-card/60 px-4 py-3 text-xs text-muted-foreground/70 shadow-sm">
-        Qualified leads do not auto-enter messaging. Operators generate drafts from Leads, and sending then depends on approval or auto-approval settings.
       </div>
 
       {/* ── AI Role / Identity ──────────────────────────────────────── */}

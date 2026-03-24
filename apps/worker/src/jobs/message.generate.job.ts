@@ -590,6 +590,11 @@ export async function handleMessageGenerateJob(
         ? icpAngle.trim()
         : (icpProfile?.description ? `Hook: ${icpProfile.description.split('.').at(0)?.trim()}` : null));
     const icpSegment = icpProfile?.name ?? null;
+    // Sales hook debug: log what was extracted so we can verify hooks reach OpenAI
+    logger.info(
+      { jobId: job.id, leadId, icpProfileId, salesHook: requiredIcpHook ? requiredIcpHook.slice(0, 80) : '(none)', icpSegment },
+      requiredIcpHook ? `Sales hook extracted: "${requiredIcpHook.slice(0, 50)}"` : 'No sales hook found for ICP',
+    );
     if (!requiredIcpHook) {
       logger.warn({ jobId: job.id, leadId, icpProfileId }, 'ICP sales hook missing; message quality may degrade');
     }
@@ -651,15 +656,14 @@ export async function handleMessageGenerateJob(
       const hasDecisionMakerPhone = !!(lead.decisionMakerPhone && lead.decisionMakerPhone.trim() !== '');
       const hasPhone = hasDecisionMakerPhone || !!(lead.phone && lead.phone.trim() !== '');
 
-      if (blendedScore >= 0.67 && hasPhone) {
-        resolvedChannel = 'WHATSAPP';
-      } else {
-        resolvedChannel = 'EMAIL';
-      }
+      // Channel selection: phone available → WhatsApp, otherwise → Email.
+      // Score tier bands are visual only — enrichment threshold upstream controls
+      // who gets a phone lookup; here we just check the result.
+      resolvedChannel = hasPhone ? 'WHATSAPP' : 'EMAIL';
 
       logger.info(
         { jobId: job.id, leadId, blendedScore, hasDecisionMakerPhone, hasPhone, resolvedChannel },
-        'Score-based channel selection',
+        'Phone-based channel selection',
       );
     }
 
