@@ -121,17 +121,17 @@ Message goes out via Email or WhatsApp
      v                        v                        v
   SCRAPE WEBSITE         SCRAPE INSTAGRAM        FIND CONTACTS
   (if enabled)           (if enabled)
-     |                        |                   Three sources:
+     |                        |                   Four sources:
      |                        |                        |
-  Crawls up to 5         Pulls: followers,      +------+------+
-  pages (home, about,    engagement rate,        |      |      |
-  team, pricing)         business category,      v      v      v
-     |                   recent posts         Website  Hunter  Apollo
-  Extracts:                                   scrape   (email  (company
-  - Team members                              emails   search  database)
-  - Contact info                                by      FREE
-  - Social links                              domain)  pre-screen
-  - Tech stack
+  Crawls up to 5         Pulls: followers,      +------+------+------+
+  pages (home, about,    engagement rate,        |      |      |      |
+  team, pricing)         business category,      v      v      v      v
+     |                   recent posts         Website Hunter  Apollo Google
+  Extracts:                                   scrape  (email  (free  CSE
+  - Team members                              emails  search  pre-   (web
+  - Contact info                                by    screen) search
+  - Social links                              domain)         for CEO/
+  - Tech stack                                                founder)
   - Business signals
                               |
      +------------------------+
@@ -216,36 +216,50 @@ Message goes out via Email or WhatsApp
          +--------------------+--------------------+
          |                    |                    |
          v                    v                    v
-      LOW (< 0.40)      MEDIUM (0.40-0.60)    HIGH (> 0.60)
+      LOW (< 0.40)      MEDIUM (0.40-0.67)    HIGH (> 0.67)
          |                    |                    |
-    Not a good fit.      Decent fit.          Strong fit.
-    Pipeline STOPS       Email only.          Email + WhatsApp.
-    here for this        |                    Phone reveal
-    lead.                |                    attempted.
-                         |                    |
-                         +--------+-----------+
-                                  |
-                                  v
+    Below qualification   Qualified.           Qualified.
+    threshold. Pipeline   |                    |
+    STOPS here.           |                    |
+                          +--------+-----------+
+                                   |
+    Score tier bands (LOW/MEDIUM/HIGH) are VISUAL
+    ONLY — they show as colors on the dashboard
+    but do NOT affect pipeline routing. The
+    enrichment threshold below is the sole
+    gatekeeper for paid API calls.
+                                   |
+                                   v
     +-----------------------------------------------------+
     |   STAGE 7: ENRICH (Optional)                         |
-    |   "Can we find a direct phone number?"               |
+    |   "Can we find better contact data?"                 |
     +-------------------------+---------------------------+
                               |
-    Only runs for MEDIUM and HIGH scores.
+    Runs for all qualified leads (score >= 0.40).
+    Gated by enrichment threshold, NOT score bands.
                               |
-    Apollo "reveal" API call:
-    - Costs money (paid credits)
+    Apollo domain search:
+    - Searches Apollo's database by company domain
+    - Costs money (paid credits, ~$0.02/search)
     - Only if score >= enrichment threshold (default: 0.30)
     - Only if daily budget not exceeded
-    - Returns: direct phone, verified email
+    - Returns: emails, phone numbers, titles
+    - "Claim" system prevents double-charging on retry
                               |
-    If phone found + HIGH score --> channel = WhatsApp
-    Otherwise --> channel = Email
+    Channel selection is simple:
+    Has phone number? --> WhatsApp
+    No phone?         --> Email
+                              |
+    NOTE: Message generation is NOT auto-triggered.
+    Leads remain "qualified" after enrichment.
+    An operator generates drafts manually from
+    the Leads page (or auto-approve handles it).
                               |
                               v
     +-----------------------------------------------------+
     |   STAGE 8: GENERATE MESSAGE                          |
     |   "Write a personalized outreach message"            |
+    |   (triggered manually or by auto-approve)            |
     +-------------------------+---------------------------+
                               |
     AI (OpenAI) gets:
