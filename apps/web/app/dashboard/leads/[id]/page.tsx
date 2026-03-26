@@ -1369,50 +1369,14 @@ export default function LeadDetailPage() {
   const [isCreatingBackup, setIsCreatingBackup] = useState(false);
   const [backupSuccess, setBackupSuccess] = useState<string | null>(null);
 
-  // Load business conversion data from Supabase (for AI insights + Brave results)
-  const [conversionData, setConversionData] = useState<ConversionData>({ businessInsights: null, matchedPerson: null, searchResults: [] });
-  const [businessId, setBusinessId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!id) return;
-    let cancelled = false;
-
-    async function loadConversionData() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-        // First get the lead's businessId
-        const { data: leadRow } = await supabase
-          .from('Lead')
-          .select('businessId:business_id')
-          .eq('id', id)
-          .single();
-
-        if (cancelled) return;
-        if (leadRow && typeof (leadRow as Record<string, unknown>).businessId === 'string') {
-          setBusinessId((leadRow as Record<string, unknown>).businessId as string);
-        }
-
-        // Load business conversion
-        const { data: convRow } = await supabase
-          .from('business_conversions')
-          .select('businessInsights:business_insights, metadata')
-          .eq('lead_id', id)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        if (cancelled) return;
-        if (convRow) {
-          setConversionData(parseConversionData(convRow as unknown as Record<string, unknown>));
-        }
-      } catch (err) {
-        if (!cancelled) console.error('Failed to load conversion data:', err);
-      }
-    }
-
-    void loadConversionData();
-    return () => { cancelled = true; };
-  }, [id]);
+  // Derive conversion data (Brave CEO, search results) from the correct businessData source
+  const conversionData = useMemo<ConversionData>(() => {
+    if (!businessData) return { businessInsights: null, matchedPerson: null, searchResults: [] };
+    return parseConversionData({
+      businessInsights: businessData.businessInsights,
+      metadata: businessData.conversionMetadata,
+    } as unknown as Record<string, unknown>);
+  }, [businessData]);
 
   const maxFollowUpNumber = useMemo(() => {
     if (!sends.data?.items.length) return -1;
@@ -1711,7 +1675,7 @@ export default function LeadDetailPage() {
       <EditableTeamMembers
         leadId={id}
         leadEmail={l.email}
-        businessId={businessId}
+        businessId={businessData?.businessId ?? null}
         initialMembers={teamMembers}
       />
 
