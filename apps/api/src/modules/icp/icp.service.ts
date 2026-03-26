@@ -14,6 +14,8 @@ import type {
   UpdateQualificationRuleRequest,
 } from '@lead-flood/contracts';
 
+import { prisma } from '@lead-flood/db';
+
 import type { IcpRepository } from './icp.repository.js';
 
 export interface IcpService {
@@ -57,7 +59,37 @@ export function buildIcpService(repository: IcpRepository): IcpService {
       return repository.updateIcpProfile(icpId, input);
     },
     async deleteIcpProfile(icpId) {
-      // TODO: add safe-delete checks.
+      // Safe-delete check: block deletion if active leads (via score predictions)
+      // or pending message drafts still reference this ICP
+      const [activeLeadCount, pendingDraftCount] = await Promise.all([
+        prisma.leadScorePrediction.count({
+          where: {
+            icpProfileId: icpId,
+            lead: { deletedAt: null, status: { notIn: ['rejected'] } },
+          },
+        }),
+        prisma.messageDraft.count({
+          where: {
+            icpProfileId: icpId,
+            approvalStatus: { in: ['PENDING', 'APPROVED', 'AUTO_APPROVED'] },
+          },
+        }),
+      ]);
+
+      const blockers: string[] = [];
+      if (activeLeadCount > 0) {
+        blockers.push(`${activeLeadCount} active lead score${activeLeadCount !== 1 ? 's' : ''}`);
+      }
+      if (pendingDraftCount > 0) {
+        blockers.push(`${pendingDraftCount} pending message draft${pendingDraftCount !== 1 ? 's' : ''}`);
+      }
+      if (blockers.length > 0) {
+        const { IcpBadRequestError } = await import('./icp.errors.js');
+        throw new IcpBadRequestError(
+          `Cannot delete ICP profile: ${blockers.join(' and ')} still reference this ICP. Deactivate or remove them first.`,
+        );
+      }
+
       await repository.deleteIcpProfile(icpId);
     },
     async createQualificationRule(icpId, input) {

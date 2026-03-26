@@ -493,6 +493,19 @@ function simulateScore(
 
 const OPERATORS = ['EQ', 'NEQ', 'GT', 'GTE', 'LT', 'LTE', 'IN', 'NOT_IN', 'CONTAINS'] as const;
 
+/** Descriptive labels for the operator dropdown */
+const OPERATOR_LABELS: Record<string, string> = {
+  EQ: 'EQ (Equals)',
+  NEQ: 'NEQ (Not Equal)',
+  GT: 'GT (Greater Than)',
+  GTE: 'GTE (Greater or Equal)',
+  LT: 'LT (Less Than)',
+  LTE: 'LTE (Less or Equal)',
+  IN: 'IN (Is One Of)',
+  NOT_IN: 'NOT_IN (Is Not One Of)',
+  CONTAINS: 'CONTAINS (Text Contains)',
+};
+
 interface StagedRule {
   name: string;
   fieldKey: string;
@@ -1403,7 +1416,7 @@ export default function ICPRulesPage() {
                     className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                   >
                     {OPERATORS.map((op) => (
-                      <option key={op} value={op}>{op}</option>
+                      <option key={op} value={op}>{OPERATOR_LABELS[op] ?? op}</option>
                     ))}
                   </select>
                 </label>

@@ -11,3 +11,10 @@ export class IcpNotFoundError extends Error {
     this.name = 'IcpNotFoundError';
   }
 }
+
+export class IcpBadRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'IcpBadRequestError';
+  }
+}

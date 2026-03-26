@@ -594,6 +594,17 @@ export async function handleMessageGenerateJob(
       logger.warn({ jobId: job.id, leadId, icpProfileId }, 'ICP sales hook missing; message quality may degrade');
     }
 
+    // Build featuresToPitch from ICP's featureList (used in initial + follow-up messages)
+    const featuresToPitch: string[] = icpProfile?.featureList && Array.isArray(icpProfile.featureList)
+      ? (icpProfile.featureList as string[]).filter((f) => typeof f === 'string' && f.trim().length > 0)
+      : [];
+
+    // Enrich icpDescription with featuresToPitch so the LLM knows which product features to reference
+    let enrichedIcpDescription = icpProfile?.description ?? 'No ICP description available';
+    if (featuresToPitch.length > 0) {
+      enrichedIcpDescription += `\n\nKey features to pitch for this ICP segment:\n${featuresToPitch.map((f, i) => `${i + 1}. ${f}`).join('\n')}`;
+    }
+
     const groundingContext = {
       leadName: `${lead.firstName} ${lead.lastName}`,
       leadEmail: lead.email,
@@ -603,7 +614,7 @@ export async function handleMessageGenerateJob(
       featuresJson,
       scoreBand: latestScore?.scoreBand ?? 'MEDIUM',
       blendedScore: latestScore?.blendedScore ?? 0,
-      icpDescription: icpProfile?.description ?? 'No ICP description available',
+      icpDescription: enrichedIcpDescription,
       businessIntelligence,
       icpHook: requiredIcpHook,
       icpAngle,
@@ -613,6 +624,7 @@ export async function handleMessageGenerateJob(
       metadata: {
         hookUsed: requiredIcpHook ?? null,
         icpSegment,
+        featuresToPitch: featuresToPitch.length > 0 ? featuresToPitch : null,
       },
     };
 
