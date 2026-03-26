@@ -743,11 +743,17 @@ export default function DiscoverPage() {
             const searchBudget = Math.ceil(desiredLeads / avgLeadRate * 1.5);
             // ~50% of discovered businesses pass prequalification and reach Hunter
             const hunterLookups = Math.ceil(searchBudget * 0.5);
+            // Brave CEO search: ~1 query per pre-qualified business
+            const braveLookups = hunterLookups;
+            // Apollo enrichment: only high-score leads (~30% of qualified)
+            const apolloLookups = Math.ceil(desiredLeads * 0.3);
             const estLeads = desiredLeads;
-            // Dollar cost: Google Places $0.01/search, Hunter $0.03/lookup (Starter plan: 2000 credits @ ~$49)
+            // Dollar cost: Google Places $0.01/search, Brave $0.005/query, Hunter $0.03/lookup, Apollo $0.05/reveal
             const googlePlacesCost = searchBudget * 0.01;
+            const braveCost = braveLookups * 0.005;
             const hunterCost = hunterLookups * 0.03;
-            const totalCost = googlePlacesCost + hunterCost;
+            const apolloCost = apolloLookups * 0.05;
+            const totalCost = googlePlacesCost + braveCost + hunterCost + apolloCost;
             return (
               <div className="rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 px-4 py-3">
                 <div className="flex items-center gap-2 mb-2">
@@ -760,7 +766,6 @@ export default function DiscoverPage() {
                 <div className="space-y-1.5">
                   <p className="text-sm text-muted-foreground">
                     ~<strong className="text-foreground">{searchBudget}</strong> search tasks
-                    {' + ~'}<strong className="text-foreground">{hunterLookups}</strong> Hunter lookups
                     {' → est. '}<strong className="text-zbooni-green">{estLeads}</strong> leads
                     {hasHistoricalData ? (
                       <span className="text-muted-foreground/60">
@@ -771,7 +776,7 @@ export default function DiscoverPage() {
                   <p className="text-xs text-muted-foreground/70">
                     Est. cost: <strong className="text-foreground">~${totalCost.toFixed(2)}</strong>
                     <span className="text-muted-foreground/50">
-                      {' '}(Google Places ${googlePlacesCost.toFixed(2)} + Hunter ${hunterCost.toFixed(2)})
+                      {' '}(Google Places ${googlePlacesCost.toFixed(2)} + Brave ${braveCost.toFixed(2)} + Hunter ${hunterCost.toFixed(2)} + Apollo ${apolloCost.toFixed(2)})
                     </span>
                   </p>
                 </div>
@@ -986,6 +991,40 @@ export default function DiscoverPage() {
               ) : null}
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* Provider Status */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <h2 className="mb-4 text-base font-bold tracking-tight">Provider Status</h2>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            { name: 'Google Places', role: 'Discovery', key: 'GOOGLE_PLACES_API_KEY', icon: Globe },
+            { name: 'Brave Search', role: 'CEO/Founder Search', key: 'BRAVE_API_KEY', icon: Search },
+            { name: 'Hunter', role: 'Email Lookup', key: 'HUNTER_API_KEY', icon: Target },
+            { name: 'Apollo', role: 'Enrichment', key: 'APOLLO_API_KEY', icon: TrendingUp },
+          ].map((provider) => {
+            const ProviderIcon = provider.icon;
+            return (
+              <div key={provider.name} className="rounded-xl border border-border/30 bg-zbooni-dark/20 p-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-teal/10">
+                    <ProviderIcon className="h-4 w-4 text-zbooni-teal" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold">{provider.name}</p>
+                    <p className="text-[10px] text-muted-foreground/60">{provider.role}</p>
+                  </div>
+                </div>
+                <div className="mt-2">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-zbooni-green/10 px-2 py-0.5 text-[10px] font-bold text-zbooni-green">
+                    <span className="h-1.5 w-1.5 rounded-full bg-zbooni-green" />
+                    Active
+                  </span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>

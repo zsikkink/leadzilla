@@ -337,9 +337,16 @@ function aggregateCosts(events: CostEventData[]) {
   }));
 }
 
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  SERPAPI: 'Google Places (Discovery)',
+  GOOGLE_PLACES: 'Google Places (Discovery)',
+  GOOGLE_CUSTOM_SEARCH: 'Brave (CEO Search)',
+  HUNTER: 'Hunter (Email)',
+  APOLLO: 'Apollo (Enrichment)',
+};
+
 function formatProviderName(provider: string): string {
-  if (provider === 'SERPAPI') return 'GOOGLE_PLACES';
-  return provider;
+  return PROVIDER_DISPLAY_NAMES[provider] ?? provider;
 }
 
 // ── Main page ────────────────────────────────────────────────────────────
@@ -408,13 +415,31 @@ export default function DiscoveryRunDetailPage() {
     setCancelPending(true);
     setCancelError(null);
     setCancelNotice(null);
-    try {
+
+    const attemptCancel = async (): Promise<Response> => {
       const headers: Record<string, string> = { 'content-type': 'application/json' };
       if (token) headers.authorization = `Bearer ${token}`;
-      const res = await fetch(`${getWebEnv().NEXT_PUBLIC_API_BASE_URL}/v1/discovery-admin/runs/${runId}/cancel`, {
+      return fetch(`${getWebEnv().NEXT_PUBLIC_API_BASE_URL}/v1/discovery-admin/runs/${runId}/cancel`, {
         method: 'POST',
         headers,
       });
+    };
+
+    try {
+      let res: Response;
+      try {
+        res = await attemptCancel();
+      } catch {
+        // Connection error on first attempt -- retry once
+        try {
+          res = await attemptCancel();
+        } catch {
+          // Both attempts failed with connection errors
+          setCancelError('Unable to reach the server. Please check your connection and try again.');
+          setCancelPending(false);
+          return;
+        }
+      }
 
       const responseBody = await res.json().catch(() => null) as CancelRunResponse | { error?: string; message?: string } | null;
 
@@ -433,7 +458,17 @@ export default function DiscoveryRunDetailPage() {
           responseBody && 'error' in responseBody
             ? (responseBody.error ?? responseBody.message)
             : undefined;
-        throw new Error(errorMessage ?? `Cancel failed (${res.status})`);
+
+        // Show user-friendly error instead of raw status codes
+        if (res.status >= 500) {
+          setCancelError('The server encountered an error while cancelling. The run may still be processing. Please refresh and try again.');
+        } else if (res.status === 404) {
+          setCancelError('This discovery run was not found. It may have already been removed.');
+        } else {
+          setCancelError(errorMessage ?? 'Cancel request failed. Please try again in a moment.');
+        }
+        setCancelPending(false);
+        return;
       }
 
       const cancelResult =
@@ -457,7 +492,11 @@ export default function DiscoveryRunDetailPage() {
       details.refetch();
       setShowCancelConfirm(false);
     } catch (err) {
-      setCancelError(err instanceof Error ? err.message : 'Failed to cancel run');
+      setCancelError(
+        err instanceof Error
+          ? `Something went wrong: ${err.message}. Please try again.`
+          : 'An unexpected error occurred. Please refresh and try again.',
+      );
     } finally {
       setCancelPending(false);
     }

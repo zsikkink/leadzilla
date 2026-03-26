@@ -506,6 +506,10 @@ export interface DiscoveryAdminRepository {
     };
     leads: DiscoveryRunLeadItem[];
   }>;
+  approveContactRecoveryItem(
+    id: string,
+    approvedByUserId: string,
+  ): Promise<{ leadId: string; businessName: string }>;
 }
 
 export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository {
@@ -1326,6 +1330,98 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
         updatedAt: run.updatedAt.toISOString(),
       },
       leads,
+    };
+  }
+
+  async approveContactRecoveryItem(
+    id: string,
+    approvedByUserId: string,
+  ): Promise<{ leadId: string; businessName: string }> {
+    // 1. Find the recovery item with its business and best candidate
+    const recoveryItem = await prisma.contactRecoveryItem.findUnique({
+      where: { id },
+      include: {
+        business: true,
+      },
+    });
+
+    if (!recoveryItem) {
+      throw new DiscoveryAdminNotFoundError(`Contact recovery item ${id} not found`);
+    }
+
+    if (recoveryItem.status !== 'OPEN') {
+      throw new DiscoveryAdminBadRequestError(
+        `Recovery item is ${recoveryItem.status}, only OPEN items can be approved`,
+      );
+    }
+
+    // 2. Get the snapshot data (contains topCandidates with contact info)
+    const snapshot = recoveryItem.recoverySnapshot as Record<string, unknown> | null;
+    const topCandidates = (snapshot?.topCandidates ?? []) as Array<{
+      name: string;
+      email?: string | null;
+      phone?: string | null;
+      title?: string | null;
+      seniority?: string | null;
+      linkedinUrl?: string | null;
+      isSendable?: boolean;
+    }>;
+
+    // Pick the best candidate: prefer one with a sendable email
+    const bestCandidate = topCandidates.find((c) => c.isSendable && c.email)
+      ?? topCandidates[0]
+      ?? null;
+
+    // Extract name parts from candidate
+    const candidateName = bestCandidate?.name ?? '';
+    const nameParts = candidateName.split(/\s+/);
+    const firstName = nameParts[0] ?? 'Unknown';
+    const lastName = nameParts.slice(1).join(' ') || null;
+    const email = bestCandidate?.email ?? null;
+    const phone = bestCandidate?.phone ?? null;
+
+    // Generate a unique email if none available (required field)
+    const leadEmail = email ?? `recovery-${recoveryItem.id.slice(0, 8)}@placeholder.local`;
+
+    // 3. Create the lead in a transaction, mark recovery item as approved
+    const lead = await prisma.$transaction(async (tx) => {
+      // Create lead from recovery business + candidate data
+      const newLead = await tx.lead.create({
+        data: {
+          firstName,
+          lastName: lastName ?? '',
+          email: leadEmail,
+          phone: phone ?? null,
+          status: 'qualified',
+          source: 'RECOVERY_APPROVED',
+          businessId: recoveryItem.businessId,
+          enrichmentData: JSON.parse(JSON.stringify({
+            companyName: recoveryItem.business.name,
+            title: bestCandidate?.title ?? null,
+            seniority: bestCandidate?.seniority ?? null,
+            linkedinUrl: bestCandidate?.linkedinUrl ?? null,
+            recoveryItemId: recoveryItem.id,
+            approvedBy: approvedByUserId,
+          })) as Prisma.InputJsonValue,
+        },
+      });
+
+      // Mark recovery item as approved (use REJECTED status with note in rejectedBy)
+      await tx.contactRecoveryItem.update({
+        where: { id },
+        data: {
+          status: 'REJECTED',
+          rejectedAt: new Date(),
+          rejectedBy: `APPROVED:${approvedByUserId}`,
+        },
+      });
+
+      return newLead;
+    });
+
+    return {
+      leadId: lead.id,
+      businessName: recoveryItem.business.name,
     };
   }
 }

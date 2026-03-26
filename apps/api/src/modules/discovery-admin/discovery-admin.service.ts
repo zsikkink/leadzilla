@@ -58,6 +58,10 @@ export interface DiscoveryAdminService {
     requestedByUserId?: string | undefined,
   ): Promise<CancelDiscoveryRunResult>;
   getDiscoveryRunDetail(id: string): Promise<Awaited<ReturnType<DiscoveryAdminRepository['getDiscoveryRunDetail']>>>;
+  approveContactRecoveryItem(
+    id: string,
+    approvedByUserId: string,
+  ): Promise<{ leadId: string; businessName: string }>;
 }
 
 export function buildDiscoveryAdminService(
@@ -115,6 +119,9 @@ export function buildDiscoveryAdminService(
     },
     async getDiscoveryRunDetail(id) {
       return repository.getDiscoveryRunDetail(id);
+    },
+    async approveContactRecoveryItem(id, approvedByUserId) {
+      return repository.approveContactRecoveryItem(id, approvedByUserId);
     },
   };
 }
