@@ -254,6 +254,18 @@ function DismissDialog({
   );
 }
 
+// ── Actionable types — these can be auto-applied via the system
+// ADJUST_THRESHOLD: changes scoring threshold value
+// ADJUST_WEIGHT: changes a feature weight value
+// DISABLE_FEATURE: sets a feature weight to 0
+// Non-actionable types (PAUSE_ICP, INCREASE_VOLUME, SWITCH_SOURCE, PREFER_VARIANT)
+// require manual human action and cannot be auto-applied
+const ACTIONABLE_RECOMMENDATION_TYPES = new Set([
+  'ADJUST_THRESHOLD',
+  'ADJUST_WEIGHT',
+  'DISABLE_FEATURE',
+]);
+
 // ── Single recommendation card ──────────────────────────────
 function RecommendationCard({
   rec,
@@ -381,14 +393,20 @@ function RecommendationCard({
                   <X className="h-3 w-3" />
                   Dismiss
                 </Button>
-                <Button
-                  size="xs"
-                  className="bg-zbooni-green/15 text-zbooni-green hover:bg-zbooni-green/25"
-                  onClick={handleApply}
-                >
-                  <Check className="h-3 w-3" />
-                  Apply
-                </Button>
+                {ACTIONABLE_RECOMMENDATION_TYPES.has(rec.type) ? (
+                  <Button
+                    size="xs"
+                    className="bg-zbooni-green/15 text-zbooni-green hover:bg-zbooni-green/25"
+                    onClick={handleApply}
+                  >
+                    <Check className="h-3 w-3" />
+                    Apply
+                  </Button>
+                ) : (
+                  <span className="text-[10px] font-medium text-muted-foreground/40 italic">
+                    Manual action required
+                  </span>
+                )}
               </>
             ) : (
               <Button
