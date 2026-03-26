@@ -316,19 +316,12 @@ export async function handleApolloEnrichJob(
     });
   };
 
-  // Call Apollo to reveal contact data (1 export credit)
+  // Call Apollo to reveal contact data via mixed_people/search (FREE endpoint — no export credit consumed)
   const apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
 
-  // Track Apollo cost event — ~$0.02/call based on Apollo pricing audit
-  await prisma.discoveryCostEvent.create({
-    data: {
-      discoveryRunId: runId,
-      provider: 'APOLLO',
-      costCents: 2,
-      apiCallType: 'post_score_enrich',
-      leadId,
-    },
-  });
+  // NOTE: searchContactsByDomain hits Apollo's mixed_people/search endpoint which is FREE.
+  // No cost event is recorded here. Paid Apollo credits (people/match reveal) are tracked
+  // in business.convert.job.ts where the actual export credit is consumed.
 
   if (apolloResult.status !== 'success' || apolloResult.contacts.length === 0) {
     await markAttemptCompleted();
