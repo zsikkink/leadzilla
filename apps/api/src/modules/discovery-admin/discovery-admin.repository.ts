@@ -11,7 +11,7 @@ import type {
   ListJobRunsResponse,
   MessageSendStatus,
 } from '@lead-flood/contracts';
-import { prisma, type Prisma } from '@lead-flood/db';
+import { PrismaRuntime, prisma, type Prisma } from '@lead-flood/db';
 
 import { DiscoveryAdminBadRequestError, DiscoveryAdminNotFoundError } from './discovery-admin.errors.js';
 
@@ -1355,6 +1355,15 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
       );
     }
 
+    // Guard: business may have been deleted since the recovery item was created
+    if (!recoveryItem.business) {
+      throw new DiscoveryAdminBadRequestError(
+        'Business for this recovery item no longer exists',
+      );
+    }
+
+    const business = recoveryItem.business;
+
     // 2. Get the snapshot data (contains topCandidates with contact info)
     const snapshot = recoveryItem.recoverySnapshot as Record<string, unknown> | null;
     const topCandidates = (snapshot?.topCandidates ?? []) as Array<{
@@ -1380,48 +1389,76 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
     const email = bestCandidate?.email ?? null;
     const phone = bestCandidate?.phone ?? null;
 
-    // Generate a unique email if none available (required field)
-    const leadEmail = email ?? `recovery-${recoveryItem.id.slice(0, 8)}@placeholder.local`;
+    // Use full UUID to guarantee uniqueness when no real email available
+    const leadEmail = email ?? `recovery-${recoveryItem.id}@placeholder.local`;
 
     // 3. Create the lead in a transaction, mark recovery item as approved
-    const lead = await prisma.$transaction(async (tx) => {
-      // Create lead from recovery business + candidate data
-      const newLead = await tx.lead.create({
-        data: {
-          firstName,
-          lastName: lastName ?? '',
-          email: leadEmail,
-          phone: phone ?? null,
-          status: 'qualified',
-          source: 'RECOVERY_APPROVED',
-          businessId: recoveryItem.businessId,
-          enrichmentData: JSON.parse(JSON.stringify({
-            companyName: recoveryItem.business.name,
-            title: bestCandidate?.title ?? null,
-            seniority: bestCandidate?.seniority ?? null,
-            linkedinUrl: bestCandidate?.linkedinUrl ?? null,
-            recoveryItemId: recoveryItem.id,
-            approvedBy: approvedByUserId,
-          })) as Prisma.InputJsonValue,
-        },
+    try {
+      const lead = await prisma.$transaction(async (tx) => {
+        // Create lead from recovery business + candidate data
+        const newLead = await tx.lead.create({
+          data: {
+            firstName,
+            lastName: lastName ?? '',
+            email: leadEmail,
+            phone: phone ?? null,
+            status: 'qualified',
+            source: 'RECOVERY_APPROVED',
+            businessId: recoveryItem.businessId,
+            enrichmentData: JSON.parse(JSON.stringify({
+              companyName: business.name,
+              title: bestCandidate?.title ?? null,
+              seniority: bestCandidate?.seniority ?? null,
+              linkedinUrl: bestCandidate?.linkedinUrl ?? null,
+              recoveryItemId: recoveryItem.id,
+              approvedBy: approvedByUserId,
+            })) as Prisma.InputJsonValue,
+          },
+        });
+
+        // Mark recovery item as approved (use REJECTED status with note in rejectedBy)
+        await tx.contactRecoveryItem.update({
+          where: { id },
+          data: {
+            status: 'REJECTED',
+            rejectedAt: new Date(),
+            rejectedBy: `APPROVED:${approvedByUserId}`,
+          },
+        });
+
+        return newLead;
       });
 
-      // Mark recovery item as approved (use REJECTED status with note in rejectedBy)
-      await tx.contactRecoveryItem.update({
-        where: { id },
-        data: {
-          status: 'REJECTED',
-          rejectedAt: new Date(),
-          rejectedBy: `APPROVED:${approvedByUserId}`,
-        },
-      });
+      return {
+        leadId: lead.id,
+        businessName: business.name,
+      };
+    } catch (error: unknown) {
+      // P2002 = unique constraint violation — candidate's email already exists as a lead
+      if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const existingLead = await prisma.lead.findFirst({
+          where: { email: leadEmail },
+          select: { id: true },
+        });
 
-      return newLead;
-    });
+        if (existingLead) {
+          // Still mark the recovery item as approved so it doesn't stay OPEN
+          await prisma.contactRecoveryItem.update({
+            where: { id },
+            data: {
+              status: 'REJECTED',
+              rejectedAt: new Date(),
+              rejectedBy: `APPROVED:${approvedByUserId}`,
+            },
+          });
 
-    return {
-      leadId: lead.id,
-      businessName: recoveryItem.business.name,
-    };
+          return {
+            leadId: existingLead.id,
+            businessName: business.name,
+          };
+        }
+      }
+      throw error;
+    }
   }
 }

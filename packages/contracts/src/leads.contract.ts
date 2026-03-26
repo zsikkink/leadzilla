@@ -129,6 +129,7 @@ export const ListLeadsQuerySchema = z
     scoreBand: LeadScoreBandSchema.optional(),
     minBlendedScore: z.coerce.number().min(0).max(1).optional(),
     includeRejected: z.coerce.boolean().default(false).optional(),
+    search: z.string().max(200).optional(),
     from: z.string().datetime().optional(),
     to: z.string().datetime().optional(),
     includeQualityMetrics: z.coerce.boolean().default(false),

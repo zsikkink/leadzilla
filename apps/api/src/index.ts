@@ -998,6 +998,7 @@ async function main(): Promise<void> {
       return true;
     },
     listLeads: async (query) => {
+      try {
       const where: Prisma.LeadWhereInput = {
         deletedAt: null,
         // Exclude rejected leads by default unless includeRejected is true
@@ -1032,6 +1033,22 @@ async function main(): Promise<void> {
               },
             }
           : {}),
+        // Search filter: match firstName, lastName, or email (case-insensitive)
+        ...(query.search
+          ? {
+              AND: [
+                {
+                  OR: [
+                    { firstName: { contains: query.search, mode: 'insensitive' as const } },
+                    { lastName: { contains: query.search, mode: 'insensitive' as const } },
+                    { email: { contains: query.search, mode: 'insensitive' as const } },
+                    { business: { name: { contains: query.search, mode: 'insensitive' as const } } },
+                    { business: { category: { contains: query.search, mode: 'insensitive' as const } } },
+                  ],
+                },
+              ],
+            }
+          : {}),
       };
 
       const [total, rows] = await Promise.all([
@@ -1062,7 +1079,7 @@ async function main(): Promise<void> {
               take: 1,
             },
             business: {
-              select: { countryCode: true, country: true, city: true, category: true },
+              select: { countryCode: true, country: true, city: true, category: true, name: true },
             },
           },
         }),
@@ -1155,6 +1172,17 @@ async function main(): Promise<void> {
         pageSize: query.pageSize,
         total,
       };
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        logger.error({ error: message }, 'listLeads query failed — returning empty result');
+        return {
+          items: [],
+          qualityMetrics: undefined,
+          page: query.page,
+          pageSize: query.pageSize,
+          total: 0,
+        };
+      }
     },
     listContactRecoveryItems: async (query: ListContactRecoveryItemsQuery): Promise<ListContactRecoveryItemsResponse> => {
       const where: Prisma.ContactRecoveryItemWhereInput = {
@@ -1263,11 +1291,41 @@ async function main(): Promise<void> {
     rejectContactRecoveryItem: async ({ id, rejectedBy, reason }): Promise<ContactRecoveryDetailResponse | null> => {
       const existing = await prisma.contactRecoveryItem.findUnique({
         where: { id },
-        select: { id: true, recoverySnapshot: true },
+        select: { id: true, status: true, recoverySnapshot: true },
       });
 
       if (!existing) {
         return null;
+      }
+
+      // Already rejected (or approved via REJECTED+APPROVED: prefix) — skip re-rejection
+      if (existing.status !== 'OPEN') {
+        // Return the current state instead of re-rejecting
+        const current = await prisma.contactRecoveryItem.findUnique({
+          where: { id },
+          include: {
+            business: {
+              select: {
+                id: true,
+                name: true,
+                city: true,
+                country: true,
+                countryCode: true,
+                websiteDomain: true,
+                instagramHandle: true,
+                category: true,
+                deterministicScore: true,
+                scoreBand: true,
+                preQualified: true,
+                disqualificationReason: true,
+              },
+            },
+            icpProfile: {
+              select: { name: true },
+            },
+          },
+        });
+        return current ? mapContactRecoveryItem(current) : null;
       }
 
       const snapshotObject =

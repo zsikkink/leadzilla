@@ -254,7 +254,12 @@ export default function LeadsPage() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Build the API query with score filter
+  // Reset to page 1 when search query changes
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch]);
+
+  // Build the API query with score filter and search
   const leads = useApiQuery(
     useCallback(
       () =>
@@ -264,10 +269,11 @@ export default function LeadsPage() {
           includeQualityMetrics: false,
           ...(statusFilter ? { status: statusFilter } : {}),
           ...(scoreBandFilter ? { scoreBand: scoreBandFilter } : {}),
+          ...(debouncedSearch ? { search: debouncedSearch } : {}),
         }),
-      [apiClient, page, pageSize, statusFilter, scoreBandFilter],
+      [apiClient, page, pageSize, statusFilter, scoreBandFilter, debouncedSearch],
     ),
-    [page, pageSize, statusFilter, scoreBandFilter],
+    [page, pageSize, statusFilter, scoreBandFilter, debouncedSearch],
   );
 
   const totalPages = leads.data ? Math.ceil(leads.data.total / leads.data.pageSize) : 0;
@@ -519,18 +525,7 @@ export default function LeadsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(leads.data?.items ?? []).filter((lead) => {
-                    if (!debouncedSearch) return true;
-                    const q = debouncedSearch.toLowerCase();
-                    const enrichment = lead.latestEnrichmentNormalizedPayload ?? lead.latestEnrichmentRawPayload;
-                    const company = extractCompanyName(enrichment) ?? lead.businessCategory;
-                    return (
-                      (lead.firstName?.toLowerCase().includes(q)) ||
-                      (lead.lastName?.toLowerCase().includes(q)) ||
-                      (lead.email?.toLowerCase().includes(q)) ||
-                      (company?.toLowerCase().includes(q))
-                    );
-                  }).map((lead) => {
+                  {(leads.data?.items ?? []).map((lead) => {
                     const enrichmentRaw = lead.latestEnrichmentNormalizedPayload ?? lead.latestEnrichmentRawPayload;
                     const blendedScore = lead.latestBlendedScore ?? extractBlendedScore(enrichmentRaw);
                     // A2: Extract company and position from enrichment data

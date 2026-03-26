@@ -32,6 +32,11 @@ Quality: `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
 - **Ripple-effect check**: Before completing any change, ask: "What other components/pages display the same data or are affected by this change?" Check sibling pages, shared components, API consumers, and settings displays. Don't just make the change — think about what it touches.
 - **Supabase must be running**: API and Worker connect to Supabase at `:54322`, NOT the Docker postgres at `:5434`. Run `supabase status` to verify. If dead, `supabase start` before doing anything.
 
+## Parallel Execution — Worktree Freshness (NEVER SKIP)
+- **Squash merge commits before launching parallel sessions.** Long merge chains from prior parallel runs cause worktree tools to branch from old ancestors, guaranteeing merge conflicts.
+- **Verify worktree base matches HEAD** after creation. If >5 commits behind, abort and recreate.
+- **Commit or stash all changes** before launching worktree agents. Uncommitted changes won't exist in the worktrees.
+
 ## Parallel Execution — Mandatory Evaluator Gate (NEVER SKIP)
 - **NEVER merge a parallel session branch without running an adversarial-evaluator agent on it first.** This is NOT optional. This is NOT a suggestion. Skipping it is a protocol violation.
 - **Sequence:** Session completes → Evaluator reviews every task PASS/FAIL with evidence → Rework if ANY task fails → Loop until ALL tasks pass → THEN merge.

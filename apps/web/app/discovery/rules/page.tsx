@@ -1019,7 +1019,7 @@ export default function ICPRulesPage() {
                         </div>
                         <p className="mt-1 font-mono text-xs text-muted-foreground">
                           <span className="text-foreground/80">{featureLabel(rule.fieldKey)}</span>{' '}
-                          <span className="text-slate-500">{OPERATOR_LABELS[rule.operator] ?? rule.operator}</span>{' '}
+                          <span className="text-slate-500">{rule.operator}</span>{' '}
                           <span className="text-foreground">{formatValue(rule.valueJson)}</span>
                         </p>
                       </div>
@@ -1086,7 +1086,7 @@ export default function ICPRulesPage() {
                         </div>
                         <p className="mt-1 font-mono text-xs text-muted-foreground">
                           <span className="text-foreground/80">{featureLabel(rule.fieldKey)}</span>{' '}
-                          <span className="text-slate-500">{OPERATOR_LABELS[rule.operator] ?? rule.operator}</span>{' '}
+                          <span className="text-slate-500">{rule.operator}</span>{' '}
                           <span className="text-foreground">{formatValue(rule.valueJson)}</span>
                         </p>
                       </div>
@@ -1153,7 +1153,7 @@ export default function ICPRulesPage() {
                         </div>
                         <p className="mt-1 font-mono text-xs text-muted-foreground">
                           <span className="text-foreground/80">{featureLabel(rule.fieldKey)}</span>{' '}
-                          <span className="text-slate-500">{OPERATOR_LABELS[rule.operator] ?? rule.operator}</span>{' '}
+                          <span className="text-slate-500">{rule.operator}</span>{' '}
                           <span className="text-foreground">{formatValue(rule.valueJson)}</span>
                         </p>
                       </div>

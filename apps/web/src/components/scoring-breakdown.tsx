@@ -252,7 +252,11 @@ export function ScoringBreakdown({
         {detPct !== null && (
           <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
-              Rule-Based
+              {!latestScore?.reasonsJson?.usedTrainedModel
+                ? 'Score (100% Rule-Based)'
+                : blendWeights
+                  ? `Rule-Based (${Math.round(blendWeights.deterministic * 100)}%)`
+                  : 'Rule-Based'}
             </p>
             <p className="mt-0.5 text-lg font-bold tabular-nums">{detPct}%</p>
           </div>
