@@ -32,7 +32,8 @@ export interface ManagerAnalyzeLogger {
 }
 
 const POSITIVE_EVENT_TYPES = ['REPLIED', 'MEETING_BOOKED', 'DEAL_WON'] as const;
-const NEGATIVE_EVENT_TYPES = ['BOUNCED', 'UNSUBSCRIBED'] as const;
+// NOT_INTERESTED replaces UNSUBSCRIBED (Phase 0 migration). Cast until Prisma regenerated.
+const NEGATIVE_EVENT_TYPES = ['BOUNCED', 'NOT_INTERESTED'] as unknown as readonly ['BOUNCED', 'UNSUBSCRIBED'];
 
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -139,7 +140,7 @@ async function computeIcpBreakdown(
         prisma.feedbackEvent.count({
           where: {
             occurredAt: { gte: weekStart, lt: weekEnd },
-            eventType: { in: ['BOUNCED', 'UNSUBSCRIBED'] },
+            eventType: { in: ['BOUNCED', 'NOT_INTERESTED'] as unknown as ('BOUNCED' | 'UNSUBSCRIBED')[] },
             messageSend: { messageDraft: { icpProfileId: icp.id } },
           },
         }),

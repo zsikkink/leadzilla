@@ -7,7 +7,6 @@ import type { Job, SendOptions } from 'pg-boss';
 import { RetryableError, classifyError } from '../errors.js';
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
 import {
-  getMessagingInstructions,
   getMessagingRole,
   getMessagingSystemPrompt,
   isManualApprovalOnlyEnabled,
@@ -561,19 +560,22 @@ export async function handleMessageGenerateJob(
     if (messageContext.teamSignal) intelligenceParts.push(`Team: ${messageContext.teamSignal}`);
     const businessIntelligence = intelligenceParts.length > 0 ? intelligenceParts.join('\n') : null;
 
-    // Load custom messaging settings from PipelineSetting (role, system prompt, instructions)
-    const [roleSetting, systemPromptSetting, instrSetting] = await Promise.all([
+    // Load custom messaging settings from PipelineSetting (role, system prompt)
+    const [roleSetting, systemPromptSetting] = await Promise.all([
       getMessagingRole(),
       getMessagingSystemPrompt(),
-      getMessagingInstructions(),
     ]);
     const customRole = roleSetting;
     const customSystemPrompt = systemPromptSetting;
-    const messagingInstructions = instrSetting;
 
-    // Extract ICP sales hook + angle from metadataJson
+    // Extract ICP metadata (sales hook, angle, messaging instructions)
     const icpMetadata = icpProfile?.metadataJson && typeof icpProfile.metadataJson === 'object'
       ? icpProfile.metadataJson as Record<string, unknown>
+      : null;
+
+    // Per-ICP messaging instructions from ICP metadataJson (Session A writes UI, we read)
+    const messagingInstructions = typeof icpMetadata?.messagingInstructions === 'string'
+      ? (icpMetadata.messagingInstructions.trim().length > 0 ? icpMetadata.messagingInstructions.trim() : null)
       : null;
     const icpHook = typeof icpMetadata?.salesHook === 'string'
       ? icpMetadata.salesHook
