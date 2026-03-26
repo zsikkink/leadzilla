@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import type { AdminListSearchTasksQuery, AdminListSearchTasksResponse } from '@lead-flood/contracts';
 
+import { CustomSelect } from '../../../src/components/custom-select.js';
 import {
   fetchAdminSearchTasks,
   queryFromSearchTaskFilters,
@@ -64,70 +65,72 @@ export default function SearchTasksPage() {
       <p className="muted">Inspect frontier tasks, request params, state transitions, and errors.</p>
       {/* Live updates control disabled for now. */}
 
-      <div className="filters" style={{ marginTop: 10 }}>
-        <label>
-          Status
-          <select
+      <div className="filters" style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end' }}>
+        <div>
+          <span className="muted" style={{ display: 'block', marginBottom: 4, fontSize: 12, fontWeight: 600 }}>Status</span>
+          <CustomSelect
             value={query.status ?? ''}
-            onChange={(event) =>
+            onChange={(val) =>
               setQuery((prev) => ({
                 ...prev,
                 page: 1,
-                status: event.target.value
-                  ? (event.target.value as AdminListSearchTasksQuery['status'])
-                  : undefined,
+                status: val ? (val as AdminListSearchTasksQuery['status']) : undefined,
               }))
             }
-          >
-            <option value="">Any</option>
-            <option value="PENDING">PENDING</option>
-            <option value="RUNNING">RUNNING</option>
-            <option value="DONE">DONE</option>
-            <option value="FAILED">FAILED</option>
-            <option value="SKIPPED">SKIPPED</option>
-          </select>
-        </label>
-        <label>
-          Task Type
-          <select
+            options={[
+              { value: '', label: 'Any' },
+              { value: 'PENDING', label: 'PENDING' },
+              { value: 'RUNNING', label: 'RUNNING' },
+              { value: 'DONE', label: 'DONE' },
+              { value: 'FAILED', label: 'FAILED' },
+              { value: 'SKIPPED', label: 'SKIPPED' },
+            ]}
+            placeholder="Any"
+          />
+        </div>
+        <div>
+          <span className="muted" style={{ display: 'block', marginBottom: 4, fontSize: 12, fontWeight: 600 }}>Task Type</span>
+          <CustomSelect
             value={query.taskType ?? ''}
-            onChange={(event) =>
+            onChange={(val) =>
               setQuery((prev) => ({
                 ...prev,
                 page: 1,
-                taskType: event.target.value
-                  ? (event.target.value as AdminListSearchTasksQuery['taskType'])
-                  : undefined,
+                taskType: val ? (val as AdminListSearchTasksQuery['taskType']) : undefined,
               }))
             }
-          >
-            <option value="">Any</option>
-            <option value="SERP_GOOGLE">SERP_GOOGLE</option>
-            <option value="SERP_GOOGLE_LOCAL">SERP_GOOGLE_LOCAL</option>
-            <option value="SERP_MAPS_LOCAL">SERP_MAPS_LOCAL</option>
-          </select>
-        </label>
-        <label>
-          Country
-          <select
+            options={[
+              { value: '', label: 'Any' },
+              { value: 'SERP_GOOGLE', label: 'SERP_GOOGLE' },
+              { value: 'SERP_GOOGLE_LOCAL', label: 'SERP_GOOGLE_LOCAL' },
+              { value: 'SERP_MAPS_LOCAL', label: 'SERP_MAPS_LOCAL' },
+            ]}
+            placeholder="Any"
+          />
+        </div>
+        <div>
+          <span className="muted" style={{ display: 'block', marginBottom: 4, fontSize: 12, fontWeight: 600 }}>Country</span>
+          <CustomSelect
             value={query.countryCode ?? ''}
-            onChange={(event) =>
+            onChange={(val) =>
               setQuery((prev) => ({
                 ...prev,
                 page: 1,
-                countryCode: event.target.value || undefined,
+                countryCode: val || undefined,
               }))
             }
-          >
-            <option value="">Any</option>
-            <option value="AE">AE</option>
-            <option value="SA">SA</option>
-            <option value="JO">JO</option>
-            <option value="EG">EG</option>
-          </select>
-        </label>
-        <label>
-          Time Bucket
+            options={[
+              { value: '', label: 'Any' },
+              { value: 'AE', label: 'AE' },
+              { value: 'SA', label: 'SA' },
+              { value: 'JO', label: 'JO' },
+              { value: 'EG', label: 'EG' },
+            ]}
+            placeholder="Any"
+          />
+        </div>
+        <div>
+          <span className="muted" style={{ display: 'block', marginBottom: 4, fontSize: 12, fontWeight: 600 }}>Time Bucket</span>
           <input
             value={query.timeBucket ?? ''}
             onChange={(event) =>
@@ -139,24 +142,26 @@ export default function SearchTasksPage() {
             }
             placeholder="2026-W08:small-validation"
           />
-        </label>
-        <label>
-          Sort
-          <select
-            value={query.sortBy}
-            onChange={(event) =>
+        </div>
+        <div>
+          <span className="muted" style={{ display: 'block', marginBottom: 4, fontSize: 12, fontWeight: 600 }}>Sort</span>
+          <CustomSelect
+            value={query.sortBy ?? 'updated_desc'}
+            onChange={(val) =>
               setQuery((prev) => ({
                 ...prev,
                 page: 1,
-                sortBy: event.target.value as AdminListSearchTasksQuery['sortBy'],
+                sortBy: val as AdminListSearchTasksQuery['sortBy'],
               }))
             }
-          >
-            <option value="updated_desc">Updated (desc)</option>
-            <option value="run_after_asc">Run after (asc)</option>
-            <option value="attempts_desc">Attempts (desc)</option>
-          </select>
-        </label>
+            options={[
+              { value: 'updated_desc', label: 'Updated (desc)' },
+              { value: 'run_after_asc', label: 'Run after (asc)' },
+              { value: 'attempts_desc', label: 'Attempts (desc)' },
+            ]}
+            placeholder="Sort by"
+          />
+        </div>
       </div>
 
       {error ? (

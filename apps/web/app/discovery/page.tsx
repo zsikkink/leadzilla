@@ -9,7 +9,6 @@ import {
   Inbox,
   Loader2,
   Mail,
-  MessageCircle,
   MessageSquare,
   RotateCcw,
   Save,
@@ -32,6 +31,7 @@ import {
   DEFAULT_MESSAGING_ROLE,
   DEFAULT_MESSAGING_SYSTEM_PROMPT,
 } from '../../src/lib/messaging-defaults.js';
+// NOTE: Global messagingInstructions removed — per-ICP instructions on ICP detail page are the canonical source.
 import { buildPipelineSettingsSavePlan } from '../../src/lib/pipeline-settings-save-plan.js';
 import { cn } from '../../src/lib/utils.js';
 
@@ -508,7 +508,6 @@ const ADDITIONAL_SETTING_LABELS: Record<string, string> = {
   auto_approve_score_max: 'Auto-Approve Max Score',
   messagingRole: 'Messaging Role',
   messagingSystemPrompt: 'Messaging System Prompt',
-  messagingInstructions: 'Messaging Instructions',
 };
 
 function getErrorMessage(error: unknown): string {
@@ -531,7 +530,6 @@ export default function ControlsSettingsPage() {
   const [autoApproveScoreMax, setAutoApproveScoreMax] = useState(1.0);
   const [messagingRole, setMessagingRole] = useState('');
   const [messagingSystemPrompt, setMessagingSystemPrompt] = useState('');
-  const [messagingInstructions, setMessagingInstructions] = useState('');
   const [hasChanges, setHasChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingSettings, setIsLoadingSettings] = useState(true);
@@ -551,7 +549,6 @@ export default function ControlsSettingsPage() {
       let nextAutoApproveScoreMax = 1.0;
       let nextMessagingRole = '';
       let nextMessagingSystemPrompt = '';
-      let nextMessagingInstructions = '';
 
       for (const item of items) {
         if (item.key === 'auto_approve_enabled') {
@@ -570,8 +567,6 @@ export default function ControlsSettingsPage() {
           nextMessagingRole = String(item.value ?? '');
         } else if (item.key === 'messagingSystemPrompt') {
           nextMessagingSystemPrompt = String(item.value ?? '');
-        } else if (item.key === 'messagingInstructions') {
-          nextMessagingInstructions = String(item.value ?? '');
         } else if (item.key === 'scoreTierBands') {
           const val = item.value as {
             low?: number | undefined;
@@ -599,7 +594,6 @@ export default function ControlsSettingsPage() {
       setAutoApproveScoreMax(nextAutoApproveScoreMax);
       setMessagingRole(nextMessagingRole);
       setMessagingSystemPrompt(nextMessagingSystemPrompt);
-      setMessagingInstructions(nextMessagingInstructions);
       setHasChanges(false);
       loadedSettingsRef.current = {
         ...newSettings,
@@ -608,7 +602,6 @@ export default function ControlsSettingsPage() {
         auto_approve_score_max: nextAutoApproveScoreMax,
         messagingRole: nextMessagingRole,
         messagingSystemPrompt: nextMessagingSystemPrompt,
-        messagingInstructions: nextMessagingInstructions,
       };
     } catch (error: unknown) {
       loadedSettingsRef.current = null;
@@ -666,7 +659,6 @@ export default function ControlsSettingsPage() {
       auto_approve_score_max: autoApproveScoreMax,
       messagingRole,
       messagingSystemPrompt,
-      messagingInstructions,
     };
 
     const saveTargets = buildPipelineSettingsSavePlan({
@@ -747,7 +739,6 @@ export default function ControlsSettingsPage() {
     autoApproveEnabled,
     autoApproveScoreMax,
     autoApproveScoreMin,
-    messagingInstructions,
     messagingRole,
     messagingSystemPrompt,
     settings,
@@ -760,7 +751,6 @@ export default function ControlsSettingsPage() {
     setAutoApproveScoreMax(1.0);
     setMessagingRole('');
     setMessagingSystemPrompt('');
-    setMessagingInstructions('');
     setHasChanges(true);
     toast.info('Settings reset to defaults — click Save to persist');
   }, []);
@@ -873,21 +863,23 @@ export default function ControlsSettingsPage() {
           icon={Zap}
           iconColor="text-zbooni-green"
           bgColor="bg-zbooni-green/10"
-          label="Provider Status Notes"
+          label="Pipeline Providers"
         >
           <div className="space-y-2">
-            <p className="text-[10px] font-medium text-muted-foreground/40">
-              Static reference only. Live provider probes are not wired on this screen.
-            </p>
-            {['SerpAPI', 'Hunter', 'Apollo'].map((provider) => (
-              <div key={provider} className="flex items-center justify-between">
-                <span className="text-[11px] font-medium text-muted-foreground/60">
-                  {provider}
-                </span>
-                <div className="flex items-center gap-1">
-                  <AlertTriangle className="h-3 w-3 text-muted-foreground/40" />
-                  <span className="text-[10px] font-semibold text-muted-foreground/40">Not probed here</span>
+            {[
+              { name: 'Google Places', desc: 'Business discovery', color: 'text-zbooni-teal' },
+              { name: 'Hunter', desc: 'Email lookup', color: 'text-yellow-400' },
+              { name: 'Apollo', desc: 'Contact enrichment', color: 'text-purple-400' },
+              { name: 'Brave Search', desc: 'Web search / DM lookup', color: 'text-blue-400' },
+            ].map((provider) => (
+              <div key={provider.name} className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <span className={`inline-block h-1.5 w-1.5 rounded-full ${provider.color} bg-current`} />
+                  <span className="text-[11px] font-medium text-muted-foreground/60">
+                    {provider.name}
+                  </span>
                 </div>
+                <span className="text-[10px] text-muted-foreground/40">{provider.desc}</span>
               </div>
             ))}
           </div>
@@ -1048,39 +1040,6 @@ export default function ControlsSettingsPage() {
               </button>
             </div>
           </div>
-        )}
-      </div>
-
-      {/* ── Messaging Instructions ────────────────────────────────────── */}
-      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-green/10">
-            <MessageCircle className="h-4 w-4 text-zbooni-green" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold tracking-tight">Messaging Instructions</h2>
-            <p className="text-[11px] text-muted-foreground/50">
-              Per-campaign tweaks appended after the system prompt (e.g. "Focus on hospitality ICPs this week")
-            </p>
-          </div>
-        </div>
-        {isLoadingSettings ? (
-          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground/50">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading saved instructions...
-          </div>
-        ) : (
-          <textarea
-            value={messagingInstructions}
-            onChange={(e) => {
-              setMessagingInstructions(e.target.value);
-              setHasChanges(true);
-            }}
-            rows={6}
-            placeholder="Enter per-campaign instructions appended after the system prompt. Example: 'Always mention our payment link feature this week. Focus on hospitality ICPs. Reference UAE market growth.'"
-            className="w-full resize-y rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none"
-            aria-label="Messaging Instructions"
-          />
         )}
       </div>
 

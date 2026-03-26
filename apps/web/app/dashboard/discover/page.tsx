@@ -743,37 +743,77 @@ export default function DiscoverPage() {
             const searchBudget = Math.ceil(desiredLeads / avgLeadRate * 1.5);
             // ~50% of discovered businesses pass prequalification and reach Hunter
             const hunterLookups = Math.ceil(searchBudget * 0.5);
+            // ~30% of qualified leads get Apollo enrichment (HIGH score band)
+            const apolloReveals = Math.ceil(desiredLeads * 0.3);
+            // Brave web search: ~1 search per business that reaches contact discovery (~60% of prequalified)
+            const braveSearches = Math.ceil(searchBudget * 0.3);
             const estLeads = desiredLeads;
-            // Dollar cost: Google Places $0.01/search, Hunter $0.03/lookup (Starter plan: 2000 credits @ ~$49)
+            // Dollar cost per provider:
+            // Google Places: $0.01/search task
+            // Hunter: $0.03/lookup (Starter plan: 2000 credits @ ~$49)
+            // Apollo: $0.05/reveal (Professional plan pricing)
+            // Brave: $0.005/search (Search API pricing)
             const googlePlacesCost = searchBudget * 0.01;
             const hunterCost = hunterLookups * 0.03;
-            const totalCost = googlePlacesCost + hunterCost;
+            const apolloCost = apolloReveals * 0.05;
+            const braveCost = braveSearches * 0.005;
+            const totalCost = googlePlacesCost + hunterCost + apolloCost + braveCost;
             return (
-              <div className="rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 px-4 py-3">
-                <div className="flex items-center gap-2 mb-2">
-                  <TrendingUp className="h-3.5 w-3.5 text-zbooni-teal" />
-                  <span className="text-xs font-semibold text-zbooni-teal">Cost Estimate</span>
+              <div className="rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 px-4 py-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <TrendingUp className="h-4 w-4 text-zbooni-teal" />
+                  <span className="text-sm font-semibold text-zbooni-teal">Cost Estimate</span>
                   {!hasHistoricalData ? (
-                    <span className="text-[10px] text-muted-foreground/50">(using default estimate)</span>
-                  ) : null}
+                    <span className="text-[10px] text-muted-foreground/50">(using default rates)</span>
+                  ) : (
+                    <span className="text-[10px] text-zbooni-green/60">(based on historical data)</span>
+                  )}
                 </div>
-                <div className="space-y-1.5">
-                  <p className="text-sm text-muted-foreground">
-                    ~<strong className="text-foreground">{searchBudget}</strong> search tasks
-                    {' + ~'}<strong className="text-foreground">{hunterLookups}</strong> Hunter lookups
-                    {' → est. '}<strong className="text-zbooni-green">{estLeads}</strong> leads
-                    {hasHistoricalData ? (
-                      <span className="text-muted-foreground/60">
-                        {' '}(based on {(avgLeadRate * 100).toFixed(1)}% lead rate)
-                      </span>
-                    ) : null}
-                  </p>
-                  <p className="text-xs text-muted-foreground/70">
-                    Est. cost: <strong className="text-foreground">~${totalCost.toFixed(2)}</strong>
-                    <span className="text-muted-foreground/50">
-                      {' '}(Google Places ${googlePlacesCost.toFixed(2)} + Hunter ${hunterCost.toFixed(2)})
+                {/* Summary */}
+                <p className="text-sm text-muted-foreground mb-3">
+                  ~<strong className="text-foreground">{searchBudget}</strong> search tasks
+                  {' → est. '}<strong className="text-zbooni-green">{estLeads}</strong> leads
+                  {hasHistoricalData ? (
+                    <span className="text-muted-foreground/60">
+                      {' '}({(avgLeadRate * 100).toFixed(1)}% lead rate)
                     </span>
-                  </p>
+                  ) : null}
+                </p>
+                {/* Per-provider breakdown */}
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="flex items-center justify-between rounded-lg bg-zbooni-dark/20 px-2.5 py-1.5">
+                    <span className="text-muted-foreground/70">Google Places</span>
+                    <div className="text-right">
+                      <span className="font-mono font-semibold text-foreground">${googlePlacesCost.toFixed(2)}</span>
+                      <span className="ml-1 text-[10px] text-muted-foreground/40">({searchBudget} searches)</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg bg-zbooni-dark/20 px-2.5 py-1.5">
+                    <span className="text-muted-foreground/70">Hunter</span>
+                    <div className="text-right">
+                      <span className="font-mono font-semibold text-foreground">${hunterCost.toFixed(2)}</span>
+                      <span className="ml-1 text-[10px] text-muted-foreground/40">({hunterLookups} lookups)</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg bg-zbooni-dark/20 px-2.5 py-1.5">
+                    <span className="text-muted-foreground/70">Apollo</span>
+                    <div className="text-right">
+                      <span className="font-mono font-semibold text-foreground">${apolloCost.toFixed(2)}</span>
+                      <span className="ml-1 text-[10px] text-muted-foreground/40">({apolloReveals} reveals)</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg bg-zbooni-dark/20 px-2.5 py-1.5">
+                    <span className="text-muted-foreground/70">Brave Search</span>
+                    <div className="text-right">
+                      <span className="font-mono font-semibold text-foreground">${braveCost.toFixed(2)}</span>
+                      <span className="ml-1 text-[10px] text-muted-foreground/40">({braveSearches} searches)</span>
+                    </div>
+                  </div>
+                </div>
+                {/* Total */}
+                <div className="mt-3 flex items-center justify-between rounded-lg border border-zbooni-teal/20 bg-zbooni-teal/5 px-3 py-2">
+                  <span className="text-xs font-semibold text-muted-foreground">Total estimated cost</span>
+                  <span className="font-mono text-sm font-bold text-foreground">~${totalCost.toFixed(2)}</span>
                 </div>
               </div>
             );

@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { CustomSelect } from '@/components/custom-select.js';
 import { cn } from '@/lib/utils.js';
 import { getWebEnv } from '@/lib/env.js';
 import { useAuth } from '@/hooks/use-auth.js';
@@ -934,17 +935,15 @@ export default function ICPRulesPage() {
               {/* ── 1. Hard Filters ── */}
               <p className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-red-400/60">Hard Filters</p>
               <div className="form-grid mt-2">
-                <label>
-                  Country
-                  <select
+                <div>
+                  <span className="mb-1 block text-xs font-semibold">Country</span>
+                  <CustomSelect
                     value={simForm.country}
-                    onChange={(e) => setSimForm((prev) => ({ ...prev, country: e.target.value }))}
-                  >
-                    {COUNTRY_OPTIONS.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </label>
+                    onChange={(val) => setSimForm((prev) => ({ ...prev, country: val }))}
+                    options={COUNTRY_OPTIONS.map((c) => ({ value: c, label: c }))}
+                    placeholder="Select country"
+                  />
+                </div>
                 <label>
                   Data Alignment Score
                   <div className="flex items-center gap-2">
@@ -1367,46 +1366,45 @@ export default function ICPRulesPage() {
                     className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                   />
                 </label>
-                <label className="text-xs">
+                <div className="text-xs">
                   <span className="mb-1 block font-semibold text-muted-foreground/70">Feature Key</span>
-                  <select
+                  <CustomSelect
                     value={currentRule.fieldKey}
-                    onChange={(e) => setCurrentRule((prev) => ({ ...prev, fieldKey: e.target.value }))}
-                    className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  >
-                    {availableFieldKeys.length === 0 ? (
-                      <option value="">No keys available</option>
-                    ) : null}
-                    {availableFieldKeys.map((k) => (
-                      <option key={k} value={k}>{k}</option>
-                    ))}
-                  </select>
-                </label>
+                    onChange={(val) => setCurrentRule((prev) => ({ ...prev, fieldKey: val }))}
+                    options={
+                      availableFieldKeys.length === 0
+                        ? [{ value: '', label: 'No keys available' }]
+                        : availableFieldKeys.map((k) => ({ value: k, label: k }))
+                    }
+                    placeholder="Select key"
+                    className="w-full"
+                  />
+                </div>
               </div>
               <div className="grid grid-cols-3 gap-3">
-                <label className="text-xs">
+                <div className="text-xs">
                   <span className="mb-1 block font-semibold text-muted-foreground/70">Rule Type</span>
-                  <select
+                  <CustomSelect
                     value={currentRule.ruleType}
-                    onChange={(e) => setCurrentRule((prev) => ({ ...prev, ruleType: e.target.value as 'WEIGHTED' | 'HARD_FILTER' }))}
-                    className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  >
-                    <option value="WEIGHTED">Weighted</option>
-                    <option value="HARD_FILTER">Hard Filter</option>
-                  </select>
-                </label>
-                <label className="text-xs">
+                    onChange={(val) => setCurrentRule((prev) => ({ ...prev, ruleType: val as 'WEIGHTED' | 'HARD_FILTER' }))}
+                    options={[
+                      { value: 'WEIGHTED', label: 'Weighted' },
+                      { value: 'HARD_FILTER', label: 'Hard Filter' },
+                    ]}
+                    placeholder="Type"
+                    className="w-full"
+                  />
+                </div>
+                <div className="text-xs">
                   <span className="mb-1 block font-semibold text-muted-foreground/70">Operator</span>
-                  <select
+                  <CustomSelect
                     value={currentRule.operator}
-                    onChange={(e) => setCurrentRule((prev) => ({ ...prev, operator: e.target.value }))}
-                    className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  >
-                    {OPERATORS.map((op) => (
-                      <option key={op} value={op}>{op}</option>
-                    ))}
-                  </select>
-                </label>
+                    onChange={(val) => setCurrentRule((prev) => ({ ...prev, operator: val }))}
+                    options={OPERATORS.map((op) => ({ value: op, label: op }))}
+                    placeholder="Operator"
+                    className="w-full"
+                  />
+                </div>
                 <label className="text-xs">
                   <span className="mb-1 block font-semibold text-muted-foreground/70">Expected Value</span>
                   <input
