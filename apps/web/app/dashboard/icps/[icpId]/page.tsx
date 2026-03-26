@@ -29,6 +29,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
+import { CustomSelect } from '../../../../src/components/custom-select.js';
 import { MENA_COUNTRIES } from '../../../../src/lib/countries.js';
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
@@ -297,17 +298,13 @@ function CountrySelector({
       {editing ? (
         <div className="mt-2 space-y-2">
           {available.length > 0 ? (
-            <select
+            <CustomSelect
               value=""
-              onChange={(e) => { add(e.target.value); e.target.value = ''; }}
-              className="h-7 w-48 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-xs focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-              disabled={isSaving}
-            >
-              <option value="" disabled>Add country...</option>
-              {available.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
+              onChange={(val) => { if (val) add(val); }}
+              options={available.map((c) => ({ value: c, label: c }))}
+              placeholder="Add country..."
+              className="w-48"
+            />
           ) : null}
           <div className="flex items-center gap-1.5">
             <button type="button" onClick={() => void save()} disabled={isSaving} className="rounded-lg p-1 text-zbooni-green hover:bg-zbooni-green/10 disabled:opacity-50">

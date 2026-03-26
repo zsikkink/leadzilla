@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { CustomSelect } from '@/components/custom-select.js';
 import { cn } from '@/lib/utils.js';
 import { getWebEnv } from '@/lib/env.js';
 import { useAuth } from '@/hooks/use-auth.js';
@@ -1197,17 +1198,15 @@ export default function ICPRulesPage() {
               {/* ── 1. Hard Filters ── */}
               <p className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-red-400/60">Hard Filters</p>
               <div className="form-grid mt-2">
-                <label>
-                  Country
-                  <select
+                <div>
+                  <span className="mb-1 block text-xs font-semibold">Country</span>
+                  <CustomSelect
                     value={simForm.country}
-                    onChange={(e) => setSimForm((prev) => ({ ...prev, country: e.target.value }))}
-                  >
-                    {COUNTRY_OPTIONS.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </label>
+                    onChange={(val) => setSimForm((prev) => ({ ...prev, country: val }))}
+                    options={COUNTRY_OPTIONS.map((c) => ({ value: c, label: c }))}
+                    placeholder="Select country"
+                  />
+                </div>
                 <label>
                   Data Alignment Score
                   <div className="flex items-center gap-2">
@@ -1622,6 +1621,89 @@ export default function ICPRulesPage() {
               <button type="button" onClick={() => { setShowAddRule(false); setCommandSearch(''); }} className="rounded-lg p-1 text-muted-foreground hover:bg-accent/50">
                 <X className="h-4 w-4" />
               </button>
+            </div>
+
+            {/* New rule form */}
+            <div className="space-y-3 rounded-xl border border-border/30 bg-zbooni-dark/30 p-4">
+              <div className="grid grid-cols-2 gap-3">
+                <label className="text-xs">
+                  <span className="mb-1 block font-semibold text-muted-foreground/70">Rule Name</span>
+                  <input
+                    value={currentRule.name}
+                    onChange={(e) => setCurrentRule((prev) => ({ ...prev, name: e.target.value }))}
+                    placeholder="e.g. Has WhatsApp"
+                    className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </label>
+                <div className="text-xs">
+                  <span className="mb-1 block font-semibold text-muted-foreground/70">Feature Key</span>
+                  <CustomSelect
+                    value={currentRule.fieldKey}
+                    onChange={(val) => setCurrentRule((prev) => ({ ...prev, fieldKey: val }))}
+                    options={
+                      availableFieldKeys.length === 0
+                        ? [{ value: '', label: 'No keys available' }]
+                        : availableFieldKeys.map((k) => ({ value: k, label: k }))
+                    }
+                    placeholder="Select key"
+                    className="w-full"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="text-xs">
+                  <span className="mb-1 block font-semibold text-muted-foreground/70">Rule Type</span>
+                  <CustomSelect
+                    value={currentRule.ruleType}
+                    onChange={(val) => setCurrentRule((prev) => ({ ...prev, ruleType: val as 'WEIGHTED' | 'HARD_FILTER' }))}
+                    options={[
+                      { value: 'WEIGHTED', label: 'Weighted' },
+                      { value: 'HARD_FILTER', label: 'Hard Filter' },
+                    ]}
+                    placeholder="Type"
+                    className="w-full"
+                  />
+                </div>
+                <div className="text-xs">
+                  <span className="mb-1 block font-semibold text-muted-foreground/70">Operator</span>
+                  <CustomSelect
+                    value={currentRule.operator}
+                    onChange={(val) => setCurrentRule((prev) => ({ ...prev, operator: val }))}
+                    options={OPERATORS.map((op) => ({ value: op, label: op }))}
+                    placeholder="Operator"
+                    className="w-full"
+                  />
+                </div>
+                <label className="text-xs">
+                  <span className="mb-1 block font-semibold text-muted-foreground/70">Expected Value</span>
+                  <input
+                    value={typeof currentRule.valueJson === 'string' ? currentRule.valueJson : JSON.stringify(currentRule.valueJson)}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      // Try to parse as JSON (number, boolean, array), fall back to string
+                      let parsed: unknown = raw;
+                      try { parsed = JSON.parse(raw); } catch { /* keep as string */ }
+                      setCurrentRule((prev) => ({ ...prev, valueJson: parsed }));
+                    }}
+                    placeholder='true, 0.5, ["AE","SA"]'
+                    className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </label>
+              </div>
+              {currentRule.ruleType === 'WEIGHTED' ? (
+                <label className="text-xs">
+                  <span className="mb-1 block font-semibold text-muted-foreground/70">Weight (-10 to 10)</span>
+                  <input
+                    type="number"
+                    min={-10}
+                    max={10}
+                    step={0.5}
+                    value={currentRule.weight}
+                    onChange={(e) => setCurrentRule((prev) => ({ ...prev, weight: Number(e.target.value) || 0 }))}
+                    className="h-8 w-24 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm tabular-nums focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </label>
+              ) : null}
             </div>
 
             {/* Grouped feature list */}
