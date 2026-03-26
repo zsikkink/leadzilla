@@ -11,6 +11,7 @@ import {
   Inbox,
   Loader2,
   Mail,
+  MapPin,
   MessageSquare,
   Plus,
   RotateCcw,

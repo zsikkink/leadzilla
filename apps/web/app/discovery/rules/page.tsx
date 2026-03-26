@@ -624,6 +624,7 @@ export default function ICPRulesPage() {
   const [showAddRule, setShowAddRule] = useState(false);
   const [stagedRules, setStagedRules] = useState<StagedRule[]>([]);
   const [submittingRules, setSubmittingRules] = useState(false);
+  const [currentRule, setCurrentRule] = useState<StagedRule>({ ...EMPTY_RULE });
 
   // Command palette state (A5)
   const [commandSearch, setCommandSearch] = useState('');
