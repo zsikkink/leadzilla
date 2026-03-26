@@ -32,9 +32,10 @@ export interface ManagerAnalyzeLogger {
 }
 
 const POSITIVE_EVENT_TYPES = ['REPLIED', 'MEETING_BOOKED', 'DEAL_WON'] as const;
-const NEGATIVE_EVENT_TYPES = ['BOUNCED', 'NOT_INTERESTED'] as const;
+const NEGATIVE_EVENT_TYPES = ['BOUNCED', 'NOT_INTERESTED', 'DEAL_LOST'] as const;
 
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 function formatErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -139,7 +140,7 @@ async function computeIcpBreakdown(
         prisma.feedbackEvent.count({
           where: {
             occurredAt: { gte: weekStart, lt: weekEnd },
-            eventType: { in: ['BOUNCED', 'NOT_INTERESTED'] },
+            eventType: { in: [...NEGATIVE_EVENT_TYPES] },
             messageSend: { messageDraft: { icpProfileId: icp.id } },
           },
         }),
@@ -336,11 +337,72 @@ async function computeWeekMetrics(
   return { sends, replies, positive, bounced };
 }
 
+// ── Deal loss analysis per ICP ───────────────────────────────
+
+interface IcpDealLossItem {
+  icpProfileId: string;
+  icpName: string;
+  dealWon: number;
+  dealLost: number;
+  dealLossRate: number;
+  totalDeals: number;
+}
+
+async function computeIcpDealLoss(
+  weekStart: Date,
+  weekEnd: Date,
+): Promise<IcpDealLossItem[]> {
+  const icpProfiles = await prisma.icpProfile.findMany({
+    where: { isActive: true },
+    select: { id: true, name: true },
+  });
+
+  const dealCounts = await Promise.all(
+    icpProfiles.map((icp) =>
+      Promise.all([
+        prisma.feedbackEvent.count({
+          where: {
+            occurredAt: { gte: weekStart, lt: weekEnd },
+            eventType: 'DEAL_WON',
+            messageSend: { messageDraft: { icpProfileId: icp.id } },
+          },
+        }),
+        prisma.feedbackEvent.count({
+          where: {
+            occurredAt: { gte: weekStart, lt: weekEnd },
+            eventType: 'DEAL_LOST',
+            messageSend: { messageDraft: { icpProfileId: icp.id } },
+          },
+        }),
+      ]),
+    ),
+  );
+
+  return icpProfiles
+    .map((icp, i) => {
+      const [dealWon, dealLost] = dealCounts[i]!;
+      const totalDeals = dealWon + dealLost;
+      return {
+        icpProfileId: icp.id,
+        icpName: icp.name,
+        dealWon,
+        dealLost,
+        dealLossRate: safeRate(dealLost, totalDeals),
+        totalDeals,
+      };
+    })
+    .filter((item) => item.totalDeals > 0);
+}
+
 // ── Discovery yield analysis ────────────────────────────────
 
 async function computeDiscoveryYield(): Promise<{
   icpYieldRates: Array<{ icpProfileId: string; icpName: string; yieldRate: number; totalDiscovered: number; totalLeads: number }>;
 }> {
+  // Scope to last 30 days so yield reflects recent ICP config / search category changes,
+  // not diluted by lifetime historical data
+  const windowStart = new Date(Date.now() - THIRTY_DAYS_MS);
+
   const icpProfiles = await prisma.icpProfile.findMany({
     where: { isActive: true },
     select: { id: true, name: true },
@@ -348,16 +410,18 @@ async function computeDiscoveryYield(): Promise<{
 
   const results = await Promise.all(
     icpProfiles.map(async (icp) => {
-      // Count discovery records and leads per ICP
+      // Count discovery records and leads per ICP within the 30-day window
       const [totalDiscovered, totalLeads] = await Promise.all([
         prisma.leadDiscoveryRecord.count({
           where: {
             icpProfileId: icp.id,
             status: 'DISCOVERED',
+            createdAt: { gte: windowStart },
           },
         }),
         prisma.lead.count({
           where: {
+            createdAt: { gte: windowStart },
             discoveryRecords: {
               some: { icpProfileId: icp.id },
             },
@@ -386,6 +450,7 @@ function generateRecommendations(
   scoreBandBreakdown: ScoreBandBreakdownItem[],
   trend: TrendComparison,
   discoveryYield: { icpYieldRates: Array<{ icpProfileId: string; icpName: string; yieldRate: number; totalDiscovered: number; totalLeads: number }> },
+  icpDealLoss: IcpDealLossItem[],
 ): ManagerRecommendation[] {
   const recommendations: ManagerRecommendation[] = [];
 
@@ -541,6 +606,21 @@ function generateRecommendations(
     }
   }
 
+  // 9. Deal loss analysis — flag ICPs with high deal loss rate
+  for (const item of icpDealLoss) {
+    if (item.totalDeals >= 3 && item.dealLossRate > 0.4) {
+      recommendations.push({
+        type: 'PAUSE_ICP',
+        icpProfileId: item.icpProfileId,
+        field: 'dealLossRate',
+        currentValue: item.dealLossRate,
+        recommendedValue: null,
+        confidence: Math.min(0.85, 0.4 + item.totalDeals * 0.03),
+        reasoning: `ICP "${item.icpName}" has a ${(item.dealLossRate * 100).toFixed(1)}% deal loss rate (${item.dealLost} lost out of ${item.totalDeals} total deals). Consider adjusting targeting criteria, pricing approach, or sales messaging for this segment.`,
+      });
+    }
+  }
+
   return recommendations;
 }
 
@@ -643,6 +723,7 @@ export async function handleManagerAnalyzeJob(
       variantBreakdown,
       scoreBandBreakdown,
       discoveryYield,
+      icpDealLoss,
     ] = await Promise.all([
       computeWeekMetrics(weekStart, weekEnd),
       computeWeekMetrics(prevWeekStart, weekStart),
@@ -650,6 +731,7 @@ export async function handleManagerAnalyzeJob(
       computeVariantBreakdown(weekStart, weekEnd),
       computeScoreBandBreakdown(weekStart, weekEnd),
       computeDiscoveryYield(),
+      computeIcpDealLoss(weekStart, weekEnd),
     ]);
 
     const currentReplyRate = safeRate(currentMetrics.replies, currentMetrics.sends);
@@ -684,6 +766,7 @@ export async function handleManagerAnalyzeJob(
       scoreBandBreakdown,
       trend,
       discoveryYield,
+      icpDealLoss,
     );
 
     // Persist the full analysis

@@ -316,7 +316,7 @@ export async function handleApolloEnrichJob(
     });
   };
 
-  // ── F2: Cross-run Apollo cache — reuse prior results for same domain ──
+  // ── Cross-run Apollo cache — reuse prior results for same domain ──
   let apolloCacheHit = false;
   const cachedConversion = await prisma.businessConversion.findFirst({
     where: {
@@ -337,21 +337,9 @@ export async function handleApolloEnrichJob(
       'Apollo reveal cache hit — reusing prior conversion data for same domain',
     );
   } else {
-    // Call Apollo to reveal contact data (1 export credit)
+    // searchContactsByDomain hits Apollo's mixed_people/search endpoint which is FREE
+    // (no export credit consumed). No cost event recorded.
     apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
-  }
-
-  // Track Apollo cost event — only for actual API calls, not cache hits
-  if (!apolloCacheHit) {
-    await prisma.discoveryCostEvent.create({
-      data: {
-        discoveryRunId: runId,
-        provider: 'APOLLO',
-        costCents: 2,
-        apiCallType: 'post_score_enrich',
-        leadId,
-      },
-    });
   }
 
   if (apolloResult.status !== 'success' || apolloResult.contacts.length === 0) {
