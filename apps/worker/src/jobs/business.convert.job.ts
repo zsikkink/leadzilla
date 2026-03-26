@@ -10,7 +10,7 @@ import type { Job, SendOptions } from 'pg-boss';
 
 import { RetryableError } from '../errors.js';
 import { tryFinalizeDiscoveryRun, checkLeadTargetReached } from '../utils/discovery-run-tracker.js';
-import { isProviderWithinBudget } from '../utils/pipeline-settings.js';
+import { isProviderWithinBudget, getScoreQualificationThreshold } from '../utils/pipeline-settings.js';
 import {
   adjudicateDecisionMakerCandidates,
   extractDecisionMakers,
@@ -55,20 +55,6 @@ export interface BusinessConvertJobPayload {
   includeSocialMediaAnalysis?: boolean | undefined;
   correlationId?: string | undefined;
 }
-
-interface ApolloContact {
-  email: string;
-  phone: string | null;
-  firstName: string;
-  lastName: string;
-  title: string | null;
-  companyName: string | null;
-}
-
-type ApolloContactSearchResult =
-  | { status: 'success'; contacts: ApolloContact[] }
-  | { status: 'retryable_error'; failure: { classification: 'retryable'; statusCode: number | null; message: string; raw: unknown } }
-  | { status: 'terminal_error'; failure: { classification: 'terminal'; statusCode: number | null; message: string; raw: unknown } };
 
 interface HunterContact {
   email: string;
@@ -249,12 +235,6 @@ interface OpenAiInsightGenerator {
 
 export interface BusinessConvertJobDependencies {
   apolloAdapter: {
-    searchContactsByDomain(domain: string): Promise<ApolloContactSearchResult>;
-    preScreenDomain?(domain: string): Promise<
-      | { status: 'success'; hasEmail: boolean; hasDirectPhone: boolean; topContactTitle: string | null }
-      | { status: 'retryable_error'; failure: { classification: 'retryable'; statusCode: number | null; message: string; raw: unknown } }
-      | { status: 'terminal_error'; failure: { classification: 'terminal'; statusCode: number | null; message: string; raw: unknown } }
-    >;
     isConfigured: boolean;
   };
   hunterAdapter: {
@@ -588,89 +568,6 @@ function matchEmailToDecisionMaker(
   }
 
   return null;
-}
-
-/**
- * Detect the dominant email pattern from known emails at a domain and generate
- * candidate emails for decision makers using that pattern. Returns SMTP-verified
- * matches only.
- */
-async function inferEmailPattern(
-  knownEmails: Array<{ email: string; firstName: string; lastName: string }>,
-  domain: string,
-  decisionMakers: Array<{ name: string; title: string | null; seniority: string }>,
-  smtpVerifier: { verify(email: string): Promise<SmtpVerificationResult> } | undefined,
-): Promise<{
-  matches: Array<{ email: string; dm: { name: string; title: string | null; seniority: string }; pattern: string }>;
-  attempted: number;
-  failedVerification: number;
-  pattern: string | null;
-}> {
-  if (!smtpVerifier || knownEmails.length === 0 || decisionMakers.length === 0) {
-    return { matches: [], attempted: 0, failedVerification: 0, pattern: null };
-  }
-
-  // Detect pattern from known emails
-  const patternCounts: Record<string, number> = {};
-
-  for (const { email, firstName, lastName } of knownEmails) {
-    const prefix = email.split('@')[0]?.toLowerCase();
-    const first = firstName.toLowerCase();
-    const last = lastName.toLowerCase();
-    if (!prefix || !first || !last) continue;
-
-    if (prefix === `${first}.${last}`) patternCounts['first.last'] = (patternCounts['first.last'] ?? 0) + 1;
-    else if (prefix === `${first[0]}${last}`) patternCounts['flast'] = (patternCounts['flast'] ?? 0) + 1;
-    else if (prefix === first) patternCounts['first'] = (patternCounts['first'] ?? 0) + 1;
-    else if (prefix === `${first[0]}.${last}`) patternCounts['f.last'] = (patternCounts['f.last'] ?? 0) + 1;
-    else if (prefix === `${first}${last}`) patternCounts['firstlast'] = (patternCounts['firstlast'] ?? 0) + 1;
-    else if (prefix === `${first}_${last}`) patternCounts['first_last'] = (patternCounts['first_last'] ?? 0) + 1;
-  }
-
-  const dominantPattern = Object.entries(patternCounts)
-    .sort(([, a], [, b]) => b - a)[0]?.[0];
-  if (!dominantPattern) {
-    return { matches: [], attempted: 0, failedVerification: 0, pattern: null };
-  }
-
-  // Generate candidates for DMs using the dominant pattern
-  const results: Array<{ email: string; dm: { name: string; title: string | null; seniority: string }; pattern: string }> = [];
-  let attempted = 0;
-  let failedVerification = 0;
-
-  for (const dm of decisionMakers) {
-    const { firstName, lastName } = parseName(dm.name);
-    const first = firstName.toLowerCase();
-    const last = lastName.toLowerCase();
-    if (!first || !last) continue;
-
-    let candidate: string | null = null;
-    switch (dominantPattern) {
-      case 'first.last': candidate = `${first}.${last}@${domain}`; break;
-      case 'flast': candidate = `${first[0]}${last}@${domain}`; break;
-      case 'first': candidate = `${first}@${domain}`; break;
-      case 'f.last': candidate = `${first[0]}.${last}@${domain}`; break;
-      case 'firstlast': candidate = `${first}${last}@${domain}`; break;
-      case 'first_last': candidate = `${first}_${last}@${domain}`; break;
-    }
-
-    if (!candidate) continue;
-    attempted += 1;
-
-    const verification = await smtpVerifier.verify(candidate);
-    if (verification.status === 'valid' || verification.status === 'catch_all') {
-      results.push({ email: candidate, dm, pattern: dominantPattern });
-    } else {
-      failedVerification += 1;
-    }
-  }
-
-  return {
-    matches: results,
-    attempted,
-    failedVerification,
-    pattern: dominantPattern,
-  };
 }
 
 /** Seniority rank for sorting decision makers (lower = more senior). */
@@ -1266,27 +1163,6 @@ export async function handleBusinessConvertJob(
     }
   }
 
-  // ── 4c. Apollo pre-screen (FREE — zero credits) ─────────────────────────
-  let apolloHasEmail = false;
-  let apolloHasDirectPhone = false;
-
-  if (deps.apolloAdapter.isConfigured && deps.apolloAdapter.preScreenDomain) {
-    const preScreenResult = await deps.apolloAdapter.preScreenDomain(domain);
-    if (preScreenResult.status === 'success') {
-      apolloHasEmail = preScreenResult.hasEmail;
-      apolloHasDirectPhone = preScreenResult.hasDirectPhone;
-      logger.info(
-        { ...logCtx, apolloHasEmail, apolloHasDirectPhone, topContactTitle: preScreenResult.topContactTitle },
-        'Apollo pre-screen completed (free)',
-      );
-    } else {
-      logger.warn(
-        { ...logCtx, apolloPreScreenStatus: preScreenResult.status },
-        'Apollo pre-screen failed — continuing without pre-screen data',
-      );
-    }
-  }
-
   // ── 5. Collect ALL contacts as BusinessContact candidates ──────────────
   interface ContactCandidate {
     name: string;
@@ -1319,10 +1195,6 @@ export async function handleBusinessConvertJob(
     hunterLowConfDrop: 0,
     hunterSmtpDrop: 0,
     hunterPass: 0,
-    apolloTotal: 0,
-    apolloGenericDrop: 0,
-    apolloSmtpDrop: 0,
-    apolloPass: 0,
     llmExtracted: 0,
     llmFakeNames: 0,
     nameValChecked: 0,
@@ -1335,7 +1207,6 @@ export async function handleBusinessConvertJob(
     withEmail: 0,
     outcome: 'pending' as string,
   };
-  let apolloContactJson: unknown = null;
   let hunterContactJson: unknown = null;
   const costEvents: Array<{ provider: 'APOLLO' | 'HUNTER' | 'GOOGLE_CUSTOM_SEARCH'; costCents: number; apiCallType: string }> = [];
   const recoveryAttempts: ContactRecoveryAttempt[] = [];
@@ -1467,80 +1338,13 @@ export async function handleBusinessConvertJob(
   }
 
   let hunterRetryable = false;
-  let apolloRetryable = false;
   let isDraftedLead = false;
-  let emailInferenceAttempted = 0;
-  let emailInferenceFailedVerification = 0;
   let adjudication: CandidateAdjudicationResult | null = null;
   let winnerSelectionMethod: 'deterministic' | 'llm' = 'deterministic';
   const locality = [business.city, business.countryCode].filter(Boolean).join(', ') || null;
   const isHighValueBusiness = business.scoreBand === 'HIGH' || business.deterministicScore >= 0.75;
 
-  // 5d. Email pattern inference from known emails (free, eliminates ~20-30% of Hunter calls)
-  if (websiteScrapeData?.decisionMakers && websiteScrapeData.decisionMakers.length > 0) {
-    const hasValidEmailFromScrape = allCandidates.some((c) => c.email !== null);
-    if (!hasValidEmailFromScrape) {
-      // Gather known email/name pairs for pattern detection
-      const knownEmails = allCandidates
-        .filter((c) => c.email !== null)
-        .map((c) => {
-          const { firstName, lastName } = parseName(c.name);
-          return { email: c.email!, firstName, lastName };
-        });
-
-      // Also include scraped emails matched to names from the page
-      if (websiteScrapeData.contactInfo?.emails) {
-        for (const { email: rawEmail } of websiteScrapeData.contactInfo.emails) {
-          if (isGenericEmail(rawEmail) || isJunkPersonalEmail(rawEmail)) continue;
-          const dms = websiteScrapeData.decisionMakers.map((dm) => ({
-            name: dm.name,
-            title: dm.title,
-            seniority: dm.seniority,
-          }));
-          const match = matchEmailToDecisionMaker(rawEmail, dms);
-          if (match) {
-            const { firstName, lastName } = parseName(match.matchedDm.name);
-            knownEmails.push({ email: rawEmail, firstName, lastName });
-          }
-        }
-      }
-
-      const dmsForInference = websiteScrapeData.decisionMakers.map((dm) => ({
-        name: dm.name,
-        title: dm.title,
-        seniority: dm.seniority,
-      }));
-
-      const inferenceResult = await inferEmailPattern(
-        knownEmails,
-        domain,
-        dmsForInference,
-        deps.smtpVerifier?.isConfigured ? deps.smtpVerifier : undefined,
-      );
-      emailInferenceAttempted += inferenceResult.attempted;
-      emailInferenceFailedVerification += inferenceResult.failedVerification;
-
-      for (const { email: inferredEmail, dm, pattern } of inferenceResult.matches) {
-        allCandidates.push({
-          name: dm.name,
-          title: dm.title,
-          email: inferredEmail,
-          phone: null,
-          linkedinUrl: null,
-          seniority: dm.seniority as ContactCandidate['seniority'],
-          positionRank: 15, // High priority — pattern-inferred + SMTP verified
-          source: 'website_scrape',
-          rawJson: { matchType: 'pattern_inference', pattern },
-        });
-        logger.info(
-          { ...logCtx, email: inferredEmail, pattern, dm: dm.name },
-          'Inferred email via pattern detection + SMTP verified',
-        );
-      }
-    }
-  }
-
-  // 5e. Fallback to paid providers if no candidate has a valid email yet
+  // 5d. Fallback to paid providers if no candidate has a valid email yet
   const hasValidEmail = allCandidates.some((candidate) =>
     candidate.email !== null && !isGenericEmail(candidate.email) && !isJunkPersonalEmail(candidate.email),
   );
@@ -1554,11 +1358,6 @@ export async function handleBusinessConvertJob(
   const identityThreshold = isHighValueBusiness ? 0.48 : 0.58;
   // Hunter searches by domain — only needs prequalified + no valid email
   const shouldSkipHunter = business.preQualified === false || hasValidEmail;
-  // Apollo/expensive enrichment — needs identity confidence (more targeted)
-  const shouldStopPaidEnrichment = business.preQualified === false
-    || !hasCredibleNamedCandidate
-    || identityConfidence < identityThreshold
-    || hasValidEmail;
 
   if (!shouldSkipHunter && !hasValidEmail) {
     logger.info(
@@ -1662,109 +1461,7 @@ export async function handleBusinessConvertJob(
 
   }
 
-  // Apollo (more expensive — needs identity confidence + budget)
-  if (!shouldStopPaidEnrichment && !hasValidEmail) {
-    const hasEmailAfterHunter = allCandidates.some((c) => c.email !== null);
-    const apolloWithinBudget = await isProviderWithinBudget('APOLLO');
-    const apolloBusinessBudget = await canSpendOnProviderForBusiness({
-      provider: 'APOLLO',
-      apiCallType: 'contact_search',
-      businessId,
-      isHighValueBusiness,
-    });
-    if (!hasEmailAfterHunter && !apolloWithinBudget) {
-      logger.warn(logCtx, 'Apollo daily budget ceiling exceeded — skipping paid lookup');
-    }
-    if (!hasEmailAfterHunter && !apolloBusinessBudget) {
-      logger.info(logCtx, 'Per-business Apollo budget reached — skipping paid lookup');
-    }
-    if (!hasEmailAfterHunter && deps.apolloAdapter.isConfigured && apolloHasEmail && apolloWithinBudget && apolloBusinessBudget) {
-      const apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
-      if (apolloResult.status === 'success' && apolloResult.contacts.length > 0) {
-        for (const ac of apolloResult.contacts) {
-          gateStats.apolloTotal++;
-          if (isGenericEmail(ac.email) || isJunkPersonalEmail(ac.email)) {
-            gateStats.apolloGenericDrop++;
-            continue;
-          }
-
-          // SMTP verify Apollo email if verifier is available
-          if (deps.smtpVerifier?.isConfigured) {
-            const smtpResult = await deps.smtpVerifier.verify(ac.email);
-            if (smtpResult.status !== 'valid' && smtpResult.status !== 'catch_all') {
-              gateStats.apolloSmtpDrop++;
-              logger.info(
-                { ...logCtx, email: ac.email, smtpStatus: smtpResult.status },
-                'Apollo contact failed SMTP verification',
-              );
-              continue;
-            }
-          }
-
-          gateStats.apolloPass++;
-          apolloContactJson = ac;
-          allCandidates.push({
-            name: [ac.firstName, ac.lastName].filter(Boolean).join(' ') || 'Unknown Contact',
-            title: ac.title,
-            email: ac.email,
-            phone: ac.phone,
-            linkedinUrl: null,
-            seniority: ac.title ? classifySeniorityLocal(ac.title) : 'other',
-            positionRank: 50,
-            source: 'apollo',
-            rawJson: ac,
-          });
-        }
-      } else if (apolloResult.status === 'retryable_error') {
-        apolloRetryable = true;
-      }
-      if (apolloResult.status === 'success') {
-        // Apollo People Search: Free plan = 5 mobile + 10 export credits/mo.
-        // Basic plan ($49/mo) = 900 credits. ~$0.05/credit, but domain search uses 1 credit.
-        // Effective cost ~2 cents/call on volume. Using 2 cents as conservative estimate.
-        costEvents.push({ provider: 'APOLLO', costCents: 2, apiCallType: 'contact_search' });
-      }
-      logger.info(
-        { ...logCtx, apolloStatus: apolloResult.status, contactsFound: apolloResult.status === 'success' ? apolloResult.contacts.length : 0 },
-        'Apollo contact search completed (fallback)',
-      );
-      recoveryAttempts.push({
-        stage: 'contact_recovery',
-        provider: 'APOLLO',
-        mode: 'discover',
-        status: apolloResult.status,
-        resultCount: apolloResult.status === 'success' ? apolloResult.contacts.length : 0,
-        notes: [],
-      });
-    }
-  } else if (!hasValidEmail && !shouldSkipHunter) {
-    // Apollo gate blocked but Hunter already ran above
-    gateStats.paidGateBlocked = true;
-    gateStats.paidGateReason = !hasCredibleNamedCandidate
-      ? 'no_credible_named_candidate'
-      : identityConfidence < identityThreshold
-        ? 'identity_confidence_below_threshold'
-        : 'validated_personal_email_already_present';
-    logger.info(
-      {
-        ...logCtx,
-        identityConfidence,
-        identityThreshold,
-        paidGateReason: gateStats.paidGateReason,
-        hasCredibleNamedCandidate,
-      },
-      'Skipping Apollo enrichment due to identity confidence gate (Hunter ran independently)',
-    );
-  } else if (!hasValidEmail) {
-    gateStats.paidGateBlocked = true;
-    gateStats.paidGateReason = business.preQualified === false
-      ? 'business_not_prequalified'
-      : 'validated_personal_email_already_present';
-    logger.info(
-      { ...logCtx, paidGateReason: gateStats.paidGateReason },
-      'Skipping paid enrichment — business not prequalified',
-    );
-  } else {
+  if (hasValidEmail) {
     logger.info(
       { ...logCtx, candidateCount: allCandidates.length },
       'Valid email found from scrape data — skipping paid providers',
@@ -1911,56 +1608,7 @@ export async function handleBusinessConvertJob(
     }
   }
 
-  // 6a. Try to infer email for high-authority candidates who lack one (B3)
-  let inferredEmailCount = 0;
-  for (const candidate of sortedCandidates) {
-    if (candidate.email !== null) continue;
-    if (seniorityRank(candidate.seniority) > 1) break; // Only for executives and directors
-
-    // Gather known emails at this domain for pattern inference
-    const knownEmails = allCandidates
-      .filter((c) => c.email !== null && c.email.endsWith(`@${domain}`))
-      .map((c) => {
-        const { firstName, lastName } = parseName(c.name);
-        return { email: c.email!, firstName, lastName };
-      });
-
-    if (knownEmails.length > 0) {
-      const inferenceResult = await inferEmailPattern(
-        knownEmails,
-        domain,
-        [{ name: candidate.name, title: candidate.title, seniority: candidate.seniority }],
-        deps.smtpVerifier?.isConfigured ? deps.smtpVerifier : undefined,
-      );
-      emailInferenceAttempted += inferenceResult.attempted;
-      emailInferenceFailedVerification += inferenceResult.failedVerification;
-
-      if (inferenceResult.matches.length > 0) {
-        if (isJunkPersonalEmail(inferenceResult.matches[0]!.email)) {
-          continue;
-        }
-        candidate.email = inferenceResult.matches[0]!.email;
-        inferredEmailCount += 1;
-        logger.info(
-          { ...logCtx, email: candidate.email, candidate: candidate.name, pattern: inferenceResult.matches[0]!.pattern },
-          'Inferred email for high-authority candidate via pattern detection',
-        );
-      }
-    }
-  }
-
-  recoveryAttempts.push({
-    stage: 'contact_recovery',
-    provider: 'EMAIL_PATTERN_INFERENCE',
-    mode: 'discover',
-    status: inferredEmailCount > 0 ? 'success' : 'empty',
-    resultCount: inferredEmailCount,
-    notes: inferredEmailCount > 0
-      ? ['Recovered sendable email addresses from known company-domain patterns']
-      : ['No company-domain email pattern could be inferred for top candidates'],
-  });
-
-  // 6b. Select the lead — prefer candidates with email, then by seniority
+  // 6a. Select the lead — prefer candidates with email, then by seniority
   const leadCandidates = sortedCandidates.filter((c) => c.email !== null);
   let resolvedContact = leadCandidates[0] ?? null;
   const cseTopCandidates: Array<Record<string, unknown>> = [];
@@ -1973,10 +1621,10 @@ export async function handleBusinessConvertJob(
     }
   }
 
-  // 6c. Both paid providers retryable → throw to trigger pg-boss retry
-  if (!resolvedContact && hunterRetryable && apolloRetryable) {
+  // 6c. Hunter retryable with no resolved contact → throw to trigger pg-boss retry
+  if (!resolvedContact && hunterRetryable) {
     throw new RetryableError(
-      `Both Hunter and Apollo returned retryable errors for domain ${domain}`,
+      `Hunter returned retryable error for domain ${domain}`,
     );
   }
 
@@ -2061,9 +1709,7 @@ export async function handleBusinessConvertJob(
       ? 'no_named_candidate_found'
       : adjudication?.verdict === 'inconclusive'
         ? 'ambiguous_winner'
-        : emailInferenceFailedVerification > 0 && emailInferenceAttempted > 0
-          ? 'email_inferred_failed_verification'
-          : 'named_candidate_no_email';
+        : 'named_candidate_no_email';
     if (inconclusiveButPromising) {
       isDraftedLead = true;
     }
@@ -2158,7 +1804,30 @@ export async function handleBusinessConvertJob(
   const contactStatus: ContactResolutionStatus = hasRealDecisionMaker
     ? (resolvedContact?.verificationVerdict === 'verified' || resolvedContact?.linkedinUrl ? 'verified' : 'discovered')
     : 'unresolved';
-  const shouldAutoReject = false;
+
+  // Auto-reject: no real decision maker AND score below qualification threshold
+  let shouldAutoReject = false;
+  if (!hasRealDecisionMaker && business.deterministicScore !== null) {
+    const scoreThreshold = await getScoreQualificationThreshold();
+    if (business.deterministicScore < scoreThreshold) {
+      shouldAutoReject = true;
+      logger.info(
+        {
+          ...logCtx,
+          deterministicScore: business.deterministicScore,
+          scoreThreshold,
+          contactStatus,
+        },
+        'Auto-rejecting — no decision maker and score below qualification threshold',
+      );
+      // Also mark the business as not prequalified
+      await prisma.business.update({
+        where: { id: businessId },
+        data: { preQualified: false, disqualificationReason: 'BELOW_SCORE_THRESHOLD' },
+      });
+    }
+  }
+
   recoveryTelemetry.finalOutcome = 'lead_created';
 
   // ── 7. Derive lead source from actual provider ───────────────────────────
@@ -2246,14 +1915,12 @@ export async function handleBusinessConvertJob(
           businessId: business.id,
           leadId: existingBusinessLead.id,
           icpProfileId,
-          apolloContactJson: apolloContactJson
-            ? toInputJson(apolloContactJson)
-            : PrismaRuntime.JsonNull,
+          apolloContactJson: PrismaRuntime.JsonNull,
           hunterContactJson: hunterContactJson
             ? toInputJson(hunterContactJson)
             : PrismaRuntime.JsonNull,
-          apolloHasEmail,
-          apolloHasDirectPhone,
+          apolloHasEmail: false,
+          apolloHasDirectPhone: false,
           metadata: toInputJson({
             discoveryRunId,
             contactStatus,
@@ -2390,14 +2057,12 @@ export async function handleBusinessConvertJob(
           businessId: business.id,
           leadId: existingLead.id,
           icpProfileId,
-          apolloContactJson: apolloContactJson
-            ? toInputJson(apolloContactJson)
-            : PrismaRuntime.JsonNull,
+          apolloContactJson: PrismaRuntime.JsonNull,
           hunterContactJson: hunterContactJson
             ? toInputJson(hunterContactJson)
             : PrismaRuntime.JsonNull,
-          apolloHasEmail,
-          apolloHasDirectPhone,
+          apolloHasEmail: false,
+          apolloHasDirectPhone: false,
               metadata: toInputJson({
                 discoveryRunId,
                 contactStatus,
@@ -2541,14 +2206,12 @@ export async function handleBusinessConvertJob(
         businessId: business.id,
         leadId: lead.id,
         icpProfileId,
-        apolloContactJson: apolloContactJson
-          ? toInputJson(apolloContactJson)
-          : PrismaRuntime.JsonNull,
+        apolloContactJson: PrismaRuntime.JsonNull,
         hunterContactJson: hunterContactJson
           ? toInputJson(hunterContactJson)
           : PrismaRuntime.JsonNull,
-        apolloHasEmail,
-        apolloHasDirectPhone,
+        apolloHasEmail: false,
+        apolloHasDirectPhone: false,
         metadata: toInputJson({
           contactSource: resolvedContact?.source ?? 'unknown',
           contactStatus,
