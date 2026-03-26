@@ -1,4 +1,4 @@
-import { prisma } from '@lead-flood/db';
+import { PrismaRuntime, prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
 import { isPrismaUniqueConstraintError } from '../errors.js';
@@ -149,14 +149,19 @@ export async function handleApolloEnrichJob(
   ): void => {
     if (!emailAvailable) return;
 
-    const channel: 'EMAIL' | 'WHATSAPP' = phoneAvailable ? 'WHATSAPP' : 'EMAIL';
+    const channel: 'EMAIL' | 'WHATSAPP' = scoreBand === 'HIGH' && phoneAvailable ? 'WHATSAPP' : 'EMAIL';
     logger.info(
       { ...logCtx, reason, channel, emailAvailable, phoneAvailable },
       'Qualified lead remains ready for manual draft generation after apollo.enrich',
     );
   };
 
-  // Score tier bands are visual only — enrichment threshold below is the sole gatekeeper
+  // LOW → skip entirely, do not advance to draft generation
+  if (scoreBand === 'LOW') {
+    logger.info(logCtx, 'LOW score band — skipping apollo.enrich entirely');
+    await tryFinalizeDiscoveryRun(runId, logger);
+    return;
+  }
 
   // Enrichment threshold gate: skip paid Apollo reveal if score is too low
   const enrichmentThreshold = await getEnrichmentThreshold();
@@ -186,13 +191,17 @@ export async function handleApolloEnrichJob(
   let needsEmailReveal = false;
   let needsPhoneReveal = false;
 
-  // Phone availability determines channel, not score band.
-  // Enrichment threshold already gates who reaches this point.
-  {
+  if (scoreBand === 'MEDIUM') {
+    // MEDIUM → reveal email only if missing + Apollo has it. NEVER reveal phone.
     if (!hasEmail && apolloHasEmail) {
       needsEmailReveal = true;
     }
-    if (!hasPhone && apolloHasDirectPhone) {
+  } else if (scoreBand === 'HIGH') {
+    // HIGH → reveal what's missing
+    if (!hasEmail && apolloHasEmail) {
+      needsEmailReveal = true;
+    }
+    if (hasEmail && !hasPhone && apolloHasDirectPhone) {
       needsPhoneReveal = true;
     }
     if (!hasEmail && apolloHasEmail) {
@@ -307,8 +316,43 @@ export async function handleApolloEnrichJob(
     });
   };
 
-  // Call Apollo to search contacts by domain (FREE — no export credits consumed)
-  const apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
+  // ── F2: Cross-run Apollo cache — reuse prior results for same domain ──
+  let apolloCacheHit = false;
+  const cachedConversion = await prisma.businessConversion.findFirst({
+    where: {
+      business: { websiteDomain: domain },
+      apolloContactJson: { not: PrismaRuntime.JsonNull },
+    },
+    select: { apolloContactJson: true },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  let apolloResult: ApolloContactSearchResult;
+  if (cachedConversion?.apolloContactJson) {
+    const cached = cachedConversion.apolloContactJson as unknown as ApolloContact[];
+    apolloResult = { status: 'success' as const, contacts: Array.isArray(cached) ? cached : [] };
+    apolloCacheHit = true;
+    logger.info(
+      { ...logCtx, domain, cachedContactCount: apolloResult.contacts.length },
+      'Apollo reveal cache hit — reusing prior conversion data for same domain',
+    );
+  } else {
+    // Call Apollo to reveal contact data (1 export credit)
+    apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
+  }
+
+  // Track Apollo cost event — only for actual API calls, not cache hits
+  if (!apolloCacheHit) {
+    await prisma.discoveryCostEvent.create({
+      data: {
+        discoveryRunId: runId,
+        provider: 'APOLLO',
+        costCents: 2,
+        apiCallType: 'post_score_enrich',
+        leadId,
+      },
+    });
+  }
 
   if (apolloResult.status !== 'success' || apolloResult.contacts.length === 0) {
     await markAttemptCompleted();

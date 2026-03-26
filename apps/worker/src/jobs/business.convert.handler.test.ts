@@ -20,6 +20,12 @@ const { dbMock, txMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => (
       businessEvidence: {
         findFirst: vi.fn(),
       },
+      lead: {
+        findFirst: vi.fn(),
+      },
+      businessConversion: {
+        findFirst: vi.fn(),
+      },
       contactRecoveryItem: {
         deleteMany: vi.fn(),
       },
@@ -55,6 +61,7 @@ const { dbMock, txMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => (
   },
   pipelineSettingsMock: {
     isProviderWithinBudget: vi.fn(),
+    getScoreQualificationThreshold: vi.fn(),
   },
   trackerMock: {
     tryFinalizeDiscoveryRun: vi.fn(),
@@ -91,6 +98,7 @@ vi.mock('@lead-flood/db', () => ({
 
 vi.mock('../utils/pipeline-settings.js', () => ({
   isProviderWithinBudget: pipelineSettingsMock.isProviderWithinBudget,
+  getScoreQualificationThreshold: pipelineSettingsMock.getScoreQualificationThreshold,
 }));
 
 vi.mock('../utils/discovery-run-tracker.js', () => ({
@@ -234,6 +242,12 @@ describe('handleBusinessConvertJob reused-lead rediscovery handling', () => {
       discoveryRunId: 'run_old',
       preQualified: true,
     });
+    // F4: Cross-run domain dedup — no prior lead by default (allow processing)
+    dbMock.prisma.lead.findFirst.mockResolvedValue(null);
+    // F2: Cross-run Apollo cache — no cached conversion by default
+    dbMock.prisma.businessConversion.findFirst.mockResolvedValue(null);
+    // F1: Pre-score threshold default
+    pipelineSettingsMock.getScoreQualificationThreshold.mockResolvedValue(0.4);
     dbMock.prisma.discoveryCostEvent.count.mockResolvedValue(0);
     dbMock.prisma.businessEvidence.findFirst.mockResolvedValue({
       id: 'evidence_1',
