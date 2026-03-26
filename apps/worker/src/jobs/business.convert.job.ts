@@ -1227,8 +1227,6 @@ export async function handleBusinessConvertJob(
     llmFakeNames: 0,
     nameValChecked: 0,
     nameValRejected: 0,
-    paidGateBlocked: false,
-    paidGateReason: null as string | null,
     identityConfidence: 0,
     contactConfidence: 0,
     totalCandidates: 0,
