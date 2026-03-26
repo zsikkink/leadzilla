@@ -9,7 +9,6 @@ import { toast } from 'sonner';
 
 import { CustomSelect } from '../../../src/components/custom-select.js';
 import { LeadsNav } from '../../../src/components/leads-nav.js';
-import { LeadStatusBadge } from '../../../src/components/lead-status-badge.js';
 import { ScoreBandBadge } from '../../../src/components/score-band-badge.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
@@ -112,6 +111,30 @@ function extractBlendedScore(enrichmentData: unknown): number | null {
     return data.blendedScore;
   }
 
+  return null;
+}
+
+// ── Extract company name from enrichment data ────────────
+function extractCompanyName(enrichmentData: unknown): string | null {
+  if (!enrichmentData || typeof enrichmentData !== 'object') return null;
+  const data = enrichmentData as Record<string, unknown>;
+  for (const key of ['companyName', 'company_name', 'organization_name', 'company']) {
+    if (typeof data[key] === 'string' && (data[key] as string).trim().length > 0) {
+      return (data[key] as string).trim();
+    }
+  }
+  return null;
+}
+
+// ── Extract position/title from enrichment data ──────────
+function extractPosition(enrichmentData: unknown): string | null {
+  if (!enrichmentData || typeof enrichmentData !== 'object') return null;
+  const data = enrichmentData as Record<string, unknown>;
+  for (const key of ['title', 'job_title', 'position']) {
+    if (typeof data[key] === 'string' && (data[key] as string).trim().length > 0) {
+      return (data[key] as string).trim();
+    }
+  }
   return null;
 }
 
@@ -494,6 +517,8 @@ export default function LeadsPage() {
                 <thead className="sticky top-0 z-10">
                   <tr className="border-b border-border/50 bg-card text-left">
                     <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Name</th>
+                    <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Company</th>
+                    <th className="hidden px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground lg:table-cell">Position</th>
                     <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Email</th>
                     <th className="hidden px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground xl:table-cell">
                       <span className="inline-flex items-center gap-1">
@@ -501,7 +526,6 @@ export default function LeadsPage() {
                         Phone
                       </span>
                     </th>
-                    <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
                     <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Band</th>
                     <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Score</th>
                     <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Created</th>
@@ -521,6 +545,8 @@ export default function LeadsPage() {
                     const enrichmentRaw = lead.latestEnrichmentNormalizedPayload ?? lead.latestEnrichmentRawPayload;
                     const blendedScore = lead.latestBlendedScore ?? extractBlendedScore(enrichmentRaw);
                     const phone = extractPhone(enrichmentRaw);
+                    const companyName = extractCompanyName(enrichmentRaw);
+                    const position = extractPosition(enrichmentRaw);
 
                     return (
                       <tr
@@ -537,6 +563,23 @@ export default function LeadsPage() {
                           className="cursor-pointer px-4 py-3 text-muted-foreground"
                           onClick={() => router.push(`/dashboard/leads/${lead.id}`)}
                         >
+                          {companyName ? (
+                            <span className="text-xs">{companyName}</span>
+                          ) : (
+                            <span className="text-muted-foreground/30">&mdash;</span>
+                          )}
+                        </td>
+                        <td className="hidden px-4 py-3 lg:table-cell">
+                          {position ? (
+                            <span className="text-xs text-muted-foreground">{position}</span>
+                          ) : (
+                            <span className="text-muted-foreground/30">&mdash;</span>
+                          )}
+                        </td>
+                        <td
+                          className="cursor-pointer px-4 py-3 text-muted-foreground"
+                          onClick={() => router.push(`/dashboard/leads/${lead.id}`)}
+                        >
                           {lead.email}
                         </td>
                         <td className="hidden px-4 py-3 xl:table-cell">
@@ -545,9 +588,6 @@ export default function LeadsPage() {
                           ) : (
                             <span className="text-muted-foreground/30">&mdash;</span>
                           )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <LeadStatusBadge status={lead.status} />
                         </td>
                         <td className="px-4 py-3">
                           {lead.latestScoreBand ? (
@@ -674,7 +714,7 @@ export default function LeadsPage() {
                   })}
                   {leads.isLoading ? (
                     <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                      <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
                         <div className="flex items-center justify-center gap-2">
                           <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
                           Loading leads...
@@ -684,7 +724,7 @@ export default function LeadsPage() {
                   ) : null}
                   {!leads.isLoading && (leads.data?.items ?? []).length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                      <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
                         No leads found.
                       </td>
                     </tr>
@@ -847,7 +887,7 @@ export default function LeadsPage() {
                 ))}
                 {rejectedLoading ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                    <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
                       <div className="flex items-center justify-center gap-2">
                         <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
                         Loading rejected leads...
@@ -857,7 +897,7 @@ export default function LeadsPage() {
                 ) : null}
                 {!rejectedLoading && rejectedLeads.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                    <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
                       No rejected leads.
                     </td>
                   </tr>

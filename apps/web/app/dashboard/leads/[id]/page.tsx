@@ -1,5 +1,6 @@
 'use client';
 
+import type { GetLeadResponse } from '@lead-flood/contracts';
 import {
   AlertCircle,
   AlertTriangle,
@@ -7,24 +8,33 @@ import {
   Brain,
   Briefcase,
   Building2,
+  Check,
   ExternalLink,
+  FileText,
   Globe,
-  Instagram,
+  Inbox,
   Linkedin,
   Loader2,
-  Camera,
   Mail,
   MapPin,
   Monitor,
+  Newspaper,
+  Pencil,
   Phone,
+  Plus,
   RefreshCw,
+  Search,
   Shield,
+  Star,
+  Trash2,
   TrendingUp,
   User,
   Users,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { toast } from 'sonner';
 
 import { AboutBusinessCard } from '../../../../src/components/about-business-card.js';
 import { LeadStatusBadge } from '../../../../src/components/lead-status-badge.js';
@@ -42,6 +52,7 @@ import { countryName } from '../../../../src/lib/countries.js';
 import { getSupabaseBrowserClient } from '../../../../src/lib/supabase-client.js';
 import { getTeamMemberTier, sortTeamMembers } from '../../../../src/lib/team-members.js';
 
+// ── Types ──────────────────────────────────────────────────
 interface EnrichmentField {
   label: string;
   value: string | number | null | undefined;
@@ -53,6 +64,127 @@ interface ScoreInfo {
   blendedScore?: number | undefined;
   scoreBand?: string | undefined;
   reasoning?: string[] | undefined;
+}
+
+interface BusinessScrapeData {
+  name: string;
+  websiteScrape: Record<string, unknown> | null;
+  instagramScrape: Record<string, unknown> | null;
+  websiteDomain: string | null;
+  instagramHandle: string | null;
+  rating: number | null;
+  reviewCount: number | null;
+  followerCount: number | null;
+  category: string | null;
+  countryCode: string | null;
+  city: string | null;
+}
+
+interface DecisionMaker { name: string; title: string; email?: string | undefined; linkedinUrl?: string | undefined }
+interface ContactEmail { email: string; context?: string | undefined }
+interface ContactPhone { number: string; type?: string | undefined }
+interface ContactAddress { text: string }
+interface SocialLink { platform: string; url: string; handle?: string | undefined }
+interface TeamMember {
+  id: string;
+  fullName: string;
+  jobTitle: string | null;
+  email: string | null;
+  phone: string | null;
+  linkedinUrl: string | null;
+  seniority: string | null;
+  positionRank: number | null;
+  source: string | null;
+  fromBusinessContacts: boolean;
+}
+
+/** Brave/Google CSE matched decision maker from business conversion metadata */
+interface BraveMatchedPerson {
+  name: string;
+  title: string;
+  linkedinUrl: string | null;
+  confidence: number;
+}
+
+/** Brave/Google CSE search result */
+interface BraveSearchResult {
+  title: string;
+  link: string;
+  snippet: string;
+  linkedinUrl: string | null;
+}
+
+/** Business conversion data loaded from Supabase */
+interface ConversionData {
+  businessInsights: string | null;
+  matchedPerson: BraveMatchedPerson | null;
+  searchResults: BraveSearchResult[];
+}
+
+/** Supabase business_contacts row */
+interface BusinessContactRow {
+  id: string;
+  businessId: string;
+  name: string;
+  title: string | null;
+  email: string | null;
+  phone: string | null;
+  linkedinUrl: string | null;
+  seniority: string;
+  positionRank: number;
+  source: string;
+}
+
+// ── Utility functions ──────────────────────────────────────
+
+function normalizeEmail(email: string | null | undefined): string | null {
+  if (!email) return null;
+  const normalized = email.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function readOptionalString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function getBusinessNameFromLead(lead: GetLeadResponse | null): string | null {
+  if (!lead?.enrichmentData || typeof lead.enrichmentData !== 'object') {
+    return null;
+  }
+  const data = lead.enrichmentData as Record<string, unknown>;
+  return readOptionalString(
+    data.companyName
+      ?? data.company_name
+      ?? data.organization_name
+      ?? data.company,
+  );
+}
+
+function buildTeamMembersFromLead(lead: GetLeadResponse | null): TeamMember[] {
+  const candidates = lead?.contactDiscovery?.topCandidates ?? [];
+  return candidates.map((candidate, index) => ({
+    id: `contact-discovery-${index}`,
+    fullName: candidate.name,
+    jobTitle: candidate.title,
+    email: candidate.email,
+    phone: null,
+    linkedinUrl: candidate.linkedinUrl,
+    seniority: null,
+    positionRank: index,
+    source: candidate.sourceStage ?? 'Contact discovery',
+    fromBusinessContacts: false,
+  }));
+}
+
+function getLeadTitleFromEnrichment(enrichmentData: unknown): string | null {
+  if (!enrichmentData || typeof enrichmentData !== 'object') return null;
+  const data = enrichmentData as Record<string, unknown>;
+  const title = data.title ?? data.job_title ?? data.position;
+  return typeof title === 'string' && title.trim().length > 0 ? title.trim() : null;
+}
+
+function isExecutiveOrDirector(member: Pick<TeamMember, 'seniority' | 'jobTitle'>): boolean {
+  return getTeamMemberTier(member.seniority, member.jobTitle) <= 1;
 }
 
 function extractEnrichmentFields(data: unknown): EnrichmentField[] {
@@ -100,80 +232,9 @@ function extractScoreInfo(data: unknown): ScoreInfo | null {
   };
 }
 
-// ── Company Intelligence (from Business scraper data) ─────────
+// ── Scrape data extraction ─────────────────────────────────
 
-interface BusinessScrapeData {
-  name: string;
-  websiteScrape: Record<string, unknown> | null;
-  instagramScrape: Record<string, unknown> | null;
-  websiteDomain: string | null;
-  instagramHandle: string | null;
-  rating: number | null;
-  reviewCount: number | null;
-  followerCount: number | null;
-  category: string | null;
-  countryCode: string | null;
-  city: string | null;
-}
-
-interface DecisionMaker { name: string; title: string; email?: string | undefined; linkedinUrl?: string | undefined }
-interface ContactEmail { email: string; context?: string | undefined }
-interface ContactPhone { number: string; type?: string | undefined }
-interface ContactAddress { text: string }
-interface SocialLink { platform: string; url: string; handle?: string | undefined }
-interface TeamMember {
-  id: string;
-  fullName: string;
-  jobTitle: string | null;
-  email: string | null;
-  phone: string | null;
-  linkedinUrl: string | null;
-  seniority: string | null;
-  positionRank: number | null;
-  source: string | null;
-  fromBusinessContacts: boolean;
-}
-interface InstagramPost {
-  caption: string;
-  likes: number;
-  comments: number;
-  timestamp: string;
-  url: string | null;
-  thumbnailUrl: string | null;
-  postType: 'image' | 'video' | 'carousel';
-}
-
-function normalizeEmail(email: string | null | undefined): string | null {
-  if (!email) return null;
-  const normalized = email.trim().toLowerCase();
-  return normalized.length > 0 ? normalized : null;
-}
-
-function getLeadTitleFromEnrichment(enrichmentData: unknown): string | null {
-  if (!enrichmentData || typeof enrichmentData !== 'object') return null;
-  const data = enrichmentData as Record<string, unknown>;
-  const title = data.title ?? data.job_title ?? data.position;
-  return typeof title === 'string' && title.trim().length > 0 ? title.trim() : null;
-}
-
-function isExecutiveOrDirector(member: Pick<TeamMember, 'seniority' | 'jobTitle'>): boolean {
-  return getTeamMemberTier(member.seniority, member.jobTitle) <= 1;
-}
-
-function getInstagramPostType(raw: unknown): 'image' | 'video' | 'carousel' {
-  if (raw === 'video') return 'video';
-  if (raw === 'carousel') return 'carousel';
-  return 'image';
-}
-
-function getInstagramPostTypeLabel(postType: 'image' | 'video' | 'carousel'): string {
-  if (postType === 'video') return 'Video';
-  if (postType === 'carousel') return 'Carousel';
-  return 'Image';
-}
-
-// Retained for potential future use — Decision Makers rendering removed (redundant with Team Members)
-function _extractBusinessDecisionMakers(scrape: Record<string, unknown>): DecisionMaker[] {
+function extractBusinessDecisionMakers(scrape: Record<string, unknown>): DecisionMaker[] {
   const raw = scrape.decisionMakers;
   if (!Array.isArray(raw)) return [];
   return raw
@@ -182,7 +243,6 @@ function _extractBusinessDecisionMakers(scrape: Record<string, unknown>): Decisi
 }
 
 function extractBusinessTechStack(scrape: Record<string, unknown>): Array<{ category: string; technologies: string[] }> {
-  // New adapter format: technologies is an object { analytics: [], crm: [], ... }
   const techObj = scrape.technologies;
   if (techObj && typeof techObj === 'object' && !Array.isArray(techObj)) {
     return Object.entries(techObj as Record<string, unknown>)
@@ -190,7 +250,6 @@ function extractBusinessTechStack(scrape: Record<string, unknown>): Array<{ cate
       .map(([category, techs]) => ({ category, technologies: (techs as string[]) }))
       .slice(0, 8);
   }
-  // Legacy format: techStack is an array of { category, technologies[] }
   const raw = scrape.techStack;
   if (!Array.isArray(raw)) return [];
   return raw
@@ -207,7 +266,6 @@ function extractBusinessSocialLinks(scrape: Record<string, unknown>): SocialLink
 }
 
 function extractBusinessCertifications(scrape: Record<string, unknown>): string[] {
-  // New adapter format: businessSignals.certifications
   const signals = scrape.businessSignals;
   if (signals && typeof signals === 'object') {
     const s = signals as Record<string, unknown>;
@@ -215,34 +273,21 @@ function extractBusinessCertifications(scrape: Record<string, unknown>): string[
       return s.certifications.filter((c): c is string => typeof c === 'string').slice(0, 8);
     }
   }
-  // Legacy format: certifications at top level
   const raw = scrape.certifications;
   if (!Array.isArray(raw)) return [];
   return raw.filter((c): c is string => typeof c === 'string').slice(0, 8);
 }
 
-const IMAGE_ARTIFACT_PATTERN = /\.(png|jpg|jpeg|gif|svg|webp|bmp|ico)\b|^https?:\/\/|^data:/i;
-
-function isCleanContactValue(value: string): boolean {
-  return !IMAGE_ARTIFACT_PATTERN.test(value);
-}
-
 function extractContactEmails(scrape: Record<string, unknown>): ContactEmail[] {
-  // New format: contactInfo.emails
   const ci = scrape.contactInfo;
   if (ci && typeof ci === 'object') {
     const c = ci as Record<string, unknown>;
     if (Array.isArray(c.emails)) {
-      return c.emails
-        .filter((e): e is ContactEmail => e && typeof e.email === 'string' && isCleanContactValue(e.email))
-        .slice(0, 5);
+      return c.emails.filter((e): e is ContactEmail => e && typeof e.email === 'string').slice(0, 5);
     }
   }
-  // Legacy: emails at top level
   if (Array.isArray(scrape.emails)) {
-    return scrape.emails
-      .filter((e): e is ContactEmail => e && typeof e.email === 'string' && isCleanContactValue(e.email))
-      .slice(0, 5);
+    return scrape.emails.filter((e): e is ContactEmail => e && typeof e.email === 'string').slice(0, 5);
   }
   return [];
 }
@@ -252,34 +297,24 @@ function extractContactPhones(scrape: Record<string, unknown>): ContactPhone[] {
   if (ci && typeof ci === 'object') {
     const c = ci as Record<string, unknown>;
     if (Array.isArray(c.phones)) {
-      return c.phones
-        .filter((p): p is ContactPhone => p && typeof p.number === 'string' && isCleanContactValue(p.number))
-        .slice(0, 5);
+      return c.phones.filter((p): p is ContactPhone => p && typeof p.number === 'string').slice(0, 5);
     }
   }
   if (Array.isArray(scrape.phones)) {
-    return scrape.phones
-      .filter((p): p is ContactPhone => p && typeof p.number === 'string' && isCleanContactValue(p.number))
-      .slice(0, 5);
+    return scrape.phones.filter((p): p is ContactPhone => p && typeof p.number === 'string').slice(0, 5);
   }
   return [];
 }
 
-const ADDRESS_PROMO_KEYWORDS = /\b(parking|available|locations|directions|visit us|click here|find us|get directions|see map)\b/i;
-
 function extractContactAddresses(scrape: Record<string, unknown>): ContactAddress[] {
   const ci = scrape.contactInfo;
-  let raw: ContactAddress[] = [];
   if (ci && typeof ci === 'object') {
     const c = ci as Record<string, unknown>;
     if (Array.isArray(c.addresses)) {
-      raw = c.addresses.filter((a): a is ContactAddress => a && typeof a.text === 'string');
+      return c.addresses.filter((a): a is ContactAddress => a && typeof a.text === 'string').slice(0, 3);
     }
   }
-  // Filter out garbage: too short, promotional text, or non-address content
-  return raw
-    .filter((a) => a.text.length >= 10 && !ADDRESS_PROMO_KEYWORDS.test(a.text))
-    .slice(0, 2);
+  return [];
 }
 
 function mergeSocialLinks(
@@ -290,7 +325,6 @@ function mergeSocialLinks(
   const links: SocialLink[] = [];
   const seen = new Set<string>();
 
-  // From website scrape socialLinks
   if (websiteScrape) {
     const raw = extractBusinessSocialLinks(websiteScrape);
     for (const sl of raw) {
@@ -302,13 +336,11 @@ function mergeSocialLinks(
     }
   }
 
-  // From Business.instagramHandle
   if (instagramHandle && !seen.has('instagram')) {
     seen.add('instagram');
     links.push({ platform: 'Instagram', url: `https://instagram.com/${instagramHandle}`, handle: instagramHandle });
   }
 
-  // From Instagram scraper data — if we have IG data, ensure it shows
   if (instagramScrape && !seen.has('instagram')) {
     const handle = instagramScrape.username as string | undefined;
     if (handle) {
@@ -320,34 +352,90 @@ function mergeSocialLinks(
   return links;
 }
 
-function InstagramThumbnail({ thumbnailUrl, postType }: { thumbnailUrl: string | null; postType: 'image' | 'video' | 'carousel' }) {
-  const [failed, setFailed] = useState(false);
+// ── Brave CEO card + Related Findings helpers ──────────────
 
-  if (!thumbnailUrl || failed) {
-    return (
-      <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-md border border-dashed border-border/40 bg-zbooni-dark/50 text-muted-foreground/60">
-        <Camera className="h-4 w-4" />
-        <span className="mt-1 text-[9px] font-semibold uppercase tracking-wide">
-          {getInstagramPostTypeLabel(postType)}
-        </span>
-      </div>
-    );
+function classifyUrl(url: string): 'linkedin' | 'company' | 'article' {
+  const lower = url.toLowerCase();
+  if (lower.includes('linkedin.com')) return 'linkedin';
+  // Check if this is the business's own website domain
+  // (we can't check domain here, so classify press/news/directory as article)
+  if (lower.includes('crunchbase.com') || lower.includes('bloomberg.com') || lower.includes('reuters.com') ||
+      lower.includes('techcrunch.com') || lower.includes('forbes.com') || lower.includes('news.') ||
+      lower.includes('press') || lower.includes('article') || lower.includes('medium.com') ||
+      lower.includes('businesswire.com') || lower.includes('prnewswire.com')) {
+    return 'article';
   }
-
-  return (
-    <img
-      src={thumbnailUrl}
-      alt="Instagram post preview"
-      className="h-16 w-16 shrink-0 rounded-md border border-border/30 object-cover"
-      onError={() => setFailed(true)}
-    />
-  );
+  return 'company';
 }
 
-function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
+function getUrlIcon(type: 'linkedin' | 'company' | 'article') {
+  switch (type) {
+    case 'linkedin': return Linkedin;
+    case 'article': return Newspaper;
+    case 'company': return Building2;
+  }
+}
+
+function getUrlIconColor(type: 'linkedin' | 'company' | 'article') {
+  switch (type) {
+    case 'linkedin': return 'text-blue-400';
+    case 'article': return 'text-amber-400';
+    case 'company': return 'text-zbooni-teal';
+  }
+}
+
+// ── Extract conversion data from Supabase ──────────────────
+
+function parseConversionData(row: Record<string, unknown> | null): ConversionData {
+  if (!row) return { businessInsights: null, matchedPerson: null, searchResults: [] };
+
+  const insights = typeof row.businessInsights === 'string' ? row.businessInsights : null;
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : null;
+
+  let matchedPerson: BraveMatchedPerson | null = null;
+  let searchResults: BraveSearchResult[] = [];
+
+  if (metadata) {
+    // Extract matched person (the top decision maker identified via Brave/Google CSE)
+    const mp = metadata.googleCseMatchedPerson ?? metadata.matchedPerson ?? metadata.topPerson;
+    if (mp && typeof mp === 'object') {
+      const p = mp as Record<string, unknown>;
+      if (typeof p.name === 'string') {
+        matchedPerson = {
+          name: p.name,
+          title: typeof p.title === 'string' ? p.title : 'Unknown',
+          linkedinUrl: typeof p.linkedinUrl === 'string' ? p.linkedinUrl : null,
+          confidence: typeof p.confidence === 'number' ? p.confidence : 0,
+        };
+      }
+    }
+
+    // Extract search results
+    const results = metadata.googleCseResults ?? metadata.braveResults ?? metadata.webSearchResults;
+    if (Array.isArray(results)) {
+      searchResults = results
+        .filter((r): r is Record<string, unknown> => r && typeof r === 'object')
+        .map((r) => ({
+          title: typeof r.title === 'string' ? r.title : '',
+          link: typeof r.link === 'string' ? r.link : (typeof r.url === 'string' ? r.url : ''),
+          snippet: typeof r.snippet === 'string' ? r.snippet : '',
+          linkedinUrl: typeof r.linkedinUrl === 'string' ? r.linkedinUrl : null,
+        }))
+        .filter((r) => r.link.length > 0)
+        .slice(0, 10);
+    }
+  }
+
+  return { businessInsights: insights, matchedPerson, searchResults };
+}
+
+// ── Intelligence Gathered Component ────────────────────────
+
+function _IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
   const ws = data.websiteScrape;
   const ig = data.instagramScrape;
 
+  const decisionMakers = ws ? extractBusinessDecisionMakers(ws) : [];
   const techStack = ws ? extractBusinessTechStack(ws) : [];
   const mergedSocialLinks = mergeSocialLinks(ws, data.instagramHandle, ig);
   const certs = ws ? extractBusinessCertifications(ws) : [];
@@ -355,7 +443,6 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
   const phones = ws ? extractContactPhones(ws) : [];
   const addresses = ws ? extractContactAddresses(ws) : [];
 
-  // Add Instagram business email/phone to contact methods
   const igBusinessEmail = ig && typeof ig.businessEmail === 'string' ? ig.businessEmail : null;
   const igBusinessPhone = ig && typeof ig.businessPhone === 'string' ? ig.businessPhone : null;
   const allEmails = [...emails];
@@ -370,7 +457,7 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
   const igMediaCount = ig && typeof ig.mediaCount === 'number' ? ig.mediaCount : null;
 
   const hasAnyData =
-    techStack.length > 0 || mergedSocialLinks.length > 0 ||
+    decisionMakers.length > 0 || techStack.length > 0 || mergedSocialLinks.length > 0 ||
     certs.length > 0 || allEmails.length > 0 || allPhones.length > 0 || addresses.length > 0;
 
   if (!hasAnyData) {
@@ -411,7 +498,7 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
         )}
       </div>
 
-      {/* Contact Methods (D6: emails + phones at top) */}
+      {/* Contact Methods */}
       {(allEmails.length > 0 || allPhones.length > 0) && (
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">
@@ -419,22 +506,14 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
           </p>
           <div className="grid gap-2 sm:grid-cols-2">
             {allEmails.map((e, i) => (
-              <a
-                key={i}
-                href={`mailto:${e.email}`}
-                className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2 text-xs text-zbooni-teal transition-colors hover:text-zbooni-green hover:border-border/40"
-              >
+              <a key={i} href={`mailto:${e.email}`} className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2 text-xs text-zbooni-teal transition-colors hover:text-zbooni-green hover:border-border/40">
                 <Mail className="h-3.5 w-3.5 shrink-0" />
                 <span className="truncate">{e.email}</span>
                 {e.context && <span className="ml-auto text-[10px] text-muted-foreground/40">{e.context}</span>}
               </a>
             ))}
             {allPhones.map((p, i) => (
-              <a
-                key={i}
-                href={`tel:${p.number}`}
-                className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2 text-xs text-zbooni-teal transition-colors hover:text-zbooni-green hover:border-border/40"
-              >
+              <a key={i} href={`tel:${p.number}`} className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2 text-xs text-zbooni-teal transition-colors hover:text-zbooni-green hover:border-border/40">
                 <Phone className="h-3.5 w-3.5 shrink-0" />
                 <span className="truncate">{p.number}</span>
                 {p.type && <span className="ml-auto text-[10px] text-muted-foreground/40">{p.type}</span>}
@@ -444,7 +523,7 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
         </div>
       )}
 
-      {/* Location (D6: addresses below) */}
+      {/* Location */}
       {addresses.length > 0 && (
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">
@@ -452,10 +531,7 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
           </p>
           <div className="grid gap-2 sm:grid-cols-2">
             {addresses.map((a, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2 text-xs text-muted-foreground"
-              >
+              <div key={i} className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2 text-xs text-muted-foreground">
                 <MapPin className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
                 <span className="truncate">{a.text}</span>
               </div>
@@ -464,7 +540,39 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
         </div>
       )}
 
-      {/* Social Presence (D5: platform icons, D7: merged sources) */}
+      {/* Decision Makers */}
+      {decisionMakers.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">
+            <Users className="mr-1 inline h-3 w-3" />Decision Makers ({decisionMakers.length})
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {decisionMakers.map((dm, i) => (
+              <div key={i} className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2">
+                <div className="flex h-7 w-7 items-center justify-center rounded-md bg-amber-500/10 text-[10px] font-bold text-amber-400">{dm.name.charAt(0)}</div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold truncate">{dm.name}</p>
+                  <p className="text-[10px] text-muted-foreground/50 truncate">{dm.title}</p>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  {dm.email && (
+                    <a href={`mailto:${dm.email}`} title={dm.email} className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
+                      <Mail className="h-3 w-3" />
+                    </a>
+                  )}
+                  {dm.linkedinUrl && (
+                    <a href={dm.linkedinUrl} target="_blank" rel="noopener noreferrer" title="LinkedIn" className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
+                      <Linkedin className="h-3 w-3" />
+                    </a>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Social Presence */}
       {mergedSocialLinks.length > 0 && (
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40 mb-2">
@@ -491,13 +599,8 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
                   style={hoverStyle}
                   className="inline-flex items-center gap-1.5 rounded-full border border-border/30 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground transition-all duration-200 hover:border-[var(--social-brand-color)] hover:shadow-[0_0_8px_var(--social-brand-shadow)] hover:text-[var(--social-brand-color)]"
                 >
-                  <SocialLinkIcon
-                    platform={sl.platform}
-                    className="h-3 w-3"
-                  />
-                  <span>
-                    {label}
-                  </span>
+                  <SocialLinkIcon platform={sl.platform} className="h-3 w-3" />
+                  <span>{label}</span>
                   <ExternalLink className="h-2.5 w-2.5" />
                 </a>
               );
@@ -544,67 +647,582 @@ function IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
   );
 }
 
-function ApolloOrgIntelCard({ data }: { data: unknown }) {
-  if (!data || typeof data !== 'object') return null;
-  const org = data as Record<string, unknown>;
-  const hasAnyField = org.industry || org.estimatedEmployees || org.foundedYear || org.annualRevenue || org.primaryPhone || org.linkedinUrl || org.country;
-  if (!hasAnyField) return null;
+// ── Brave Search Results Section ───────────────────────────
+
+function BraveSearchSection({ conversion }: { conversion: ConversionData }) {
+  const { matchedPerson, searchResults } = conversion;
+
+  if (!matchedPerson && searchResults.length === 0) return null;
+
+  // Separate related findings (non-linkedin, supplementary results)
+  const relatedFindings = searchResults.filter((r) => {
+    const type = classifyUrl(r.link);
+    return type === 'article';
+  });
 
   return (
     <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-      <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-        <Building2 className="h-4 w-4 text-zbooni-teal" />
-        Company Intel (Apollo)
+      <h2 className="mb-4 flex items-center gap-2 text-base font-bold tracking-tight">
+        <Search className="h-4 w-4 text-zbooni-teal" />
+        Web Search Results
       </h2>
-      <div className="space-y-2 text-sm">
-        {typeof org.industry === 'string' && org.industry && (
-          <div className="flex justify-between">
-            <span className="text-muted-foreground/60">Industry</span>
-            <span>{org.industry}</span>
+
+      {/* CEO / Decision Maker Card (C3) */}
+      {matchedPerson && (
+        <div className="rounded-xl border border-border/30 bg-zbooni-dark/30 p-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-sm font-bold text-amber-400">
+              {matchedPerson.name.charAt(0)}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-bold">{matchedPerson.name}</p>
+                <span className="rounded-full border border-amber-400/40 bg-amber-400/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-300">
+                  Decision Maker
+                </span>
+              </div>
+              <p className="mt-0.5 text-xs text-muted-foreground/60">{matchedPerson.title}</p>
+              {matchedPerson.confidence > 0 && (
+                <p className="mt-1 text-[10px] text-muted-foreground/40">
+                  Confidence: {Math.round(matchedPerson.confidence * 100)}%
+                </p>
+              )}
+
+              {/* Links with proper icons */}
+              <div className="mt-2 flex flex-wrap gap-2">
+                {matchedPerson.linkedinUrl && (
+                  <a
+                    href={matchedPerson.linkedinUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-blue-400/20 bg-blue-400/5 px-2.5 py-1.5 text-[11px] font-semibold text-blue-400 transition-colors hover:bg-blue-400/10"
+                  >
+                    <Linkedin className="h-3 w-3" />
+                    LinkedIn Profile
+                    <ExternalLink className="h-2.5 w-2.5" />
+                  </a>
+                )}
+              </div>
+            </div>
           </div>
-        )}
-        {typeof org.estimatedEmployees === 'number' && (
-          <div className="flex justify-between">
-            <span className="text-muted-foreground/60">Employees</span>
-            <span>{org.estimatedEmployees.toLocaleString()}</span>
+        </div>
+      )}
+
+      {/* Search results with correct icon types */}
+      {searchResults.length > 0 && (
+        <div className="mt-4 space-y-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">
+            Search Results ({searchResults.length})
+          </p>
+          {searchResults.slice(0, 5).map((r, i) => {
+            const urlType = classifyUrl(r.link);
+            const Icon = getUrlIcon(urlType);
+            const iconColor = getUrlIconColor(urlType);
+
+            return (
+              <a
+                key={i}
+                href={r.link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-start gap-2.5 rounded-lg border border-border/20 bg-zbooni-dark/20 px-3 py-2.5 transition-colors hover:border-border/40"
+              >
+                <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${iconColor}`} />
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold text-foreground/80 truncate">{r.title}</p>
+                  {r.snippet && (
+                    <p className="mt-0.5 text-[10px] text-muted-foreground/50 line-clamp-2">{r.snippet}</p>
+                  )}
+                  <p className="mt-0.5 text-[10px] text-muted-foreground/30 truncate">{r.link}</p>
+                </div>
+                <ExternalLink className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/30" />
+              </a>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Related Findings (C4) */}
+      {relatedFindings.length > 0 && (
+        <div className="mt-4">
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">
+            <FileText className="mr-1 inline h-3 w-3" />
+            Related Findings ({relatedFindings.length})
+          </p>
+          <div className="space-y-1.5">
+            {relatedFindings.map((r, i) => (
+              <a
+                key={i}
+                href={r.link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 rounded-lg border border-amber-400/10 bg-amber-400/[0.03] px-3 py-2 text-xs transition-colors hover:border-amber-400/30"
+              >
+                <Newspaper className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                <span className="truncate font-semibold text-foreground/70">{r.title}</span>
+                <ExternalLink className="ml-auto h-3 w-3 shrink-0 text-muted-foreground/30" />
+              </a>
+            ))}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Editable Team Members (C9) ─────────────────────────────
+
+function EditableTeamMembers({
+  leadId: _leadId,
+  leadEmail,
+  businessId,
+  initialMembers,
+}: {
+  leadId: string;
+  leadEmail: string | null;
+  businessId: string | null;
+  initialMembers: TeamMember[];
+}) {
+  const [contacts, setContacts] = useState<BusinessContactRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [savingId, setSavingId] = useState<string | null>(null);
+
+  // Form state for editing
+  const [editName, setEditName] = useState('');
+  const [editTitle, setEditTitle] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+
+  // Form state for adding
+  const [addName, setAddName] = useState('');
+  const [addTitle, setAddTitle] = useState('');
+  const [addEmail, setAddEmail] = useState('');
+  const [addPhone, setAddPhone] = useState('');
+
+  const leadEmailNormalized = normalizeEmail(leadEmail);
+
+  // Load contacts from Supabase
+  useEffect(() => {
+    if (!businessId) {
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    async function load() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data, error } = await supabase
+          .from('business_contacts')
+          .select('id, businessId:business_id, name, title, email, phone, linkedinUrl:linkedin_url, seniority, positionRank:position_rank, source')
+          .eq('business_id', businessId)
+          .order('position_rank', { ascending: true });
+
+        if (cancelled) return;
+        if (error) {
+          console.error('Failed to load business contacts:', error);
+          return;
+        }
+        if (data) {
+          setContacts(data as unknown as BusinessContactRow[]);
+        }
+      } catch (err) {
+        if (!cancelled) console.error('Failed to load contacts:', err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void load();
+    return () => { cancelled = true; };
+  }, [businessId]);
+
+  // Merge contacts from Supabase + lead's topCandidates (dedup by email)
+  const allMembers = useMemo(() => {
+    const fromDb: TeamMember[] = contacts.map((c) => ({
+      id: c.id,
+      fullName: c.name,
+      jobTitle: c.title,
+      email: c.email,
+      phone: c.phone,
+      linkedinUrl: c.linkedinUrl,
+      seniority: c.seniority,
+      positionRank: c.positionRank,
+      source: c.source,
+      fromBusinessContacts: true,
+    }));
+
+    // Merge: prefer DB contacts, add initialMembers that aren't in DB (by email dedup)
+    const dbEmails = new Set(fromDb.map((m) => normalizeEmail(m.email)).filter(Boolean));
+    const merged = [...fromDb];
+    for (const m of initialMembers) {
+      const norm = normalizeEmail(m.email);
+      if (!norm || !dbEmails.has(norm)) {
+        merged.push(m);
+      }
+    }
+
+    return sortTeamMembers(merged, leadEmail).ordered;
+  }, [contacts, initialMembers, leadEmail]);
+
+  const startEdit = (member: TeamMember) => {
+    setEditingId(member.id);
+    setEditName(member.fullName);
+    setEditTitle(member.jobTitle ?? '');
+    setEditEmail(member.email ?? '');
+    setEditPhone(member.phone ?? '');
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+  };
+
+  const saveEdit = async (memberId: string) => {
+    if (!editName.trim()) {
+      toast.error('Name is required');
+      return;
+    }
+    setSavingId(memberId);
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { error } = await supabase
+        .from('business_contacts')
+        .update({
+          name: editName.trim(),
+          title: editTitle.trim() || null,
+          email: editEmail.trim() || null,
+          phone: editPhone.trim() || null,
+        })
+        .eq('id', memberId);
+
+      if (error) throw error;
+
+      setContacts((prev) =>
+        prev.map((c) =>
+          c.id === memberId
+            ? { ...c, name: editName.trim(), title: editTitle.trim() || null, email: editEmail.trim() || null, phone: editPhone.trim() || null }
+            : c,
+        ),
+      );
+      setEditingId(null);
+      toast.success('Contact updated');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const handleDelete = async (memberId: string, memberName: string) => {
+    if (!window.confirm(`Remove ${memberName} from the team?`)) return;
+    setSavingId(memberId);
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { error } = await supabase
+        .from('business_contacts')
+        .delete()
+        .eq('id', memberId);
+
+      if (error) throw error;
+
+      setContacts((prev) => prev.filter((c) => c.id !== memberId));
+      toast.success(`${memberName} removed`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const handleSetPrimary = async (memberId: string, memberName: string) => {
+    if (!businessId) return;
+    setSavingId(memberId);
+    try {
+      const supabase = getSupabaseBrowserClient();
+
+      // Set all other contacts to higher position_rank
+      await supabase
+        .from('business_contacts')
+        .update({ position_rank: 99 })
+        .eq('business_id', businessId);
+
+      // Set this one to rank 0
+      const { error } = await supabase
+        .from('business_contacts')
+        .update({ position_rank: 0 })
+        .eq('id', memberId);
+
+      if (error) throw error;
+
+      setContacts((prev) =>
+        prev.map((c) => ({
+          ...c,
+          positionRank: c.id === memberId ? 0 : 99,
+        })),
+      );
+      toast.success(`${memberName} set as primary contact`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const handleAdd = async () => {
+    if (!businessId) {
+      toast.error('No business linked to this lead');
+      return;
+    }
+    if (!addName.trim()) {
+      toast.error('Name is required');
+      return;
+    }
+    setSavingId('add');
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { data, error } = await supabase
+        .from('business_contacts')
+        .insert({
+          business_id: businessId,
+          name: addName.trim(),
+          title: addTitle.trim() || null,
+          email: addEmail.trim() || null,
+          phone: addPhone.trim() || null,
+          seniority: 'other',
+          position_rank: 50,
+          source: 'manual',
+        })
+        .select('id, businessId:business_id, name, title, email, phone, linkedinUrl:linkedin_url, seniority, positionRank:position_rank, source')
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        setContacts((prev) => [...prev, data as unknown as BusinessContactRow]);
+      }
+      setAddName('');
+      setAddTitle('');
+      setAddEmail('');
+      setAddPhone('');
+      setShowAddForm(false);
+      toast.success(`${addName.trim()} added to team`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to add contact');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground/50">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
+          Loading team members...
+        </div>
+      </div>
+    );
+  }
+
+  if (allMembers.length === 0 && !showAddForm) {
+    return (
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-bold tracking-tight flex items-center gap-2">
+            <Users className="h-4 w-4 text-amber-400" />
+            Team Members
+          </h2>
+          {businessId && (
+            <button
+              type="button"
+              onClick={() => setShowAddForm(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-zbooni-teal/10 px-3 py-1.5 text-xs font-semibold text-zbooni-teal transition-colors hover:bg-zbooni-teal/20"
+            >
+              <Plus className="h-3 w-3" /> Add Member
+            </button>
+          )}
+        </div>
+        <p className="mt-3 text-sm text-muted-foreground/50">No team members found for this business.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-base font-bold tracking-tight flex items-center gap-2">
+          <Users className="h-4 w-4 text-amber-400" />
+          Team Members
+          <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">{allMembers.length}</span>
+        </h2>
+        {businessId && (
+          <button
+            type="button"
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-zbooni-teal/10 px-3 py-1.5 text-xs font-semibold text-zbooni-teal transition-colors hover:bg-zbooni-teal/20"
+          >
+            <Plus className="h-3 w-3" /> Add
+          </button>
         )}
-        {typeof org.foundedYear === 'number' && (
-          <div className="flex justify-between">
-            <span className="text-muted-foreground/60">Founded</span>
-            <span>{org.foundedYear}</span>
+      </div>
+
+      {/* Add Form */}
+      {showAddForm && (
+        <div className="mb-4 rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 p-4">
+          <p className="mb-3 text-xs font-semibold text-zbooni-teal">New Team Member</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <input value={addName} onChange={(e) => setAddName(e.target.value)} placeholder="Name *" className="h-8 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-zbooni-teal/30" />
+            <input value={addTitle} onChange={(e) => setAddTitle(e.target.value)} placeholder="Position" className="h-8 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-zbooni-teal/30" />
+            <input value={addEmail} onChange={(e) => setAddEmail(e.target.value)} placeholder="Email" type="email" className="h-8 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-zbooni-teal/30" />
+            <input value={addPhone} onChange={(e) => setAddPhone(e.target.value)} placeholder="Phone" className="h-8 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-zbooni-teal/30" />
           </div>
-        )}
-        {typeof org.annualRevenue === 'string' && org.annualRevenue && (
-          <div className="flex justify-between">
-            <span className="text-muted-foreground/60">Revenue</span>
-            <span>{org.annualRevenue}</span>
+          <div className="mt-3 flex gap-2">
+            <button type="button" onClick={() => void handleAdd()} disabled={savingId === 'add'} className="inline-flex items-center gap-1.5 rounded-lg bg-zbooni-teal/20 px-3 py-1.5 text-xs font-semibold text-zbooni-teal transition-colors hover:bg-zbooni-teal/30 disabled:opacity-50">
+              {savingId === 'add' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+              Add
+            </button>
+            <button type="button" onClick={() => setShowAddForm(false)} className="rounded-lg px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground">
+              Cancel
+            </button>
           </div>
-        )}
-        {typeof org.primaryPhone === 'string' && org.primaryPhone && (
-          <div className="flex justify-between">
-            <span className="text-muted-foreground/60">Phone</span>
-            <span className="font-mono text-xs">{org.primaryPhone}</span>
-          </div>
-        )}
-        {typeof org.linkedinUrl === 'string' && org.linkedinUrl && (
-          <div className="flex justify-between">
-            <span className="text-muted-foreground/60">LinkedIn</span>
-            <a href={org.linkedinUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green truncate max-w-[200px]">
-              Company Profile <ExternalLink className="h-3 w-3 shrink-0" />
-            </a>
-          </div>
-        )}
-        {typeof org.country === 'string' && org.country && (
-          <div className="flex justify-between">
-            <span className="text-muted-foreground/60">Location</span>
-            <span>{[typeof org.city === 'string' ? org.city : null, org.country].filter(Boolean).join(', ')}</span>
-          </div>
-        )}
+        </div>
+      )}
+
+      {/* Team member cards */}
+      <div className="grid gap-2.5 sm:grid-cols-2">
+        {allMembers.map((tm, idx) => {
+          const isPrimary = leadEmailNormalized
+            ? normalizeEmail(tm.email) === leadEmailNormalized
+            : idx === 0;
+          const isDecisionMaker = isExecutiveOrDirector(tm);
+          const seniorityLabel = tm.seniority ? tm.seniority.charAt(0).toUpperCase() + tm.seniority.slice(1) : null;
+          const isEditing = editingId === tm.id;
+          const isFromDb = tm.fromBusinessContacts;
+          const isSaving = savingId === tm.id;
+
+          if (isEditing) {
+            return (
+              <div key={tm.id} className="rounded-lg border border-zbooni-teal/30 bg-zbooni-teal/5 p-3">
+                <div className="space-y-2">
+                  <input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="Name *" className="h-7 w-full rounded-md border border-border/40 bg-zbooni-dark/30 px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-zbooni-teal/30" />
+                  <input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} placeholder="Position" className="h-7 w-full rounded-md border border-border/40 bg-zbooni-dark/30 px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-zbooni-teal/30" />
+                  <input value={editEmail} onChange={(e) => setEditEmail(e.target.value)} placeholder="Email" type="email" className="h-7 w-full rounded-md border border-border/40 bg-zbooni-dark/30 px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-zbooni-teal/30" />
+                  <input value={editPhone} onChange={(e) => setEditPhone(e.target.value)} placeholder="Phone" className="h-7 w-full rounded-md border border-border/40 bg-zbooni-dark/30 px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-zbooni-teal/30" />
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => void saveEdit(tm.id)} disabled={isSaving} className="inline-flex items-center gap-1 rounded-md bg-zbooni-teal/20 px-2 py-1 text-[10px] font-semibold text-zbooni-teal hover:bg-zbooni-teal/30 disabled:opacity-50">
+                      {isSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                      Save
+                    </button>
+                    <button type="button" onClick={cancelEdit} className="rounded-md px-2 py-1 text-[10px] font-semibold text-muted-foreground hover:text-foreground">
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <div key={tm.id} className="group rounded-lg border border-border/25 bg-zbooni-dark/35 p-3">
+              <div className="flex items-start gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-[11px] font-bold text-amber-400">
+                  {tm.fullName.charAt(0)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <p className="truncate text-sm font-semibold">{tm.fullName}</p>
+                    {isPrimary ? (
+                      <span className="rounded-full border border-zbooni-green/40 bg-zbooni-green/20 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-zbooni-green">
+                        Primary
+                      </span>
+                    ) : null}
+                    {isDecisionMaker && !isPrimary ? (
+                      <span className="rounded-full border border-amber-400/40 bg-amber-400/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-300">
+                        Decision Maker
+                      </span>
+                    ) : null}
+                    {seniorityLabel && seniorityLabel.toLowerCase() !== 'other' ? (
+                      <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-blue-300">
+                        {seniorityLabel}
+                      </span>
+                    ) : null}
+                  </div>
+                  {tm.jobTitle ? (
+                    <p className="mt-0.5 truncate text-[11px] text-muted-foreground/60">{tm.jobTitle}</p>
+                  ) : null}
+
+                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px]">
+                    {tm.email ? (
+                      <a href={`mailto:${tm.email}`} className="inline-flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green">
+                        <Mail className="h-3.5 w-3.5" />
+                        <span className="font-mono">{tm.email}</span>
+                      </a>
+                    ) : (
+                      <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-medium text-muted-foreground/60">
+                        No email found
+                      </span>
+                    )}
+                    {tm.phone ? (
+                      <a href={`tel:${tm.phone}`} className="inline-flex items-center gap-1 text-muted-foreground/80 transition-colors hover:text-foreground">
+                        <Phone className="h-3.5 w-3.5" />
+                        {tm.phone}
+                      </a>
+                    ) : null}
+                    {tm.linkedinUrl ? (
+                      <a href={tm.linkedinUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green">
+                        <Linkedin className="h-3.5 w-3.5" />
+                        LinkedIn
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+
+                {/* Edit/Delete/Primary buttons (only for DB-backed contacts) */}
+                {isFromDb && (
+                  <div className="flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                    {!isPrimary && (
+                      <button
+                        type="button"
+                        title="Set as primary"
+                        onClick={() => void handleSetPrimary(tm.id, tm.fullName)}
+                        disabled={isSaving}
+                        className="rounded-md p-1 text-muted-foreground/40 transition-colors hover:bg-zbooni-green/10 hover:text-zbooni-green disabled:opacity-50"
+                      >
+                        <Star className="h-3 w-3" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      title="Edit"
+                      onClick={() => startEdit(tm)}
+                      className="rounded-md p-1 text-muted-foreground/40 transition-colors hover:bg-zbooni-teal/10 hover:text-zbooni-teal"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                    <button
+                      type="button"
+                      title="Remove"
+                      onClick={() => void handleDelete(tm.id, tm.fullName)}
+                      disabled={isSaving}
+                      className="rounded-md p-1 text-muted-foreground/40 transition-colors hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
+
+// ── Main Page Component ────────────────────────────────────
 
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -620,187 +1238,73 @@ export default function LeadDetailPage() {
     useCallback(() => apiClient.listSends({ leadId: id, page: 1, pageSize: 50 }), [apiClient, id]),
     [id],
   );
-
-  // Fetch linked Business scraper data via business_conversions → businesses
-  const [businessData, setBusinessData] = useState<BusinessScrapeData | null>(null);
-  const [businessId, setBusinessId] = useState<string | null>(null);
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
-  const [instagramPosts, setInstagramPosts] = useState<InstagramPost[]>([]);
-  const [conversionMetadata, setConversionMetadata] = useState<Record<string, unknown> | null>(null);
-  const [leadPhoneSource, setLeadPhoneSource] = useState<string | null>(null);
-  const [leadBusinessEmail, setLeadBusinessEmail] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    async function fetchBusiness() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-        // Find business linked to this lead
-        const { data: conversions } = await supabase
-          .from('business_conversions')
-          .select('businessId, icpProfileId, metadata')
-          .eq('leadId', id)
-          .limit(1);
-
-        const bizId = conversions?.[0]?.businessId;
-        const convIcpProfileId = conversions?.[0]?.icpProfileId as string | null | undefined;
-        const convMetadata = conversions?.[0]?.metadata as Record<string, unknown> | null | undefined;
-        if (!bizId || cancelled) return;
-
-        setBusinessId(bizId);
-        if (convIcpProfileId) setLeadIcpProfileId(convIcpProfileId);
-        if (convMetadata) setConversionMetadata(convMetadata);
-
-        const { data: biz } = await supabase
-          .from('businesses')
-          .select('name, website_domain, instagram_handle, rating, review_count, follower_count, category, country_code, city, apify_website_scrape_json, apify_instagram_scrape_json')
-          .eq('id', bizId)
-          .single();
-
-        if (!biz || cancelled) return;
-
-        setBusinessData({
-          name: biz.name ?? '',
-          websiteScrape: biz.apify_website_scrape_json as Record<string, unknown> | null,
-          instagramScrape: biz.apify_instagram_scrape_json as Record<string, unknown> | null,
-          websiteDomain: biz.website_domain,
-          instagramHandle: biz.instagram_handle,
-          rating: biz.rating,
-          reviewCount: biz.review_count,
-          followerCount: biz.follower_count,
-          category: biz.category,
-          countryCode: biz.country_code ?? null,
-          city: biz.city ?? null,
-        });
-
-        // Fetch phoneSource and businessEmail from Lead table
-        const { data: leadExtra } = await supabase
-          .from('Lead')
-          .select('phoneSource, businessEmail')
-          .eq('id', id)
-          .single();
-        if (leadExtra && !cancelled) {
-          setLeadPhoneSource((leadExtra.phoneSource as string) ?? null);
-          setLeadBusinessEmail((leadExtra.businessEmail as string) ?? null);
-        }
-
-        // Fetch team members from business_contacts table
-        const { data: contacts } = await supabase
-          .from('business_contacts')
-          .select('id, name, title, email, phone, linkedinUrl, seniority, positionRank, source')
-          .eq('businessId', bizId)
-          .order('positionRank', { ascending: true })
-          .order('createdAt', { ascending: false });
-
-        if (contacts && contacts.length > 0 && !cancelled) {
-          const mapped = contacts.map((c: {
-            id: string;
-            name: string;
-            title: string | null;
-            email: string | null;
-            phone: string | null;
-            linkedinUrl: string | null;
-            seniority: string | null;
-            positionRank: number | null;
-            source: string | null;
-          }) => ({
-            id: c.id,
-            fullName: c.name,
-            jobTitle: c.title,
-            email: c.email,
-            phone: c.phone,
-            linkedinUrl: c.linkedinUrl,
-            seniority: c.seniority,
-            positionRank: c.positionRank,
-            source: (c.source as string) ?? null,
-            fromBusinessContacts: true,
-          }));
-          setTeamMembers(mapped);
-        }
-
-        // Extract Instagram recent posts from scrape data
-        const igScrape = biz.apify_instagram_scrape_json as Record<string, unknown> | null;
-        if (igScrape && Array.isArray(igScrape.recentPosts) && !cancelled) {
-          const posts = (igScrape.recentPosts as Array<Record<string, unknown>>)
-            .slice(0, 6)
-            .map((p) => ({
-              caption: typeof p.caption === 'string' ? p.caption : '',
-              likes: typeof p.likeCount === 'number'
-                ? p.likeCount
-                : (typeof p.likes === 'number' ? p.likes : (typeof p.likesCount === 'number' ? p.likesCount : 0)),
-              comments: typeof p.commentCount === 'number'
-                ? p.commentCount
-                : (typeof p.comments === 'number' ? p.comments : (typeof p.commentsCount === 'number' ? p.commentsCount : 0)),
-              timestamp: typeof p.timestamp === 'string' ? p.timestamp : (typeof p.takenAtTimestamp === 'string' ? p.takenAtTimestamp : ''),
-              url: typeof p.url === 'string' ? p.url : (typeof p.shortCode === 'string' ? `https://instagram.com/p/${p.shortCode}` : null),
-              thumbnailUrl:
-                typeof p.thumbnailUrl === 'string'
-                  ? p.thumbnailUrl
-                  : (
-                    typeof p.displayUrl === 'string'
-                      ? p.displayUrl
-                      : (typeof p.url === 'string' ? p.url : null)
-                  ),
-              postType: getInstagramPostType(typeof p.postType === 'string' ? p.postType.toLowerCase() : null),
-            }));
-          setInstagramPosts(posts);
-        }
-      } catch {
-        // Silently fail — business intel is supplementary
-      }
-    }
-    void fetchBusiness();
-    return () => { cancelled = true; };
-  }, [id]);
-
-  // Backup contact rotation
-  const [leadIcpProfileId, setLeadIcpProfileId] = useState<string | null>(null);
   const [isCreatingBackup, setIsCreatingBackup] = useState(false);
   const [backupSuccess, setBackupSuccess] = useState<string | null>(null);
 
-  const backupContacts = useMemo(() => {
-    if (!lead.data) return [];
-    const currentEmail = lead.data.email?.toLowerCase();
-    return sortTeamMembers(teamMembers, lead.data.email).ordered
-      .filter((tm) => tm.email && tm.email.toLowerCase() !== currentEmail);
-  }, [teamMembers, lead.data]);
+  // Load business conversion data from Supabase (for AI insights + Brave results)
+  const [conversionData, setConversionData] = useState<ConversionData>({ businessInsights: null, matchedPerson: null, searchResults: [] });
+  const [businessId, setBusinessId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+
+    async function loadConversionData() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        // First get the lead's businessId
+        const { data: leadRow } = await supabase
+          .from('Lead')
+          .select('businessId:business_id')
+          .eq('id', id)
+          .single();
+
+        if (cancelled) return;
+        if (leadRow && typeof (leadRow as Record<string, unknown>).businessId === 'string') {
+          setBusinessId((leadRow as Record<string, unknown>).businessId as string);
+        }
+
+        // Load business conversion
+        const { data: convRow } = await supabase
+          .from('business_conversions')
+          .select('businessInsights:business_insights, metadata')
+          .eq('lead_id', id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (cancelled) return;
+        if (convRow) {
+          setConversionData(parseConversionData(convRow as unknown as Record<string, unknown>));
+        }
+      } catch (err) {
+        if (!cancelled) console.error('Failed to load conversion data:', err);
+      }
+    }
+
+    void loadConversionData();
+    return () => { cancelled = true; };
+  }, [id]);
 
   const maxFollowUpNumber = useMemo(() => {
     if (!sends.data?.items.length) return -1;
     return Math.max(...sends.data.items.map((s) => s.followUpNumber ?? 0));
   }, [sends.data]);
 
-  const hasReply = sends.data?.items.some((s) => s.status === 'REPLIED') ?? false;
-  const showBackupBanner = maxFollowUpNumber >= 3 && !hasReply && backupContacts.length > 0;
-  const nextBackup = backupContacts[0];
-
-  const handleStartBackupSequence = async (contact: typeof backupContacts[0]) => {
+  const handleStartBackupSequence = async (contact: TeamMember) => {
     if (!contact.email) return;
     setIsCreatingBackup(true);
     try {
-      // Dedup check — don't create duplicate leads for same email
-      const supabase = getSupabaseBrowserClient();
-      const { data: existing } = await supabase
-        .from('Lead')
-        .select('id')
-        .eq('email', contact.email.toLowerCase())
-        .is('deletedAt', null)
-        .limit(1);
-      if (existing && existing.length > 0) {
-        setBackupSuccess(`Lead already exists for ${contact.email}.`);
-        return;
-      }
-
       const nameParts = contact.fullName.split(' ');
       const firstName = nameParts[0] ?? contact.fullName;
       const lastName = nameParts.slice(1).join(' ') || 'Unknown';
-      await apiClient.createLead({
+      await apiClient.createBackupLead(id, {
         firstName,
         lastName,
         email: contact.email,
         source: 'BACKUP_CONTACT_ROTATION',
-        ...(leadIcpProfileId ? { icpProfileId: leadIcpProfileId } : {}),
       });
-      setBackupSuccess(`New lead created for ${contact.fullName}. Message generation will start automatically.`);
+      setBackupSuccess(`New lead created for ${contact.fullName}. It will re-enter qualification using the source business context.`);
     } catch (err) {
       setBackupSuccess(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
@@ -809,6 +1313,27 @@ export default function LeadDetailPage() {
   };
 
   const l = lead.data;
+  const businessName = useMemo(() => getBusinessNameFromLead(l ?? null), [l]);
+  const teamMembers = useMemo(() => buildTeamMembersFromLead(l ?? null), [l]);
+  const businessSummary = useMemo(() => {
+    if (!l) return null;
+    if (!businessName && !l.businessCategory && !l.businessCountryCode && !l.businessCity) return null;
+    return {
+      category: l.businessCategory ?? null,
+      countryCode: l.businessCountryCode ?? null,
+      city: l.businessCity ?? null,
+    };
+  }, [businessName, l]);
+  const backupContacts = useMemo(() => {
+    if (!l) return [];
+    const currentEmail = l.email?.toLowerCase();
+    return sortTeamMembers(teamMembers, l.email).ordered
+      .filter((tm) => tm.email && tm.email.toLowerCase() !== currentEmail);
+  }, [l, teamMembers]);
+  const hasReply = sends.data?.items.some((s) => s.status === 'REPLIED') ?? false;
+  const showBackupBanner = maxFollowUpNumber >= 3 && !hasReply && backupContacts.length > 0;
+  const nextBackup = backupContacts[0];
+  const hasConversationHistory = (sends.data?.items.length ?? 0) > 0;
   const sortedTeamMembers = useMemo(
     () => (l ? sortTeamMembers(teamMembers, l.email).ordered : []),
     [teamMembers, l],
@@ -818,15 +1343,11 @@ export default function LeadDetailPage() {
   const leadMatchedTeamMember = leadEmailNormalized
     ? sortedTeamMembers.find((member) => normalizeEmail(member.email) === leadEmailNormalized) ?? null
     : null;
-  const fallbackLeadTier = getTeamMemberTier(
-    null,
-    leadTitle,
-  );
+  const fallbackLeadTier = getTeamMemberTier(null, leadTitle);
   const primaryLeadTier = leadMatchedTeamMember
     ? getTeamMemberTier(leadMatchedTeamMember.seniority, leadMatchedTeamMember.jobTitle)
     : fallbackLeadTier;
   const executiveDirectorContacts = sortedTeamMembers.filter((member) => (
-    member.fromBusinessContacts &&
     isExecutiveOrDirector(member) &&
     normalizeEmail(member.email) !== leadEmailNormalized
   ));
@@ -856,6 +1377,15 @@ export default function LeadDetailPage() {
 
   const scorePercent = scoreInfo?.blendedScore ? Math.round(scoreInfo.blendedScore * 100) : null;
 
+  // ── Section Order (C8):
+  // 1. Header
+  // 2. About This Business (AI insights from C1)
+  // 3. Brave Search Results (CEO card + Related Findings from C3/C4)
+  // 4. Team Members (editable from C9)
+  // 5. Intelligence Gathered
+  // 6. Scoring Breakdown
+  // 7. Message History
+
   return (
     <div className="space-y-6">
       <button
@@ -866,7 +1396,7 @@ export default function LeadDetailPage() {
         <ArrowLeft className="h-4 w-4" /> Back to leads
       </button>
 
-      {/* Header */}
+      {/* ─── Header ─── */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
         <div className="flex items-start justify-between">
           <div>
@@ -874,45 +1404,11 @@ export default function LeadDetailPage() {
               {l.firstName} {l.lastName}
             </h1>
             <p className="mt-0.5 text-sm text-muted-foreground">{l.email}</p>
-            {businessData ? (
-              <div className="mt-1 flex items-center gap-2">
-                {businessData.websiteDomain ? (
-                  <a
-                    href={`https://${businessData.websiteDomain}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:text-zbooni-green"
-                  >
-                    <Building2 className="h-3 w-3" />
-                    {businessData.name}
-                    <ExternalLink className="h-2.5 w-2.5" />
-                  </a>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                    <Building2 className="h-3 w-3" />
-                    {businessData.name}
-                  </span>
-                )}
-                {(() => {
-                  const apolloCountry = typeof conversionMetadata?.apolloOrgEnrichment === 'object' && conversionMetadata.apolloOrgEnrichment !== null
-                    ? (conversionMetadata.apolloOrgEnrichment as Record<string, unknown>).country
-                    : null;
-                  if (
-                    typeof apolloCountry === 'string' && apolloCountry.length > 0 &&
-                    businessData.countryCode &&
-                    apolloCountry.toLowerCase() !== businessData.countryCode.toLowerCase() &&
-                    apolloCountry.toLowerCase() !== countryName(businessData.countryCode).toLowerCase()
-                  ) {
-                    return (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-bold text-amber-300">
-                        <MapPin className="h-2.5 w-2.5" />
-                        HQ: {apolloCountry}
-                      </span>
-                    );
-                  }
-                  return null;
-                })()}
-              </div>
+            {businessName ? (
+              <p className="mt-1 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground/70">
+                <Building2 className="h-3 w-3" />
+                {businessName}
+              </p>
             ) : null}
           </div>
           <div className="flex items-center gap-2">
@@ -933,7 +1429,6 @@ export default function LeadDetailPage() {
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Updated</p>
             <p className="mt-0.5 font-medium">{new Date(l.updatedAt).toLocaleString()}</p>
           </div>
-          {/* Score in bottom-right of header */}
           {scoreInfo?.scoreBand ? (
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Lead Score</p>
@@ -947,8 +1442,8 @@ export default function LeadDetailPage() {
           ) : null}
         </div>
 
-        {/* D9: Phone with source label + D9 business email + LinkedIn */}
-        {(enrichmentFields.some((f) => f.label === 'Phone') || leadBusinessEmail || primaryLinkedinUrl) && (
+        {/* Phone + LinkedIn */}
+        {(enrichmentFields.some((f) => f.label === 'Phone') || primaryLinkedinUrl) && (
           <div className="mt-3 flex flex-wrap gap-3">
             {enrichmentFields.filter((f) => f.label === 'Phone').map((f) => (
               <div key="phone" className="flex items-center gap-2 text-sm">
@@ -956,26 +1451,8 @@ export default function LeadDetailPage() {
                 <a href={f.href ?? '#'} className="font-medium text-zbooni-teal hover:text-zbooni-green transition-colors">
                   {f.value}
                 </a>
-                {leadPhoneSource && (
-                  <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${
-                    leadPhoneSource === 'APOLLO' || leadPhoneSource === 'HUNTER'
-                      ? 'bg-zbooni-green/15 text-zbooni-green'
-                      : 'bg-muted/20 text-muted-foreground/50'
-                  }`}>
-                    {leadPhoneSource === 'WEBSITE_SCRAPE' ? 'Website' : leadPhoneSource}
-                  </span>
-                )}
               </div>
             ))}
-            {leadBusinessEmail && (
-              <div className="flex items-center gap-2 text-sm">
-                <Mail className="h-3.5 w-3.5 text-muted-foreground/50" />
-                <a href={`mailto:${leadBusinessEmail}`} className="font-medium text-zbooni-teal hover:text-zbooni-green transition-colors">
-                  {leadBusinessEmail}
-                </a>
-                <span className="rounded-full bg-muted/20 px-1.5 py-0.5 text-[9px] font-bold text-muted-foreground/50">Business</span>
-              </div>
-            )}
             {primaryLinkedinUrl && (
               <a
                 href={primaryLinkedinUrl}
@@ -998,113 +1475,91 @@ export default function LeadDetailPage() {
         ) : null}
       </div>
 
-      {/* About This Business (D1) */}
-      {businessData ? (
+      {/* ─── 1. About This Business (C1 — AI insights) ─── */}
+      {businessSummary ? (
         <AboutBusinessCard
-          category={businessData.category}
-          websiteDescription={
-            conversionMetadata
-              ? ((conversionMetadata.websiteDescription as string) ?? null)
-              : null
-          }
-          metaDescription={
-            businessData.websiteScrape
-              ? ((businessData.websiteScrape.metaDescription as string) ?? null)
-              : null
-          }
-          instagramBio={
-            businessData.instagramScrape
-              ? ((businessData.instagramScrape.biography as string) ?? null)
-              : null
-          }
-          countryCode={businessData.countryCode}
-          city={businessData.city}
-          rating={businessData.rating}
-          reviewCount={businessData.reviewCount}
+          category={businessSummary.category}
+          metaDescription={null}
+          instagramBio={null}
+          countryCode={businessSummary.countryCode}
+          city={businessSummary.city}
+          rating={null}
+          reviewCount={null}
+          businessInsights={conversionData.businessInsights}
         />
       ) : null}
 
-      {/* Web Search Results (from Brave Search in conversion metadata) */}
-      {conversionMetadata &&
-        Array.isArray(conversionMetadata.googleCseResults) &&
-        (conversionMetadata.googleCseResults as Array<Record<string, unknown>>).length > 0 ? (
+      {/* ─── 2. Brave Search Results (C3 + C4 — CEO card + Related Findings) ─── */}
+      <BraveSearchSection conversion={conversionData} />
+
+      {/* Low authority warning */}
+      {showLowAuthorityWarning ? (
+        <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 px-4 py-3">
+          <div className="flex items-start gap-2.5 text-sm text-amber-200">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <p className="font-semibold">
+                Primary contact is non-executive. Decision makers identified below — consider reaching them directly via LinkedIn.
+              </p>
+              {firstExecutiveDirectorContact?.linkedinUrl ? (
+                <a
+                  href={firstExecutiveDirectorContact.linkedinUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-amber-100 underline decoration-amber-100/60 underline-offset-2 hover:text-white"
+                >
+                  View {firstExecutiveDirectorContact.fullName} on LinkedIn
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ─── 3. Team Members (C9 — fully editable) ─── */}
+      <EditableTeamMembers
+        leadId={id}
+        leadEmail={l.email}
+        businessId={businessId}
+        initialMembers={teamMembers}
+      />
+
+      {/* ─── 4. Intelligence Gathered ─── */}
+      {enrichmentFields.length > 0 ? (
         <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
           <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-            <Globe className="h-4 w-4 text-zbooni-teal" />
-            Web Search Results (CEO/Founder)
-            <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">
-              {(conversionMetadata.googleCseResults as unknown[]).length}
-            </span>
-            {conversionMetadata.foundCsuiteDecisionMaker === true && (
-              <span className="ml-auto rounded-full bg-zbooni-green/15 px-2.5 py-0.5 text-[10px] font-bold text-zbooni-green">
-                C-Suite Found
-              </span>
-            )}
+            <User className="h-4 w-4 text-zbooni-teal" />
+            Intelligence Gathered
           </h2>
-          <div className="space-y-2">
-            {(conversionMetadata.googleCseResults as Array<Record<string, unknown>>).map((result, i) => {
-              const matchedPerson = conversionMetadata.googleCseMatchedPerson as Record<string, unknown> | null | undefined;
-              const isMatched = matchedPerson &&
-                typeof matchedPerson.linkedinUrl === 'string' &&
-                typeof result.link === 'string' &&
-                matchedPerson.linkedinUrl === result.link;
-
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {enrichmentFields.map((field) => {
+              const Icon = field.icon;
               return (
                 <div
-                  key={i}
-                  className={`rounded-lg border px-4 py-3 ${
-                    isMatched
-                      ? 'border-zbooni-green/40 bg-zbooni-green/[0.04]'
-                      : 'border-border/20 bg-zbooni-dark/30'
-                  }`}
+                  key={field.label}
+                  className="flex items-start gap-3 rounded-xl border border-border/30 bg-zbooni-dark/40 p-3.5"
                 >
-                  <div className="flex items-start gap-3">
-                    <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
-                      isMatched ? 'bg-zbooni-green/15' : 'bg-[#0A66C2]/10'
-                    }`}>
-                      <Linkedin className={`h-4 w-4 ${isMatched ? 'text-zbooni-green' : 'text-[#0A66C2]'}`} />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        {typeof result.link === 'string' ? (
-                          <a
-                            href={result.link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-sm font-semibold text-zbooni-teal transition-colors hover:text-zbooni-green flex items-center gap-1"
-                          >
-                            <span className="truncate">{typeof result.title === 'string' ? result.title : 'LinkedIn Profile'}</span>
-                            <ExternalLink className="h-3 w-3 shrink-0" />
-                          </a>
-                        ) : (
-                          <p className="text-sm font-semibold truncate">
-                            {typeof result.title === 'string' ? result.title : 'LinkedIn Profile'}
-                          </p>
-                        )}
-                        {isMatched && (
-                          <span className="shrink-0 rounded-full border border-zbooni-green/40 bg-zbooni-green/20 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-zbooni-green">
-                            Matched
-                          </span>
-                        )}
-                      </div>
-                      {typeof result.snippet === 'string' && (
-                        <p className="mt-0.5 text-xs text-muted-foreground/60 line-clamp-2">{result.snippet}</p>
-                      )}
-                      {isMatched && matchedPerson && (
-                        <div className="mt-1.5 flex flex-wrap gap-2">
-                          {typeof matchedPerson.name === 'string' && (
-                            <span className="rounded-full bg-zbooni-green/10 px-2 py-0.5 text-[10px] font-semibold text-zbooni-green">
-                              {matchedPerson.name}
-                            </span>
-                          )}
-                          {typeof matchedPerson.title === 'string' && (
-                            <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
-                              {matchedPerson.title}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </div>
+                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zbooni-teal/10">
+                    <Icon className="h-4 w-4 text-zbooni-teal" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+                      {field.label}
+                    </p>
+                    {field.href ? (
+                      <a
+                        href={field.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-0.5 flex items-center gap-1 text-sm font-medium text-zbooni-teal transition-colors hover:text-zbooni-green"
+                      >
+                        <span className="truncate">{field.value}</span>
+                        <ExternalLink className="h-3 w-3 shrink-0" />
+                      </a>
+                    ) : (
+                      <p className="mt-0.5 truncate text-sm font-medium">{field.value}</p>
+                    )}
                   </div>
                 </div>
               );
@@ -1113,10 +1568,21 @@ export default function LeadDetailPage() {
         </div>
       ) : null}
 
-      {/* Company Intel (Apollo org enrichment from conversion metadata) */}
-      <ApolloOrgIntelCard data={conversionMetadata?.apolloOrgEnrichment} />
+      {/* No enrichment data at all */}
+      {!l.enrichmentData ? (
+        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+          <div className="flex items-center gap-3 text-muted-foreground/60">
+            <AlertCircle className="h-5 w-5" />
+            <p className="text-sm">
+              {l.status === 'enriched' || l.status === 'scored' || l.status === 'qualified' || l.status === 'drafted' || l.status === 'messaged' || l.status === 'replied'
+                ? 'Enrichment completed, but no normalized enrichment fields are available for this lead yet.'
+                : 'No enrichment data available yet. This lead may still be processing.'}
+            </p>
+          </div>
+        </div>
+      ) : null}
 
-      {/* Scoring Breakdown (D3) */}
+      {/* ─── 5. Scoring Breakdown (C7) ─── */}
       <ScoringBreakdown
         leadId={id}
         blendedScore={scoreInfo?.blendedScore}
@@ -1157,257 +1623,6 @@ export default function LeadDetailPage() {
         </div>
       ) : null}
 
-      {/* Contact & Company Details */}
-      {enrichmentFields.length > 0 ? (
-        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-            <User className="h-4 w-4 text-zbooni-teal" />
-            Contact & Company Details
-          </h2>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {enrichmentFields.map((field) => {
-              const Icon = field.icon;
-              return (
-                <div
-                  key={field.label}
-                  className="flex items-start gap-3 rounded-xl border border-border/30 bg-zbooni-dark/40 p-3.5"
-                >
-                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zbooni-teal/10">
-                    <Icon className="h-4 w-4 text-zbooni-teal" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-                      {field.label}
-                    </p>
-                    {field.href ? (
-                      <a
-                        href={field.href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="mt-0.5 flex items-center gap-1 text-sm font-medium text-zbooni-teal transition-colors hover:text-zbooni-green"
-                      >
-                        <span className="truncate">{field.value}</span>
-                        <ExternalLink className="h-3 w-3 shrink-0" />
-                      </a>
-                    ) : (
-                      <p className="mt-0.5 truncate text-sm font-medium">{field.value}</p>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-
-
-      {/* No enrichment data at all */}
-      {!l.enrichmentData ? (
-        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <div className="flex items-center gap-3 text-muted-foreground/60">
-            <AlertCircle className="h-5 w-5" />
-            <p className="text-sm">
-              {l.status === 'enriched' || l.status === 'scored' || l.status === 'qualified' || l.status === 'drafted' || l.status === 'messaged' || l.status === 'replied'
-                ? 'Enrichment completed, but no normalized enrichment fields are available for this lead yet.'
-                : 'No enrichment data available yet. This lead may still be processing.'}
-            </p>
-          </div>
-        </div>
-      ) : null}
-
-      {/* Intelligence Gathered (from Business scraper data) */}
-      {businessData ? (
-        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-            <Building2 className="h-4 w-4 text-zbooni-teal" />
-            Intelligence Gathered
-            {businessData.name ? (
-              <span className="ml-2 text-sm font-normal text-muted-foreground/60">— {businessData.name}</span>
-            ) : null}
-            {businessId ? (
-              <button
-                type="button"
-                onClick={() => router.push(`/dashboard/leads/businesses?selected=${businessId}`)}
-                className="ml-auto text-xs text-zbooni-teal hover:text-zbooni-green transition-colors flex items-center gap-1"
-              >
-                View in Business Intel <ExternalLink className="h-3 w-3" />
-              </button>
-            ) : null}
-          </h2>
-          <IntelligenceGathered data={businessData} />
-        </div>
-      ) : null}
-
-      {showLowAuthorityWarning ? (
-        <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 px-4 py-3">
-          <div className="flex items-start gap-2.5 text-sm text-amber-200">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <div>
-              <p className="font-semibold">
-                Primary contact is non-executive. Decision makers identified below — consider reaching them directly via LinkedIn.
-              </p>
-              {firstExecutiveDirectorContact?.linkedinUrl ? (
-                <a
-                  href={firstExecutiveDirectorContact.linkedinUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-amber-100 underline decoration-amber-100/60 underline-offset-2 hover:text-white"
-                >
-                  View {firstExecutiveDirectorContact.fullName} on LinkedIn
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {/* Team Members */}
-      {sortedTeamMembers.length > 0 ? (
-        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-            <Users className="h-4 w-4 text-amber-400" />
-            Team Members
-            <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">{sortedTeamMembers.length}</span>
-          </h2>
-          <div className="grid gap-2.5 sm:grid-cols-2">
-            {sortedTeamMembers.map((tm, idx) => {
-              const isPrimary = leadEmailNormalized
-                ? normalizeEmail(tm.email) === leadEmailNormalized
-                : idx === 0;
-              const isDecisionMaker = isExecutiveOrDirector(tm);
-              const seniorityLabel = tm.seniority ? tm.seniority.charAt(0).toUpperCase() + tm.seniority.slice(1) : null;
-
-              return (
-                <div
-                  key={tm.id}
-                  className="rounded-lg border border-border/25 bg-zbooni-dark/35 p-3"
-                >
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-[11px] font-bold text-amber-400">
-                      {tm.fullName.charAt(0)}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <p className="truncate text-sm font-semibold">{tm.fullName}</p>
-                        {isPrimary ? (
-                          <span className="rounded-full border border-zbooni-green/40 bg-zbooni-green/20 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-zbooni-green">
-                            Primary
-                          </span>
-                        ) : null}
-                        {isDecisionMaker && !isPrimary ? (
-                          <span className="rounded-full border border-amber-400/40 bg-amber-400/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-300">
-                            Decision Maker
-                          </span>
-                        ) : null}
-                        {seniorityLabel && seniorityLabel.toLowerCase() !== 'other' ? (
-                          <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-blue-300">
-                            {seniorityLabel}
-                          </span>
-                        ) : null}
-                        {tm.source ? (
-                          <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                            {tm.source}
-                          </span>
-                        ) : null}
-                      </div>
-                      {tm.jobTitle ? (
-                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground/60">{tm.jobTitle}</p>
-                      ) : null}
-
-                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px]">
-                        {tm.email ? (
-                          <a
-                            href={`mailto:${tm.email}`}
-                            className="inline-flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green"
-                          >
-                            <Mail className="h-3.5 w-3.5" />
-                            <span className="font-mono">{tm.email}</span>
-                          </a>
-                        ) : (
-                          <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-medium text-muted-foreground/60">
-                            No email found
-                          </span>
-                        )}
-
-                        {tm.phone ? (
-                          <a
-                            href={`tel:${tm.phone}`}
-                            className="inline-flex items-center gap-1 text-muted-foreground/80 transition-colors hover:text-foreground"
-                          >
-                            <Phone className="h-3.5 w-3.5" />
-                            {tm.phone}
-                          </a>
-                        ) : null}
-
-                        {tm.linkedinUrl ? (
-                          <a
-                            href={tm.linkedinUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green"
-                          >
-                            <Linkedin className="h-3.5 w-3.5" />
-                            LinkedIn
-                            <ExternalLink className="h-3 w-3" />
-                          </a>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-
-      {/* Instagram Recent Posts */}
-      {instagramPosts.length > 0 ? (
-        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-            <Instagram className="h-4 w-4 text-pink-400" />
-            Recent Instagram Posts
-            <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">{instagramPosts.length}</span>
-          </h2>
-          <div className="space-y-3">
-            {instagramPosts.map((post, i) => (
-              <div key={i} className="rounded-lg border border-border/20 bg-zbooni-dark/30 px-4 py-3">
-                <div className="flex gap-3">
-                  <InstagramThumbnail thumbnailUrl={post.thumbnailUrl} postType={post.postType} />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm text-muted-foreground/80 line-clamp-3">{post.caption || 'No caption'}</p>
-                    <div className="mt-2 flex items-center gap-4 text-[11px] text-muted-foreground/50">
-                      <span>{post.likes.toLocaleString()} likes</span>
-                      <span>{post.comments.toLocaleString()} comments</span>
-                      {post.timestamp ? <span>{new Date(post.timestamp).toLocaleDateString()}</span> : null}
-                      {post.url ? (
-                        <a href={post.url} target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 text-pink-400 hover:text-pink-300 transition-colors">
-                          View <ExternalLink className="h-2.5 w-2.5" />
-                        </a>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {/* D10: Instagram cookie expiry warning */}
-      {businessData?.instagramHandle && (
-        !businessData.instagramScrape ||
-        (businessData.instagramScrape.isVerified == null && businessData.instagramScrape.businessCategory == null)
-      ) ? (
-        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3">
-          <div className="flex items-center gap-2 text-xs text-amber-400">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            <span>Instagram insights are partial right now. Session credentials likely need refresh.</span>
-          </div>
-        </div>
-      ) : null}
-
       {/* Backup Contact Rotation Banner */}
       {showBackupBanner && nextBackup ? (
         <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-5 shadow-sm">
@@ -1440,7 +1655,7 @@ export default function LeadDetailPage() {
               ) : (
                 <button
                   type="button"
-                  onClick={() => handleStartBackupSequence(nextBackup)}
+                  onClick={() => void handleStartBackupSequence(nextBackup)}
                   disabled={isCreatingBackup}
                   className="mt-3 inline-flex items-center gap-2 rounded-lg bg-amber-500/20 px-3.5 py-2 text-xs font-semibold text-amber-300 transition-colors hover:bg-amber-500/30 disabled:opacity-50"
                 >
@@ -1457,12 +1672,23 @@ export default function LeadDetailPage() {
         </div>
       ) : null}
 
-      {/* Message History */}
+      {/* ─── 6. Message History ─── */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-          <Mail className="h-4 w-4 text-zbooni-green" />
-          Message History
-        </h2>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-base font-bold tracking-tight flex items-center gap-2">
+            <Mail className="h-4 w-4 text-zbooni-green" />
+            Message History
+          </h2>
+          {hasConversationHistory ? (
+            <Link
+              href={`/dashboard/inbox?leadId=${encodeURIComponent(id)}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border/50 px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+            >
+              <Inbox className="h-3.5 w-3.5" />
+              Open in Inbox
+            </Link>
+          ) : null}
+        </div>
 
         {sends.isLoading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
