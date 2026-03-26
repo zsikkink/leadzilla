@@ -2,15 +2,19 @@
 
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronRight,
   DollarSign,
-  FileText,
   Gauge,
+  Globe,
   Hash,
   Inbox,
   Loader2,
   Mail,
+  MapPin,
   MessageCircle,
   MessageSquare,
+  Plus,
   RotateCcw,
   Save,
   Settings,
@@ -21,6 +25,7 @@ import {
   Target,
   Timer,
   UserCog,
+  X,
   Zap,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -33,6 +38,7 @@ import {
   DEFAULT_MESSAGING_SYSTEM_PROMPT,
 } from '../../src/lib/messaging-defaults.js';
 import { buildPipelineSettingsSavePlan } from '../../src/lib/pipeline-settings-save-plan.js';
+import { MENA_COUNTRIES } from '../../src/lib/countries.js';
 import { cn } from '../../src/lib/utils.js';
 
 // ── Setting types ──────────────────────────────────────────────────────
@@ -519,6 +525,259 @@ function getErrorMessage(error: unknown): string {
     return error;
   }
   return 'unknown error';
+}
+
+// ── Countries & Cities Manager (A7) ─────────────────────────────────────
+
+interface CountryCityData {
+  [country: string]: string[];
+}
+
+function CountriesCitiesManager({
+  apiClient,
+}: {
+  apiClient: { listPipelineSettings: () => Promise<{ items: Array<{ key: string; value: unknown }> }>; updatePipelineSetting: (key: string, value: unknown) => Promise<unknown> };
+}) {
+  const [countryCities, setCountryCities] = useState<CountryCityData>({});
+  const [loading, setLoading] = useState(true);
+  const [expandedCountry, setExpandedCountry] = useState<string | null>(null);
+  const [newCountry, setNewCountry] = useState('');
+  const [showCountryInput, setShowCountryInput] = useState(false);
+  const [newCityInputs, setNewCityInputs] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void apiClient.listPipelineSettings().then(({ items }) => {
+      const setting = items.find((i) => i.key === 'countryCities');
+      if (setting?.value && typeof setting.value === 'object') {
+        setCountryCities(setting.value as CountryCityData);
+      }
+    }).catch(() => undefined).finally(() => setLoading(false));
+  }, [apiClient]);
+
+  const save = async (data: CountryCityData) => {
+    setSaving(true);
+    try {
+      await apiClient.updatePipelineSetting('countryCities', data);
+      setCountryCities(data);
+      toast.success('Countries & cities saved');
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addCountry = () => {
+    const name = newCountry.trim();
+    if (!name || name in countryCities) return;
+    const updated = { ...countryCities, [name]: [] };
+    setNewCountry('');
+    setShowCountryInput(false);
+    setExpandedCountry(name);
+    void save(updated);
+  };
+
+  const removeCountry = (country: string) => {
+    const updated = { ...countryCities };
+    delete updated[country];
+    if (expandedCountry === country) setExpandedCountry(null);
+    void save(updated);
+  };
+
+  const addCity = (country: string) => {
+    const city = (newCityInputs[country] ?? '').trim();
+    if (!city || countryCities[country]?.includes(city)) return;
+    const updated = { ...countryCities, [country]: [...(countryCities[country] ?? []), city] };
+    setNewCityInputs((prev) => ({ ...prev, [country]: '' }));
+    void save(updated);
+  };
+
+  const removeCity = (country: string, city: string) => {
+    const updated = {
+      ...countryCities,
+      [country]: (countryCities[country] ?? []).filter((c) => c !== city),
+    };
+    void save(updated);
+  };
+
+  const addMenaCountries = () => {
+    const updated = { ...countryCities };
+    for (const c of MENA_COUNTRIES) {
+      if (!(c in updated)) {
+        updated[c] = [];
+      }
+    }
+    void save(updated);
+  };
+
+  const countries = Object.keys(countryCities).sort();
+
+  return (
+    <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-teal/10">
+          <Globe className="h-4 w-4 text-zbooni-teal" />
+        </div>
+        <div>
+          <h2 className="text-base font-bold tracking-tight">Countries & Cities</h2>
+          <p className="text-[11px] text-muted-foreground/50">
+            Manage target countries and cities. Used in ICP selectors and discovery search filters.
+          </p>
+        </div>
+        {saving ? <Loader2 className="ml-auto h-4 w-4 animate-spin text-muted-foreground" /> : null}
+      </div>
+
+      {loading ? (
+        <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground/50">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading...
+        </div>
+      ) : (
+        <>
+          {/* Country pills */}
+          <div className="flex flex-wrap gap-2">
+            {countries.map((country) => {
+              const isExpanded = expandedCountry === country;
+              const cities = countryCities[country] ?? [];
+
+              return (
+                <div key={country} className="w-full">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedCountry(isExpanded ? null : country)}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors',
+                        isExpanded
+                          ? 'bg-zbooni-teal/20 text-zbooni-teal'
+                          : 'bg-zbooni-dark/60 text-muted-foreground hover:bg-zbooni-dark/80 hover:text-foreground',
+                      )}
+                    >
+                      <Globe className="h-3 w-3" />
+                      {country}
+                      <span className="font-mono text-[10px] text-muted-foreground/50">({cities.length})</span>
+                      {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeCountry(country)}
+                      className="rounded-full p-1 text-muted-foreground/30 transition-colors hover:bg-red-500/10 hover:text-red-400"
+                      title="Remove country"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+
+                  {/* Expanded: city list */}
+                  {isExpanded ? (
+                    <div className="ml-6 mt-2 mb-3 space-y-2 rounded-xl border border-border/30 bg-zbooni-dark/20 p-3">
+                      {cities.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {cities.map((city) => (
+                            <span
+                              key={city}
+                              className="inline-flex items-center gap-1 rounded-full bg-zbooni-dark/60 px-2.5 py-1 text-xs text-muted-foreground"
+                            >
+                              <MapPin className="h-2.5 w-2.5" />
+                              {city}
+                              <button
+                                type="button"
+                                onClick={() => removeCity(country, city)}
+                                className="ml-0.5 rounded-full transition-colors hover:text-red-400"
+                              >
+                                <X className="h-2.5 w-2.5" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground/40 italic">No cities added</p>
+                      )}
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          value={newCityInputs[country] ?? ''}
+                          onChange={(e) => setNewCityInputs((prev) => ({ ...prev, [country]: e.target.value }))}
+                          placeholder="Add city..."
+                          className="h-7 w-40 rounded-full border border-border/50 bg-zbooni-dark/60 px-3 text-xs focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') addCity(country);
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => addCity(country)}
+                          className="rounded-full p-1 text-zbooni-teal transition-colors hover:bg-zbooni-teal/10"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+
+          {countries.length === 0 ? (
+            <p className="py-4 text-center text-sm text-muted-foreground/40 italic">No countries configured</p>
+          ) : null}
+
+          {/* Add country */}
+          <div className="mt-4 flex items-center gap-2">
+            {showCountryInput ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  value={newCountry}
+                  onChange={(e) => setNewCountry(e.target.value)}
+                  placeholder="Country name..."
+                  className="h-8 w-40 rounded-full border border-border/50 bg-zbooni-dark/60 px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') addCountry();
+                    if (e.key === 'Escape') { setShowCountryInput(false); setNewCountry(''); }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={addCountry}
+                  disabled={!newCountry.trim()}
+                  className="rounded-full bg-zbooni-teal/15 p-1.5 text-zbooni-teal transition-colors hover:bg-zbooni-teal/25 disabled:opacity-40"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowCountryInput(false); setNewCountry(''); }}
+                  className="rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-accent/50"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCountryInput(true)}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-zbooni-teal/10 px-3 py-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:bg-zbooni-teal/20"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Add Country
+                </button>
+                <button
+                  type="button"
+                  onClick={addMenaCountries}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-zbooni-green/10 px-3 py-1.5 text-xs font-medium text-zbooni-green transition-colors hover:bg-zbooni-green/20"
+                >
+                  <Globe className="h-3.5 w-3.5" />
+                  Add All MENA
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 // ── Main page ──────────────────────────────────────────────────────────
@@ -1053,35 +1312,23 @@ export default function ControlsSettingsPage() {
 
       {/* ── Messaging Instructions ────────────────────────────────────── */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
+        <div className="mb-2 flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-green/10">
             <MessageCircle className="h-4 w-4 text-zbooni-green" />
           </div>
           <div>
             <h2 className="text-base font-bold tracking-tight">Messaging Instructions</h2>
             <p className="text-[11px] text-muted-foreground/50">
-              Per-campaign tweaks appended after the system prompt (e.g. "Focus on hospitality ICPs this week")
+              Messaging instructions are now per-ICP for more targeted messaging.
             </p>
           </div>
         </div>
-        {isLoadingSettings ? (
-          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground/50">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading saved instructions...
-          </div>
-        ) : (
-          <textarea
-            value={messagingInstructions}
-            onChange={(e) => {
-              setMessagingInstructions(e.target.value);
-              setHasChanges(true);
-            }}
-            rows={6}
-            placeholder="Enter per-campaign instructions appended after the system prompt. Example: 'Always mention our payment link feature this week. Focus on hospitality ICPs. Reference UAE market growth.'"
-            className="w-full resize-y rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none"
-            aria-label="Messaging Instructions"
-          />
-        )}
+        <div className="rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 px-4 py-3">
+          <p className="text-sm text-muted-foreground">
+            Go to each ICP profile to set messaging instructions specific to that customer segment.
+            This allows the AI to tailor messages based on the ICP&apos;s unique value proposition.
+          </p>
+        </div>
       </div>
 
       {/* ── Pipeline Settings ───────────────────────────────────────── */}
@@ -1256,28 +1503,8 @@ export default function ControlsSettingsPage() {
         </div>
       </div>
 
-      {/* ── Outbox Monitor ──────────────────────────────────────────── */}
-      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-teal/10">
-            <FileText className="h-4 w-4 text-zbooni-teal" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold tracking-tight">Outbox Monitor</h2>
-            <p className="text-[11px] text-muted-foreground/50">
-              Recent pipeline events and their processing status
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-col items-center justify-center py-8 text-center">
-          <FileText className="mb-2 h-8 w-8 text-muted-foreground/20" />
-          <p className="text-sm font-medium text-muted-foreground/50">No recent events</p>
-          <p className="mt-0.5 text-[11px] text-muted-foreground/30">
-            Pipeline events will appear here as discovery runs process
-          </p>
-        </div>
-      </div>
+      {/* ── Countries & Cities Management (A7) ─────────────────────── */}
+      <CountriesCitiesManager apiClient={apiClient} />
     </div>
   );
 }

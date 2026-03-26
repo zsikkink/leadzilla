@@ -16,6 +16,9 @@ import {
   Plus,
   Trash2,
   X,
+  Search,
+  Check,
+  Pencil,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -493,6 +496,91 @@ function simulateScore(
 
 const OPERATORS = ['EQ', 'NEQ', 'GT', 'GTE', 'LT', 'LTE', 'IN', 'NOT_IN', 'CONTAINS'] as const;
 
+const OPERATOR_LABELS: Record<string, string> = {
+  EQ: 'Equals (EQ)',
+  NEQ: 'Not Equals (NEQ)',
+  GT: 'Greater Than (GT)',
+  GTE: 'Greater or Equal (GTE)',
+  LT: 'Less Than (LT)',
+  LTE: 'Less or Equal (LTE)',
+  IN: 'In List (IN)',
+  NOT_IN: 'Not In List (NOT_IN)',
+  CONTAINS: 'Contains',
+};
+
+/** Feature key descriptions for the command palette and dropdowns */
+const FEATURE_KEY_DESCRIPTIONS: Record<string, { label: string; category: string; description: string }> = {
+  // Business Signals
+  has_whatsapp: { label: 'Has WhatsApp', category: 'Business Signals', description: 'Business has a WhatsApp contact number' },
+  has_instagram: { label: 'Has Instagram', category: 'Business Signals', description: 'Business has an Instagram presence' },
+  has_website: { label: 'Has Website', category: 'Business Signals', description: 'Business has a website URL' },
+  has_linkedin: { label: 'Has LinkedIn', category: 'Business Signals', description: 'Business has a LinkedIn company page' },
+  review_count: { label: 'Review Count', category: 'Business Signals', description: 'Number of Google Maps reviews' },
+  avg_rating: { label: 'Average Rating', category: 'Business Signals', description: 'Average Google Maps rating (0-5)' },
+  recent_activity: { label: 'Recent Activity', category: 'Business Signals', description: 'Business shows signs of recent updates or activity' },
+  follower_count: { label: 'Follower Count', category: 'Business Signals', description: 'Social media follower count' },
+  estimated_employees: { label: 'Estimated Employees', category: 'Business Signals', description: 'Approximate employee headcount' },
+  certification_count: { label: 'Certification Count', category: 'Business Signals', description: 'Number of displayed certifications or awards' },
+  // Online Presence
+  website_email_count: { label: 'Website Email Count', category: 'Online Presence', description: 'Number of email addresses found on website' },
+  website_phone_count: { label: 'Website Phone Count', category: 'Online Presence', description: 'Number of phone numbers found on website' },
+  social_link_count: { label: 'Social Link Count', category: 'Online Presence', description: 'Total number of social media links on site' },
+  tech_stack_size: { label: 'Tech Stack Size', category: 'Online Presence', description: 'Number of detected technologies on website' },
+  has_crm: { label: 'Has CRM', category: 'Online Presence', description: 'CRM software detected on website' },
+  has_live_chat: { label: 'Has Live Chat', category: 'Online Presence', description: 'Live chat widget detected on website' },
+  has_analytics: { label: 'Has Analytics', category: 'Online Presence', description: 'Analytics tools detected on website' },
+  // Financial Indicators
+  accepts_online_payments: { label: 'Accepts Online Payments', category: 'Financial Indicators', description: 'Business accepts online payments (Stripe, PayPal, etc.)' },
+  apify_payment_widget_count: { label: 'Payment Widget Count', category: 'Financial Indicators', description: 'Number of payment widgets detected on site' },
+  apify_has_pricing_tiers: { label: 'Has Pricing Tiers', category: 'Financial Indicators', description: 'Website displays tiered pricing plans' },
+  high_ticket_signals: { label: 'High-Ticket Signals', category: 'Financial Indicators', description: 'Indicators of premium/luxury pricing' },
+  custom_order_signals: { label: 'Custom Order Signals', category: 'Financial Indicators', description: 'Business offers custom or bespoke orders' },
+  variable_pricing_detected: { label: 'Variable Pricing', category: 'Financial Indicators', description: 'Pricing varies by configuration or customization' },
+  // Sales Motion Fit
+  has_booking_or_contact_form: { label: 'Booking/Contact Form', category: 'Sales Motion Fit', description: 'Business has booking or contact inquiry form' },
+  decision_maker_count: { label: 'Decision Maker Count', category: 'Sales Motion Fit', description: 'Number of identified decision makers' },
+  has_executive_contact: { label: 'Has Executive Contact', category: 'Sales Motion Fit', description: 'Executive-level contact identified' },
+  has_decision_maker_phone: { label: 'Has DM Phone', category: 'Sales Motion Fit', description: 'Decision maker has a direct phone number' },
+  apollo_has_direct_phone: { label: 'Apollo Direct Phone', category: 'Sales Motion Fit', description: 'Apollo found a direct phone for decision maker' },
+  apify_has_booking_form: { label: 'Has Booking Form', category: 'Sales Motion Fit', description: 'Dedicated booking form found on website' },
+  // Market Fit
+  industry_match: { label: 'Industry Match', category: 'Market Fit', description: 'Business industry matches ICP target industries' },
+  industry_supported: { label: 'Industry Supported', category: 'Market Fit', description: 'Business is in a supported industry' },
+  geo_match: { label: 'Geographic Match', category: 'Market Fit', description: 'Business location matches ICP target countries' },
+  icp_segment_priority: { label: 'ICP Segment Priority', category: 'Market Fit', description: 'Priority ranking of the ICP segment (1=highest)' },
+  data_alignment_score: { label: 'Data Alignment Score', category: 'Market Fit', description: 'Cross-source data validation confidence (0-1)' },
+  // Instagram Metrics
+  instagram_follower_count: { label: 'IG Followers', category: 'Instagram Metrics', description: 'Instagram follower count' },
+  instagram_engagement_rate: { label: 'IG Engagement Rate', category: 'Instagram Metrics', description: 'Instagram engagement rate percentage' },
+  instagram_is_business_account: { label: 'IG Business Account', category: 'Instagram Metrics', description: 'Instagram account is a business profile' },
+  instagram_days_since_last_post: { label: 'IG Days Since Post', category: 'Instagram Metrics', description: 'Days since last Instagram post' },
+  instagram_has_bio_link: { label: 'IG Has Bio Link', category: 'Instagram Metrics', description: 'Instagram bio contains a link' },
+  instagram_has_business_email: { label: 'IG Business Email', category: 'Instagram Metrics', description: 'Business email found on Instagram profile' },
+  instagram_business_category: { label: 'IG Category', category: 'Instagram Metrics', description: 'Instagram business category classification' },
+  // Anti-fit Signals
+  pure_self_serve_ecom: { label: 'Pure Self-Serve Ecom', category: 'Anti-fit Signals', description: 'Business is pure self-serve ecommerce (no custom orders)' },
+  subscription_billing_detected: { label: 'Subscription Billing', category: 'Anti-fit Signals', description: 'Business uses subscription/recurring billing model' },
+  shopify_detected: { label: 'Shopify Detected', category: 'Anti-fit Signals', description: 'Shopify platform detected' },
+  apify_has_shopify: { label: 'Has Shopify', category: 'Anti-fit Signals', description: 'Shopify store detected via scraper' },
+  // Miscellaneous
+  physical_address_present: { label: 'Physical Address', category: 'Miscellaneous', description: 'Physical business address is listed' },
+  multi_staff_detected: { label: 'Multi-Staff', category: 'Miscellaneous', description: 'Multiple staff members detected' },
+  follower_growth_signal: { label: 'Follower Growth', category: 'Miscellaneous', description: 'Social media following is growing' },
+  high_engagement_signal: { label: 'High Engagement', category: 'Miscellaneous', description: 'High social media engagement detected' },
+  international_customer_signals: { label: 'International Customers', category: 'Miscellaneous', description: 'Signals of international customer base' },
+  review_count_tier: { label: 'Review Count Tier', category: 'Miscellaneous', description: 'Tiered review count classification' },
+  follower_count_tier: { label: 'Follower Count Tier', category: 'Miscellaneous', description: 'Tiered follower count classification' },
+  deposit_milestone_signals: { label: 'Deposit Milestones', category: 'Miscellaneous', description: 'Deposit or milestone payment signals' },
+  bank_transfer_reliance: { label: 'Bank Transfer Reliance', category: 'Miscellaneous', description: 'Business relies on bank transfers' },
+  upsell_signals: { label: 'Upsell Signals', category: 'Miscellaneous', description: 'Upsell or cross-sell opportunities detected' },
+  apify_has_product_catalog: { label: 'Has Product Catalog', category: 'Miscellaneous', description: 'Product catalog found on website' },
+};
+
+/** Get a descriptive label for a field key */
+function featureLabel(key: string): string {
+  return FEATURE_KEY_DESCRIPTIONS[key]?.label ?? key.replaceAll('_', ' ');
+}
+
 interface StagedRule {
   name: string;
   fieldKey: string;
@@ -531,8 +619,22 @@ export default function ICPRulesPage() {
   // Add Rule state
   const [showAddRule, setShowAddRule] = useState(false);
   const [stagedRules, setStagedRules] = useState<StagedRule[]>([]);
-  const [currentRule, setCurrentRule] = useState<StagedRule>(EMPTY_RULE);
   const [submittingRules, setSubmittingRules] = useState(false);
+
+  // Command palette state (A5)
+  const [commandSearch, setCommandSearch] = useState('');
+
+  // Inline editing state (A2)
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<{
+    name: string;
+    fieldKey: string;
+    operator: string;
+    valueJson: unknown;
+    weight: number;
+    ruleType: string;
+  } | null>(null);
+  const [savingRule, setSavingRule] = useState(false);
 
   const profiles = icpQuery.data?.items ?? [];
 
@@ -551,12 +653,6 @@ export default function ICPRulesPage() {
   const availableFieldKeys = KNOWN_SCORING_FIELD_KEYS.filter(
     (k) => !existingFieldKeys.has(k) && !stagedFieldKeys.has(k),
   );
-
-  const addToStaging = () => {
-    if (!currentRule.name.trim() || !currentRule.fieldKey) return;
-    setStagedRules((prev) => [...prev, { ...currentRule }]);
-    setCurrentRule({ ...EMPTY_RULE, fieldKey: availableFieldKeys[0] ?? '' });
-  };
 
   const removeFromStaging = (idx: number) => {
     setStagedRules((prev) => prev.filter((_, i) => i !== idx));
@@ -601,6 +697,83 @@ export default function ICPRulesPage() {
       icpQuery.refetch();
     }
     setSubmittingRules(false);
+  };
+
+  // A2: Inline rule editing handlers
+  const startEditingRule = (rule: QualificationRuleResponse) => {
+    setEditingRuleId(rule.id);
+    setEditDraft({
+      name: rule.name,
+      fieldKey: rule.fieldKey,
+      operator: rule.operator,
+      valueJson: rule.valueJson,
+      weight: rule.weight ?? 1,
+      ruleType: rule.ruleType,
+    });
+  };
+
+  const cancelEditing = () => {
+    setEditingRuleId(null);
+    setEditDraft(null);
+  };
+
+  const saveEditingRule = async () => {
+    if (!editingRuleId || !editDraft || !effectiveSelectedId) return;
+    setSavingRule(true);
+    try {
+      const res = await fetch(
+        `${getWebEnv().NEXT_PUBLIC_API_BASE_URL}/v1/icps/${effectiveSelectedId}/rules/${editingRuleId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'content-type': 'application/json',
+            ...(token ? { authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            name: editDraft.name,
+            fieldKey: editDraft.fieldKey,
+            operator: editDraft.operator,
+            valueJson: editDraft.valueJson,
+            weight: editDraft.weight,
+          }),
+        },
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+      }
+      toast.success('Rule updated');
+      cancelEditing();
+      icpQuery.refetch();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update rule');
+    } finally {
+      setSavingRule(false);
+    }
+  };
+
+  // A2: Delete rule handler
+  const deleteRule = async (ruleId: string) => {
+    if (!effectiveSelectedId) return;
+    try {
+      const res = await fetch(
+        `${getWebEnv().NEXT_PUBLIC_API_BASE_URL}/v1/icps/${effectiveSelectedId}/rules/${ruleId}`,
+        {
+          method: 'DELETE',
+          headers: {
+            ...(token ? { authorization: `Bearer ${token}` } : {}),
+          },
+        },
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+      }
+      toast.success('Rule deleted');
+      icpQuery.refetch();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete rule');
+    }
   };
 
   useEffect(() => {
@@ -751,7 +924,6 @@ export default function ICPRulesPage() {
               <button
                 type="button"
                 onClick={() => {
-                  setCurrentRule({ ...EMPTY_RULE, fieldKey: availableFieldKeys[0] ?? '' });
                   setShowAddRule(true);
                 }}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-zbooni-green/15 px-3 py-1.5 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/25"
@@ -798,18 +970,42 @@ export default function ICPRulesPage() {
                 <div className="space-y-2">
                   {hardFilterRules.map((rule) => {
                     const meta = ruleTypeLabel('HARD_FILTER');
+                    const isEditing = editingRuleId === rule.id;
+                    if (isEditing && editDraft) {
+                      return (
+                        <div key={rule.id} className={cn('rounded-lg border px-4 py-3 space-y-2', meta.border, meta.bg)}>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} placeholder="Rule name" className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none" />
+                            <select value={editDraft.operator} onChange={(e) => setEditDraft({ ...editDraft, operator: e.target.value })} className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none">
+                              {OPERATORS.map((op) => <option key={op} value={op}>{OPERATOR_LABELS[op]}</option>)}
+                            </select>
+                          </div>
+                          <input value={typeof editDraft.valueJson === 'string' ? editDraft.valueJson : JSON.stringify(editDraft.valueJson)} onChange={(e) => { let parsed: unknown = e.target.value; try { parsed = JSON.parse(e.target.value); } catch { /* string */ } setEditDraft({ ...editDraft, valueJson: parsed }); }} placeholder="Value" className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none" />
+                          <div className="flex items-center gap-1.5">
+                            <button type="button" onClick={() => void saveEditingRule()} disabled={savingRule} className="rounded-lg p-1.5 text-zbooni-green hover:bg-zbooni-green/10 disabled:opacity-50">
+                              {savingRule ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                            </button>
+                            <button type="button" onClick={cancelEditing} className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent/50"><X className="h-3.5 w-3.5" /></button>
+                          </div>
+                        </div>
+                      );
+                    }
                     return (
                       <div
                         key={rule.id}
-                        className={cn('rounded-lg border px-4 py-3', meta.border, meta.bg)}
+                        className={cn('group rounded-lg border px-4 py-3', meta.border, meta.bg)}
                       >
                         <div className="flex items-center justify-between">
                           <span className="text-sm font-semibold">{rule.name}</span>
-                          <span className="font-mono text-[11px] text-red-400">REQUIRED</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-[11px] text-red-400">REQUIRED</span>
+                            <button type="button" onClick={() => startEditingRule(rule)} className="rounded p-0.5 text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"><Pencil className="h-3 w-3" /></button>
+                            <button type="button" onClick={() => void deleteRule(rule.id)} className="rounded p-0.5 text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-400"><Trash2 className="h-3 w-3" /></button>
+                          </div>
                         </div>
                         <p className="mt-1 font-mono text-xs text-muted-foreground">
-                          {rule.fieldKey}{' '}
-                          <span className="text-slate-500">{rule.operator}</span>{' '}
+                          <span className="text-foreground/80">{featureLabel(rule.fieldKey)}</span>{' '}
+                          <span className="text-slate-500">{OPERATOR_LABELS[rule.operator] ?? rule.operator}</span>{' '}
                           <span className="text-foreground">{formatValue(rule.valueJson)}</span>
                         </p>
                       </div>
@@ -830,20 +1026,50 @@ export default function ICPRulesPage() {
                   {weightedRules.map((rule) => {
                     const meta = ruleTypeLabel('WEIGHTED');
                     const w = rule.weight ?? 0;
+                    const isEditing = editingRuleId === rule.id;
+                    if (isEditing && editDraft) {
+                      return (
+                        <div key={rule.id} className={cn('rounded-lg border px-4 py-3 space-y-2', meta.border, meta.bg)}>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} placeholder="Rule name" className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none" />
+                            <select value={editDraft.operator} onChange={(e) => setEditDraft({ ...editDraft, operator: e.target.value })} className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none">
+                              {OPERATORS.map((op) => <option key={op} value={op}>{OPERATOR_LABELS[op]}</option>)}
+                            </select>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input value={typeof editDraft.valueJson === 'string' ? editDraft.valueJson : JSON.stringify(editDraft.valueJson)} onChange={(e) => { let parsed: unknown = e.target.value; try { parsed = JSON.parse(e.target.value); } catch { /* string */ } setEditDraft({ ...editDraft, valueJson: parsed }); }} placeholder="Value" className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none" />
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-muted-foreground/60">Weight:</span>
+                              <input type="number" min={-10} max={10} step={0.5} value={editDraft.weight} onChange={(e) => setEditDraft({ ...editDraft, weight: Number(e.target.value) || 0 })} className="h-8 w-20 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm tabular-nums focus:border-primary focus:outline-none" />
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button type="button" onClick={() => void saveEditingRule()} disabled={savingRule} className="rounded-lg p-1.5 text-zbooni-green hover:bg-zbooni-green/10 disabled:opacity-50">
+                              {savingRule ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                            </button>
+                            <button type="button" onClick={cancelEditing} className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent/50"><X className="h-3.5 w-3.5" /></button>
+                          </div>
+                        </div>
+                      );
+                    }
                     return (
                       <div
                         key={rule.id}
-                        className={cn('rounded-lg border px-4 py-3', meta.border, meta.bg)}
+                        className={cn('group rounded-lg border px-4 py-3', meta.border, meta.bg)}
                       >
                         <div className="flex items-center justify-between">
                           <span className="text-sm font-semibold">{rule.name}</span>
-                          <span className="font-mono text-[11px] text-blue-400">
-                            w={w > 0 ? '+' : ''}{w.toFixed(2)}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-[11px] text-blue-400">
+                              w={w > 0 ? '+' : ''}{w.toFixed(2)}
+                            </span>
+                            <button type="button" onClick={() => startEditingRule(rule)} className="rounded p-0.5 text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"><Pencil className="h-3 w-3" /></button>
+                            <button type="button" onClick={() => void deleteRule(rule.id)} className="rounded p-0.5 text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-400"><Trash2 className="h-3 w-3" /></button>
+                          </div>
                         </div>
                         <p className="mt-1 font-mono text-xs text-muted-foreground">
-                          {rule.fieldKey}{' '}
-                          <span className="text-slate-500">{rule.operator}</span>{' '}
+                          <span className="text-foreground/80">{featureLabel(rule.fieldKey)}</span>{' '}
+                          <span className="text-slate-500">{OPERATOR_LABELS[rule.operator] ?? rule.operator}</span>{' '}
                           <span className="text-foreground">{formatValue(rule.valueJson)}</span>
                         </p>
                       </div>
@@ -864,20 +1090,50 @@ export default function ICPRulesPage() {
                   {antiFitRules.map((rule) => {
                     const meta = ruleTypeLabel('ANTI_FIT');
                     const w = rule.weight ?? 0;
+                    const isEditing = editingRuleId === rule.id;
+                    if (isEditing && editDraft) {
+                      return (
+                        <div key={rule.id} className={cn('rounded-lg border px-4 py-3 space-y-2', meta.border, meta.bg)}>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} placeholder="Rule name" className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none" />
+                            <select value={editDraft.operator} onChange={(e) => setEditDraft({ ...editDraft, operator: e.target.value })} className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none">
+                              {OPERATORS.map((op) => <option key={op} value={op}>{OPERATOR_LABELS[op]}</option>)}
+                            </select>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input value={typeof editDraft.valueJson === 'string' ? editDraft.valueJson : JSON.stringify(editDraft.valueJson)} onChange={(e) => { let parsed: unknown = e.target.value; try { parsed = JSON.parse(e.target.value); } catch { /* string */ } setEditDraft({ ...editDraft, valueJson: parsed }); }} placeholder="Value" className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none" />
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-muted-foreground/60">Weight:</span>
+                              <input type="number" min={-10} max={10} step={0.5} value={editDraft.weight} onChange={(e) => setEditDraft({ ...editDraft, weight: Number(e.target.value) || 0 })} className="h-8 w-20 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm tabular-nums focus:border-primary focus:outline-none" />
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button type="button" onClick={() => void saveEditingRule()} disabled={savingRule} className="rounded-lg p-1.5 text-zbooni-green hover:bg-zbooni-green/10 disabled:opacity-50">
+                              {savingRule ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                            </button>
+                            <button type="button" onClick={cancelEditing} className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent/50"><X className="h-3.5 w-3.5" /></button>
+                          </div>
+                        </div>
+                      );
+                    }
                     return (
                       <div
                         key={rule.id}
-                        className={cn('rounded-lg border px-4 py-3', meta.border, meta.bg)}
+                        className={cn('group rounded-lg border px-4 py-3', meta.border, meta.bg)}
                       >
                         <div className="flex items-center justify-between">
                           <span className="text-sm font-semibold">{rule.name}</span>
-                          <span className="font-mono text-[11px] text-orange-400">
-                            w={w.toFixed(2)}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-[11px] text-orange-400">
+                              w={w.toFixed(2)}
+                            </span>
+                            <button type="button" onClick={() => startEditingRule(rule)} className="rounded p-0.5 text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"><Pencil className="h-3 w-3" /></button>
+                            <button type="button" onClick={() => void deleteRule(rule.id)} className="rounded p-0.5 text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-400"><Trash2 className="h-3 w-3" /></button>
+                          </div>
                         </div>
                         <p className="mt-1 font-mono text-xs text-muted-foreground">
-                          {rule.fieldKey}{' '}
-                          <span className="text-slate-500">{rule.operator}</span>{' '}
+                          <span className="text-foreground/80">{featureLabel(rule.fieldKey)}</span>{' '}
+                          <span className="text-slate-500">{OPERATOR_LABELS[rule.operator] ?? rule.operator}</span>{' '}
                           <span className="text-foreground">{formatValue(rule.valueJson)}</span>
                         </p>
                       </div>
@@ -1336,129 +1592,104 @@ export default function ICPRulesPage() {
         </div>
       ) : null}
 
-      {/* ── Add Rule Modal ──────────────────────────────────────── */}
+      {/* ── Add Rule Command Palette (A5) ──────────────────────────── */}
       {showAddRule && selectedProfile ? (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-          onClick={(e) => { if (e.target === e.currentTarget) setShowAddRule(false); }}
+          className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-[10vh] backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) { setShowAddRule(false); setCommandSearch(''); } }}
           role="dialog"
           aria-modal="true"
           aria-labelledby="add-rule-title"
         >
-          <div className="w-full max-w-xl rounded-2xl border border-border/50 bg-card p-6 shadow-xl animate-in fade-in zoom-in-95 duration-200">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 id="add-rule-title" className="text-lg font-extrabold tracking-tight">
-                Add Rules to {selectedProfile.name}
-              </h2>
-              <button type="button" onClick={() => setShowAddRule(false)} className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent/50">
+          <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border/50 bg-card shadow-2xl animate-in fade-in zoom-in-95 duration-200" style={{ maxHeight: '70vh' }}>
+            {/* Search header */}
+            <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3">
+              <Search className="h-4 w-4 shrink-0 text-muted-foreground/50" />
+              <input
+                value={commandSearch}
+                onChange={(e) => setCommandSearch(e.target.value)}
+                placeholder="Search features... (e.g. WhatsApp, payment, Instagram)"
+                className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
+                autoFocus
+              />
+              <button type="button" onClick={() => { setShowAddRule(false); setCommandSearch(''); }} className="rounded-lg p-1 text-muted-foreground hover:bg-accent/50">
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            {/* New rule form */}
-            <div className="space-y-3 rounded-xl border border-border/30 bg-zbooni-dark/30 p-4">
-              <div className="grid grid-cols-2 gap-3">
-                <label className="text-xs">
-                  <span className="mb-1 block font-semibold text-muted-foreground/70">Rule Name</span>
-                  <input
-                    value={currentRule.name}
-                    onChange={(e) => setCurrentRule((prev) => ({ ...prev, name: e.target.value }))}
-                    placeholder="e.g. Has WhatsApp"
-                    className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  />
-                </label>
-                <label className="text-xs">
-                  <span className="mb-1 block font-semibold text-muted-foreground/70">Feature Key</span>
-                  <select
-                    value={currentRule.fieldKey}
-                    onChange={(e) => setCurrentRule((prev) => ({ ...prev, fieldKey: e.target.value }))}
-                    className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  >
-                    {availableFieldKeys.length === 0 ? (
-                      <option value="">No keys available</option>
-                    ) : null}
-                    {availableFieldKeys.map((k) => (
-                      <option key={k} value={k}>{k}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                <label className="text-xs">
-                  <span className="mb-1 block font-semibold text-muted-foreground/70">Rule Type</span>
-                  <select
-                    value={currentRule.ruleType}
-                    onChange={(e) => setCurrentRule((prev) => ({ ...prev, ruleType: e.target.value as 'WEIGHTED' | 'HARD_FILTER' }))}
-                    className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  >
-                    <option value="WEIGHTED">Weighted</option>
-                    <option value="HARD_FILTER">Hard Filter</option>
-                  </select>
-                </label>
-                <label className="text-xs">
-                  <span className="mb-1 block font-semibold text-muted-foreground/70">Operator</span>
-                  <select
-                    value={currentRule.operator}
-                    onChange={(e) => setCurrentRule((prev) => ({ ...prev, operator: e.target.value }))}
-                    className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  >
-                    {OPERATORS.map((op) => (
-                      <option key={op} value={op}>{op}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs">
-                  <span className="mb-1 block font-semibold text-muted-foreground/70">Expected Value</span>
-                  <input
-                    value={typeof currentRule.valueJson === 'string' ? currentRule.valueJson : JSON.stringify(currentRule.valueJson)}
-                    onChange={(e) => {
-                      const raw = e.target.value;
-                      // Try to parse as JSON (number, boolean, array), fall back to string
-                      let parsed: unknown = raw;
-                      try { parsed = JSON.parse(raw); } catch { /* keep as string */ }
-                      setCurrentRule((prev) => ({ ...prev, valueJson: parsed }));
-                    }}
-                    placeholder='true, 0.5, ["AE","SA"]'
-                    className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  />
-                </label>
-              </div>
-              {currentRule.ruleType === 'WEIGHTED' ? (
-                <label className="text-xs">
-                  <span className="mb-1 block font-semibold text-muted-foreground/70">Weight (-10 to 10)</span>
-                  <input
-                    type="number"
-                    min={-10}
-                    max={10}
-                    step={0.5}
-                    value={currentRule.weight}
-                    onChange={(e) => setCurrentRule((prev) => ({ ...prev, weight: Number(e.target.value) || 0 }))}
-                    className="h-8 w-24 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm tabular-nums focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  />
-                </label>
-              ) : null}
+            {/* Grouped feature list */}
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {(() => {
+                const search = commandSearch.toLowerCase();
+                const grouped: Record<string, Array<{ key: string; label: string; description: string }>> = {};
 
-              <button
-                type="button"
-                onClick={addToStaging}
-                disabled={!currentRule.name.trim() || !currentRule.fieldKey}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-zbooni-teal/15 px-3 py-1.5 text-xs font-semibold text-zbooni-teal transition-colors hover:bg-zbooni-teal/25 disabled:opacity-40"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Add to Batch
-              </button>
+                for (const key of availableFieldKeys) {
+                  const info = FEATURE_KEY_DESCRIPTIONS[key];
+                  const label = info?.label ?? key.replaceAll('_', ' ');
+                  const category = info?.category ?? 'Other';
+                  const description = info?.description ?? '';
+
+                  if (search && !label.toLowerCase().includes(search) && !key.toLowerCase().includes(search) && !description.toLowerCase().includes(search) && !category.toLowerCase().includes(search)) {
+                    continue;
+                  }
+
+                  if (!grouped[category]) grouped[category] = [];
+                  grouped[category].push({ key, label, description });
+                }
+
+                const categories = Object.entries(grouped);
+                if (categories.length === 0) {
+                  return (
+                    <div className="flex flex-col items-center py-12 text-center">
+                      <Search className="h-6 w-6 text-muted-foreground/20" />
+                      <p className="mt-2 text-sm text-muted-foreground/50">
+                        {availableFieldKeys.length === 0 ? 'All features already have rules' : 'No features match your search'}
+                      </p>
+                    </div>
+                  );
+                }
+
+                return categories.map(([category, features]) => (
+                  <div key={category}>
+                    <p className="sticky top-0 z-10 bg-card/95 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50 backdrop-blur-sm">
+                      {category}
+                    </p>
+                    {features.map((feature) => (
+                      <button
+                        key={feature.key}
+                        type="button"
+                        onClick={() => {
+                          setStagedRules((prev) => [...prev, {
+                            ...EMPTY_RULE,
+                            fieldKey: feature.key,
+                            name: feature.label,
+                          }]);
+                          setCommandSearch('');
+                        }}
+                        className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-zbooni-dark/40"
+                      >
+                        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-zbooni-teal/10">
+                          <Plus className="h-3.5 w-3.5 text-zbooni-teal" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold">{feature.label}</p>
+                          <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground/50">{feature.description}</p>
+                          <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/30">{feature.key}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ));
+              })()}
             </div>
 
-            {/* Staged rules list */}
+            {/* Staged rules count + submit */}
             {stagedRules.length > 0 ? (
-              <div className="mt-4">
-                <p className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground/60">
-                  Staged Rules ({stagedRules.length})
-                </p>
-                <div className="space-y-1.5">
+              <div className="border-t border-border/50 px-4 py-3">
+                <div className="mb-2 space-y-1.5">
                   {stagedRules.map((rule, idx) => (
                     <div key={idx} className="flex items-center justify-between rounded-lg border border-border/30 bg-zbooni-dark/30 px-3 py-2">
-                      <div>
+                      <div className="min-w-0 flex-1">
                         <span className="text-sm font-semibold">{rule.name}</span>
                         <span className="ml-2 font-mono text-[10px] text-muted-foreground/50">
                           {rule.fieldKey} {rule.operator} {typeof rule.valueJson === 'string' ? rule.valueJson : JSON.stringify(rule.valueJson)}
@@ -1478,30 +1709,26 @@ export default function ICPRulesPage() {
                     </div>
                   ))}
                 </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setStagedRules([])}
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    Clear all
+                  </button>
+                  <button
+                    type="button"
+                    onClick={submitStagedRules}
+                    disabled={submittingRules}
+                    className="ml-auto inline-flex items-center gap-2 rounded-xl bg-zbooni-green px-4 py-2 text-sm font-semibold text-black shadow-lg shadow-zbooni-green/20 transition-all hover:bg-zbooni-green/90 disabled:opacity-50"
+                  >
+                    {submittingRules ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    Save {stagedRules.length} Rule{stagedRules.length !== 1 ? 's' : ''}
+                  </button>
+                </div>
               </div>
             ) : null}
-
-            {/* Submit */}
-            <div className="mt-4 flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setShowAddRule(false)}
-                className="flex-1 rounded-xl border border-input py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={submitStagedRules}
-                disabled={stagedRules.length === 0 || submittingRules}
-                className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-zbooni-green px-4 py-2.5 text-sm font-semibold text-black shadow-lg shadow-zbooni-green/20 transition-all hover:bg-zbooni-green/90 disabled:opacity-50"
-              >
-                {submittingRules ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : null}
-                Save {stagedRules.length} Rule{stagedRules.length !== 1 ? 's' : ''}
-              </button>
-            </div>
           </div>
         </div>
       ) : null}

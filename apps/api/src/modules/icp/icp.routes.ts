@@ -20,7 +20,7 @@ import {
 } from '@lead-flood/contracts';
 
 import { requireAppAdminAccess } from '../../auth/guard.js';
-import { IcpNotFoundError, IcpNotImplementedError } from './icp.errors.js';
+import { IcpHasActiveDataError, IcpNotFoundError, IcpNotImplementedError } from './icp.errors.js';
 import { PrismaIcpRepository } from './icp.repository.js';
 import { buildIcpService } from './icp.service.js';
 
@@ -49,6 +49,16 @@ function handleModuleError(error: unknown, request: FastifyRequest, reply: Fasti
 
   if (error instanceof IcpNotFoundError) {
     reply.status(404).send(
+      ErrorResponseSchema.parse({
+        error: error.message,
+        requestId: request.id,
+      }),
+    );
+    return true;
+  }
+
+  if (error instanceof IcpHasActiveDataError) {
+    reply.status(409).send(
       ErrorResponseSchema.parse({
         error: error.message,
         requestId: request.id,
