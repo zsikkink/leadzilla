@@ -806,7 +806,7 @@ export function FeedbackStageDetails({ events }: { events: FeedbackEventData[] }
     MEETING_BOOKED: 'Meeting Booked',
     DEAL_WON: 'Deal Won',
     DEAL_LOST: 'Deal Lost',
-    UNSUBSCRIBED: 'Unsubscribed',
+    NOT_INTERESTED: 'Not Interested',
     BOUNCED: 'Bounced',
   };
 
@@ -815,7 +815,7 @@ export function FeedbackStageDetails({ events }: { events: FeedbackEventData[] }
     MEETING_BOOKED: 'text-zbooni-green bg-zbooni-green/10',
     DEAL_WON: 'text-zbooni-green bg-zbooni-green/10',
     DEAL_LOST: 'text-red-400 bg-red-400/10',
-    UNSUBSCRIBED: 'text-orange-400 bg-orange-400/10',
+    NOT_INTERESTED: 'text-orange-400 bg-orange-400/10',
     BOUNCED: 'text-red-400 bg-red-400/10',
   };
 

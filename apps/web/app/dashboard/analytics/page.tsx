@@ -54,7 +54,7 @@ const EVENT_TYPE_BADGES: Record<string, { className: string; label: string }> = 
   MEETING_BOOKED: { className: 'bg-zbooni-teal/15 text-zbooni-teal', label: 'Meeting' },
   DEAL_WON: { className: 'bg-zbooni-green/15 text-zbooni-green', label: 'Won' },
   DEAL_LOST: { className: 'bg-red-500/15 text-red-400', label: 'Lost' },
-  UNSUBSCRIBED: { className: 'bg-slate-500/15 text-slate-400', label: 'Unsub' },
+  NOT_INTERESTED: { className: 'bg-slate-500/15 text-slate-400', label: 'Not Interested' },
   BOUNCED: { className: 'bg-slate-600/15 text-slate-500', label: 'Bounced' },
 };
 
