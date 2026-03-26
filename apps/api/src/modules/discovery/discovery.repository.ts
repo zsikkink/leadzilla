@@ -14,9 +14,13 @@ import {
   DiscoveryRunNotFoundError,
   DiscoveryWorkerUnavailableError,
 } from './discovery.errors.js';
-import type { DiscoveryRunJobPayload } from './discovery.service.js';
+import type {
+  DiscoveryRunJobPayload,
+  DiscoverySeedShardJobPayload,
+} from './discovery.service.js';
 
 const DISCOVERY_RUN_JOB_TYPE = 'discovery.run';
+const DISCOVERY_SEED_JOB_TYPE = 'discovery.seed';
 const DEFAULT_PG_BOSS_SCHEMA = 'pgboss';
 
 interface DiscoveryRunProgress {
@@ -111,6 +115,7 @@ export interface DiscoveryRepository {
     runId: string,
     input: CreateDiscoveryRunRequest,
     payload: DiscoveryRunJobPayload,
+    seedPayloads: DiscoverySeedShardJobPayload[],
   ): Promise<void>;
   markDiscoveryRunFailed(runId: string, message: string): Promise<void>;
   getDiscoveryRunStatus(
@@ -133,6 +138,7 @@ export class StubDiscoveryRepository implements DiscoveryRepository {
     _runId: string,
     _input: CreateDiscoveryRunRequest,
     _payload: DiscoveryRunJobPayload,
+    _seedPayloads: DiscoverySeedShardJobPayload[],
   ): Promise<void> {
     throw new DiscoveryNotImplementedError('TODO: create discovery run persistence');
   }
@@ -187,6 +193,7 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
     runId: string,
     input: CreateDiscoveryRunRequest,
     payload: DiscoveryRunJobPayload,
+    seedPayloads: DiscoverySeedShardJobPayload[],
   ): Promise<void> {
     // Store the full ICP list in the payload for multi-ICP tracking
     const icpProfileIds = input.icpProfileIds?.length
@@ -194,24 +201,49 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
       : input.icpProfileId
         ? [input.icpProfileId]
         : [payload.icpProfileId];
+    const emptyResult = {
+      totalItems: 0,
+      processedItems: 0,
+      failedItems: 0,
+    };
 
-    await prisma.jobExecution.create({
-      data: {
-        id: runId,
-        type: DISCOVERY_RUN_JOB_TYPE,
-        status: 'queued',
-        attempts: 0,
-        payload: toInputJson({
-          ...payload,
-          icpProfileIds,
-        }),
-        result: toInputJson({
-          totalItems: 0,
-          processedItems: 0,
-          failedItems: 0,
-        }),
-        error: null,
-      },
+    await prisma.$transaction(async (tx) => {
+      await tx.jobExecution.create({
+        data: {
+          id: runId,
+          type: DISCOVERY_RUN_JOB_TYPE,
+          status: 'queued',
+          attempts: 0,
+          payload: toInputJson({
+            ...payload,
+            icpProfileIds,
+          }),
+          result: toInputJson(emptyResult),
+          error: null,
+        },
+      });
+
+      for (const seedPayload of seedPayloads) {
+        await tx.jobExecution.create({
+          data: {
+            id: seedPayload.jobExecutionId,
+            type: DISCOVERY_SEED_JOB_TYPE,
+            status: 'queued',
+            attempts: 0,
+            payload: toInputJson(seedPayload),
+            result: toInputJson(emptyResult),
+            error: null,
+          },
+        });
+
+        await tx.outboxEvent.create({
+          data: {
+            type: DISCOVERY_SEED_JOB_TYPE,
+            payload: toInputJson(seedPayload),
+            status: 'pending',
+          },
+        });
+      }
     });
   }
 

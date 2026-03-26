@@ -40,6 +40,37 @@ describe('dispatchPendingOutboxEvents', () => {
     };
   }
 
+  async function createDiscoverySeedDispatchFixture() {
+    const discoveryRun = await prisma.jobExecution.create({
+      data: {
+        type: 'discovery.run',
+        status: 'running',
+        payload: {
+          icpProfileId: 'icp_1',
+          countries: ['AE'],
+        },
+      },
+    });
+    const seedJob = await prisma.jobExecution.create({
+      data: {
+        type: 'discovery.seed',
+        status: 'queued',
+        payload: {
+          discoveryRunId: discoveryRun.id,
+          icpProfileId: 'icp_1',
+          countries: ['AE'],
+        },
+      },
+    });
+
+    createdJobIds.push(discoveryRun.id, seedJob.id);
+
+    return {
+      discoveryRunId: discoveryRun.id,
+      seedJobExecutionId: seedJob.id,
+    };
+  }
+
   beforeEach(async () => {
     await prisma.outboxEvent.deleteMany({
       where: {
@@ -119,6 +150,56 @@ describe('dispatchPendingOutboxEvents', () => {
     expect(updated?.processedAt).not.toBeNull();
   });
 
+  it('dispatches discovery.seed outbox rows using the per-seed job execution gate', async () => {
+    const fixture = await createDiscoverySeedDispatchFixture();
+    const event = await prisma.outboxEvent.create({
+      data: {
+        type: 'discovery.seed',
+        payload: {
+          reason: 'api',
+          correlationId: fixture.discoveryRunId,
+          discoveryRunId: fixture.discoveryRunId,
+          jobExecutionId: fixture.seedJobExecutionId,
+          icpProfileId: 'icp_1',
+          countries: ['AE'],
+          enqueueRunTasks: true,
+        },
+        status: 'pending',
+      },
+    });
+    createdOutboxIds.push(event.id);
+
+    const boss = {
+      send: vi.fn(async () => 'ok'),
+    };
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    const count = await dispatchPendingOutboxEvents(boss as unknown as Pick<PgBoss, 'send'>, logger);
+
+    expect(count).toBe(1);
+    expect(boss.send).toHaveBeenCalledWith(
+      'discovery.seed',
+      expect.objectContaining({
+        discoveryRunId: fixture.discoveryRunId,
+        jobExecutionId: fixture.seedJobExecutionId,
+        icpProfileId: 'icp_1',
+      }),
+      expect.objectContaining({
+        singletonKey: `discovery.seed:${fixture.discoveryRunId}:icp_1`,
+      }),
+    );
+
+    const updated = await prisma.outboxEvent.findUnique({
+      where: { id: event.id },
+    });
+    expect(updated?.status).toBe('sent');
+    expect(updated?.attempts).toBe(1);
+  });
+
   it('marks outbox events as failed and schedules retry when publish fails', async () => {
     const fixture = await createQueuedJobFixture();
     const event = await prisma.outboxEvent.create({
@@ -169,9 +250,8 @@ describe('dispatchPendingOutboxEvents', () => {
           jobExecutionId: fixture.jobExecutionId,
           source: 'test',
         },
-        status: 'failed',
+        status: 'pending',
         attempts: 5,
-        nextAttemptAt: new Date(Date.now() - 1_000),
       },
     });
     createdOutboxIds.push(event.id);

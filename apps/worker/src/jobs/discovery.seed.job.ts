@@ -32,6 +32,8 @@ export interface DiscoverySeedJobPayload {
   reason?: string;
   correlationId?: string;
   jobRunId?: string;
+  /** Durable per-shard submission record used by outbox dispatch and tracking. */
+  jobExecutionId?: string | undefined;
   profile?: 'default' | 'small';
   maxTasks?: number;
   maxPages?: number;
@@ -196,6 +198,17 @@ export async function handleDiscoverySeedJob(
       }
     }
 
+    if (job.data.jobExecutionId) {
+      await prisma.jobExecution.update({
+        where: { id: job.data.jobExecutionId },
+        data: {
+          status: 'running',
+          startedAt: new Date(),
+          error: null,
+        },
+      });
+    }
+
     // B9: If ICP profile is provided, load its target industries for v2 task generation
     let icpSeedConfig: IcpSeedConfig | undefined;
     if (job.data.icpProfileId) {
@@ -331,6 +344,23 @@ export async function handleDiscoverySeedJob(
     // If 0 tasks were generated, finalize the run immediately instead of
     // enqueuing empty run_search_task slots that race with this update.
     if (seedResult.generated === 0) {
+      if (job.data.jobExecutionId) {
+        await prisma.jobExecution.update({
+          where: { id: job.data.jobExecutionId },
+          data: {
+            status: 'failed',
+            finishedAt: new Date(),
+            error: 'Seed generated 0 search tasks. Check ICP industry mapping and country codes.',
+            result: toInputJson({
+              totalItems: 0,
+              processedItems: 0,
+              failedItems: 0,
+              searchTasksInserted: 0,
+            }),
+          },
+        });
+      }
+
       if (job.data.discoveryRunId) {
         await prisma.jobExecution.update({
           where: { id: job.data.discoveryRunId },
@@ -413,7 +443,35 @@ export async function handleDiscoverySeedJob(
         },
       });
     }
+
+    if (job.data.jobExecutionId) {
+      await prisma.jobExecution.update({
+        where: { id: job.data.jobExecutionId },
+        data: {
+          status: 'completed',
+          finishedAt: new Date(),
+          error: null,
+          result: toInputJson({
+            totalItems: seedResult.generated,
+            processedItems: seedResult.generated,
+            failedItems: 0,
+            searchTasksInserted: seedResult.inserted,
+          }),
+        },
+      });
+    }
   } catch (error: unknown) {
+    if (job.data.jobExecutionId) {
+      await prisma.jobExecution.update({
+        where: { id: job.data.jobExecutionId },
+        data: {
+          status: 'failed',
+          error: error instanceof Error ? error.message : 'Failed to execute discovery seed job',
+          finishedAt: new Date(),
+        },
+      });
+    }
+
     if (job.data.jobRunId) {
       await prisma.jobRun.update({
         where: { id: job.data.jobRunId },

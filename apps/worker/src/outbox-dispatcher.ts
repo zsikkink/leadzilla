@@ -4,9 +4,17 @@ import { buildFeaturesComputeSingletonKey } from '@lead-flood/contracts';
 import { type Prisma, prisma } from '@lead-flood/db';
 
 import {
+  DISCOVERY_SEED_JOB_NAME,
+  type DiscoverySeedJobPayload,
+} from './jobs/discovery.seed.job.js';
+import {
   FEATURES_COMPUTE_JOB_NAME,
   type FeaturesComputeJobPayload,
 } from './jobs/features.compute.job.js';
+import {
+  SCORING_COMPUTE_JOB_NAME,
+  type ScoringComputeJobPayload,
+} from './jobs/scoring.compute.job.js';
 
 interface LegacyOutboxPayload {
   leadId: string;
@@ -14,7 +22,18 @@ interface LegacyOutboxPayload {
   source: string;
 }
 
-type SupportedOutboxPayload = LegacyOutboxPayload | FeaturesComputeJobPayload;
+type SupportedOutboxPayload =
+  | LegacyOutboxPayload
+  | DiscoverySeedOutboxPayload
+  | FeaturesComputeJobPayload
+  | ScoringComputeJobPayload;
+type ScoringComputeOutboxPayload = ScoringComputeJobPayload & { jobExecutionId?: string };
+type DiscoverySeedOutboxPayload = DiscoverySeedJobPayload & {
+  discoveryRunId: string;
+  jobExecutionId: string;
+  icpProfileId: string;
+  countries: string[];
+};
 
 export interface OutboxDispatchPlan {
   jobExecutionId: string;
@@ -65,6 +84,52 @@ function isFeaturesComputeOutboxPayload(payload: unknown): payload is FeaturesCo
   );
 }
 
+function isScoringComputeOutboxPayload(payload: unknown): payload is ScoringComputeOutboxPayload {
+  if (!payload || typeof payload !== 'object') {
+    return false;
+  }
+
+  const value = payload as Record<string, unknown>;
+  return (
+    typeof value.runId === 'string' &&
+    typeof value.mode === 'string' &&
+    (value.jobExecutionId === undefined || typeof value.jobExecutionId === 'string') &&
+    (value.correlationId === undefined || typeof value.correlationId === 'string') &&
+    (value.icpProfileId === undefined || typeof value.icpProfileId === 'string') &&
+    (value.modelVersionId === undefined || typeof value.modelVersionId === 'string') &&
+    (value.requestedByUserId === undefined || typeof value.requestedByUserId === 'string') &&
+    (
+      value.leadIds === undefined ||
+      (Array.isArray(value.leadIds) && value.leadIds.every((entry) => typeof entry === 'string'))
+    )
+  );
+}
+
+function isDiscoverySeedOutboxPayload(payload: unknown): payload is DiscoverySeedOutboxPayload {
+  if (!payload || typeof payload !== 'object') {
+    return false;
+  }
+
+  const value = payload as Record<string, unknown>;
+  return (
+    typeof value.discoveryRunId === 'string' &&
+    typeof value.jobExecutionId === 'string' &&
+    typeof value.icpProfileId === 'string' &&
+    Array.isArray(value.countries) &&
+    value.countries.every((entry) => typeof entry === 'string') &&
+    (value.cities === undefined ||
+      (Array.isArray(value.cities) && value.cities.every((entry) => typeof entry === 'string'))) &&
+    (value.includeWebsiteAnalysis === undefined || typeof value.includeWebsiteAnalysis === 'boolean') &&
+    (value.includeSocialMediaAnalysis === undefined || typeof value.includeSocialMediaAnalysis === 'boolean') &&
+    (value.maxTasks === undefined || typeof value.maxTasks === 'number') &&
+    (value.validationMode === undefined || typeof value.validationMode === 'boolean') &&
+    (value.minReviewCount === undefined || typeof value.minReviewCount === 'number') &&
+    (value.reason === undefined || typeof value.reason === 'string') &&
+    (value.correlationId === undefined || typeof value.correlationId === 'string') &&
+    (value.enqueueRunTasks === undefined || typeof value.enqueueRunTasks === 'boolean')
+  );
+}
+
 export function resolveOutboxDispatchPlan(
   eventType: string,
   payload: unknown,
@@ -83,6 +148,44 @@ export function resolveOutboxDispatchPlan(
         icpProfileId: payload.icpProfileId,
         snapshotVersion: payload.snapshotVersion,
       }),
+    };
+  }
+
+  if (eventType === SCORING_COMPUTE_JOB_NAME) {
+    if (!isScoringComputeOutboxPayload(payload)) {
+      return null;
+    }
+
+    const bossPayload: ScoringComputeJobPayload = {
+      runId: payload.runId,
+      mode: payload.mode,
+      ...(payload.correlationId !== undefined ? { correlationId: payload.correlationId } : {}),
+      ...(payload.icpProfileId !== undefined ? { icpProfileId: payload.icpProfileId } : {}),
+      ...(payload.leadIds !== undefined ? { leadIds: payload.leadIds } : {}),
+      ...(payload.modelVersionId !== undefined ? { modelVersionId: payload.modelVersionId } : {}),
+      ...(payload.requestedByUserId !== undefined ? { requestedByUserId: payload.requestedByUserId } : {}),
+    };
+    const singletonKey =
+      payload.jobExecutionId && payload.icpProfileId && payload.leadIds?.length === 1
+        ? `scoring.compute:${payload.runId}:${payload.leadIds[0]}:${payload.icpProfileId}`
+        : `scoring.compute:${payload.runId}`;
+
+    return {
+      jobExecutionId: payload.jobExecutionId ?? payload.runId,
+      bossPayload,
+      singletonKey,
+    };
+  }
+
+  if (eventType === DISCOVERY_SEED_JOB_NAME) {
+    if (!isDiscoverySeedOutboxPayload(payload)) {
+      return null;
+    }
+
+    return {
+      jobExecutionId: payload.jobExecutionId,
+      bossPayload: payload,
+      singletonKey: `discovery.seed:${payload.discoveryRunId}:${payload.icpProfileId}`,
     };
   }
 

@@ -3,12 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { prismaMock } = vi.hoisted(() => ({
   prismaMock: {
+    $transaction: vi.fn(),
     $queryRawUnsafe: vi.fn(),
     jobExecution: {
       count: vi.fn(),
       create: vi.fn(),
       findMany: vi.fn(),
       findFirst: vi.fn(),
+    },
+    outboxEvent: {
+      create: vi.fn(),
     },
     business: {
       findMany: vi.fn(),
@@ -86,9 +90,13 @@ describe('discovery.routes ownership scoping', () => {
     currentUserId = 'user_a';
     enqueueDiscoveryRun = vi.fn(async () => undefined);
 
+    prismaMock.$transaction.mockImplementation(async (callback: (tx: typeof prismaMock) => Promise<unknown>) =>
+      callback(prismaMock),
+    );
     prismaMock.$queryRawUnsafe.mockResolvedValue([{ active: true }]);
     prismaMock.jobExecution.count.mockResolvedValue(0);
     prismaMock.jobExecution.create.mockResolvedValue(undefined);
+    prismaMock.outboxEvent.create.mockResolvedValue(undefined);
 
     app = Fastify();
     app.decorateRequest('user', null);
@@ -326,10 +334,52 @@ describe('discovery.routes ownership scoping', () => {
       }),
     );
 
-    expect(enqueueDiscoveryRun).toHaveBeenCalledWith(
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
+    expect(prismaMock.jobExecution.create).toHaveBeenCalledTimes(2);
+    expect(prismaMock.outboxEvent.create).toHaveBeenCalledTimes(1);
+
+    const responseBody = response.json() as { runId: string };
+    const rootCreateCall = prismaMock.jobExecution.create.mock.calls[0]?.[0];
+    const seedCreateCall = prismaMock.jobExecution.create.mock.calls[1]?.[0];
+    const seedJobExecutionId = seedCreateCall?.data?.id;
+
+    expect(rootCreateCall).toEqual(
       expect.objectContaining({
-        requestedByUserId: 'user_a',
+        data: expect.objectContaining({
+          id: responseBody.runId,
+          type: 'discovery.run',
+        }),
       }),
     );
+    expect(seedCreateCall).toEqual(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          id: expect.any(String),
+          type: 'discovery.seed',
+          status: 'queued',
+          payload: expect.objectContaining({
+            discoveryRunId: responseBody.runId,
+            icpProfileId: 'icp_1',
+            jobExecutionId: expect.any(String),
+            enqueueRunTasks: true,
+          }),
+        }),
+      }),
+    );
+    expect(prismaMock.outboxEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: 'discovery.seed',
+          status: 'pending',
+          payload: expect.objectContaining({
+            discoveryRunId: responseBody.runId,
+            icpProfileId: 'icp_1',
+            jobExecutionId: seedJobExecutionId,
+            enqueueRunTasks: true,
+          }),
+        }),
+      }),
+    );
+    expect(enqueueDiscoveryRun).not.toHaveBeenCalled();
   });
 });

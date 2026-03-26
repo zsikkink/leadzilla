@@ -25,6 +25,22 @@ export interface DiscoveryRunJobPayload {
   requestedByUserId?: string | undefined;
 }
 
+export interface DiscoverySeedShardJobPayload {
+  reason: 'api';
+  correlationId: string;
+  jobExecutionId: string;
+  discoveryRunId: string;
+  icpProfileId: string;
+  countries: CreateDiscoveryRunRequest['countries'];
+  cities?: CreateDiscoveryRunRequest['cities'];
+  includeWebsiteAnalysis?: boolean | undefined;
+  includeSocialMediaAnalysis?: boolean | undefined;
+  maxTasks?: number | undefined;
+  validationMode?: boolean | undefined;
+  minReviewCount?: number | undefined;
+  enqueueRunTasks: true;
+}
+
 export interface DiscoveryServiceDependencies {
   enqueueDiscoveryRun: (payload: DiscoveryRunJobPayload) => Promise<void>;
 }
@@ -56,9 +72,57 @@ function resolveIcpProfileIds(input: CreateDiscoveryRunRequest): string[] {
   return [];
 }
 
+function buildDiscoverySeedShardJobPayloads(
+  runId: string,
+  input: CreateDiscoveryRunRequest,
+  icpProfileIds: string[],
+): DiscoverySeedShardJobPayload[] {
+  const totalLimit = input.limit;
+  const icpCount = icpProfileIds.length;
+  const perIcpLimit = totalLimit !== undefined && icpCount > 0
+    ? Math.floor(totalLimit / icpCount)
+    : undefined;
+  const remainderLimit = totalLimit !== undefined && perIcpLimit !== undefined
+    ? totalLimit - perIcpLimit * icpCount
+    : 0;
+  const seedPayloads: DiscoverySeedShardJobPayload[] = [];
+
+  for (let i = 0; i < icpProfileIds.length; i += 1) {
+    const icpProfileId = icpProfileIds[i]!;
+    let maxTasks = perIcpLimit;
+
+    if (maxTasks !== undefined && i < remainderLimit) {
+      maxTasks += 1;
+    }
+
+    // Explicitly skip zero-budget shards instead of falling back to worker defaults.
+    if (maxTasks !== undefined && maxTasks <= 0) {
+      continue;
+    }
+
+    seedPayloads.push({
+      reason: 'api',
+      correlationId: runId,
+      jobExecutionId: randomUUID(),
+      discoveryRunId: runId,
+      icpProfileId,
+      countries: input.countries,
+      cities: input.cities,
+      includeWebsiteAnalysis: input.includeWebsiteAnalysis,
+      includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
+      maxTasks,
+      validationMode: (input.limit ?? 0) <= 10,
+      minReviewCount: input.advancedSettings?.minReviewCount,
+      enqueueRunTasks: true,
+    });
+  }
+
+  return seedPayloads;
+}
+
 export function buildDiscoveryService(
   repository: DiscoveryRepository,
-  dependencies: DiscoveryServiceDependencies,
+  _dependencies: DiscoveryServiceDependencies,
 ): DiscoveryService {
   const queuedStatus: PipelineRunStatus = 'QUEUED';
 
@@ -84,50 +148,8 @@ export function buildDiscoveryService(
         requestedByUserId: input.requestedByUserId,
       };
 
-      await repository.createDiscoveryRun(runId, input, payload);
-
-      try {
-        // Split limit across ICPs: distribute remainder one-by-one from the front.
-        const totalLimit = input.limit;
-        const icpCount = icpProfileIds.length;
-        const perIcpLimit = totalLimit !== undefined
-          ? Math.floor(totalLimit / icpCount)
-          : undefined;
-        const remainderLimit = totalLimit !== undefined && perIcpLimit !== undefined
-          ? totalLimit - perIcpLimit * icpCount
-          : 0;
-
-        for (let i = 0; i < icpProfileIds.length; i++) {
-          const icpId = icpProfileIds[i]!;
-          let icpLimit = perIcpLimit;
-          if (icpLimit !== undefined && i < remainderLimit) {
-            icpLimit += 1;
-          }
-
-          // Explicitly skip zero-budget shards instead of falling back to worker defaults.
-          if (icpLimit !== undefined && icpLimit <= 0) {
-            continue;
-          }
-
-          await dependencies.enqueueDiscoveryRun({
-            runId,
-            icpProfileId: icpId,
-            countries: input.countries,
-            cities: input.cities,
-            includeWebsiteAnalysis: input.includeWebsiteAnalysis,
-            includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
-            limit: icpLimit,
-            validationMode: (input.limit ?? 0) <= 10,
-            minReviewCount: input.advancedSettings?.minReviewCount,
-            requestedByUserId: input.requestedByUserId,
-          });
-        }
-      } catch (error: unknown) {
-        const errorMessage =
-          error instanceof Error ? error.message : 'Failed to enqueue discovery.run job';
-        await repository.markDiscoveryRunFailed(runId, errorMessage);
-        throw error;
-      }
+      const seedPayloads = buildDiscoverySeedShardJobPayloads(runId, input, icpProfileIds);
+      await repository.createDiscoveryRun(runId, input, payload, seedPayloads);
 
       return {
         runId,
