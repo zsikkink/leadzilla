@@ -179,8 +179,8 @@ export class PrismaFeedbackRepository extends StubFeedbackRepository {
       meetingBookedCount: countByEventType(groups, 'MEETING_BOOKED'),
       dealWonCount: countByEventType(groups, 'DEAL_WON'),
       dealLostCount: countByEventType(groups, 'DEAL_LOST'),
-      unsubscribedCount: countByEventType(groups, 'UNSUBSCRIBED'),
       bouncedCount: countByEventType(groups, 'BOUNCED'),
+      notInterestedCount: countByEventType(groups, 'NOT_INTERESTED'),
     };
   }
 }

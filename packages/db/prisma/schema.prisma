@@ -184,8 +184,8 @@ enum FeedbackEventType {
   MEETING_BOOKED
   DEAL_WON
   DEAL_LOST
-  UNSUBSCRIBED
   BOUNCED
+  NOT_INTERESTED
 }
 
 enum FeedbackSource {
@@ -204,7 +204,6 @@ enum ReplyClassification {
   INTERESTED
   NOT_INTERESTED
   OUT_OF_OFFICE
-  UNSUBSCRIBE
 }
 
 enum SearchTaskType {

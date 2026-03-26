@@ -145,12 +145,12 @@ export async function processTrengoWebhook(
 /** Map Resend event types to our FeedbackEventType */
 function mapResendEventType(
   type: string,
-): 'BOUNCED' | 'UNSUBSCRIBED' | 'DELIVERED' | null {
+): 'BOUNCED' | 'NOT_INTERESTED' | 'DELIVERED' | null {
   switch (type) {
     case 'email.bounced':
       return 'BOUNCED';
     case 'email.complained':
-      return 'UNSUBSCRIBED';
+      return 'NOT_INTERESTED';
     case 'email.delivered':
       return 'DELIVERED';
     default:
@@ -170,7 +170,7 @@ function extractDomain(email: string): string | null {
  * 1. Parse event type: email.bounced, email.complained, email.delivered
  * 2. Correlate to a MessageSend via recipient email on the Lead
  * 3. For bounced/complained:
- *    - Create FeedbackEvent (BOUNCED or UNSUBSCRIBED)
+ *    - Create FeedbackEvent (BOUNCED or NOT_INTERESTED)
  *    - Update MessageSend.status to BOUNCED
  *    - Cancel follow-ups (nextFollowUpAfter=null) for all pending sends on that lead
  *    - Log bounce domain

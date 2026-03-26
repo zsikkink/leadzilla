@@ -5,8 +5,8 @@ export const FeedbackEventTypeSchema = z.enum([
   'MEETING_BOOKED',
   'DEAL_WON',
   'DEAL_LOST',
-  'UNSUBSCRIBED',
   'BOUNCED',
+  'NOT_INTERESTED',
 ]);
 
 export const FeedbackSourceSchema = z.enum(['WEBHOOK', 'MANUAL', 'CRM_IMPORT']);
@@ -86,8 +86,8 @@ export const FeedbackSummaryResponseSchema = z
     meetingBookedCount: z.number().int().min(0),
     dealWonCount: z.number().int().min(0),
     dealLostCount: z.number().int().min(0),
-    unsubscribedCount: z.number().int().min(0),
     bouncedCount: z.number().int().min(0),
+    notInterestedCount: z.number().int().min(0),
   })
   .strict();
 
