@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { useCallback, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 
 import { AboutBusinessCard } from '../../../../src/components/about-business-card.js';
 import { LeadStatusBadge } from '../../../../src/components/lead-status-badge.js';
@@ -40,6 +40,7 @@ import {
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
 import { countryName } from '../../../../src/lib/countries.js';
+import { getSupabaseBrowserClient } from '../../../../src/lib/supabase-client.js';
 import { getTeamMemberTier, sortTeamMembers } from '../../../../src/lib/team-members.js';
 
 interface EnrichmentField {
@@ -132,6 +133,19 @@ interface TeamMember {
   positionRank: number | null;
   source: string | null;
   fromBusinessContacts: boolean;
+}
+
+// ── Supabase business data (A1 fix: query by businessId, not leadId) ──
+interface SupabaseBusinessData {
+  businessId: string | null;
+  businessInsights: string | null;
+  conversionMetadata: Record<string, unknown> | null;
+  businessContacts: TeamMember[];
+  businessName: string | null;
+  websiteDomain: string | null;
+  instagramHandle: string | null;
+  rating: number | null;
+  reviewCount: number | null;
 }
 interface _InstagramPost {
   caption: string;
@@ -566,6 +580,90 @@ function _IntelligenceGathered({ data }: { data: BusinessScrapeData }) {
   );
 }
 
+// ── Fetch business data from Supabase by businessId (not leadId) ───
+async function fetchBusinessDataFromSupabase(leadId: string): Promise<SupabaseBusinessData> {
+  const empty: SupabaseBusinessData = {
+    businessId: null,
+    businessInsights: null,
+    conversionMetadata: null,
+    businessContacts: [],
+    businessName: null,
+    websiteDomain: null,
+    instagramHandle: null,
+    rating: null,
+    reviewCount: null,
+  };
+
+  try {
+    const supabase = getSupabaseBrowserClient();
+
+    // Step 1: Get the lead's businessId from the Lead table
+    const { data: leadRow, error: leadError } = await supabase
+      .from('Lead')
+      .select('businessId')
+      .eq('id', leadId)
+      .single();
+
+    if (leadError || !leadRow?.businessId) return empty;
+
+    const businessId = leadRow.businessId as string;
+
+    // Step 2: Fetch business_conversions by businessId (not leadId — leadId can be NULL)
+    const [conversionResult, contactsResult, businessResult] = await Promise.allSettled([
+      supabase
+        .from('business_conversions')
+        .select('businessInsights, metadata')
+        .eq('businessId', businessId)
+        .order('createdAt', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from('business_contacts')
+        .select('id, name, title, email, phone, linkedinUrl, seniority, positionRank, source')
+        .eq('businessId', businessId)
+        .order('positionRank', { ascending: true }),
+      supabase
+        .from('businesses')
+        .select('name, website_domain, instagram_handle, rating, review_count')
+        .eq('id', businessId)
+        .single(),
+    ]);
+
+    const conversion = conversionResult.status === 'fulfilled' ? conversionResult.value.data : null;
+    const contacts = contactsResult.status === 'fulfilled' ? (contactsResult.value.data ?? []) : [];
+    const business = businessResult.status === 'fulfilled' ? businessResult.value.data : null;
+
+    const metadata = conversion?.metadata && typeof conversion.metadata === 'object' && !Array.isArray(conversion.metadata)
+      ? conversion.metadata as Record<string, unknown>
+      : null;
+
+    return {
+      businessId,
+      businessInsights: conversion?.businessInsights ?? null,
+      conversionMetadata: metadata,
+      businessContacts: contacts.map((c: Record<string, unknown>) => ({
+        id: String(c.id ?? ''),
+        fullName: String(c.name ?? 'Unknown'),
+        jobTitle: typeof c.title === 'string' ? c.title : null,
+        email: typeof c.email === 'string' ? c.email : null,
+        phone: typeof c.phone === 'string' ? c.phone : null,
+        linkedinUrl: typeof c.linkedinUrl === 'string' ? c.linkedinUrl : null,
+        seniority: typeof c.seniority === 'string' ? c.seniority : null,
+        positionRank: typeof c.positionRank === 'number' ? c.positionRank : null,
+        source: typeof c.source === 'string' ? c.source : null,
+        fromBusinessContacts: true,
+      })),
+      businessName: business?.name ?? null,
+      websiteDomain: business?.website_domain ?? null,
+      instagramHandle: business?.instagram_handle ?? null,
+      rating: typeof business?.rating === 'number' ? business.rating : null,
+      reviewCount: typeof business?.review_count === 'number' ? business.review_count : null,
+    };
+  } catch {
+    return empty;
+  }
+}
+
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { apiClient } = useAuth();
@@ -575,6 +673,16 @@ export default function LeadDetailPage() {
     useCallback(() => apiClient.getLead(id), [apiClient, id]),
     [id],
   );
+
+  // A1: Fetch business data from Supabase (by businessId, not leadId)
+  const [businessData, setBusinessData] = useState<SupabaseBusinessData | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchBusinessDataFromSupabase(id).then((data) => {
+      if (!cancelled) setBusinessData(data);
+    });
+    return () => { cancelled = true; };
+  }, [id]);
 
   const sends = useApiQuery(
     useCallback(() => apiClient.listSends({ leadId: id, page: 1, pageSize: 50 }), [apiClient, id]),
@@ -610,8 +718,35 @@ export default function LeadDetailPage() {
   };
 
   const l = lead.data;
-  const businessName = useMemo(() => getBusinessNameFromLead(l ?? null), [l]);
-  const teamMembers = useMemo(() => buildTeamMembersFromLead(l ?? null), [l]);
+  const businessName = useMemo(
+    () => getBusinessNameFromLead(l ?? null) ?? (businessData?.businessName || null),
+    [l, businessData],
+  );
+  // A1+A4: Merge API candidates with Supabase business_contacts, deduplicate by email
+  const teamMembers = useMemo(() => {
+    const apiCandidates = buildTeamMembersFromLead(l ?? null);
+    const supabaseContacts = businessData?.businessContacts ?? [];
+    const seen = new Set<string>();
+    const merged: TeamMember[] = [];
+
+    // API candidates first (they come from conversion metadata)
+    for (const tm of apiCandidates) {
+      const key = tm.email ? tm.email.toLowerCase() : `name:${tm.fullName.toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push(tm);
+      }
+    }
+    // Then Supabase business_contacts (may have more contacts)
+    for (const tm of supabaseContacts) {
+      const key = tm.email ? tm.email.toLowerCase() : `name:${tm.fullName.toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push(tm);
+      }
+    }
+    return merged;
+  }, [l, businessData]);
   const businessSummary = useMemo(() => {
     if (!l) {
       return null;
@@ -637,10 +772,45 @@ export default function LeadDetailPage() {
   const showBackupBanner = maxFollowUpNumber >= 3 && !hasReply && backupContacts.length > 0;
   const nextBackup = backupContacts[0];
   const hasConversationHistory = (sends.data?.items.length ?? 0) > 0;
-  const sortedTeamMembers = useMemo(
-    () => (l ? sortTeamMembers(teamMembers, l.email).ordered : []),
-    [teamMembers, l],
-  );
+  // A4: Build primary contact from the lead's own data and prepend to team members
+  const displayTeamMembers = useMemo(() => {
+    if (!l) return [];
+    const sorted = sortTeamMembers(teamMembers, l.email).ordered;
+    const leadEmail = l.email?.toLowerCase();
+    const alreadyInList = leadEmail && sorted.some((m) => normalizeEmail(m.email) === leadEmail);
+
+    if (alreadyInList) return sorted;
+
+    // Create a primary contact TeamMember from the lead record
+    const primaryContact: TeamMember = {
+      id: `lead-primary-${l.id}`,
+      fullName: [l.firstName, l.lastName].filter(Boolean).join(' ') || 'Primary Contact',
+      jobTitle: getLeadTitleFromEnrichment(l.enrichmentData),
+      email: l.email ?? null,
+      phone: null,
+      linkedinUrl: null,
+      seniority: null,
+      positionRank: -1,
+      source: 'Lead record',
+      fromBusinessContacts: false,
+    };
+
+    // Enrich with phone from enrichment data
+    const enrichData = l.enrichmentData as Record<string, unknown> | null | undefined;
+    if (enrichData) {
+      const phone = enrichData.phone ?? enrichData.mobile_phone ?? enrichData.phone_number;
+      if (typeof phone === 'string' && phone.length > 0) {
+        primaryContact.phone = phone;
+      }
+      const linkedin = enrichData.linkedinUrl ?? enrichData.linkedin_url ?? enrichData.linkedin;
+      if (typeof linkedin === 'string' && linkedin.length > 0) {
+        primaryContact.linkedinUrl = linkedin;
+      }
+    }
+
+    return [primaryContact, ...sorted];
+  }, [l, teamMembers]);
+  const sortedTeamMembers = displayTeamMembers;
   const leadEmailNormalized = normalizeEmail(l?.email);
   const leadTitle = getLeadTitleFromEnrichment(l?.enrichmentData);
   const leadMatchedTeamMember = leadEmailNormalized
@@ -773,18 +943,57 @@ export default function LeadDetailPage() {
         ) : null}
       </div>
 
-      {/* About This Business (D1) */}
-      {businessSummary ? (
+      {/* About This Business (D1) — enriched with Supabase business data */}
+      {businessSummary || businessData?.businessInsights ? (
         <AboutBusinessCard
-          category={businessSummary.category}
-          metaDescription={null}
+          category={businessSummary?.category ?? null}
+          metaDescription={businessData?.businessInsights ?? null}
           instagramBio={null}
-          countryCode={businessSummary.countryCode}
-          city={businessSummary.city}
-          rating={null}
-          reviewCount={null}
+          countryCode={businessSummary?.countryCode ?? null}
+          city={businessSummary?.city ?? null}
+          rating={businessData?.rating ?? null}
+          reviewCount={businessData?.reviewCount ?? null}
         />
       ) : null}
+
+      {/* Brave CEO / Web Search Results — from conversion metadata */}
+      {(() => {
+        const googleCse = businessData?.conversionMetadata?.googleCseMatchedPerson as Record<string, unknown> | undefined;
+        if (!googleCse?.name) return null;
+        return (
+          <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+            <h2 className="mb-4 flex items-center gap-2 text-base font-bold tracking-tight">
+              <Globe className="h-4 w-4 text-zbooni-teal" />
+              Web Search Results (CEO/Founder)
+            </h2>
+            <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
+              <div className="flex items-start gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zbooni-teal/10 text-[11px] font-bold text-zbooni-teal">
+                  {String(googleCse.name).charAt(0)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold">{String(googleCse.name)}</p>
+                  {googleCse.title ? (
+                    <p className="mt-0.5 text-[11px] text-muted-foreground/60">{String(googleCse.title)}</p>
+                  ) : null}
+                  {googleCse.confidence != null ? (
+                    <p className="mt-0.5 text-[10px] text-muted-foreground/40">
+                      Confidence: {Math.round(Number(googleCse.confidence) * 100)}%
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 gap-1.5">
+                  {typeof googleCse.linkedinUrl === 'string' && googleCse.linkedinUrl ? (
+                    <a href={googleCse.linkedinUrl} target="_blank" rel="noopener noreferrer" className="text-muted-foreground/40 hover:text-zbooni-teal transition-colors">
+                      <Linkedin className="h-3.5 w-3.5" />
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Scoring Breakdown (D3) */}
       <ScoringBreakdown
@@ -919,9 +1128,11 @@ export default function LeadDetailPage() {
           </h2>
           <div className="grid gap-2.5 sm:grid-cols-2">
             {sortedTeamMembers.map((tm, idx) => {
-              const isPrimary = leadEmailNormalized
-                ? normalizeEmail(tm.email) === leadEmailNormalized
-                : idx === 0;
+              const isPrimary = tm.id.startsWith('lead-primary-') || (
+                leadEmailNormalized
+                  ? normalizeEmail(tm.email) === leadEmailNormalized
+                  : idx === 0
+              );
               const isDecisionMaker = isExecutiveOrDirector(tm);
               const seniorityLabel = tm.seniority ? tm.seniority.charAt(0).toUpperCase() + tm.seniority.slice(1) : null;
 
@@ -939,7 +1150,7 @@ export default function LeadDetailPage() {
                         <p className="truncate text-sm font-semibold">{tm.fullName}</p>
                         {isPrimary ? (
                           <span className="rounded-full border border-zbooni-green/40 bg-zbooni-green/20 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-zbooni-green">
-                            Primary
+                            Primary Contact
                           </span>
                         ) : null}
                         {isDecisionMaker && !isPrimary ? (

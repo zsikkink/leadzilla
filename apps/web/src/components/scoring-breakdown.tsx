@@ -36,6 +36,18 @@ interface DeterministicData {
   predictionId: string | null;
 }
 
+// A5+A6: Category bonus data from score prediction
+interface CategoryScoreData {
+  matched: number;
+  total: number;
+  rate: number;
+}
+
+interface CategoryBonusData {
+  categoryScores: Record<string, CategoryScoreData>;
+  qualificationPath: string | null;
+}
+
 interface ScoringBreakdownProps {
   leadId: string;
   blendedScore?: number | undefined;
@@ -50,6 +62,7 @@ export function ScoringBreakdown({
   const { apiClient } = useAuth();
   const [snapshot, setSnapshot] = useState<FeatureSnapshot | null>(null);
   const [deterministic, setDeterministic] = useState<DeterministicData | null>(null);
+  const [categoryBonus, setCategoryBonus] = useState<CategoryBonusData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showAllRules, setShowAllRules] = useState(false);
@@ -61,9 +74,10 @@ export function ScoringBreakdown({
 
     async function fetchScoring() {
       try {
-        const [snapRes, detRes] = await Promise.allSettled([
+        const [snapRes, detRes, scoreRes] = await Promise.allSettled([
           apiClient.getLatestLeadFeatureSnapshot(leadId),
           apiClient.getLatestLeadDeterministicScore(leadId),
+          apiClient.getLatestLeadScore(leadId),
         ]);
 
         if (cancelled) return;
@@ -98,6 +112,27 @@ export function ScoringBreakdown({
             ruleEvaluation: Array.isArray(data.ruleEvaluation) ? data.ruleEvaluation : [],
             predictionId: data.predictionId,
           });
+        }
+
+        // A5+A6: Extract category bonus data from score prediction
+        if (scoreRes.status === 'fulfilled') {
+          const data = scoreRes.value as {
+            prediction: {
+              reasonsJson: unknown;
+            } | null;
+          };
+          if (data.prediction?.reasonsJson && typeof data.prediction.reasonsJson === 'object') {
+            const reasons = data.prediction.reasonsJson as Record<string, unknown>;
+            const catScores = (
+              typeof reasons.categoryScores === 'object' && reasons.categoryScores !== null
+                ? reasons.categoryScores
+                : {}
+            ) as Record<string, CategoryScoreData>;
+            setCategoryBonus({
+              categoryScores: catScores,
+              qualificationPath: typeof reasons.qualificationPath === 'string' ? reasons.qualificationPath : null,
+            });
+          }
         }
       } catch {
         if (!cancelled) setError('Failed to load scoring data');
@@ -137,6 +172,14 @@ export function ScoringBreakdown({
   const allRules = deterministic?.ruleEvaluation
     .filter((r) => r.ruleType !== 'HARD_FILTER')
     .sort((a, b) => b.contribution - a.contribution) ?? [];
+
+  // A5: Count category bonus matches alongside rule matches
+  const CATEGORY_PASS_THRESHOLD = 0.5;
+  const categoryEntries = Object.entries(categoryBonus?.categoryScores ?? {})
+    .filter(([key]) => key !== 'general');
+  const categoryBonusMatchCount = categoryEntries.filter(
+    ([, score]) => score.rate >= CATEGORY_PASS_THRESHOLD && score.matched >= 1,
+  ).length;
 
   const detScore = deterministic?.deterministicScore;
   const blendPct = blendedScore != null ? Math.round(blendedScore * 100) : null;
@@ -192,7 +235,14 @@ export function ScoringBreakdown({
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
               Rules Matched
             </p>
-            <p className="mt-0.5 text-lg font-bold tabular-nums">{snapshot.ruleMatchCount}</p>
+            <p className="mt-0.5 text-lg font-bold tabular-nums">
+              {snapshot.ruleMatchCount + categoryBonusMatchCount}
+              {categoryBonusMatchCount > 0 && (
+                <span className="ml-1 text-[10px] font-semibold text-zbooni-green">
+                  (+{categoryBonusMatchCount} category)
+                </span>
+              )}
+            </p>
           </div>
         )}
       </div>
@@ -339,6 +389,71 @@ export function ScoringBreakdown({
                   </span>
                 </div>
               ))}
+
+              {/* A6: Category Bonuses sub-section */}
+              {categoryEntries.length > 0 && (
+                <div className="mt-3 rounded-lg border border-border/20 bg-zbooni-dark/20 p-3">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
+                    Category Bonuses
+                    {categoryBonus?.qualificationPath ? (
+                      <span className={cn(
+                        'ml-2 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase',
+                        categoryBonus.qualificationPath === 'PROCEED'
+                          ? 'bg-zbooni-green/15 text-zbooni-green'
+                          : categoryBonus.qualificationPath === 'SELECTIVE'
+                            ? 'bg-yellow-500/15 text-yellow-400'
+                            : 'bg-red-500/15 text-red-400',
+                      )}>
+                        {categoryBonus.qualificationPath}
+                      </span>
+                    ) : null}
+                  </p>
+                  <div className="space-y-1">
+                    {categoryEntries.map(([category, score]) => {
+                      const passed = score.rate >= CATEGORY_PASS_THRESHOLD && score.matched >= 1;
+                      const bonusValue = passed
+                        ? (categoryBonus?.qualificationPath === 'PROCEED' ? '+10%'
+                          : categoryBonus?.qualificationPath === 'SELECTIVE' ? '+5%'
+                          : '-5%')
+                        : null;
+                      return (
+                        <div
+                          key={category}
+                          className={cn(
+                            'flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs',
+                            passed
+                              ? 'border-zbooni-green/10 bg-zbooni-green/[0.03]'
+                              : 'border-border/15 bg-zbooni-dark/10',
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              'h-1.5 w-1.5 rounded-full shrink-0',
+                              passed ? 'bg-zbooni-green' : 'bg-muted-foreground/30',
+                            )}
+                          />
+                          <span className={cn(
+                            'font-semibold',
+                            passed ? 'text-foreground' : 'text-muted-foreground/50',
+                          )}>
+                            {formatFieldKey(category)}
+                          </span>
+                          <span className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground/40">
+                            <span>{score.matched}/{score.total} ({Math.round(score.rate * 100)}%)</span>
+                            {passed && bonusValue ? (
+                              <span className={bonusValue.startsWith('+') ? 'text-zbooni-green' : 'text-red-400'}>
+                                {bonusValue}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground/30">no bonus</span>
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

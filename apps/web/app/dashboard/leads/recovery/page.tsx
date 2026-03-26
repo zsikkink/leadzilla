@@ -25,6 +25,7 @@ import { useApiQuery } from '@/hooks/use-api-query.js';
 import { useAuth } from '@/hooks/use-auth.js';
 import { cn } from '@/lib/utils.js';
 import { countryName } from '@/lib/countries.js';
+import { getSupabaseBrowserClient } from '@/lib/supabase-client.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -266,10 +267,12 @@ function RecoveryDetailPanel({
   item,
   onReject,
   rejecting,
+  enrichment,
 }: {
   item: ContactRecoveryItem;
   onReject: () => void;
   rejecting: boolean;
+  enrichment: RecoveryBusinessEnrichment | null;
 }) {
   const metaDescription = extractMetaDescription(item.snapshot.websiteIntelligence);
   const igBio = extractInstagramBio(item.snapshot.instagramIntelligence);
@@ -321,13 +324,13 @@ function RecoveryDetailPanel({
           instagramBio={igBio}
           countryCode={item.business.countryCode}
           city={item.business.city}
-          rating={null}
-          reviewCount={null}
+          rating={enrichment?.rating ?? null}
+          reviewCount={enrichment?.reviewCount ?? null}
         />
       </div>
 
       {/* Quick stats */}
-      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Contacts Found</p>
           <p className="mt-0.5 text-sm font-bold">{item.candidateCount}</p>
@@ -338,6 +341,18 @@ function RecoveryDetailPanel({
             {hasSendable ? 'Available' : item.candidateCount > 0 ? 'No sendable email' : 'None'}
           </p>
         </div>
+        {enrichment?.rating != null ? (
+          <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Google Rating</p>
+            <p className="mt-0.5 text-sm font-bold">{enrichment.rating}/5</p>
+          </div>
+        ) : null}
+        {enrichment?.reviewCount != null ? (
+          <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Reviews</p>
+            <p className="mt-0.5 text-sm font-bold">{enrichment.reviewCount}</p>
+          </div>
+        ) : null}
         <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Terminal Reason</p>
           <p className="mt-0.5 text-xs font-semibold">{formatTerminalReason(item.snapshot.terminalReason)}</p>
@@ -462,6 +477,60 @@ function RecoveryDetailPanel({
           </div>
         ) : null}
 
+        {/* A8: Business Contacts from DB (additional contacts beyond pipeline candidates) */}
+        {enrichment && enrichment.contacts.length > 0 ? (
+          <div className="rounded-xl border border-border/30 bg-zbooni-dark/20">
+            <div className="flex w-full items-center gap-2 px-4 py-3">
+              <UserRound className="h-4 w-4 text-blue-400" />
+              <span className="flex-1 text-sm font-bold tracking-tight">Additional Business Contacts</span>
+              <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">
+                {enrichment.contacts.length}
+              </span>
+            </div>
+            <div className="border-t border-border/20 px-4 py-3">
+              <div className="space-y-2">
+                {enrichment.contacts.map((contact) => (
+                  <div key={contact.id} className="flex items-center gap-3 rounded-lg border border-border/20 bg-slate-800 px-3 py-2">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-500/10 text-[11px] font-bold text-blue-400">
+                      {contact.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <p className="truncate text-sm font-semibold">{contact.name}</p>
+                        <span className="shrink-0 rounded-full bg-muted/20 px-1.5 py-0.5 text-[9px] font-bold text-muted-foreground/60">
+                          {formatSeniority(contact.seniority)}
+                        </span>
+                      </div>
+                      {contact.title ? (
+                        <p className="truncate text-[11px] text-muted-foreground/50">{contact.title}</p>
+                      ) : null}
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      {contact.email ? (
+                        <a
+                          href={`mailto:${contact.email}`}
+                          title={contact.email}
+                          className="flex items-center gap-1 text-[11px] text-zbooni-teal transition-colors hover:text-zbooni-green"
+                        >
+                          <Mail className="h-3 w-3" />
+                          <span className="hidden max-w-[140px] truncate sm:inline">{contact.email}</span>
+                        </a>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground/40">No email</span>
+                      )}
+                      {contact.phone ? (
+                        <a href={`tel:${contact.phone}`} title={contact.phone} className="text-muted-foreground/40 transition-colors hover:text-zbooni-teal">
+                          <Phone className="h-3 w-3" />
+                        </a>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {/* Scraped timestamps */}
         <div className="flex gap-4 text-[10px] text-muted-foreground/30">
           <span>Run {item.discoveryRunId.slice(0, 8)}</span>
@@ -470,6 +539,52 @@ function RecoveryDetailPanel({
       </div>
     </div>
   );
+}
+
+// ── A8: Enriched business data from Supabase ──────────────────────────────────
+
+interface RecoveryBusinessContact {
+  id: string;
+  name: string;
+  title: string | null;
+  email: string | null;
+  phone: string | null;
+  seniority: string;
+}
+
+interface RecoveryBusinessEnrichment {
+  rating: number | null;
+  reviewCount: number | null;
+  contacts: RecoveryBusinessContact[];
+}
+
+async function fetchRecoveryBusinessEnrichment(businessId: string): Promise<RecoveryBusinessEnrichment> {
+  const empty: RecoveryBusinessEnrichment = { rating: null, reviewCount: null, contacts: [] };
+  try {
+    const supabase = getSupabaseBrowserClient();
+    const [bizResult, contactsResult] = await Promise.allSettled([
+      supabase.from('businesses').select('rating, review_count').eq('id', businessId).single(),
+      supabase.from('business_contacts').select('id, name, title, email, phone, seniority').eq('businessId', businessId).order('positionRank', { ascending: true }),
+    ]);
+
+    const biz = bizResult.status === 'fulfilled' ? bizResult.value.data : null;
+    const contacts = contactsResult.status === 'fulfilled' ? (contactsResult.value.data ?? []) : [];
+
+    return {
+      rating: typeof biz?.rating === 'number' ? biz.rating : null,
+      reviewCount: typeof biz?.review_count === 'number' ? biz.review_count : null,
+      contacts: contacts.map((c: Record<string, unknown>) => ({
+        id: String(c.id ?? ''),
+        name: String(c.name ?? 'Unknown'),
+        title: typeof c.title === 'string' ? c.title : null,
+        email: typeof c.email === 'string' ? c.email : null,
+        phone: typeof c.phone === 'string' ? c.phone : null,
+        seniority: typeof c.seniority === 'string' ? c.seniority : 'other',
+      })),
+    };
+  } catch {
+    return empty;
+  }
 }
 
 // ── Main page ────────────────────────────────────────────────────────────────
@@ -485,6 +600,7 @@ export default function ContactRecoveryPage() {
   const [status, setStatus] = useState<ContactRecoveryStatus>('OPEN');
   const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('selected'));
   const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [businessEnrichment, setBusinessEnrichment] = useState<RecoveryBusinessEnrichment | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query.trim()), 250);
@@ -525,6 +641,19 @@ export default function ContactRecoveryPage() {
   const selected = selectedId
     ? recovery.data?.items.find((item) => item.id === selectedId) ?? null
     : null;
+
+  // A8: Fetch enriched business data (rating, review count, contacts) for selected item
+  useEffect(() => {
+    if (!selected) {
+      setBusinessEnrichment(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchRecoveryBusinessEnrichment(selected.businessId).then((data) => {
+      if (!cancelled) setBusinessEnrichment(data);
+    });
+    return () => { cancelled = true; };
+  }, [selected?.businessId, selected]);
 
   const totalPages = recovery.data ? Math.max(1, Math.ceil(recovery.data.total / recovery.data.pageSize)) : 1;
 
@@ -672,6 +801,7 @@ export default function ContactRecoveryPage() {
               item={selected}
               rejecting={rejectingId === selected.id}
               onReject={() => void handleReject(selected)}
+              enrichment={businessEnrichment}
             />
           </div>
         ) : (

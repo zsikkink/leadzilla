@@ -1,7 +1,7 @@
 'use client';
 
 import type { LeadScoreBand, LeadStatus } from '@lead-flood/contracts';
-import { AlertTriangle, Eye, Loader2, MessageSquare, Phone, Undo2, X } from 'lucide-react';
+import { AlertTriangle, Eye, Loader2, MessageSquare, Undo2, X } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -115,21 +115,26 @@ function extractBlendedScore(enrichmentData: unknown): number | null {
   return null;
 }
 
-// ── Extract phone from enrichment data ──────────────────
-function extractPhone(enrichmentData: unknown): string | null {
+// ── A2: Extract company name from enrichment data ─────────
+function extractCompanyName(enrichmentData: unknown): string | null {
   if (!enrichmentData || typeof enrichmentData !== 'object') return null;
   const data = enrichmentData as Record<string, unknown>;
 
-  // Try nested phone fields
-  if (typeof data.phone === 'string' && data.phone.length > 0) return data.phone;
-  if (typeof data.phoneNumber === 'string' && data.phoneNumber.length > 0) return data.phoneNumber;
-
-  // Try normalized payload
-  if (data.normalized && typeof data.normalized === 'object') {
-    const norm = data.normalized as Record<string, unknown>;
-    if (typeof norm.phone === 'string' && norm.phone.length > 0) return norm.phone;
+  // Try all known key variations
+  for (const key of ['companyName', 'company_name', 'organization_name', 'company']) {
+    if (typeof data[key] === 'string' && data[key].length > 0) return data[key];
   }
+  return null;
+}
 
+// ── A2: Extract position/title from enrichment data ───────
+function extractPosition(enrichmentData: unknown): string | null {
+  if (!enrichmentData || typeof enrichmentData !== 'object') return null;
+  const data = enrichmentData as Record<string, unknown>;
+
+  for (const key of ['title', 'job_title', 'position']) {
+    if (typeof data[key] === 'string' && data[key].length > 0) return data[key];
+  }
   return null;
 }
 
@@ -453,7 +458,17 @@ export default function LeadsPage() {
           </div>
 
           {leads.error ? (
-            <p className="text-sm text-destructive">{leads.error}</p>
+            <div className="flex items-center gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-red-300" />
+              <p className="flex-1">Failed to load leads: {leads.error}. This can happen with slow database connections — try again.</p>
+              <button
+                type="button"
+                onClick={() => leads.refetch()}
+                className="shrink-0 rounded-lg bg-red-500/15 px-3 py-1.5 text-xs font-semibold text-red-100 transition-colors hover:bg-red-500/25"
+              >
+                Retry
+              </button>
+            </div>
           ) : null}
 
           {isQualificationThresholdLoading ? (
@@ -494,13 +509,8 @@ export default function LeadsPage() {
                 <thead className="sticky top-0 z-10">
                   <tr className="border-b border-border/50 bg-card text-left">
                     <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Name</th>
-                    <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Email</th>
-                    <th className="hidden px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground xl:table-cell">
-                      <span className="inline-flex items-center gap-1">
-                        <Phone className="h-3 w-3" />
-                        Phone
-                      </span>
-                    </th>
+                    <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Company</th>
+                    <th className="hidden px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground lg:table-cell">Position</th>
                     <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
                     <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Band</th>
                     <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Score</th>
@@ -512,15 +522,20 @@ export default function LeadsPage() {
                   {(leads.data?.items ?? []).filter((lead) => {
                     if (!debouncedSearch) return true;
                     const q = debouncedSearch.toLowerCase();
+                    const enrichment = lead.latestEnrichmentNormalizedPayload ?? lead.latestEnrichmentRawPayload;
+                    const company = extractCompanyName(enrichment) ?? lead.businessCategory;
                     return (
                       (lead.firstName?.toLowerCase().includes(q)) ||
                       (lead.lastName?.toLowerCase().includes(q)) ||
-                      (lead.email?.toLowerCase().includes(q))
+                      (lead.email?.toLowerCase().includes(q)) ||
+                      (company?.toLowerCase().includes(q))
                     );
                   }).map((lead) => {
                     const enrichmentRaw = lead.latestEnrichmentNormalizedPayload ?? lead.latestEnrichmentRawPayload;
                     const blendedScore = lead.latestBlendedScore ?? extractBlendedScore(enrichmentRaw);
-                    const phone = extractPhone(enrichmentRaw);
+                    // A2: Extract company and position from enrichment data
+                    const companyName = extractCompanyName(enrichmentRaw);
+                    const position = extractPosition(enrichmentRaw);
 
                     return (
                       <tr
@@ -528,20 +543,23 @@ export default function LeadsPage() {
                         className="border-b border-border/30 transition-colors last:border-0 hover:bg-accent/50"
                       >
                         <td
-                          className="cursor-pointer px-4 py-3 font-medium"
+                          className="cursor-pointer px-4 py-3"
                           onClick={() => router.push(`/dashboard/leads/${lead.id}`)}
                         >
-                          {lead.firstName} {lead.lastName}
+                          <p className="font-medium">{lead.firstName} {lead.lastName}</p>
+                          <p className="mt-0.5 text-[11px] text-muted-foreground/60">{lead.email}</p>
                         </td>
                         <td
                           className="cursor-pointer px-4 py-3 text-muted-foreground"
                           onClick={() => router.push(`/dashboard/leads/${lead.id}`)}
                         >
-                          {lead.email}
+                          {companyName || lead.businessCategory || (
+                            <span className="text-muted-foreground/30">&mdash;</span>
+                          )}
                         </td>
-                        <td className="hidden px-4 py-3 xl:table-cell">
-                          {phone ? (
-                            <span className="font-mono text-xs text-muted-foreground">{phone}</span>
+                        <td className="hidden px-4 py-3 lg:table-cell">
+                          {position ? (
+                            <span className="text-xs text-muted-foreground">{position}</span>
                           ) : (
                             <span className="text-muted-foreground/30">&mdash;</span>
                           )}
@@ -611,59 +629,48 @@ export default function LeadsPage() {
                               const draftTitle = draftDisabled
                                 ? readinessLabel
                                 : 'Generate the initial draft for this qualified lead. Sending then depends on approval or auto-approval settings.';
-                              const readinessClassName = draftDisabled
-                                ? 'text-amber-300'
-                                : 'text-zbooni-green';
 
                               return (
-                                <div className="flex flex-col items-start gap-1.5">
-                                  <div className="flex items-center gap-1">
-                                    <span title={draftTitle}>
-                                      <button
-                                        type="button"
-                                        title={draftTitle}
-                                        disabled={draftDisabled || generatingForLead === lead.id}
-                                        className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-zbooni-teal/15 hover:text-zbooni-teal disabled:opacity-50"
-                                        onClick={() => {
-                                          if (!lead.latestIcpProfileId) return;
-                                          void handleGenerateMessage(
-                                            lead.id,
-                                            lead.latestIcpProfileId,
-                                            lead.firstName ?? '',
-                                            lead.latestScorePredictionId ?? null,
-                                          );
-                                        }}
-                                      >
-                                        {generatingForLead === lead.id ? (
-                                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                        ) : (
-                                          <MessageSquare className="h-3.5 w-3.5" />
-                                        )}
-                                      </button>
-                                    </span>
-                                    <button
-                                      type="button"
-                                      title="Reject lead"
-                                      disabled={rejectingLead === lead.id}
-                                      className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-red-500/15 hover:text-red-400 disabled:opacity-50"
-                                      onClick={() => handleReject(lead.id, lead.firstName ?? '', lead.lastName ?? '')}
-                                    >
-                                      {rejectingLead === lead.id ? (
-                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                      ) : (
-                                        <X className="h-3.5 w-3.5" />
-                                      )}
-                                    </button>
-                                  </div>
-                                  <p
-                                    className={cn(
-                                      'max-w-[220px] text-[11px] leading-snug',
-                                      readinessClassName,
-                                    )}
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
                                     title={draftTitle}
+                                    disabled={draftDisabled || generatingForLead === lead.id}
+                                    className={cn(
+                                      'rounded-md p-1.5 transition-colors disabled:opacity-50',
+                                      draftDisabled
+                                        ? 'text-muted-foreground/50 hover:bg-accent/50'
+                                        : 'text-zbooni-green hover:bg-zbooni-green/15',
+                                    )}
+                                    onClick={() => {
+                                      if (!lead.latestIcpProfileId) return;
+                                      void handleGenerateMessage(
+                                        lead.id,
+                                        lead.latestIcpProfileId,
+                                        lead.firstName ?? '',
+                                        lead.latestScorePredictionId ?? null,
+                                      );
+                                    }}
                                   >
-                                    {readinessLabel}
-                                  </p>
+                                    {generatingForLead === lead.id ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                      <MessageSquare className="h-3.5 w-3.5" />
+                                    )}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Reject lead"
+                                    disabled={rejectingLead === lead.id}
+                                    className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-red-500/15 hover:text-red-400 disabled:opacity-50"
+                                    onClick={() => handleReject(lead.id, lead.firstName ?? '', lead.lastName ?? '')}
+                                  >
+                                    {rejectingLead === lead.id ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                      <X className="h-3.5 w-3.5" />
+                                    )}
+                                  </button>
                                 </div>
                               );
                             })()}
