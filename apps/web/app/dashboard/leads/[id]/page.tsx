@@ -232,6 +232,40 @@ function extractScoreInfo(data: unknown): ScoreInfo | null {
   };
 }
 
+// ── Supabase business data (A1 fix: query by businessId, not leadId) ──
+interface SupabaseBusinessData {
+  businessId: string | null;
+  businessInsights: string | null;
+  conversionMetadata: Record<string, unknown> | null;
+  businessContacts: TeamMember[];
+  businessName: string | null;
+  websiteDomain: string | null;
+  instagramHandle: string | null;
+  rating: number | null;
+  reviewCount: number | null;
+}
+interface _InstagramPost {
+  caption: string;
+  likes: number;
+  comments: number;
+  timestamp: string;
+  url: string | null;
+  thumbnailUrl: string | null;
+  postType: 'image' | 'video' | 'carousel';
+}
+
+function _getInstagramPostType(raw: unknown): 'image' | 'video' | 'carousel' {
+  if (raw === 'video') return 'video';
+  if (raw === 'carousel') return 'carousel';
+  return 'image';
+}
+
+function _getInstagramPostTypeLabel(postType: 'image' | 'video' | 'carousel'): string {
+  if (postType === 'video') return 'Video';
+  if (postType === 'carousel') return 'Carousel';
+  return 'Image';
+}
+
 // ── Scrape data extraction ─────────────────────────────────
 
 function extractBusinessDecisionMakers(scrape: Record<string, unknown>): DecisionMaker[] {
@@ -1222,6 +1256,90 @@ function EditableTeamMembers({
   );
 }
 
+// ── Fetch business data from Supabase by businessId (not leadId) ───
+async function fetchBusinessDataFromSupabase(leadId: string): Promise<SupabaseBusinessData> {
+  const empty: SupabaseBusinessData = {
+    businessId: null,
+    businessInsights: null,
+    conversionMetadata: null,
+    businessContacts: [],
+    businessName: null,
+    websiteDomain: null,
+    instagramHandle: null,
+    rating: null,
+    reviewCount: null,
+  };
+
+  try {
+    const supabase = getSupabaseBrowserClient();
+
+    // Step 1: Get the lead's businessId from the Lead table
+    const { data: leadRow, error: leadError } = await supabase
+      .from('Lead')
+      .select('businessId')
+      .eq('id', leadId)
+      .single();
+
+    if (leadError || !leadRow?.businessId) return empty;
+
+    const businessId = leadRow.businessId as string;
+
+    // Step 2: Fetch business_conversions by businessId (not leadId — leadId can be NULL)
+    const [conversionResult, contactsResult, businessResult] = await Promise.allSettled([
+      supabase
+        .from('business_conversions')
+        .select('businessInsights, metadata')
+        .eq('businessId', businessId)
+        .order('createdAt', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from('business_contacts')
+        .select('id, name, title, email, phone, linkedinUrl, seniority, positionRank, source')
+        .eq('businessId', businessId)
+        .order('positionRank', { ascending: true }),
+      supabase
+        .from('businesses')
+        .select('name, website_domain, instagram_handle, rating, review_count')
+        .eq('id', businessId)
+        .single(),
+    ]);
+
+    const conversion = conversionResult.status === 'fulfilled' ? conversionResult.value.data : null;
+    const contacts = contactsResult.status === 'fulfilled' ? (contactsResult.value.data ?? []) : [];
+    const business = businessResult.status === 'fulfilled' ? businessResult.value.data : null;
+
+    const metadata = conversion?.metadata && typeof conversion.metadata === 'object' && !Array.isArray(conversion.metadata)
+      ? conversion.metadata as Record<string, unknown>
+      : null;
+
+    return {
+      businessId,
+      businessInsights: conversion?.businessInsights ?? null,
+      conversionMetadata: metadata,
+      businessContacts: contacts.map((c: Record<string, unknown>) => ({
+        id: String(c.id ?? ''),
+        fullName: String(c.name ?? 'Unknown'),
+        jobTitle: typeof c.title === 'string' ? c.title : null,
+        email: typeof c.email === 'string' ? c.email : null,
+        phone: typeof c.phone === 'string' ? c.phone : null,
+        linkedinUrl: typeof c.linkedinUrl === 'string' ? c.linkedinUrl : null,
+        seniority: typeof c.seniority === 'string' ? c.seniority : null,
+        positionRank: typeof c.positionRank === 'number' ? c.positionRank : null,
+        source: typeof c.source === 'string' ? c.source : null,
+        fromBusinessContacts: true,
+      })),
+      businessName: business?.name ?? null,
+      websiteDomain: business?.website_domain ?? null,
+      instagramHandle: business?.instagram_handle ?? null,
+      rating: typeof business?.rating === 'number' ? business.rating : null,
+      reviewCount: typeof business?.review_count === 'number' ? business.review_count : null,
+    };
+  } catch {
+    return empty;
+  }
+}
+
 // ── Main Page Component ────────────────────────────────────
 
 export default function LeadDetailPage() {
@@ -1233,6 +1351,16 @@ export default function LeadDetailPage() {
     useCallback(() => apiClient.getLead(id), [apiClient, id]),
     [id],
   );
+
+  // A1: Fetch business data from Supabase (by businessId, not leadId)
+  const [businessData, setBusinessData] = useState<SupabaseBusinessData | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchBusinessDataFromSupabase(id).then((data) => {
+      if (!cancelled) setBusinessData(data);
+    });
+    return () => { cancelled = true; };
+  }, [id]);
 
   const sends = useApiQuery(
     useCallback(() => apiClient.listSends({ leadId: id, page: 1, pageSize: 50 }), [apiClient, id]),
@@ -1313,8 +1441,35 @@ export default function LeadDetailPage() {
   };
 
   const l = lead.data;
-  const businessName = useMemo(() => getBusinessNameFromLead(l ?? null), [l]);
-  const teamMembers = useMemo(() => buildTeamMembersFromLead(l ?? null), [l]);
+  const businessName = useMemo(
+    () => getBusinessNameFromLead(l ?? null) ?? (businessData?.businessName || null),
+    [l, businessData],
+  );
+  // A1+A4: Merge API candidates with Supabase business_contacts, deduplicate by email
+  const teamMembers = useMemo(() => {
+    const apiCandidates = buildTeamMembersFromLead(l ?? null);
+    const supabaseContacts = businessData?.businessContacts ?? [];
+    const seen = new Set<string>();
+    const merged: TeamMember[] = [];
+
+    // API candidates first (they come from conversion metadata)
+    for (const tm of apiCandidates) {
+      const key = tm.email ? tm.email.toLowerCase() : `name:${tm.fullName.toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push(tm);
+      }
+    }
+    // Then Supabase business_contacts (may have more contacts)
+    for (const tm of supabaseContacts) {
+      const key = tm.email ? tm.email.toLowerCase() : `name:${tm.fullName.toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push(tm);
+      }
+    }
+    return merged;
+  }, [l, businessData]);
   const businessSummary = useMemo(() => {
     if (!l) return null;
     if (!businessName && !l.businessCategory && !l.businessCountryCode && !l.businessCity) return null;
@@ -1334,10 +1489,45 @@ export default function LeadDetailPage() {
   const showBackupBanner = maxFollowUpNumber >= 3 && !hasReply && backupContacts.length > 0;
   const nextBackup = backupContacts[0];
   const hasConversationHistory = (sends.data?.items.length ?? 0) > 0;
-  const sortedTeamMembers = useMemo(
-    () => (l ? sortTeamMembers(teamMembers, l.email).ordered : []),
-    [teamMembers, l],
-  );
+  // A4: Build primary contact from the lead's own data and prepend to team members
+  const displayTeamMembers = useMemo(() => {
+    if (!l) return [];
+    const sorted = sortTeamMembers(teamMembers, l.email).ordered;
+    const leadEmail = l.email?.toLowerCase();
+    const alreadyInList = leadEmail && sorted.some((m) => normalizeEmail(m.email) === leadEmail);
+
+    if (alreadyInList) return sorted;
+
+    // Create a primary contact TeamMember from the lead record
+    const primaryContact: TeamMember = {
+      id: `lead-primary-${l.id}`,
+      fullName: [l.firstName, l.lastName].filter(Boolean).join(' ') || 'Primary Contact',
+      jobTitle: getLeadTitleFromEnrichment(l.enrichmentData),
+      email: l.email ?? null,
+      phone: null,
+      linkedinUrl: null,
+      seniority: null,
+      positionRank: -1,
+      source: 'Lead record',
+      fromBusinessContacts: false,
+    };
+
+    // Enrich with phone from enrichment data
+    const enrichData = l.enrichmentData as Record<string, unknown> | null | undefined;
+    if (enrichData) {
+      const phone = enrichData.phone ?? enrichData.mobile_phone ?? enrichData.phone_number;
+      if (typeof phone === 'string' && phone.length > 0) {
+        primaryContact.phone = phone;
+      }
+      const linkedin = enrichData.linkedinUrl ?? enrichData.linkedin_url ?? enrichData.linkedin;
+      if (typeof linkedin === 'string' && linkedin.length > 0) {
+        primaryContact.linkedinUrl = linkedin;
+      }
+    }
+
+    return [primaryContact, ...sorted];
+  }, [l, teamMembers]);
+  const sortedTeamMembers = displayTeamMembers;
   const leadEmailNormalized = normalizeEmail(l?.email);
   const leadTitle = getLeadTitleFromEnrichment(l?.enrichmentData);
   const leadMatchedTeamMember = leadEmailNormalized
@@ -1476,15 +1666,15 @@ export default function LeadDetailPage() {
       </div>
 
       {/* ─── 1. About This Business (C1 — AI insights) ─── */}
-      {businessSummary ? (
+      {businessSummary || businessData?.businessInsights ? (
         <AboutBusinessCard
-          category={businessSummary.category}
-          metaDescription={null}
+          category={businessSummary?.category ?? null}
+          metaDescription={businessData?.businessInsights ?? null}
           instagramBio={null}
-          countryCode={businessSummary.countryCode}
-          city={businessSummary.city}
-          rating={null}
-          reviewCount={null}
+          countryCode={businessSummary?.countryCode ?? null}
+          city={businessSummary?.city ?? null}
+          rating={businessData?.rating ?? null}
+          reviewCount={businessData?.reviewCount ?? null}
           businessInsights={conversionData.businessInsights}
         />
       ) : null}
