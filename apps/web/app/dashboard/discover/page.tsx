@@ -83,18 +83,6 @@ const LIMIT_OPTIONS = [
   { value: '1000', label: '1000' },
 ];
 
-// ── Helpers ──────────────────────────────────────────────
-function formatDuration(startedAt: string | null, finishedAt: string | null): string {
-  if (!startedAt) return 'Queued';
-  const start = new Date(startedAt).getTime();
-  const end = finishedAt ? new Date(finishedAt).getTime() : Date.now();
-  const totalSeconds = Math.round((end - start) / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes === 0) return `${seconds}s`;
-  return `${minutes}m ${seconds}s`;
-}
-
 // ── Sub-components ──────────────────────────────────────
 
 function StatusIcon({ status }: { status: PipelineRunStatus }) {
@@ -238,7 +226,6 @@ interface RunBatch {
     totalItems: number;
     processedItems: number;
     failedItems: number;
-    converted?: number | undefined;
     startedAt: string | null;
     finishedAt: string | null;
     createdAt: string;
@@ -250,7 +237,6 @@ interface RunBatch {
   totalItems: number;
   totalProcessed: number;
   totalFailed: number;
-  totalConverted: number;
   overallStatus: PipelineRunStatus;
   createdAt: string;
   startedAt: string | null;
@@ -317,7 +303,6 @@ function buildBatch(
     totalItems: runs.reduce((sum, r) => sum + r.totalItems, 0),
     totalProcessed: runs.reduce((sum, r) => sum + r.processedItems, 0),
     totalFailed: runs.reduce((sum, r) => sum + r.failedItems, 0),
-    totalConverted: runs.reduce((sum, r) => sum + (r.converted ?? 0), 0),
     overallStatus,
     createdAt: runs[0]!.createdAt,
     startedAt,
@@ -753,16 +738,22 @@ export default function DiscoverPage() {
               .filter((r): r is number => r !== undefined);
             const avgLeadRate = selectedLeadRates.length > 0
               ? selectedLeadRates.reduce((a, b) => a + b, 0) / selectedLeadRates.length
-              : 0.10; // default fallback: ~10% leads per search task (conservative based on pipeline data)
+              : 0.015; // default fallback: ~1.5% leads per search task
             const hasHistoricalData = selectedLeadRates.length > 0;
             const searchBudget = Math.ceil(desiredLeads / avgLeadRate * 1.5);
             // ~50% of discovered businesses pass prequalification and reach Hunter
             const hunterLookups = Math.ceil(searchBudget * 0.5);
+            // Brave CEO search: ~1 query per pre-qualified business
+            const braveLookups = hunterLookups;
+            // Apollo enrichment: only high-score leads (~30% of qualified)
+            const apolloLookups = Math.ceil(desiredLeads * 0.3);
             const estLeads = desiredLeads;
-            // Dollar cost: Google Places $0.01/search, Hunter $0.03/lookup (Starter plan: 2000 credits @ ~$49)
+            // Dollar cost: Google Places $0.01/search, Brave $0.005/query, Hunter $0.03/lookup, Apollo $0.05/reveal
             const googlePlacesCost = searchBudget * 0.01;
+            const braveCost = braveLookups * 0.005;
             const hunterCost = hunterLookups * 0.03;
-            const totalCost = googlePlacesCost + hunterCost;
+            const apolloCost = apolloLookups * 0.05;
+            const totalCost = googlePlacesCost + braveCost + hunterCost + apolloCost;
             return (
               <div className="rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 px-4 py-3">
                 <div className="flex items-center gap-2 mb-2">
@@ -775,7 +766,6 @@ export default function DiscoverPage() {
                 <div className="space-y-1.5">
                   <p className="text-sm text-muted-foreground">
                     ~<strong className="text-foreground">{searchBudget}</strong> search tasks
-                    {' + ~'}<strong className="text-foreground">{hunterLookups}</strong> Hunter lookups
                     {' → est. '}<strong className="text-zbooni-green">{estLeads}</strong> leads
                     {hasHistoricalData ? (
                       <span className="text-muted-foreground/60">
@@ -786,7 +776,7 @@ export default function DiscoverPage() {
                   <p className="text-xs text-muted-foreground/70">
                     Est. cost: <strong className="text-foreground">~${totalCost.toFixed(2)}</strong>
                     <span className="text-muted-foreground/50">
-                      {' '}(Google Places ${googlePlacesCost.toFixed(2)} + Web Search free + Hunter ${hunterCost.toFixed(2)})
+                      {' '}(Google Places ${googlePlacesCost.toFixed(2)} + Brave ${braveCost.toFixed(2)} + Hunter ${hunterCost.toFixed(2)} + Apollo ${apolloCost.toFixed(2)})
                     </span>
                   </p>
                 </div>
@@ -832,12 +822,14 @@ export default function DiscoverPage() {
             <Zap className="h-4 w-4 text-zbooni-green" />
             Discovery Runs
           </h2>
-          {hasActiveRuns ? (
-            <span className="flex items-center gap-1.5 text-[11px] font-semibold text-zbooni-teal">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              Live
-            </span>
-          ) : null}
+          <button
+            type="button"
+            onClick={() => setRunsRefreshKey((k) => k + 1)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/40"
+          >
+            <Loader2 className={cn('h-3 w-3', discoveryRuns.isLoading && 'animate-spin')} />
+            Refresh
+          </button>
         </div>
 
         {discoveryRuns.isLoading && !discoveryRuns.data ? (
@@ -870,24 +862,19 @@ export default function DiscoverPage() {
                 PARTIAL: 'bg-yellow-500/15 text-yellow-400',
               };
               const isTerminal = batch.overallStatus === 'SUCCEEDED' || batch.overallStatus === 'FAILED' || batch.overallStatus === 'PARTIAL';
-              const duration = isTerminal
-                ? formatDuration(batch.startedAt, batch.finishedAt)
-                : batch.startedAt
-                  ? 'Running...'
-                  : 'Queued';
+              const duration = batch.startedAt
+                ? batch.finishedAt
+                  ? `${Math.round((new Date(batch.finishedAt).getTime() - new Date(batch.startedAt).getTime()) / 1000)}s`
+                  : isTerminal
+                    ? 'Completed'
+                    : 'Running...'
+                : 'Queued';
               const firstWords = batch.icpNames.map((n) => n.split(/\s+/)[0] ?? n);
               const icpLabel = firstWords.length <= 3
                 ? firstWords.join(' & ')
                 : `${firstWords.slice(0, 2).join(' & ')} +${firstWords.length - 2}`;
 
               const primaryRunId = batch.runs[0]?.runId;
-              const leadsFound = batch.totalConverted;
-              const leadsTarget = batch.totalLimit;
-
-              // Country display: show "All countries" when 3+ countries
-              const countryLabel = batch.countries.length > 3
-                ? `All countries (${batch.countries.length})`
-                : batch.countries.map((c) => countryName(c)).join(', ');
 
               return (
                 <Link
@@ -926,39 +913,33 @@ export default function DiscoverPage() {
                     </div>
                     {batch.countries.length > 0 ? (
                       <div className="flex flex-wrap gap-1">
-                        <span className="flex items-center gap-1 rounded bg-zbooni-teal/10 px-1.5 py-0.5 text-[10px] text-zbooni-teal">
-                          <Globe className="h-2.5 w-2.5" />
-                          {countryLabel}
-                        </span>
-                        {leadsTarget > 0 ? (
+                        {batch.countries.map((c) => (
+                          <span key={c} className="rounded bg-zbooni-teal/10 px-1.5 py-0.5 text-[10px] text-zbooni-teal">
+                            {countryName(c)}
+                          </span>
+                        ))}
+                        {batch.totalLimit > 0 ? (
                           <span className="rounded bg-muted/20 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                            {leadsTarget} lead target
+                            {batch.totalLimit} leads
                           </span>
                         ) : null}
                       </div>
                     ) : null}
                   </div>
 
-                  {/* Progress bar — shows leads found / target */}
-                  {leadsTarget > 0 ? (
+                  {/* Progress bar — shows search task progress, not lead count */}
+                  {batch.totalItems > 0 || batch.overallStatus === 'RUNNING' ? (
                     <ProgressBar
-                      processed={leadsFound}
-                      total={leadsTarget}
-                      label="leads"
-                    />
-                  ) : batch.totalItems > 0 || batch.overallStatus === 'RUNNING' ? (
-                    <ProgressBar
-                      processed={leadsFound}
-                      total={Math.max(leadsFound, 1)}
-                      label="leads"
+                      processed={batch.totalProcessed}
+                      total={batch.totalItems || 1}
+                      label="tasks"
                     />
                   ) : null}
 
                   {/* Stats row */}
                   <div className="mt-2 flex items-center gap-3 text-[10px] text-muted-foreground/60">
                     <span>
-                      Leads: <strong className="text-zbooni-green">{leadsFound}</strong>
-                      {leadsTarget > 0 ? <span> / {leadsTarget}</span> : null}
+                      Processed: <strong className="text-foreground">{batch.totalProcessed}</strong>
                     </span>
                     {batch.totalFailed > 0 ? (
                       <span>
@@ -1010,6 +991,40 @@ export default function DiscoverPage() {
               ) : null}
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* Provider Status */}
+      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+        <h2 className="mb-4 text-base font-bold tracking-tight">Provider Status</h2>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            { name: 'Google Places', role: 'Discovery', key: 'GOOGLE_PLACES_API_KEY', icon: Globe },
+            { name: 'Brave Search', role: 'CEO/Founder Search', key: 'BRAVE_API_KEY', icon: Search },
+            { name: 'Hunter', role: 'Email Lookup', key: 'HUNTER_API_KEY', icon: Target },
+            { name: 'Apollo', role: 'Enrichment', key: 'APOLLO_API_KEY', icon: TrendingUp },
+          ].map((provider) => {
+            const ProviderIcon = provider.icon;
+            return (
+              <div key={provider.name} className="rounded-xl border border-border/30 bg-zbooni-dark/20 p-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-teal/10">
+                    <ProviderIcon className="h-4 w-4 text-zbooni-teal" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold">{provider.name}</p>
+                    <p className="text-[10px] text-muted-foreground/60">{provider.role}</p>
+                  </div>
+                </div>
+                <div className="mt-2">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-zbooni-green/10 px-2 py-0.5 text-[10px] font-bold text-zbooni-green">
+                    <span className="h-1.5 w-1.5 rounded-full bg-zbooni-green" />
+                    Active
+                  </span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>

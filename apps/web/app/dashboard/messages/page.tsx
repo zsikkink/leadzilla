@@ -6,7 +6,7 @@ import type {
   MessageDraftResponse,
   MessageSendResponse,
 } from '@lead-flood/contracts';
-import { Check, CheckCheck, Minus, Square, X } from 'lucide-react';
+import { AlertTriangle, Check, CheckCheck, Minus, Square, X, XCircle } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -618,6 +618,39 @@ export default function MessagesPage() {
         <p className="mt-2 text-sm text-muted-foreground">{approvalModeSummary.body}</p>
       </div>
 
+      {/* Bounced / Failed sends summary */}
+      {(() => {
+        const bouncedSends = Object.values(initialSendByDraftId).filter((s) => s.status === 'BOUNCED');
+        const failedSends = Object.values(initialSendByDraftId).filter((s) => s.status === 'FAILED');
+        if (bouncedSends.length === 0 && failedSends.length === 0) return null;
+
+        return (
+          <div className="rounded-xl border border-red-500/30 bg-red-500/[0.06] px-4 py-3">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" />
+              <span className="text-sm font-semibold text-red-300">Delivery Issues</span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-3 text-xs">
+              {bouncedSends.length > 0 ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-1 font-semibold text-amber-300">
+                  <XCircle className="h-3 w-3" />
+                  {bouncedSends.length} bounced
+                </span>
+              ) : null}
+              {failedSends.length > 0 ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-red-500/15 px-2.5 py-1 font-semibold text-red-300">
+                  <XCircle className="h-3 w-3" />
+                  {failedSends.length} failed
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-1.5 text-[11px] text-muted-foreground/60">
+              These messages could not be delivered. Check the lead&apos;s email address and retry or try a different contact.
+            </p>
+          </div>
+        );
+      })()}
+
       {/* Select-all row */}
       {visiblePendingIds.size > 0 ? (
         <div className="flex items-center gap-3 rounded-xl border border-border/30 bg-card/50 px-4 py-2.5">
@@ -653,6 +686,9 @@ export default function MessagesPage() {
           const isPending = draft.approvalStatus === 'PENDING';
           const isSelected = selectedIds.has(draft.id);
           const isTargetDraft = draftIdTarget === draft.id;
+          const sendForDraft = draft.followUpNumber === 0 ? initialSendByDraftId[draft.id] ?? null : null;
+          const isBounced = sendForDraft?.status === 'BOUNCED';
+          const isFailed = sendForDraft?.status === 'FAILED';
 
           return (
             <div
@@ -676,13 +712,29 @@ export default function MessagesPage() {
                   'min-w-0 flex-1',
                   isSelected && 'rounded-2xl ring-1 ring-zbooni-green/30',
                   isTargetDraft && 'rounded-2xl ring-1 ring-zbooni-teal/40',
+                  (isBounced || isFailed) && 'rounded-2xl ring-1 ring-red-500/30',
                 )}
               >
+                {(isBounced || isFailed) ? (
+                  <div className="flex items-center gap-2 rounded-t-2xl border-b border-red-500/20 bg-red-500/[0.06] px-4 py-1.5">
+                    {isBounced ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-300">
+                        <AlertTriangle className="h-3 w-3" />
+                        Bounced
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-red-300">
+                        <XCircle className="h-3 w-3" />
+                        Failed to send
+                      </span>
+                    )}
+                  </div>
+                ) : null}
                 <MessageDraftCard
                   draft={draft}
                   leadName={leadDataMap[draft.leadId]?.name}
                   companyName={leadDataMap[draft.leadId]?.company}
-                  initialSend={draft.followUpNumber === 0 ? initialSendByDraftId[draft.id] ?? null : null}
+                  initialSend={sendForDraft}
                   initialSendLoaded={
                     draft.followUpNumber > 0 || loadedInitialSendLeadIds.has(draft.leadId)
                   }

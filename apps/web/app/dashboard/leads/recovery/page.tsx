@@ -3,6 +3,7 @@
 import type { ContactRecoveryCandidate, ContactRecoveryItem } from '@lead-flood/contracts';
 import {
   Building2,
+  CheckCircle2,
   ExternalLink,
   Globe,
   Instagram,
@@ -25,6 +26,7 @@ import { useApiQuery } from '@/hooks/use-api-query.js';
 import { useAuth } from '@/hooks/use-auth.js';
 import { cn } from '@/lib/utils.js';
 import { countryName } from '@/lib/countries.js';
+import { getWebEnv } from '@/lib/env.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -259,10 +261,14 @@ function RecoveryDetailPanel({
   item,
   onReject,
   rejecting,
+  onApprove,
+  approving,
 }: {
   item: ContactRecoveryItem;
   onReject: () => void;
   rejecting: boolean;
+  onApprove: () => void;
+  approving: boolean;
 }) {
   const metaDescription = extractMetaDescription(item.snapshot.websiteIntelligence);
   const igBio = extractInstagramBio(item.snapshot.instagramIntelligence);
@@ -289,20 +295,34 @@ function RecoveryDetailPanel({
         <div className="flex items-center gap-3">
           <ScoreBadge score={item.business.deterministicScore} band={item.business.scoreBand} />
           {item.status === 'OPEN' ? (
-            <button
-              type="button"
-              onClick={onReject}
-              disabled={rejecting}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-1.5 text-xs font-semibold text-red-300 transition-colors hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {rejecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldX className="h-3.5 w-3.5" />}
-              Reject
-            </button>
-          ) : (
-            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-[10px] text-red-300">
-              Rejected {item.rejectedAt ? new Date(item.rejectedAt).toLocaleDateString() : ''}
+            <>
+              <button
+                type="button"
+                onClick={onApprove}
+                disabled={approving || rejecting}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-zbooni-green/40 bg-zbooni-green/10 px-2.5 py-1.5 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/15 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {approving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                Approve
+              </button>
+              <button
+                type="button"
+                onClick={onReject}
+                disabled={rejecting || approving}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-1.5 text-xs font-semibold text-red-300 transition-colors hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {rejecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldX className="h-3.5 w-3.5" />}
+                Reject
+              </button>
+            </>
+          ) : null}
+          {item.status === 'REJECTED' ? (
+            <div className="flex items-center gap-2">
+              <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-[10px] text-red-300">
+                Rejected {item.rejectedAt ? new Date(item.rejectedAt).toLocaleDateString() : ''}
+              </div>
             </div>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -469,7 +489,7 @@ function RecoveryDetailPanel({
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function ContactRecoveryPage() {
-  const { apiClient } = useAuth();
+  const { apiClient, token } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const [page, setPage] = useState(1);
@@ -478,6 +498,7 @@ export default function ContactRecoveryPage() {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('selected'));
   const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [approvingId, setApprovingId] = useState<string | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query.trim()), 250);
@@ -536,6 +557,35 @@ export default function ContactRecoveryPage() {
       toast.error(error instanceof Error ? error.message : 'Failed to reject contact recovery item');
     } finally {
       setRejectingId(null);
+    }
+  }
+
+  async function handleApprove(item: ContactRecoveryItem): Promise<void> {
+    if (!window.confirm(`Create a lead from "${item.business.name}" using the best available contact?`)) {
+      return;
+    }
+
+    setApprovingId(item.id);
+    try {
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      if (token) headers.authorization = `Bearer ${token}`;
+      const res = await fetch(
+        `${getWebEnv().NEXT_PUBLIC_API_BASE_URL}/v1/discovery-admin/recovery/${item.id}/approve`,
+        { method: 'POST', headers },
+      );
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { error?: string } | null;
+        throw new Error(body?.error ?? `Approve failed (${res.status})`);
+      }
+
+      const result = await res.json() as { leadId: string; businessName: string };
+      toast.success(`Lead created from ${result.businessName}`);
+      recovery.refetch();
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : 'Failed to approve recovery item');
+    } finally {
+      setApprovingId(null);
     }
   }
 
@@ -654,6 +704,8 @@ export default function ContactRecoveryPage() {
               item={selected}
               rejecting={rejectingId === selected.id}
               onReject={() => void handleReject(selected)}
+              approving={approvingId === selected.id}
+              onApprove={() => void handleApprove(selected)}
             />
           </div>
         ) : (
