@@ -8,6 +8,7 @@ import {
   BarChart3,
   ChevronsLeft,
   ChevronsRight,
+  Handshake,
   Inbox,
   LayoutDashboard,
   Lightbulb,
@@ -29,6 +30,7 @@ const DASHBOARD_NAV_ITEMS = [
   { href: '/dashboard/inbox', label: 'Inbox', icon: Inbox },
   { href: '/dashboard/icps', label: 'ICP Profiles', icon: Target },
   { href: '/dashboard/analytics', label: 'Analytics', icon: BarChart3 },
+  { href: '/dashboard/analytics/deals', label: 'Deals', icon: Handshake },
   { href: '/dashboard/recommendations', label: 'Recommendations', icon: Lightbulb },
   { href: '/dashboard/jobs', label: 'Jobs', icon: Activity },
 ] as const;
