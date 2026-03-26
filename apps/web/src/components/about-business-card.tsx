@@ -1,4 +1,4 @@
-import { Building2, MapPin, Star } from 'lucide-react';
+import { Building2, MapPin, Sparkles, Star } from 'lucide-react';
 
 import { countryName } from '../lib/countries.js';
 
@@ -10,6 +10,8 @@ interface AboutBusinessCardProps {
   city: string | null;
   rating: number | null;
   reviewCount: number | null;
+  /** AI-generated business insights from business_conversions.businessInsights */
+  businessInsights?: string | null | undefined;
 }
 
 export function AboutBusinessCard({
@@ -20,10 +22,17 @@ export function AboutBusinessCard({
   city,
   rating,
   reviewCount,
+  businessInsights,
 }: AboutBusinessCardProps) {
   const location = [countryCode ? countryName(countryCode) : null, city]
     .filter(Boolean)
     .join(', ');
+
+  // Prefer AI insights over raw scraped description
+  const hasAiInsights = businessInsights && businessInsights.trim().length > 0;
+  const descriptionText = hasAiInsights
+    ? businessInsights.trim()
+    : (metaDescription ?? 'No description available');
 
   return (
     <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
@@ -42,13 +51,24 @@ export function AboutBusinessCard({
           </div>
         )}
 
-        {/* Description */}
-        <p className="text-sm text-muted-foreground/70 leading-relaxed">
-          {metaDescription ?? 'No description available'}
-        </p>
+        {/* AI Insights or Description */}
+        <div>
+          {hasAiInsights ? (
+            <div className="flex items-start gap-2">
+              <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+              <p className="text-sm text-foreground/80 leading-relaxed">
+                {descriptionText}
+              </p>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground/70 leading-relaxed">
+              {descriptionText}
+            </p>
+          )}
+        </div>
 
-        {/* Instagram Bio */}
-        {instagramBio && (
+        {/* Instagram Bio — only show if no AI insights (avoid redundancy) */}
+        {instagramBio && !hasAiInsights && (
           <p className="text-xs italic text-muted-foreground/60 leading-relaxed">
             &ldquo;{instagramBio}&rdquo;
           </p>
