@@ -59,7 +59,7 @@ export interface AiScoreResult {
 }
 
 export interface ReplyClassificationResult {
-  classification: 'INTERESTED' | 'NOT_INTERESTED' | 'OUT_OF_OFFICE' | 'UNSUBSCRIBE';
+  classification: 'INTERESTED' | 'NOT_INTERESTED' | 'OUT_OF_OFFICE';
   confidence: number;
 }
 
@@ -104,7 +104,7 @@ const ScoringResponseSchema = z.object({
 });
 
 const ClassificationResponseSchema = z.object({
-  classification: z.enum(['INTERESTED', 'NOT_INTERESTED', 'OUT_OF_OFFICE', 'UNSUBSCRIBE']),
+  classification: z.enum(['INTERESTED', 'NOT_INTERESTED', 'OUT_OF_OFFICE']),
   confidence: z.number().min(0).max(1),
 });
 
@@ -403,9 +403,8 @@ export class OpenAiAdapter {
       'You are a reply classifier for Zbooni, a UAE fintech company.',
       'Classify the customer reply into exactly one category:',
       '- INTERESTED: The person wants to learn more, asks questions, or shows positive intent.',
-      '- NOT_INTERESTED: The person explicitly declines, says no, or shows negative intent.',
+      '- NOT_INTERESTED: The person explicitly declines, says no, shows negative intent, or asks to stop receiving messages (e.g. "stop", "remove me", "don\'t contact me").',
       '- OUT_OF_OFFICE: Auto-reply or mention of being away/unavailable/on leave.',
-      '- UNSUBSCRIBE: Asks to stop receiving messages, says "stop", "remove me", "don\'t contact me".',
       'The reply may be in any language (English, Arabic, Hindi, etc.). Classify based on intent regardless of language.',
       'Return the classification and a confidence score between 0 and 1.',
     ].join(' ');

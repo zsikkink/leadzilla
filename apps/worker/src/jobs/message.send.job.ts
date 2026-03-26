@@ -116,11 +116,12 @@ export async function handleMessageSendJob(
       return;
     }
 
-    // --- Global suppression check: skip leads that have bounced or unsubscribed ---
+    // --- Global suppression check: skip leads that have bounced or opted out ---
+    // NOT_INTERESTED replaces UNSUBSCRIBED (Phase 0 migration). Cast needed until Prisma regenerated.
     const suppressionEvent = await prisma.feedbackEvent.findFirst({
       where: {
         leadId: send.lead.id,
-        eventType: { in: ['BOUNCED', 'UNSUBSCRIBED'] },
+        eventType: { in: ['BOUNCED', 'NOT_INTERESTED'] as unknown as ('BOUNCED' | 'UNSUBSCRIBED')[] },
       },
       select: { id: true, eventType: true, occurredAt: true },
       orderBy: { occurredAt: 'desc' },

@@ -41,7 +41,7 @@ export interface LabelsGenerateJobDependencies {
 /** Feedback event types that indicate positive outcomes. */
 const POSITIVE_EVENT_TYPES = new Set(['MEETING_BOOKED', 'DEAL_WON']);
 /** Feedback event types that indicate negative outcomes. */
-const NEGATIVE_EVENT_TYPES = new Set(['DEAL_LOST', 'UNSUBSCRIBED']);
+const NEGATIVE_EVENT_TYPES = new Set(['DEAL_LOST', 'NOT_INTERESTED']);
 
 
 export async function handleLabelsGenerateJob(
