@@ -24,6 +24,9 @@ const { dbMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => ({
       discoveryCostEvent: {
         create: vi.fn(),
       },
+      businessConversion: {
+        findFirst: vi.fn(),
+      },
     },
   },
   pipelineSettingsMock: {
@@ -37,6 +40,7 @@ const { dbMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => ({
 
 vi.mock('@lead-flood/db', () => ({
   prisma: dbMock.prisma,
+  PrismaRuntime: { JsonNull: null },
 }));
 
 vi.mock('../utils/pipeline-settings.js', () => ({
@@ -97,6 +101,8 @@ describe('handleApolloEnrichJob draft policy alignment', () => {
     dbMock.prisma.discoveryCostEvent.create.mockResolvedValue({
       id: 'cost_1',
     });
+    // F2: Cross-run Apollo cache — no cached conversion by default
+    dbMock.prisma.businessConversion.findFirst.mockResolvedValue(null);
     dbMock.prisma.lead.updateMany.mockResolvedValue({
       count: 1,
     });

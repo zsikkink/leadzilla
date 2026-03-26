@@ -10,7 +10,10 @@ import type { Job, SendOptions } from 'pg-boss';
 
 import { RetryableError } from '../errors.js';
 import { tryFinalizeDiscoveryRun, checkLeadTargetReached } from '../utils/discovery-run-tracker.js';
-import { isProviderWithinBudget } from '../utils/pipeline-settings.js';
+import {
+  getScoreQualificationThreshold,
+  isProviderWithinBudget,
+} from '../utils/pipeline-settings.js';
 import {
   adjudicateDecisionMakerCandidates,
   extractDecisionMakers,
@@ -1069,6 +1072,34 @@ export async function handleBusinessConvertJob(
 
   const domain = business.websiteDomain;
 
+  // ── 2b. Cross-run domain dedup (F4) ───────────────────────────────────
+  // If this business's domain was already processed in a PREVIOUS discovery
+  // run AND that run created a lead (converted or rejected), skip entirely.
+  // Only dedup across DIFFERENT runs, not within the same run.
+  const priorDomainLead = await prisma.lead.findFirst({
+    where: {
+      business: {
+        websiteDomain: domain,
+        discoveryRunId: { not: discoveryRunId },
+      },
+      deletedAt: null,
+    },
+    select: { id: true, status: true },
+  });
+  if (priorDomainLead) {
+    logger.info(
+      {
+        ...logCtx,
+        domain,
+        priorLeadId: priorDomainLead.id,
+        priorLeadStatus: priorDomainLead.status,
+      },
+      'Cross-run domain dedup — domain already has a lead from a previous run, skipping',
+    );
+    await tryFinalizeDiscoveryRun(discoveryRunId, logger, trackerSelfExclusion);
+    return;
+  }
+
   if (!deps) {
     logger.warn(logCtx, 'No dependencies provided — cannot convert business');
     return;
@@ -1679,63 +1710,144 @@ export async function handleBusinessConvertJob(
       logger.info(logCtx, 'Per-business Apollo budget reached — skipping paid lookup');
     }
     if (!hasEmailAfterHunter && deps.apolloAdapter.isConfigured && apolloHasEmail && apolloWithinBudget && apolloBusinessBudget) {
-      const apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
-      if (apolloResult.status === 'success' && apolloResult.contacts.length > 0) {
-        for (const ac of apolloResult.contacts) {
-          gateStats.apolloTotal++;
-          if (isGenericEmail(ac.email) || isJunkPersonalEmail(ac.email)) {
-            gateStats.apolloGenericDrop++;
-            continue;
-          }
+      // ── F1: Pre-score gate — skip paid Apollo if deterministic pre-score is too low ──
+      const preScoreFeatures = {
+        reviewCount: business.reviewCount ?? 0,
+        hasWhatsapp: Boolean(websiteScrapeData?.hasWhatsApp),
+        hasInstagram: Boolean(instagramHandle),
+        followerCount: instagramData?.followerCount ?? 0,
+        physicalAddressPresent: Boolean(business.address && business.address.length > 0),
+        recentActivity: Boolean(instagramData?.lastPostDate),
+        techStackSize: websiteScrapeData?.technologies
+          ? Object.values(websiteScrapeData.technologies).reduce((sum, arr) => sum + arr.length, 0)
+          : 0,
+        hasBookingForm: Boolean(websiteScrapeData?.hasBookingForm),
+        acceptsOnlinePayments: Boolean(
+          websiteScrapeData?.paymentWidgets && websiteScrapeData.paymentWidgets.length > 0,
+        ),
+      };
+      // Quick deterministic pre-score using only pre-enrichment signals
+      let deterministicPreScore = 0;
+      if (preScoreFeatures.reviewCount >= 50) deterministicPreScore += 0.15;
+      else if (preScoreFeatures.reviewCount >= 15) deterministicPreScore += 0.08;
+      if (preScoreFeatures.hasWhatsapp) deterministicPreScore += 0.12;
+      if (preScoreFeatures.hasInstagram) deterministicPreScore += 0.05;
+      if (preScoreFeatures.followerCount >= 1000) deterministicPreScore += 0.10;
+      else if (preScoreFeatures.followerCount >= 200) deterministicPreScore += 0.05;
+      if (preScoreFeatures.physicalAddressPresent) deterministicPreScore += 0.08;
+      if (preScoreFeatures.recentActivity) deterministicPreScore += 0.08;
+      if (preScoreFeatures.techStackSize >= 3) deterministicPreScore += 0.10;
+      else if (preScoreFeatures.techStackSize >= 1) deterministicPreScore += 0.05;
+      if (preScoreFeatures.hasBookingForm) deterministicPreScore += 0.10;
+      if (preScoreFeatures.acceptsOnlinePayments) deterministicPreScore += 0.12;
+      // Base score — every business gets some credit for existing in Maps
+      deterministicPreScore += 0.10;
 
-          // SMTP verify Apollo email if verifier is available
-          if (deps.smtpVerifier?.isConfigured) {
-            const smtpResult = await deps.smtpVerifier.verify(ac.email);
-            if (smtpResult.status !== 'valid' && smtpResult.status !== 'catch_all') {
-              gateStats.apolloSmtpDrop++;
-              logger.info(
-                { ...logCtx, email: ac.email, smtpStatus: smtpResult.status },
-                'Apollo contact failed SMTP verification',
-              );
+      const preScoreThreshold = await getScoreQualificationThreshold(); // default 0.40
+      if (deterministicPreScore < preScoreThreshold) {
+        logger.info(
+          {
+            ...logCtx,
+            deterministicPreScore: Number(deterministicPreScore.toFixed(3)),
+            preScoreThreshold,
+            preScoreFeatures,
+          },
+          'Pre-score below qualification threshold — skipping paid Apollo contact search',
+        );
+        gateStats.paidGateBlocked = true;
+        gateStats.paidGateReason = 'pre_score_below_threshold';
+      } else {
+        // ── F2: Cross-run Apollo cache — reuse prior results for same domain ──
+        let apolloCacheHit = false;
+        const cachedConversion = await prisma.businessConversion.findFirst({
+          where: {
+            business: {
+              websiteDomain: domain,
+              id: { not: businessId }, // different business, same domain
+            },
+            apolloContactJson: { not: PrismaRuntime.JsonNull },
+          },
+          select: { apolloContactJson: true },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        let apolloResult: ApolloContactSearchResult;
+        if (cachedConversion?.apolloContactJson) {
+          // Reuse cached Apollo contacts from a prior run
+          const cached = cachedConversion.apolloContactJson as unknown as ApolloContact[];
+          apolloResult = { status: 'success' as const, contacts: Array.isArray(cached) ? cached : [] };
+          apolloCacheHit = true;
+          logger.info(
+            { ...logCtx, domain, cachedContactCount: apolloResult.contacts.length },
+            'Apollo contact cache hit — reusing prior run data for same domain',
+          );
+        } else {
+          apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
+        }
+
+        if (apolloResult.status === 'success' && apolloResult.contacts.length > 0) {
+          for (const ac of apolloResult.contacts) {
+            gateStats.apolloTotal++;
+            if (isGenericEmail(ac.email) || isJunkPersonalEmail(ac.email)) {
+              gateStats.apolloGenericDrop++;
               continue;
             }
-          }
 
-          gateStats.apolloPass++;
-          apolloContactJson = ac;
-          allCandidates.push({
-            name: [ac.firstName, ac.lastName].filter(Boolean).join(' ') || 'Unknown Contact',
-            title: ac.title,
-            email: ac.email,
-            phone: ac.phone,
-            linkedinUrl: null,
-            seniority: ac.title ? classifySeniorityLocal(ac.title) : 'other',
-            positionRank: 50,
-            source: 'apollo',
-            rawJson: ac,
-          });
+            // SMTP verify Apollo email if verifier is available
+            if (deps.smtpVerifier?.isConfigured) {
+              const smtpResult = await deps.smtpVerifier.verify(ac.email);
+              if (smtpResult.status !== 'valid' && smtpResult.status !== 'catch_all') {
+                gateStats.apolloSmtpDrop++;
+                logger.info(
+                  { ...logCtx, email: ac.email, smtpStatus: smtpResult.status },
+                  'Apollo contact failed SMTP verification',
+                );
+                continue;
+              }
+            }
+
+            gateStats.apolloPass++;
+            apolloContactJson = ac;
+            allCandidates.push({
+              name: [ac.firstName, ac.lastName].filter(Boolean).join(' ') || 'Unknown Contact',
+              title: ac.title,
+              email: ac.email,
+              phone: ac.phone,
+              linkedinUrl: null,
+              seniority: ac.title ? classifySeniorityLocal(ac.title) : 'other',
+              positionRank: 50,
+              source: 'apollo',
+              rawJson: ac,
+            });
+          }
+        } else if (apolloResult.status === 'retryable_error') {
+          apolloRetryable = true;
         }
-      } else if (apolloResult.status === 'retryable_error') {
-        apolloRetryable = true;
+        if (apolloResult.status === 'success' && !apolloCacheHit) {
+          // Only charge cost for actual API calls, not cache hits
+          // Apollo People Search: Free plan = 5 mobile + 10 export credits/mo.
+          // Basic plan ($49/mo) = 900 credits. ~$0.05/credit, but domain search uses 1 credit.
+          // Effective cost ~2 cents/call on volume. Using 2 cents as conservative estimate.
+          costEvents.push({ provider: 'APOLLO', costCents: 2, apiCallType: 'contact_search' });
+        }
+        logger.info(
+          {
+            ...logCtx,
+            apolloStatus: apolloResult.status,
+            apolloCacheHit,
+            contactsFound: apolloResult.status === 'success' ? apolloResult.contacts.length : 0,
+          },
+          apolloCacheHit ? 'Apollo contact search completed (cache hit)' : 'Apollo contact search completed (fallback)',
+        );
+        recoveryAttempts.push({
+          stage: 'contact_recovery',
+          provider: 'APOLLO',
+          mode: 'discover',
+          status: apolloResult.status,
+          resultCount: apolloResult.status === 'success' ? apolloResult.contacts.length : 0,
+          notes: apolloCacheHit ? ['reused cached Apollo contacts for same domain'] : [],
+        });
       }
-      if (apolloResult.status === 'success') {
-        // Apollo People Search: Free plan = 5 mobile + 10 export credits/mo.
-        // Basic plan ($49/mo) = 900 credits. ~$0.05/credit, but domain search uses 1 credit.
-        // Effective cost ~2 cents/call on volume. Using 2 cents as conservative estimate.
-        costEvents.push({ provider: 'APOLLO', costCents: 2, apiCallType: 'contact_search' });
-      }
-      logger.info(
-        { ...logCtx, apolloStatus: apolloResult.status, contactsFound: apolloResult.status === 'success' ? apolloResult.contacts.length : 0 },
-        'Apollo contact search completed (fallback)',
-      );
-      recoveryAttempts.push({
-        stage: 'contact_recovery',
-        provider: 'APOLLO',
-        mode: 'discover',
-        status: apolloResult.status,
-        resultCount: apolloResult.status === 'success' ? apolloResult.contacts.length : 0,
-        notes: [],
-      });
     }
   } else if (!hasValidEmail && !shouldSkipHunter) {
     // Apollo gate blocked but Hunter already ran above
@@ -1876,7 +1988,18 @@ export async function handleBusinessConvertJob(
       .filter((candidate) => isValidPersonName(candidate.name, business.name))
       .slice(0, 5);
 
-    if (isAmbiguousTopCandidates(adjudicationCandidates)) {
+    // ── F3: Skip LLM adjudication when top candidate has high confidence ──
+    const topCandidateConfidence = adjudicationCandidates[0]?.confidence ?? 0;
+    if (topCandidateConfidence > 0.8) {
+      logger.info(
+        {
+          ...logCtx,
+          topCandidateConfidence,
+          topCandidateName: adjudicationCandidates[0]?.name,
+        },
+        'Top candidate has high confidence (>0.8) — skipping LLM adjudication',
+      );
+    } else if (isAmbiguousTopCandidates(adjudicationCandidates)) {
       const inputCandidates = adjudicationCandidates.map((candidate, index) => ({
         id: `candidate-${index + 1}`,
         name: candidate.name,
