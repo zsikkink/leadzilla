@@ -11,3 +11,10 @@ export class IcpNotFoundError extends Error {
     this.name = 'IcpNotFoundError';
   }
 }
+
+export class IcpHasActiveDataError extends Error {
+  constructor(message = 'ICP has active leads or discovery runs') {
+    super(message);
+    this.name = 'IcpHasActiveDataError';
+  }
+}

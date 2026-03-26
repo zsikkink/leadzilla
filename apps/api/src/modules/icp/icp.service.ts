@@ -15,6 +15,8 @@ import type {
 } from '@lead-flood/contracts';
 
 import type { IcpRepository } from './icp.repository.js';
+import { IcpHasActiveDataError } from './icp.errors.js';
+import { prisma } from '@lead-flood/db';
 
 export interface IcpService {
   createIcpProfile(input: CreateIcpProfileRequest): Promise<IcpProfileResponse>;
@@ -57,7 +59,31 @@ export function buildIcpService(repository: IcpRepository): IcpService {
       return repository.updateIcpProfile(icpId, input);
     },
     async deleteIcpProfile(icpId) {
-      // TODO: add safe-delete checks.
+      // Safe-delete: block if ICP has active leads or active discovery jobs
+      const [leadCount, activeJobCount] = await Promise.all([
+        prisma.leadDiscoveryRecord.count({ where: { icpProfileId: icpId } }),
+        prisma.jobExecution.count({
+          where: {
+            type: { startsWith: 'discovery' },
+            status: { in: ['queued', 'running'] },
+            payload: { path: ['icpProfileId'], equals: icpId },
+          },
+        }),
+      ]);
+
+      const reasons: string[] = [];
+      if (leadCount > 0) {
+        reasons.push(`${leadCount} lead${leadCount > 1 ? 's' : ''} linked to this ICP`);
+      }
+      if (activeJobCount > 0) {
+        reasons.push(`${activeJobCount} active discovery job${activeJobCount > 1 ? 's' : ''}`);
+      }
+      if (reasons.length > 0) {
+        throw new IcpHasActiveDataError(
+          `Cannot delete ICP: ${reasons.join(', ')}. Remove or reassign them first.`,
+        );
+      }
+
       await repository.deleteIcpProfile(icpId);
     },
     async createQualificationRule(icpId, input) {

@@ -2,16 +2,19 @@
 
 import {
   AlertTriangle,
-  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   DollarSign,
-  FileText,
   Gauge,
+  Globe,
   Hash,
   Inbox,
   Loader2,
   Mail,
+  MapPin,
   MessageCircle,
   MessageSquare,
+  Plus,
   RotateCcw,
   Save,
   Settings,
@@ -22,6 +25,7 @@ import {
   Target,
   Timer,
   UserCog,
+  X,
   Zap,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -33,6 +37,8 @@ import {
   DEFAULT_MESSAGING_ROLE,
   DEFAULT_MESSAGING_SYSTEM_PROMPT,
 } from '../../src/lib/messaging-defaults.js';
+import { buildPipelineSettingsSavePlan } from '../../src/lib/pipeline-settings-save-plan.js';
+import { MENA_COUNTRIES } from '../../src/lib/countries.js';
 import { cn } from '../../src/lib/utils.js';
 
 // ── Setting types ──────────────────────────────────────────────────────
@@ -479,7 +485,7 @@ function getDefaultSettings(): SettingsState {
     scoreTierBands: { low: 0.34, med: 0.67, high: 0.67 },
     followUpMaxCount: 3,
     whatsappDailyLimit: 50,
-    emailDailyLimit: 100,
+    emailDailyLimit: 10,
     modelActivationAuc: 0.6,
     providerBudgetCeiling: 50,
   };
@@ -511,10 +517,6 @@ const ADDITIONAL_SETTING_LABELS: Record<string, string> = {
   messagingInstructions: 'Messaging Instructions',
 };
 
-function getSettingDisplayLabel(key: string): string {
-  return PIPELINE_SETTING_LABELS[key] ?? ADDITIONAL_SETTING_LABELS[key] ?? key;
-}
-
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
@@ -525,10 +527,263 @@ function getErrorMessage(error: unknown): string {
   return 'unknown error';
 }
 
+// ── Countries & Cities Manager (A7) ─────────────────────────────────────
+
+interface CountryCityData {
+  [country: string]: string[];
+}
+
+function CountriesCitiesManager({
+  apiClient,
+}: {
+  apiClient: { listPipelineSettings: () => Promise<{ items: Array<{ key: string; value: unknown }> }>; updatePipelineSetting: (key: string, value: unknown) => Promise<unknown> };
+}) {
+  const [countryCities, setCountryCities] = useState<CountryCityData>({});
+  const [loading, setLoading] = useState(true);
+  const [expandedCountry, setExpandedCountry] = useState<string | null>(null);
+  const [newCountry, setNewCountry] = useState('');
+  const [showCountryInput, setShowCountryInput] = useState(false);
+  const [newCityInputs, setNewCityInputs] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void apiClient.listPipelineSettings().then(({ items }) => {
+      const setting = items.find((i) => i.key === 'countryCities');
+      if (setting?.value && typeof setting.value === 'object') {
+        setCountryCities(setting.value as CountryCityData);
+      }
+    }).catch(() => undefined).finally(() => setLoading(false));
+  }, [apiClient]);
+
+  const save = async (data: CountryCityData) => {
+    setSaving(true);
+    try {
+      await apiClient.updatePipelineSetting('countryCities', data);
+      setCountryCities(data);
+      toast.success('Countries & cities saved');
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addCountry = () => {
+    const name = newCountry.trim();
+    if (!name || name in countryCities) return;
+    const updated = { ...countryCities, [name]: [] };
+    setNewCountry('');
+    setShowCountryInput(false);
+    setExpandedCountry(name);
+    void save(updated);
+  };
+
+  const removeCountry = (country: string) => {
+    const updated = { ...countryCities };
+    delete updated[country];
+    if (expandedCountry === country) setExpandedCountry(null);
+    void save(updated);
+  };
+
+  const addCity = (country: string) => {
+    const city = (newCityInputs[country] ?? '').trim();
+    if (!city || countryCities[country]?.includes(city)) return;
+    const updated = { ...countryCities, [country]: [...(countryCities[country] ?? []), city] };
+    setNewCityInputs((prev) => ({ ...prev, [country]: '' }));
+    void save(updated);
+  };
+
+  const removeCity = (country: string, city: string) => {
+    const updated = {
+      ...countryCities,
+      [country]: (countryCities[country] ?? []).filter((c) => c !== city),
+    };
+    void save(updated);
+  };
+
+  const addMenaCountries = () => {
+    const updated = { ...countryCities };
+    for (const c of MENA_COUNTRIES) {
+      if (!(c in updated)) {
+        updated[c] = [];
+      }
+    }
+    void save(updated);
+  };
+
+  const countries = Object.keys(countryCities).sort();
+
+  return (
+    <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-teal/10">
+          <Globe className="h-4 w-4 text-zbooni-teal" />
+        </div>
+        <div>
+          <h2 className="text-base font-bold tracking-tight">Countries & Cities</h2>
+          <p className="text-[11px] text-muted-foreground/50">
+            Manage target countries and cities. Used in ICP selectors and discovery search filters.
+          </p>
+        </div>
+        {saving ? <Loader2 className="ml-auto h-4 w-4 animate-spin text-muted-foreground" /> : null}
+      </div>
+
+      {loading ? (
+        <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground/50">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading...
+        </div>
+      ) : (
+        <>
+          {/* Country pills */}
+          <div className="flex flex-wrap gap-2">
+            {countries.map((country) => {
+              const isExpanded = expandedCountry === country;
+              const cities = countryCities[country] ?? [];
+
+              return (
+                <div key={country} className="w-full">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedCountry(isExpanded ? null : country)}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors',
+                        isExpanded
+                          ? 'bg-zbooni-teal/20 text-zbooni-teal'
+                          : 'bg-zbooni-dark/60 text-muted-foreground hover:bg-zbooni-dark/80 hover:text-foreground',
+                      )}
+                    >
+                      <Globe className="h-3 w-3" />
+                      {country}
+                      <span className="font-mono text-[10px] text-muted-foreground/50">({cities.length})</span>
+                      {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeCountry(country)}
+                      className="rounded-full p-1 text-muted-foreground/30 transition-colors hover:bg-red-500/10 hover:text-red-400"
+                      title="Remove country"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+
+                  {/* Expanded: city list */}
+                  {isExpanded ? (
+                    <div className="ml-6 mt-2 mb-3 space-y-2 rounded-xl border border-border/30 bg-zbooni-dark/20 p-3">
+                      {cities.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {cities.map((city) => (
+                            <span
+                              key={city}
+                              className="inline-flex items-center gap-1 rounded-full bg-zbooni-dark/60 px-2.5 py-1 text-xs text-muted-foreground"
+                            >
+                              <MapPin className="h-2.5 w-2.5" />
+                              {city}
+                              <button
+                                type="button"
+                                onClick={() => removeCity(country, city)}
+                                className="ml-0.5 rounded-full transition-colors hover:text-red-400"
+                              >
+                                <X className="h-2.5 w-2.5" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground/40 italic">No cities added</p>
+                      )}
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          value={newCityInputs[country] ?? ''}
+                          onChange={(e) => setNewCityInputs((prev) => ({ ...prev, [country]: e.target.value }))}
+                          placeholder="Add city..."
+                          className="h-7 w-40 rounded-full border border-border/50 bg-zbooni-dark/60 px-3 text-xs focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') addCity(country);
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => addCity(country)}
+                          className="rounded-full p-1 text-zbooni-teal transition-colors hover:bg-zbooni-teal/10"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+
+          {countries.length === 0 ? (
+            <p className="py-4 text-center text-sm text-muted-foreground/40 italic">No countries configured</p>
+          ) : null}
+
+          {/* Add country */}
+          <div className="mt-4 flex items-center gap-2">
+            {showCountryInput ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  value={newCountry}
+                  onChange={(e) => setNewCountry(e.target.value)}
+                  placeholder="Country name..."
+                  className="h-8 w-40 rounded-full border border-border/50 bg-zbooni-dark/60 px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') addCountry();
+                    if (e.key === 'Escape') { setShowCountryInput(false); setNewCountry(''); }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={addCountry}
+                  disabled={!newCountry.trim()}
+                  className="rounded-full bg-zbooni-teal/15 p-1.5 text-zbooni-teal transition-colors hover:bg-zbooni-teal/25 disabled:opacity-40"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowCountryInput(false); setNewCountry(''); }}
+                  className="rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-accent/50"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCountryInput(true)}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-zbooni-teal/10 px-3 py-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:bg-zbooni-teal/20"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Add Country
+                </button>
+                <button
+                  type="button"
+                  onClick={addMenaCountries}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-zbooni-green/10 px-3 py-1.5 text-xs font-medium text-zbooni-green transition-colors hover:bg-zbooni-green/20"
+                >
+                  <Globe className="h-3.5 w-3.5" />
+                  Add All MENA
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────
 
 export default function ControlsSettingsPage() {
-  const { apiClient } = useAuth();
+  const { apiClient, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [settings, setSettings] = useState<SettingsState>(getDefaultSettings);
   const [autoApproveEnabled, setAutoApproveEnabled] = useState(false);
   const [autoApproveScoreMin, setAutoApproveScoreMin] = useState(0.5);
@@ -539,61 +794,98 @@ export default function ControlsSettingsPage() {
   const [hasChanges, setHasChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingSettings, setIsLoadingSettings] = useState(true);
+  const [settingsLoadError, setSettingsLoadError] = useState<string | null>(null);
   const loadedRef = useRef(false);
+  const loadedSettingsRef = useRef<Record<string, unknown> | null>(null);
 
-  // Load all settings from API on mount
-  useEffect(() => {
-    if (loadedRef.current) return;
-    loadedRef.current = true;
+  const loadSettings = useCallback(async () => {
+    setIsLoadingSettings(true);
+    setSettingsLoadError(null);
 
-    apiClient
-      .listPipelineSettings()
-      .then(({ items }) => {
-        const newSettings = { ...getDefaultSettings() };
-        for (const item of items) {
-          if (item.key === 'auto_approve_enabled') {
-            setAutoApproveEnabled(item.value === true || item.value === 'true');
-          } else if (item.key === 'auto_approve_score_min') {
-            const n = Number(item.value);
-            if (!Number.isNaN(n)) setAutoApproveScoreMin(n);
-          } else if (item.key === 'auto_approve_score_max') {
-            const n = Number(item.value);
-            if (!Number.isNaN(n)) setAutoApproveScoreMax(n);
-          } else if (item.key === 'messagingRole') {
-            setMessagingRole(String(item.value ?? ''));
-          } else if (item.key === 'messagingSystemPrompt') {
-            setMessagingSystemPrompt(String(item.value ?? ''));
-          } else if (item.key === 'messagingInstructions') {
-            setMessagingInstructions(String(item.value ?? ''));
-          } else if (item.key === 'scoreTierBands') {
-            const val = item.value as {
-              low?: number | undefined;
-              med?: number | undefined;
-              high?: number | undefined;
-            } | null;
-            if (val && typeof val === 'object') {
-              newSettings.scoreTierBands = {
-                low: val.low ?? 0.34,
-                med: val.med ?? 0.67,
-                high: val.high ?? 0.67,
-              };
-            }
-          } else if (NUMERIC_SETTING_KEYS.has(item.key)) {
-            const num = Number(item.value);
-            if (!Number.isNaN(num)) {
-              (newSettings as Record<string, unknown>)[item.key] = num;
-            }
+    try {
+      const { items } = await apiClient.listPipelineSettings();
+      const newSettings = { ...getDefaultSettings() };
+      let nextAutoApproveEnabled = false;
+      let nextAutoApproveScoreMin = 0.5;
+      let nextAutoApproveScoreMax = 1.0;
+      let nextMessagingRole = '';
+      let nextMessagingSystemPrompt = '';
+      let nextMessagingInstructions = '';
+
+      for (const item of items) {
+        if (item.key === 'auto_approve_enabled') {
+          nextAutoApproveEnabled = item.value === true || item.value === 'true';
+        } else if (item.key === 'auto_approve_score_min') {
+          const value = Number(item.value);
+          if (!Number.isNaN(value)) {
+            nextAutoApproveScoreMin = value;
+          }
+        } else if (item.key === 'auto_approve_score_max') {
+          const value = Number(item.value);
+          if (!Number.isNaN(value)) {
+            nextAutoApproveScoreMax = value;
+          }
+        } else if (item.key === 'messagingRole') {
+          nextMessagingRole = String(item.value ?? '');
+        } else if (item.key === 'messagingSystemPrompt') {
+          nextMessagingSystemPrompt = String(item.value ?? '');
+        } else if (item.key === 'messagingInstructions') {
+          nextMessagingInstructions = String(item.value ?? '');
+        } else if (item.key === 'scoreTierBands') {
+          const val = item.value as {
+            low?: number | undefined;
+            med?: number | undefined;
+            high?: number | undefined;
+          } | null;
+          if (val && typeof val === 'object') {
+            newSettings.scoreTierBands = {
+              low: val.low ?? 0.34,
+              med: val.med ?? 0.67,
+              high: val.high ?? 0.67,
+            };
+          }
+        } else if (NUMERIC_SETTING_KEYS.has(item.key)) {
+          const num = Number(item.value);
+          if (!Number.isNaN(num)) {
+            (newSettings as Record<string, unknown>)[item.key] = num;
           }
         }
-        setSettings(newSettings);
-      })
-      .catch(() => {
-        // Use defaults if API fails
-      })
-      .finally(() => {
-        setIsLoadingSettings(false);
-      });
+      }
+
+      setSettings(newSettings);
+      setAutoApproveEnabled(nextAutoApproveEnabled);
+      setAutoApproveScoreMin(nextAutoApproveScoreMin);
+      setAutoApproveScoreMax(nextAutoApproveScoreMax);
+      setMessagingRole(nextMessagingRole);
+      setMessagingSystemPrompt(nextMessagingSystemPrompt);
+      setMessagingInstructions(nextMessagingInstructions);
+      setHasChanges(false);
+      loadedSettingsRef.current = {
+        ...newSettings,
+        auto_approve_enabled: nextAutoApproveEnabled,
+        auto_approve_score_min: nextAutoApproveScoreMin,
+        auto_approve_score_max: nextAutoApproveScoreMax,
+        messagingRole: nextMessagingRole,
+        messagingSystemPrompt: nextMessagingSystemPrompt,
+        messagingInstructions: nextMessagingInstructions,
+      };
+    } catch (error: unknown) {
+      loadedSettingsRef.current = null;
+      setSettingsLoadError(getErrorMessage(error));
+    } finally {
+      setIsLoadingSettings(false);
+    }
   }, [apiClient]);
+
+  // Load all settings from API on mount once auth is ready
+  useEffect(() => {
+    if (loadedRef.current || isAuthLoading || !isAuthenticated) {
+      return;
+    }
+
+    loadedRef.current = true;
+    void loadSettings();
+  }, [isAuthLoading, isAuthenticated, loadSettings]);
 
   // Real data queries for status cards
   const stats = useApiQuery(
@@ -615,34 +907,81 @@ export default function ControlsSettingsPage() {
   );
 
   const handleSave = useCallback(async () => {
+    if (autoApproveScoreMin > autoApproveScoreMax) {
+      toast.error('Auto-approve min score must be less than or equal to the max score.');
+      return;
+    }
+
+    const currentSettings = loadedSettingsRef.current;
+    if (!currentSettings) {
+      toast.error('Saved settings are unavailable. Retry loading before saving changes.');
+      return;
+    }
+
+    const nextSettings = {
+      ...settings,
+      auto_approve_enabled: autoApproveEnabled,
+      auto_approve_score_min: autoApproveScoreMin,
+      auto_approve_score_max: autoApproveScoreMax,
+      messagingRole,
+      messagingSystemPrompt,
+      messagingInstructions,
+    };
+
+    const saveTargets = buildPipelineSettingsSavePlan({
+      currentValues: currentSettings,
+      nextValues: nextSettings,
+      labels: {
+        ...PIPELINE_SETTING_LABELS,
+        ...ADDITIONAL_SETTING_LABELS,
+      },
+    });
+
+    if (saveTargets.length === 0) {
+      setHasChanges(false);
+      return;
+    }
+
     setIsSaving(true);
-    const saveTargets = [
-      ...(Object.entries(settings) as [string, unknown][]).map(([key, value]) => ({
-        key,
-        value,
-        label: getSettingDisplayLabel(key),
-      })),
-      { key: 'auto_approve_enabled', value: autoApproveEnabled, label: getSettingDisplayLabel('auto_approve_enabled') },
-      { key: 'auto_approve_score_min', value: autoApproveScoreMin, label: getSettingDisplayLabel('auto_approve_score_min') },
-      { key: 'auto_approve_score_max', value: autoApproveScoreMax, label: getSettingDisplayLabel('auto_approve_score_max') },
-      { key: 'messagingRole', value: messagingRole, label: getSettingDisplayLabel('messagingRole') },
-      { key: 'messagingSystemPrompt', value: messagingSystemPrompt, label: getSettingDisplayLabel('messagingSystemPrompt') },
-      { key: 'messagingInstructions', value: messagingInstructions, label: getSettingDisplayLabel('messagingInstructions') },
-    ];
+    const results: Array<
+      | { key: string; value: unknown; label: string; success: true }
+      | { key: string; value: unknown; label: string; success: false; errorMessage: string }
+    > = [];
 
-    const results = await Promise.all(
-      saveTargets.map(async (target) => {
-        try {
-          await apiClient.updatePipelineSetting(target.key, target.value);
-          return { ...target, success: true as const };
-        } catch (error: unknown) {
-          return { ...target, success: false as const, errorMessage: getErrorMessage(error) };
-        }
-      }),
+    for (const target of saveTargets) {
+      try {
+        await apiClient.updatePipelineSetting(target.key, target.value);
+        results.push({ ...target, success: true });
+      } catch (error: unknown) {
+        results.push({
+          ...target,
+          success: false,
+          errorMessage: getErrorMessage(error),
+        });
+      }
+    }
+
+    const successfulTargets = results.filter(
+      (result): result is { key: string; value: unknown; label: string; success: true } =>
+        result.success,
     );
+    if (successfulTargets.length > 0) {
+      loadedSettingsRef.current = {
+        ...currentSettings,
+        ...Object.fromEntries(successfulTargets.map((result) => [result.key, result.value])),
+      };
+    }
 
-    const failedSaves = results.filter((result) => !result.success);
-    const successfulSaveCount = results.length - failedSaves.length;
+    const failedSaves = results.filter(
+      (result): result is {
+        key: string;
+        value: unknown;
+        label: string;
+        success: false;
+        errorMessage: string;
+      } => !result.success,
+    );
+    const successfulSaveCount = successfulTargets.length;
 
     if (failedSaves.length === 0) {
       toast.success(`Saved ${successfulSaveCount} settings.`);
@@ -662,7 +1001,16 @@ export default function ControlsSettingsPage() {
     }
     setHasChanges(true);
     setIsSaving(false);
-  }, [apiClient, settings, autoApproveEnabled, autoApproveScoreMin, autoApproveScoreMax, messagingRole, messagingSystemPrompt, messagingInstructions]);
+  }, [
+    apiClient,
+    autoApproveEnabled,
+    autoApproveScoreMax,
+    autoApproveScoreMin,
+    messagingInstructions,
+    messagingRole,
+    messagingSystemPrompt,
+    settings,
+  ]);
 
   const handleReset = useCallback(() => {
     setSettings(getDefaultSettings());
@@ -675,6 +1023,10 @@ export default function ControlsSettingsPage() {
     setHasChanges(true);
     toast.info('Settings reset to defaults — click Save to persist');
   }, []);
+
+  const saveDisabled =
+    !hasChanges || isSaving || isLoadingSettings || settingsLoadError !== null;
+  const resetDisabled = isLoadingSettings || settingsLoadError !== null;
 
   return (
     <div className="space-y-6">
@@ -690,7 +1042,13 @@ export default function ControlsSettingsPage() {
           <button
             type="button"
             onClick={handleReset}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3.5 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
+            disabled={resetDisabled}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-colors',
+              resetDisabled
+                ? 'cursor-not-allowed bg-muted/10 text-muted-foreground/40'
+                : 'bg-muted/20 text-muted-foreground hover:bg-muted/40',
+            )}
           >
             <RotateCcw className="h-3.5 w-3.5" />
             Reset Defaults
@@ -698,12 +1056,12 @@ export default function ControlsSettingsPage() {
           <button
             type="button"
             onClick={handleSave}
-            disabled={!hasChanges || isSaving}
+            disabled={saveDisabled}
             className={cn(
               'inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold transition-all',
-              hasChanges && !isSaving
+              !saveDisabled
                 ? 'bg-zbooni-teal/20 text-zbooni-teal hover:bg-zbooni-teal/30'
-                : 'bg-muted/20 text-muted-foreground/60 cursor-not-allowed',
+                : 'cursor-not-allowed bg-muted/20 text-muted-foreground/60',
             )}
           >
             {isSaving ? (
@@ -715,6 +1073,32 @@ export default function ControlsSettingsPage() {
           </button>
         </div>
       </div>
+
+      {settingsLoadError ? (
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-semibold text-red-300">Saved settings failed to load</p>
+              <p className="mt-1 text-red-100/80">
+                {settingsLoadError}. The values on this page may be defaults, so saving is disabled until a retry succeeds.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadSettings()}
+              disabled={isLoadingSettings}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/15 px-3 py-2 text-xs font-semibold text-red-100 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isLoadingSettings ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RotateCcw className="h-3.5 w-3.5" />
+              )}
+              Retry Load
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {/* ── System Status Cards (4-col grid) ────────────────────────── */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -748,29 +1132,21 @@ export default function ControlsSettingsPage() {
           icon={Zap}
           iconColor="text-zbooni-green"
           bgColor="bg-zbooni-green/10"
-          label="Provider Status"
+          label="Provider Status Notes"
         >
           <div className="space-y-2">
-            {[
-              { name: 'SerpAPI', configured: true },
-              { name: 'Hunter', configured: true },
-              { name: 'Apollo', configured: false },
-            ].map((provider) => (
-              <div key={provider.name} className="flex items-center justify-between">
+            <p className="text-[10px] font-medium text-muted-foreground/40">
+              Static reference only. Live provider probes are not wired on this screen.
+            </p>
+            {['SerpAPI', 'Hunter', 'Apollo'].map((provider) => (
+              <div key={provider} className="flex items-center justify-between">
                 <span className="text-[11px] font-medium text-muted-foreground/60">
-                  {provider.name}
+                  {provider}
                 </span>
-                {provider.configured ? (
-                  <div className="flex items-center gap-1">
-                    <CheckCircle2 className="h-3 w-3 text-zbooni-green" />
-                    <span className="text-[10px] font-semibold text-zbooni-green">Active</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1">
-                    <AlertTriangle className="h-3 w-3 text-muted-foreground/40" />
-                    <span className="text-[10px] font-semibold text-muted-foreground/40">Not configured</span>
-                  </div>
-                )}
+                <div className="flex items-center gap-1">
+                  <AlertTriangle className="h-3 w-3 text-muted-foreground/40" />
+                  <span className="text-[10px] font-semibold text-muted-foreground/40">Not probed here</span>
+                </div>
               </div>
             ))}
           </div>
@@ -781,15 +1157,15 @@ export default function ControlsSettingsPage() {
           icon={AlertTriangle}
           iconColor="text-yellow-400"
           bgColor="bg-yellow-500/10"
-          label="DLQ Depth"
+          label="DLQ Depth Placeholder"
         >
           <div className="flex flex-col items-center py-2">
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-zbooni-green" />
-              <span className="text-2xl font-extrabold tracking-tight text-zbooni-green">0</span>
+              <AlertTriangle className="h-5 w-5 text-muted-foreground/40" />
+              <span className="text-2xl font-extrabold tracking-tight text-muted-foreground/60">--</span>
             </div>
             <p className="mt-1 text-[10px] font-medium text-muted-foreground/40">
-              All queues healthy
+              Live queue depth is not wired on this screen
             </p>
           </div>
         </StatusCard>
@@ -806,10 +1182,14 @@ export default function ControlsSettingsPage() {
               {stats.data?.pendingApprovals ?? pendingDrafts.data?.total ?? 0}
             </span>
             <p className="mt-1 text-[10px] font-medium text-muted-foreground/40">
-              Message drafts awaiting review
+              Operator-generated drafts awaiting approval
             </p>
           </div>
         </StatusCard>
+      </div>
+
+      <div className="rounded-2xl border border-border/50 bg-card/60 px-4 py-3 text-xs text-muted-foreground/70 shadow-sm">
+        Qualified leads do not auto-enter messaging. Operators generate drafts from Leads, and sending then depends on approval or auto-approval settings.
       </div>
 
       {/* ── AI Role / Identity ──────────────────────────────────────── */}
@@ -932,35 +1312,23 @@ export default function ControlsSettingsPage() {
 
       {/* ── Messaging Instructions ────────────────────────────────────── */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
+        <div className="mb-2 flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-green/10">
             <MessageCircle className="h-4 w-4 text-zbooni-green" />
           </div>
           <div>
             <h2 className="text-base font-bold tracking-tight">Messaging Instructions</h2>
             <p className="text-[11px] text-muted-foreground/50">
-              Per-campaign tweaks appended after the system prompt (e.g. "Focus on hospitality ICPs this week")
+              Messaging instructions are now per-ICP for more targeted messaging.
             </p>
           </div>
         </div>
-        {isLoadingSettings ? (
-          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground/50">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading saved instructions...
-          </div>
-        ) : (
-          <textarea
-            value={messagingInstructions}
-            onChange={(e) => {
-              setMessagingInstructions(e.target.value);
-              setHasChanges(true);
-            }}
-            rows={6}
-            placeholder="Enter per-campaign instructions appended after the system prompt. Example: 'Always mention our payment link feature this week. Focus on hospitality ICPs. Reference UAE market growth.'"
-            className="w-full resize-y rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none"
-            aria-label="Messaging Instructions"
-          />
-        )}
+        <div className="rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 px-4 py-3">
+          <p className="text-sm text-muted-foreground">
+            Go to each ICP profile to set messaging instructions specific to that customer segment.
+            This allows the AI to tailor messages based on the ICP&apos;s unique value proposition.
+          </p>
+        </div>
       </div>
 
       {/* ── Pipeline Settings ───────────────────────────────────────── */}
@@ -1135,28 +1503,8 @@ export default function ControlsSettingsPage() {
         </div>
       </div>
 
-      {/* ── Outbox Monitor ──────────────────────────────────────────── */}
-      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-teal/10">
-            <FileText className="h-4 w-4 text-zbooni-teal" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold tracking-tight">Outbox Monitor</h2>
-            <p className="text-[11px] text-muted-foreground/50">
-              Recent pipeline events and their processing status
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-col items-center justify-center py-8 text-center">
-          <FileText className="mb-2 h-8 w-8 text-muted-foreground/20" />
-          <p className="text-sm font-medium text-muted-foreground/50">No recent events</p>
-          <p className="mt-0.5 text-[11px] text-muted-foreground/30">
-            Pipeline events will appear here as discovery runs process
-          </p>
-        </div>
-      </div>
+      {/* ── Countries & Cities Management (A7) ─────────────────────── */}
+      <CountriesCitiesManager apiClient={apiClient} />
     </div>
   );
 }

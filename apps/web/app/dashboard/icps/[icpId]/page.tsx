@@ -2,6 +2,7 @@
 
 import type {
   IcpProfileResponse,
+  QualificationRuleResponse,
 } from '@lead-flood/contracts';
 import {
   ArrowLeft,
@@ -880,6 +881,209 @@ function extractMeta(metadataJson: Record<string, unknown> | null | undefined): 
   };
 }
 
+// A4: Editable rules section with inline weight editing
+function IcpRulesSection({
+  profile,
+  onRulesChanged,
+}: {
+  profile: IcpProfileResponse;
+  apiClient: { getIcpRules: (icpId: string) => Promise<{ items: QualificationRuleResponse[] }> };
+  onRulesChanged: () => void;
+}) {
+  const { token } = useAuth();
+  const rules = profile.qualificationRules ?? [];
+  const [editingWeights, setEditingWeights] = useState<Record<string, number>>({});
+  const [savingWeightId, setSavingWeightId] = useState<string | null>(null);
+
+  const hardFilters = rules.filter((r) => r.ruleType === 'HARD_FILTER');
+  const positiveRules = rules.filter((r) => r.ruleType === 'WEIGHTED' && (r.weight ?? 0) >= 0);
+  const negativeRules = rules.filter((r) => r.ruleType === 'WEIGHTED' && (r.weight ?? 0) < 0);
+  const totalPositiveWeight = positiveRules.reduce((sum, r) => sum + (r.weight ?? 0), 0);
+
+  const saveWeight = async (ruleId: string, newWeight: number) => {
+    setSavingWeightId(ruleId);
+    try {
+      const env = await import('../../../../src/lib/env.js');
+      const res = await fetch(
+        `${env.getWebEnv().NEXT_PUBLIC_API_BASE_URL}/v1/icps/${profile.id}/rules/${ruleId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'content-type': 'application/json',
+            ...(token ? { authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ weight: newWeight }),
+        },
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+      }
+      toast.success('Weight updated');
+      setEditingWeights((prev) => { const next = { ...prev }; delete next[ruleId]; return next; });
+      onRulesChanged();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update weight');
+    } finally {
+      setSavingWeightId(null);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+      <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
+        <Shield className="h-4 w-4 text-zbooni-teal" />
+        Qualification Rules
+        <span className="ml-auto text-xs font-normal text-muted-foreground">{rules.length} rules</span>
+      </h2>
+
+      {/* Hard Filters */}
+      {hardFilters.length > 0 ? (
+        <div className="mb-4">
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-red-400/80">Hard Filters (must all pass)</h3>
+          <div className="space-y-1.5">
+            {hardFilters.map((r) => (
+              <div key={r.id} className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">
+                <span className="font-mono text-[11px] font-semibold text-red-400">{r.fieldKey}</span>
+                <span className="text-[11px] text-muted-foreground/60">{r.operator} {typeof r.valueJson === 'string' ? r.valueJson : JSON.stringify(r.valueJson)}</span>
+                <span className="ml-auto font-mono text-[10px] text-red-400">REQUIRED</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Positive Weighted Rules with editable weights (A4) */}
+      {positiveRules.length > 0 ? (
+        <div className="mb-4">
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-zbooni-green/80">
+            Positive Signals (total weight: {totalPositiveWeight})
+          </h3>
+          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+            {positiveRules.map((r) => {
+              const isEditing = r.id in editingWeights;
+              const currentWeight = isEditing ? (editingWeights[r.id] ?? r.weight ?? 0) : (r.weight ?? 0);
+
+              return (
+                <div key={r.id} className="group flex items-center justify-between rounded-lg border border-zbooni-green/20 bg-zbooni-green/5 px-3 py-2">
+                  <div className="min-w-0">
+                    <span className="text-[11px] font-medium">{r.name}</span>
+                    <span className="ml-1.5 font-mono text-[10px] text-muted-foreground/40">{r.fieldKey}</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {isEditing ? (
+                      <>
+                        <input
+                          type="number"
+                          min={-10}
+                          max={10}
+                          step={0.5}
+                          value={currentWeight}
+                          onChange={(e) => setEditingWeights((prev) => ({ ...prev, [r.id]: Number(e.target.value) || 0 }))}
+                          className="h-6 w-14 rounded border border-border/50 bg-zbooni-dark/60 px-1.5 text-center font-mono text-[10px] tabular-nums focus:border-primary focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void saveWeight(r.id, currentWeight)}
+                          disabled={savingWeightId === r.id}
+                          className="rounded p-0.5 text-zbooni-green hover:bg-zbooni-green/10 disabled:opacity-50"
+                        >
+                          {savingWeightId === r.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingWeights((prev) => { const next = { ...prev }; delete next[r.id]; return next; })}
+                          className="rounded p-0.5 text-muted-foreground hover:bg-accent/50"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setEditingWeights((prev) => ({ ...prev, [r.id]: r.weight ?? 0 }))}
+                        className="rounded bg-zbooni-green/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-zbooni-green transition-colors hover:bg-zbooni-green/25"
+                        title="Click to edit weight"
+                      >
+                        +{(r.weight ?? 0)}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Negative (Anti-fit) Rules */}
+      {negativeRules.length > 0 ? (
+        <div className="mb-4">
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-orange-400/80">Anti-fit Signals</h3>
+          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+            {negativeRules.map((r) => {
+              const isEditing = r.id in editingWeights;
+              const currentWeight = isEditing ? (editingWeights[r.id] ?? r.weight ?? 0) : (r.weight ?? 0);
+
+              return (
+                <div key={r.id} className="group flex items-center justify-between rounded-lg border border-orange-500/20 bg-orange-500/5 px-3 py-2">
+                  <div className="min-w-0">
+                    <span className="text-[11px] font-medium">{r.name}</span>
+                    <span className="ml-1.5 font-mono text-[10px] text-muted-foreground/40">{r.fieldKey}</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {isEditing ? (
+                      <>
+                        <input
+                          type="number"
+                          min={-10}
+                          max={10}
+                          step={0.5}
+                          value={currentWeight}
+                          onChange={(e) => setEditingWeights((prev) => ({ ...prev, [r.id]: Number(e.target.value) || 0 }))}
+                          className="h-6 w-14 rounded border border-border/50 bg-zbooni-dark/60 px-1.5 text-center font-mono text-[10px] tabular-nums focus:border-primary focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void saveWeight(r.id, currentWeight)}
+                          disabled={savingWeightId === r.id}
+                          className="rounded p-0.5 text-zbooni-green hover:bg-zbooni-green/10 disabled:opacity-50"
+                        >
+                          {savingWeightId === r.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingWeights((prev) => { const next = { ...prev }; delete next[r.id]; return next; })}
+                          className="rounded p-0.5 text-muted-foreground hover:bg-accent/50"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setEditingWeights((prev) => ({ ...prev, [r.id]: r.weight ?? 0 }))}
+                        className="rounded bg-orange-500/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-orange-400 transition-colors hover:bg-orange-500/25"
+                        title="Click to edit weight"
+                      >
+                        {r.weight ?? 0}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {rules.length === 0 ? (
+        <p className="py-4 text-center text-sm text-muted-foreground/40 italic">No qualification rules configured</p>
+      ) : null}
+    </div>
+  );
+}
+
 export default function IcpDetailPage() {
   const { icpId } = useParams<{ icpId: string }>();
   const { apiClient } = useAuth();
@@ -1232,122 +1436,37 @@ export default function IcpDetailPage() {
         onSave={(val) => handleUpdate({ featureList: val.length > 0 ? val : null })}
       />
 
-      {/* Scoring Rules — mirrors actual UNIVERSAL_RULES from scoring engine */}
+      {/* A6: Per-ICP Messaging Instructions */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-          <Shield className="h-4 w-4 text-zbooni-teal" />
-          Scoring Rules
-          <span className="ml-auto text-xs font-normal text-muted-foreground">Universal rules — same for all ICPs</span>
-        </h2>
-
-        {/* Scoring Formula */}
-        <div className="mb-4 rounded-xl border border-border/30 bg-zbooni-dark/80 px-4 py-3">
-          <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/50">Scoring Equation</p>
-          <p className="font-mono text-[12px] leading-relaxed">
-            <span className="text-muted-foreground/70">score = </span>
-            <span className="text-emerald-400">0.10</span>
-            <span className="text-muted-foreground/70"> + </span>
-            <span className="text-blue-400">[(matched+ + 1) / (total+ + 1)]</span>
-            <span className="text-muted-foreground/70"> &times; </span>
-            <span className="text-orange-400">clamp(1 &minus; negPenalty, 0.2, 1.0)</span>
-            <span className="text-muted-foreground/70"> &times; </span>
-            <span className="text-muted-foreground/70">0.90</span>
-            <span className="text-muted-foreground/70"> + </span>
-            <span className="text-purple-400">categoryBonus</span>
-          </p>
-          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted-foreground/40">
-            <span><span className="text-emerald-400">&bull;</span> 0.10 = BASE_SCORE (floor)</span>
-            <span><span className="text-blue-400">&bull;</span> matchRatio = positive signal match rate</span>
-            <span><span className="text-orange-400">&bull;</span> penaltyFactor = negative signal dampener</span>
-            <span><span className="text-purple-400">&bull;</span> categoryBonus = +10% / +5% / &minus;5%</span>
-          </div>
+        <div className="mb-3 flex items-center gap-2">
+          <MessageSquare className="h-4 w-4 text-zbooni-green" />
+          <h2 className="text-base font-bold tracking-tight">Messaging Instructions</h2>
         </div>
-
-        {/* Hard Filters */}
-        <div className="mb-4">
-          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-red-400/80">Hard Filters (must all pass)</h3>
-          <div className="space-y-1.5">
-            {[
-              { field: 'country', rule: 'IN [UAE, KSA, Jordan, Egypt, Bahrain, Kuwait, Oman, Qatar]' },
-              { field: 'has_email', rule: 'Must have email contact' },
-              { field: 'data_alignment_score', rule: '>= 0.3 (cross-source validation)' },
-              { field: 'pure_self_serve_ecom', rule: 'NEQ true (disqualify pure self-serve ecommerce)' },
-              { field: 'subscription_billing_detected', rule: 'NEQ true (disqualify subscription/recurring billing)' },
-            ].map((r) => (
-              <div key={r.field} className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">
-                <span className="font-mono text-[11px] font-semibold text-red-400">{r.field}</span>
-                <span className="text-[11px] text-muted-foreground/60">{r.rule}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Positive Weighted Rules */}
-        <div className="mb-4">
-          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-zbooni-green/80">Positive Signals (total weight: 21)</h3>
-          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-            {[
-              { field: 'has_whatsapp', label: 'WhatsApp presence', weight: 3 },
-              { field: 'has_instagram', label: 'Instagram presence', weight: 2 },
-              { field: 'review_count', label: 'Reviews > 10', weight: 2 },
-              { field: 'custom_order_signals', label: 'Custom order signals', weight: 2 },
-              { field: 'has_booking_or_contact_form', label: 'Booking/contact form', weight: 2 },
-              { field: 'high_ticket_signals', label: 'High-ticket signals', weight: 2 },
-              { field: 'icp_segment_priority', label: 'P1 priority segment', weight: 2 },
-              { field: 'found_csuite_decision_maker', label: 'C-suite decision maker identified via web search', weight: 2 },
-              { field: 'recent_activity', label: 'Recent activity', weight: 1 },
-              { field: 'apify_payment_widget_count', label: 'Payment widgets', weight: 1 },
-              { field: 'apify_has_pricing_tiers', label: 'Has pricing tiers', weight: 1 },
-              { field: 'social_link_count', label: 'Multiple social profiles', weight: 1 },
-            ].map((r) => (
-              <div key={r.field} className="flex items-center justify-between rounded-lg border border-zbooni-green/20 bg-zbooni-green/5 px-3 py-2">
-                <div className="min-w-0">
-                  <span className="text-[11px] font-medium">{r.label}</span>
-                  <span className="ml-1.5 font-mono text-[10px] text-muted-foreground/40">{r.field}</span>
-                </div>
-                <span className="shrink-0 rounded bg-zbooni-green/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-zbooni-green">+{r.weight}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Category Bonus System */}
-        <div className="mb-4">
-          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-purple-400/80">Category Bonus System</h3>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {[
-              { cat: 'Sales Motion Fit', fields: 'whatsapp, instagram, custom orders, decision makers' },
-              { cat: 'Payment Complexity', fields: 'payment widgets, pricing tiers, high-ticket signals' },
-              { cat: 'Risk & Urgency', fields: 'recent activity, booking form, contact info' },
-              { cat: 'Switching Willingness', fields: 'social links, linkedin, tech stack, IG engagement' },
-              { cat: 'General', fields: 'industry match, geo match, ICP priority' },
-            ].map((c) => (
-              <div key={c.cat} className="rounded-lg border border-purple-500/20 bg-purple-500/5 px-3 py-2">
-                <p className="text-[11px] font-semibold text-purple-400">{c.cat}</p>
-                <p className="mt-0.5 text-[10px] text-muted-foreground/50">{c.fields}</p>
-              </div>
-            ))}
-          </div>
-          <div className="mt-2 flex flex-wrap gap-3 text-[10px] text-muted-foreground/50">
-            <span><strong className="text-zbooni-green">PROCEED</strong> (Sales + Payment + 3+ cats): +10% bonus</span>
-            <span><strong className="text-zbooni-teal">SELECTIVE</strong> (2+ cats): +5% bonus</span>
-            <span><strong className="text-red-400">DISQUALIFY</strong> (&lt;2 cats): -5% penalty</span>
-          </div>
-        </div>
-
-        {/* Tier Bands */}
-        <div>
-          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground/60">Score Tier Bands</h3>
-          <div className="flex items-center gap-2">
-            <span className="rounded-md bg-red-500/15 px-2 py-1 text-[10px] font-bold text-red-400">LOW &lt; 0.34</span>
-            <span className="rounded-md bg-yellow-500/15 px-2 py-1 text-[10px] font-bold text-yellow-400">0.34 &le; MED &lt; 0.67</span>
-            <span className="rounded-md bg-zbooni-green/15 px-2 py-1 text-[10px] font-bold text-zbooni-green">HIGH &ge; 0.67</span>
-          </div>
-          <p className="mt-1.5 text-[10px] text-muted-foreground/40">
-            Blend: 90% rules / 10% ML (no model) → 70/30 (AUC≥0.70, 200+ samples) → 50/50 (AUC≥0.80, 500+ samples)
-          </p>
-        </div>
+        <p className="mb-3 text-[11px] text-muted-foreground/50">
+          Per-ICP instructions appended to the AI system prompt when generating messages for leads in this ICP.
+        </p>
+        <EditableField
+          label=""
+          value={
+            (profile.metadataJson && typeof profile.metadataJson === 'object' && 'messagingInstructions' in profile.metadataJson
+              ? String((profile.metadataJson as Record<string, unknown>).messagingInstructions ?? '')
+              : '')
+          }
+          multiline
+          onSave={(val) =>
+            handleUpdate({
+              metadataJson: {
+                ...(profile.metadataJson ?? {}),
+                messagingInstructions: val || undefined,
+              },
+            })
+          }
+          textClassName="text-sm text-muted-foreground whitespace-pre-line leading-relaxed"
+        />
       </div>
+
+      {/* Scoring Rules — A4: Editable weights from actual qualification rules */}
+      <IcpRulesSection profile={profile} apiClient={apiClient} onRulesChanged={() => void icp.refetch()} />
 
       {/* Danger Zone — Delete ICP */}
       <div className="rounded-2xl border border-red-500/30 bg-red-500/5 p-6">
@@ -1396,7 +1515,7 @@ export default function IcpDetailPage() {
             </div>
 
             <p className="mb-6 text-sm text-muted-foreground">
-              All associated qualification rules, scoring data, and message history linked to this ICP will be affected. This action cannot be undone.
+              If this ICP has active leads or running discovery jobs, deletion will be blocked and you will see an error explaining why.
             </p>
 
             <div className="flex items-center gap-3">
