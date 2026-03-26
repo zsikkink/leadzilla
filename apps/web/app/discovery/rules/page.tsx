@@ -985,9 +985,12 @@ export default function ICPRulesPage() {
                         <div key={rule.id} className={cn('rounded-lg border px-4 py-3 space-y-2', meta.border, meta.bg)}>
                           <div className="grid grid-cols-2 gap-2">
                             <input value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} placeholder="Rule name" className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none" />
-                            <select value={editDraft.operator} onChange={(e) => setEditDraft({ ...editDraft, operator: e.target.value })} className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none">
-                              {OPERATORS.map((op) => <option key={op} value={op}>{OPERATOR_LABELS[op]}</option>)}
-                            </select>
+                            <CustomSelect
+                              value={editDraft.operator}
+                              onChange={(val) => setEditDraft({ ...editDraft, operator: val })}
+                              options={OPERATORS.map((op) => ({ value: op, label: OPERATOR_LABELS[op] ?? op }))}
+                              className="h-8 w-full"
+                            />
                           </div>
                           <input value={typeof editDraft.valueJson === 'string' ? editDraft.valueJson : JSON.stringify(editDraft.valueJson)} onChange={(e) => { let parsed: unknown = e.target.value; try { parsed = JSON.parse(e.target.value); } catch { /* string */ } setEditDraft({ ...editDraft, valueJson: parsed }); }} placeholder="Value" className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none" />
                           <div className="flex items-center gap-1.5">
@@ -1041,9 +1044,12 @@ export default function ICPRulesPage() {
                         <div key={rule.id} className={cn('rounded-lg border px-4 py-3 space-y-2', meta.border, meta.bg)}>
                           <div className="grid grid-cols-2 gap-2">
                             <input value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} placeholder="Rule name" className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none" />
-                            <select value={editDraft.operator} onChange={(e) => setEditDraft({ ...editDraft, operator: e.target.value })} className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none">
-                              {OPERATORS.map((op) => <option key={op} value={op}>{OPERATOR_LABELS[op]}</option>)}
-                            </select>
+                            <CustomSelect
+                              value={editDraft.operator}
+                              onChange={(val) => setEditDraft({ ...editDraft, operator: val })}
+                              options={OPERATORS.map((op) => ({ value: op, label: OPERATOR_LABELS[op] ?? op }))}
+                              className="h-8 w-full"
+                            />
                           </div>
                           <div className="grid grid-cols-2 gap-2">
                             <input value={typeof editDraft.valueJson === 'string' ? editDraft.valueJson : JSON.stringify(editDraft.valueJson)} onChange={(e) => { let parsed: unknown = e.target.value; try { parsed = JSON.parse(e.target.value); } catch { /* string */ } setEditDraft({ ...editDraft, valueJson: parsed }); }} placeholder="Value" className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none" />
@@ -1105,9 +1111,12 @@ export default function ICPRulesPage() {
                         <div key={rule.id} className={cn('rounded-lg border px-4 py-3 space-y-2', meta.border, meta.bg)}>
                           <div className="grid grid-cols-2 gap-2">
                             <input value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} placeholder="Rule name" className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none" />
-                            <select value={editDraft.operator} onChange={(e) => setEditDraft({ ...editDraft, operator: e.target.value })} className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-sm focus:border-primary focus:outline-none">
-                              {OPERATORS.map((op) => <option key={op} value={op}>{OPERATOR_LABELS[op]}</option>)}
-                            </select>
+                            <CustomSelect
+                              value={editDraft.operator}
+                              onChange={(val) => setEditDraft({ ...editDraft, operator: val })}
+                              options={OPERATORS.map((op) => ({ value: op, label: OPERATOR_LABELS[op] ?? op }))}
+                              className="h-8 w-full"
+                            />
                           </div>
                           <div className="grid grid-cols-2 gap-2">
                             <input value={typeof editDraft.valueJson === 'string' ? editDraft.valueJson : JSON.stringify(editDraft.valueJson)} onChange={(e) => { let parsed: unknown = e.target.value; try { parsed = JSON.parse(e.target.value); } catch { /* string */ } setEditDraft({ ...editDraft, valueJson: parsed }); }} placeholder="Value" className="h-8 w-full rounded-lg border border-border/50 bg-zbooni-dark/60 px-2.5 text-sm focus:border-primary focus:outline-none" />

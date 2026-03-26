@@ -409,5 +409,5 @@ export async function handleApolloEnrichJob(
   }
 
   await tryFinalizeDiscoveryRun(runId, logger);
-  logger.info(logCtx, 'Completed apollo.enrich job');
+  logger.info({ ...logCtx, apolloCacheHit }, 'Completed apollo.enrich job');
 }

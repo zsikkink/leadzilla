@@ -11,7 +11,6 @@ import {
 import { createLogger } from '@lead-flood/observability';
 import {
   ApolloDiscoveryAdapter,
-  GoogleCustomSearchAdapter,
   HunterEnrichmentAdapter,
   InstagramScraperAdapter,
   OpenAiAdapter,
@@ -317,11 +316,6 @@ async function main(): Promise<void> {
       : {}),
   });
 
-  const googleCseAdapter = new GoogleCustomSearchAdapter({
-    apiKey: env.GOOGLE_CUSTOM_SEARCH_API_KEY,
-    engineId: env.GOOGLE_CUSTOM_SEARCH_ENGINE_ID,
-  });
-
   let discoveryRuntimeConfig: DiscoveryRuntimeConfig | null = null;
   let v2SearchProvider: V2DiscoveryProvider | null = null;
   try {
@@ -616,9 +610,6 @@ async function main(): Promise<void> {
     BUSINESS_CONVERT_JOB_NAME,
     (jobLogger, job) =>
       handleBusinessConvertJob(jobLogger, job, {
-        apolloAdapter: {
-          isConfigured: Boolean(env.APOLLO_API_KEY),
-        },
         hunterAdapter: {
           searchDomainContacts: (domain) => hunterAdapter.searchDomainContacts(domain),
           isConfigured: Boolean(env.HUNTER_API_KEY),

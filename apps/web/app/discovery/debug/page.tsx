@@ -33,6 +33,7 @@ import {
 import { cn } from '@/lib/utils.js';
 import { useAuth } from '@/hooks/use-auth.js';
 import { useApiQuery } from '@/hooks/use-api-query.js';
+import { CustomSelect } from '@/components/custom-select.js';
 import { EnrichedStageContent } from '@/components/debug/stage-renderers.js';
 import { fetchLeadLifecycleData } from '@/components/debug/lifecycle-data.js';
 import type { LeadLifecycleData } from '@/components/debug/lifecycle-data.js';
@@ -566,15 +567,12 @@ function LifecycleTab() {
             <div className="mt-3 flex items-center justify-between border-t border-border/30 pt-3">
               <div className="flex items-center gap-2">
                 <span className="text-[10px] text-muted-foreground/40">Show</span>
-                <select
-                  value={pageSize}
-                  onChange={(e) => handlePageSizeChange(Number(e.target.value))}
-                  className="rounded-md border border-border/40 bg-background px-2 py-1 text-[11px] text-foreground focus:border-zbooni-teal/50 focus:outline-none"
-                >
-                  {PAGE_SIZE_OPTIONS.map((size) => (
-                    <option key={size} value={size}>{size}</option>
-                  ))}
-                </select>
+                <CustomSelect
+                  value={String(pageSize)}
+                  onChange={(val) => handlePageSizeChange(Number(val))}
+                  options={PAGE_SIZE_OPTIONS.map((size) => ({ value: String(size), label: String(size) }))}
+                  className="w-16 text-[11px]"
+                />
                 <span className="text-[10px] text-muted-foreground/40">of {filteredLeads.length}</span>
               </div>
               <div className="flex items-center gap-1.5">

@@ -42,16 +42,16 @@ describe('OpenAiAdapter.classifyReply', () => {
     }
   });
 
-  it('classifies an unsubscribe reply', async () => {
+  it('classifies a not-interested reply', async () => {
     const adapter = buildAdapter({
-      choices: [{ message: { content: JSON.stringify({ classification: 'UNSUBSCRIBE', confidence: 0.85 }) } }],
+      choices: [{ message: { content: JSON.stringify({ classification: 'NOT_INTERESTED', confidence: 0.85 }) } }],
     });
 
     const result = await adapter.classifyReply('Please stop contacting me.');
 
     expect(result.status).toBe('success');
     if (result.status === 'success') {
-      expect(result.data.classification).toBe('UNSUBSCRIBE');
+      expect(result.data.classification).toBe('NOT_INTERESTED');
     }
   });
 

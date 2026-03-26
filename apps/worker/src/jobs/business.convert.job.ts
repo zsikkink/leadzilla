@@ -234,9 +234,6 @@ interface OpenAiInsightGenerator {
 }
 
 export interface BusinessConvertJobDependencies {
-  apolloAdapter: {
-    isConfigured: boolean;
-  };
   hunterAdapter: {
     searchDomainContacts(domain: string): Promise<HunterDomainSearchResult>;
     isConfigured: boolean;
@@ -1234,7 +1231,7 @@ export async function handleBusinessConvertJob(
     outcome: 'pending' as string,
   };
   let hunterContactJson: unknown = null;
-  const costEvents: Array<{ provider: 'APOLLO' | 'HUNTER' | 'GOOGLE_CUSTOM_SEARCH'; costCents: number; apiCallType: string }> = [];
+  const costEvents: Array<{ provider: 'APOLLO' | 'HUNTER'; costCents: number; apiCallType: string }> = [];
   const recoveryAttempts: ContactRecoveryAttempt[] = [];
   const recoveryTelemetry: ContactRecoveryTelemetryState = {
     cseVerifyAttempted: false,

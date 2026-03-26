@@ -133,9 +133,6 @@ const logger = {
 
 function makeDeps(enqueueFeaturesCompute = vi.fn()): BusinessConvertJobDependencies {
   return {
-    apolloAdapter: {
-      isConfigured: false,
-    },
     hunterAdapter: {
       isConfigured: true,
       searchDomainContacts: vi.fn(async () => ({
