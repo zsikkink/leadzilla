@@ -647,8 +647,15 @@ export class PrismaIcpRepository extends StubIcpRepository {
 
   override async deleteIcpProfile(icpId: string): Promise<void> {
     try {
-      await prisma.icpProfile.delete({
-        where: { id: icpId },
+      await prisma.$transaction(async (tx) => {
+        // Delete all QualificationRules for this ICP first (FK constraint)
+        await tx.qualificationRule.deleteMany({
+          where: { icpProfileId: icpId },
+        });
+        // Then delete the ICP profile itself
+        await tx.icpProfile.delete({
+          where: { id: icpId },
+        });
       });
     } catch (error: unknown) {
       if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2025') {

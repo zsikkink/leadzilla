@@ -499,16 +499,17 @@ function simulateScore(
 
 const OPERATORS = ['EQ', 'NEQ', 'GT', 'GTE', 'LT', 'LTE', 'IN', 'NOT_IN', 'CONTAINS'] as const;
 
+/** Descriptive labels for the operator dropdown */
 const OPERATOR_LABELS: Record<string, string> = {
-  EQ: 'Equals (EQ)',
-  NEQ: 'Not Equals (NEQ)',
-  GT: 'Greater Than (GT)',
-  GTE: 'Greater or Equal (GTE)',
-  LT: 'Less Than (LT)',
-  LTE: 'Less or Equal (LTE)',
-  IN: 'In List (IN)',
-  NOT_IN: 'Not In List (NOT_IN)',
-  CONTAINS: 'Contains',
+  EQ: 'EQ (Equals)',
+  NEQ: 'NEQ (Not Equal)',
+  GT: 'GT (Greater Than)',
+  GTE: 'GTE (Greater or Equal)',
+  LT: 'LT (Less Than)',
+  LTE: 'LTE (Less or Equal)',
+  IN: 'IN (Is One Of)',
+  NOT_IN: 'NOT_IN (Is Not One Of)',
+  CONTAINS: 'CONTAINS (Text Contains)',
 };
 
 /** Feature key descriptions for the command palette and dropdowns */
@@ -583,6 +584,7 @@ const FEATURE_KEY_DESCRIPTIONS: Record<string, { label: string; category: string
 function featureLabel(key: string): string {
   return FEATURE_KEY_DESCRIPTIONS[key]?.label ?? key.replaceAll('_', ' ');
 }
+
 
 interface StagedRule {
   name: string;
@@ -1679,7 +1681,7 @@ export default function ICPRulesPage() {
                   <CustomSelect
                     value={currentRule.operator}
                     onChange={(val) => setCurrentRule((prev) => ({ ...prev, operator: val }))}
-                    options={OPERATORS.map((op) => ({ value: op, label: op }))}
+                    options={OPERATORS.map((op) => ({ value: op, label: OPERATOR_LABELS[op] ?? op }))}
                     placeholder="Operator"
                     className="w-full"
                   />
