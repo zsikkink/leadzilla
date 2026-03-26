@@ -135,7 +135,6 @@ function makeDeps(enqueueFeaturesCompute = vi.fn()): BusinessConvertJobDependenc
   return {
     apolloAdapter: {
       isConfigured: false,
-      searchContactsByDomain: vi.fn(),
     },
     hunterAdapter: {
       isConfigured: true,

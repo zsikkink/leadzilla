@@ -617,7 +617,6 @@ async function main(): Promise<void> {
     (jobLogger, job) =>
       handleBusinessConvertJob(jobLogger, job, {
         apolloAdapter: {
-          searchContactsByDomain: (domain: string) => apolloAdapter.searchContactsByDomain(domain),
           isConfigured: Boolean(env.APOLLO_API_KEY),
         },
         hunterAdapter: {
