@@ -88,7 +88,12 @@ export default function DashboardPage() {
   const sentToday = funnel.data?.messagesSentCount ?? 0;
 
   // Cost per lead from analytics API (already in dollars)
-  const costPerLead = funnel.data?.costPerLead ?? 0;
+  // Show '--' when no completed runs exist (costPerLead=0 and no leads), not $0.00
+  const rawCostPerLead = funnel.data?.costPerLead ?? null;
+  const hasCompletedRuns = (funnel.data?.discoveredCount ?? 0) > 0;
+  const costPerLeadDisplay = rawCostPerLead !== null && hasCompletedRuns
+    ? `$${rawCostPerLead.toFixed(2)}`
+    : '\u2014';
 
   return (
     <div className="space-y-6">
@@ -172,7 +177,7 @@ export default function DashboardPage() {
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Cost / Lead</p>
             <div className="mt-1.5 flex items-baseline gap-1">
               <DollarSign className="h-4 w-4 text-muted-foreground/50" />
-              <p className="text-3xl font-extrabold tracking-tight">{costPerLead.toFixed(2)}</p>
+              <p className="text-3xl font-extrabold tracking-tight">{costPerLeadDisplay}</p>
             </div>
           </div>
         </div>

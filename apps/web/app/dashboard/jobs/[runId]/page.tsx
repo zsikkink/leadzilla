@@ -122,11 +122,12 @@ interface CostEventData {
   createdAt: string;
 }
 
-const KNOWN_COST_PROVIDERS = [
+// V3 providers to always display in cost breakdown, even at $0
+const V3_COST_PROVIDERS = [
   'GOOGLE_PLACES',
-  'GOOGLE_CUSTOM_SEARCH',
   'HUNTER',
   'APOLLO',
+  'BRAVE_SEARCH',
 ] as const;
 
 interface OutcomeData {
@@ -322,14 +323,19 @@ function formatDuration(startIso: string | null, endIso: string | null): string 
 // ── Aggregate cost events by provider ────────────────────────────────────
 function aggregateCosts(events: CostEventData[]) {
   const map = new Map<string, { calls: number; costCents: number }>();
-  for (const provider of KNOWN_COST_PROVIDERS) {
+  // Pre-seed all V3 providers so they always appear (even at $0)
+  for (const provider of V3_COST_PROVIDERS) {
     map.set(provider, { calls: 0, costCents: 0 });
   }
   for (const e of events) {
-    const existing = map.get(e.provider) ?? { calls: 0, costCents: 0 };
-    existing.calls += 1;
-    existing.costCents += e.creditCost;
-    map.set(e.provider, existing);
+    // Map legacy SERPAPI → GOOGLE_PLACES, skip legacy web-search providers
+    const mappedProvider = e.provider === 'SERPAPI' ? 'GOOGLE_PLACES' : e.provider;
+    // Only aggregate into known V3 providers; ignore legacy ones
+    const existing = map.get(mappedProvider);
+    if (existing) {
+      existing.calls += 1;
+      existing.costCents += e.creditCost;
+    }
   }
   return Array.from(map.entries()).map(([provider, data]) => ({
     provider,
@@ -338,11 +344,12 @@ function aggregateCosts(events: CostEventData[]) {
 }
 
 const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
-  SERPAPI: 'Google Places (Discovery)',
-  GOOGLE_PLACES: 'Google Places (Discovery)',
-  GOOGLE_CUSTOM_SEARCH: 'Brave (CEO Search)',
-  HUNTER: 'Hunter (Email)',
-  APOLLO: 'Apollo (Enrichment)',
+  GOOGLE_PLACES: 'Google Places',
+  HUNTER: 'Hunter',
+  APOLLO: 'Apollo',
+  BRAVE_SEARCH: 'Brave Search',
+  GOOGLE_CUSTOM_SEARCH: 'Brave Search',
+  SERPAPI: 'Google Places', // legacy mapping
 };
 
 function formatProviderName(provider: string): string {
@@ -506,7 +513,16 @@ export default function DiscoveryRunDetailPage() {
   const searchTasks = (details.data?.searchTasks ?? []) as SearchTaskData[];
   const businesses = (details.data?.businesses ?? []) as BusinessData[];
   const costEvents = (details.data?.costEvents ?? []) as CostEventData[];
-  const leads = details.data?.leads ?? [];
+  // Filter out null/undefined leads — business_conversions.lead_id is NULL for many rows
+  const leads = (details.data?.leads ?? []).filter(
+    (l): l is Record<string, unknown> => l !== null && l !== undefined && typeof l === 'object',
+  );
+  // The "converted" count from the run's result JSON is the authoritative source
+  // (set during discovery finalization). Falls back to filtered leads array length.
+  const runData = (details.data?.run ?? {}) as Record<string, unknown>;
+  const authorativeLeadCount = typeof runData.converted === 'number'
+    ? runData.converted
+    : leads.length;
   const recoveryItems = useMemo(
     () =>
       businesses
@@ -524,7 +540,7 @@ export default function DiscoveryRunDetailPage() {
   );
 
   const failedTasks = searchTasks.filter((t) => t.status === 'FAILED');
-  const aggregatedCosts = useMemo(() => aggregateCosts(costEvents).filter((c) => c.calls > 0), [costEvents]);
+  const aggregatedCosts = useMemo(() => aggregateCosts(costEvents), [costEvents]);
   const totalCostCents = aggregatedCosts.reduce((sum, c) => sum + c.costCents, 0);
 
   // Not found state
@@ -676,7 +692,7 @@ export default function DiscoveryRunDetailPage() {
           const targetLeads = typeof runConfig?.limit === 'number' ? runConfig.limit : null;
 
           if (targetLeads !== null) {
-            const leadsFound = leads.length;
+            const leadsFound = authorativeLeadCount;
             const progressPct = Math.max(
               Math.round((leadsFound / targetLeads) * 100),
               leadsFound > 0 ? 3 : 0,
@@ -741,7 +757,7 @@ export default function DiscoveryRunDetailPage() {
         />
         <MetricCard
           label="Leads Converted"
-          value={leads.length}
+          value={authorativeLeadCount}
           icon={Users}
           iconColor="text-zbooni-green"
           bgColor="bg-zbooni-green/10"
@@ -779,6 +795,7 @@ export default function DiscoveryRunDetailPage() {
           DNS_RESOLUTION_FAILED: 'DNS failed',
           NO_CONTACTS_FOUND: 'No contacts found',
           BUSINESS_NOT_FOUND: 'Business not found',
+          DECISION_MAKER_IDENTIFIED: 'No Contact Found',
         };
         const reasons = outcome?.disqualificationReasons ?? {};
         const hasReasons = Object.keys(reasons).length > 0;
@@ -790,7 +807,7 @@ export default function DiscoveryRunDetailPage() {
               { label: 'Already Known', value: alreadyKnown ?? 0, color: 'text-muted-foreground' },
               { label: 'New', value: newFound ?? 0, color: 'text-zbooni-teal' },
               { label: 'Disqualified', value: disqualified ?? 0, color: 'text-red-400' },
-              { label: 'Leads', value: converted ?? leads.length, color: 'text-zbooni-green' },
+              { label: 'Leads', value: converted ?? authorativeLeadCount, color: 'text-zbooni-green' },
             ]
           : [
               { label: 'Businesses', value: outcome!.businessesFound, color: 'text-blue-400' },
@@ -843,7 +860,7 @@ export default function DiscoveryRunDetailPage() {
             <Users className="h-4 w-4 text-zbooni-green" />
             <h2 className="text-base font-bold tracking-tight">Converted Leads</h2>
             <span className="ml-auto rounded-md bg-white/[0.04] px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums text-muted-foreground/60">
-              {leads.length}
+              {authorativeLeadCount}
             </span>
           </div>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -912,7 +929,9 @@ export default function DiscoveryRunDetailPage() {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-semibold">{item.business_name}</p>
                   <p className="truncate text-[10px] text-muted-foreground/50">
-                    {item.reason.replace(/_/g, ' ')}
+                    {item.reason === 'DECISION_MAKER_IDENTIFIED'
+                      ? 'No Contact Found'
+                      : item.reason.replace(/_/g, ' ')}
                   </p>
                 </div>
                 <span className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ${
