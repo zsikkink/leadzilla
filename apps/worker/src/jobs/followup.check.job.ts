@@ -48,14 +48,12 @@ interface FollowupGenerationCandidate {
   };
 }
 
-// NOT_INTERESTED replaces UNSUBSCRIBED (Phase 0 migration adds enum value).
-// Cast needed until Prisma client is regenerated with the updated FeedbackEventType enum.
 const TERMINAL_FOLLOW_UP_FEEDBACK_EVENT_TYPES = [
   'NOT_INTERESTED' as const,
   'MEETING_BOOKED' as const,
   'DEAL_WON' as const,
   'BOUNCED' as const,
-] as unknown as ('UNSUBSCRIBED' | 'MEETING_BOOKED' | 'DEAL_WON' | 'BOUNCED')[];
+];
 
 function buildFollowupGeneratePayload(
   send: FollowupGenerationCandidate,

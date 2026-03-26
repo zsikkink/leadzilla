@@ -330,7 +330,6 @@ function RecoveryDetailPanel({
       <div className="mt-4">
         <AboutBusinessCard
           category={item.business.category}
-          websiteDescription={null}
           metaDescription={metaDescription}
           instagramBio={igBio}
           countryCode={item.business.countryCode}

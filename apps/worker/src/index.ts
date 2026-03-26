@@ -617,20 +617,12 @@ async function main(): Promise<void> {
     (jobLogger, job) =>
       handleBusinessConvertJob(jobLogger, job, {
         apolloAdapter: {
-          searchContactsByDomain: (domain) => apolloAdapter.searchContactsByDomain(domain),
-          preScreenDomain: (domain) => apolloAdapter.preScreenDomain(domain),
-          revealContactEmail: (params) => apolloAdapter.revealContactEmail(params),
-          enrichOrganization: (domain) => apolloAdapter.enrichOrganization(domain),
           isConfigured: Boolean(env.APOLLO_API_KEY),
         },
         hunterAdapter: {
           searchDomainContacts: (domain) => hunterAdapter.searchDomainContacts(domain),
           isConfigured: Boolean(env.HUNTER_API_KEY),
         },
-        googleCseAdapter: googleCseAdapter.isConfigured ? {
-          search: (query, numResults) => googleCseAdapter.search(query, numResults),
-          isConfigured: true,
-        } : undefined,
         websiteScraperAdapter,
         instagramScraperAdapter,
         smtpVerifier: new SmtpVerifier(),

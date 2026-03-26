@@ -196,12 +196,11 @@ export async function handleReplyClassifyJob(
         await cancelFollowUps(leadId);
 
         // Write suppression record so message.send blocks future sends.
-        // NOT_INTERESTED replaces UNSUBSCRIBED (Phase 0 migration). Cast needed until Prisma regenerated.
         await prisma.feedbackEvent.create({
           data: {
             leadId,
             messageSendId: messageSendId ?? null,
-            eventType: 'NOT_INTERESTED' as unknown as 'UNSUBSCRIBED',
+            eventType: 'NOT_INTERESTED',
             source: 'MANUAL',
             replyClassification: 'NOT_INTERESTED',
             dedupeKey: `not_interested:${feedbackEventId}`,

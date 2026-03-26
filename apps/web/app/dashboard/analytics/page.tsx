@@ -45,7 +45,7 @@ const LABEL_CARDS = [
   { key: 'meetingBookedCount' as const, label: 'Meeting Booked', Icon: CalendarCheck, color: 'text-zbooni-teal', bg: 'bg-zbooni-teal/15', border: 'border-zbooni-teal/25' },
   { key: 'dealWonCount' as const, label: 'Deal Won', Icon: ThumbsUp, color: 'text-zbooni-green', bg: 'bg-zbooni-green/15', border: 'border-zbooni-green/25' },
   { key: 'dealLostCount' as const, label: 'Deal Lost', Icon: ThumbsDown, color: 'text-red-400', bg: 'bg-red-500/15', border: 'border-red-500/25' },
-  { key: 'unsubscribedCount' as const, label: 'Unsubscribed', Icon: Unplug, color: 'text-slate-400', bg: 'bg-slate-500/15', border: 'border-slate-500/25' },
+  { key: 'notInterestedCount' as const, label: 'Not Interested', Icon: Unplug, color: 'text-slate-400', bg: 'bg-slate-500/15', border: 'border-slate-500/25' },
   { key: 'bouncedCount' as const, label: 'Bounced', Icon: AlertTriangle, color: 'text-slate-500', bg: 'bg-slate-600/15', border: 'border-slate-600/25' },
 ];
 

@@ -316,7 +316,7 @@ export function LlmCeoValidationDetails({ data }: { data: BusinessConversionData
       {data.ceoMatch && (
         <div className="space-y-1.5">
           <SectionTitle title="Matched Person" />
-          <DataRow label="Name" value={data.ceoMatch.name} />
+          <DataRow label="Name" value={data.ceoMatch.name ?? 'Unknown'} />
           {data.ceoMatch.title && <DataRow label="Title" value={data.ceoMatch.title} />}
           {data.ceoMatch.linkedinUrl && (
             <div className="flex items-start gap-3 text-sm">
@@ -349,23 +349,23 @@ export function ApolloOrgEnrichmentDetails({ data }: { data: BusinessConversionD
 
   return (
     <div className="space-y-1.5">
-      {org.name && <DataRow label="Organization" value={org.name} />}
-      {org.industry && <DataRow label="Industry" value={org.industry} />}
-      {org.estimatedEmployees != null && <DataRow label="Employees" value={org.estimatedEmployees.toLocaleString()} />}
+      {org.name != null && <DataRow label="Organization" value={String(org.name)} />}
+      {org.industry != null && <DataRow label="Industry" value={String(org.industry)} />}
+      {org.estimatedEmployees != null && <DataRow label="Employees" value={Number(org.estimatedEmployees).toLocaleString()} />}
       {org.foundedYear != null && <DataRow label="Founded" value={String(org.foundedYear)} />}
-      {org.annualRevenue && <DataRow label="Revenue" value={org.annualRevenue} />}
-      {org.city && <DataRow label="City" value={org.city} />}
-      {org.country && <DataRow label="Country" value={org.country} />}
-      {org.linkedinUrl && (
+      {org.annualRevenue != null && <DataRow label="Revenue" value={String(org.annualRevenue)} />}
+      {org.city != null && <DataRow label="City" value={String(org.city)} />}
+      {org.country != null && <DataRow label="Country" value={String(org.country)} />}
+      {org.linkedinUrl != null && (
         <div className="flex items-start gap-3 text-sm">
           <span className="w-44 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-400">LinkedIn</span>
-          <a href={org.linkedinUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-zbooni-teal hover:underline">
-            {org.linkedinUrl}
+          <a href={String(org.linkedinUrl)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-zbooni-teal hover:underline">
+            {String(org.linkedinUrl)}
             <ExternalLink className="h-2.5 w-2.5" />
           </a>
         </div>
       )}
-      {org.primaryPhone && <DataRow label="Phone" value={org.primaryPhone} mono />}
+      {org.primaryPhone != null && <DataRow label="Phone" value={String(org.primaryPhone)} mono />}
     </div>
   );
 }

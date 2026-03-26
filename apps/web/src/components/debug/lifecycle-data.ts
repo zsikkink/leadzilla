@@ -54,11 +54,35 @@ export interface HunterContact {
   type: string | null;
 }
 
+export interface BraveSearchResult {
+  title: string;
+  link: string;
+  snippet?: string | undefined;
+}
+
+export interface ApolloOrgEnrichment {
+  name?: string | undefined;
+  industry?: string | undefined;
+  estimatedEmployees?: number | undefined;
+  foundedYear?: number | undefined;
+  annualRevenue?: string | undefined;
+  city?: string | undefined;
+  country?: string | undefined;
+  linkedinUrl?: string | undefined;
+  primaryPhone?: string | undefined;
+  [key: string]: unknown;
+}
+
 export interface BusinessConversionData {
   method: string | null;
   businessInsights: string | null;
   apolloContacts: ApolloContact[];
   hunterContacts: HunterContact[];
+  contactSource?: string | undefined;
+  braveSearchResults: BraveSearchResult[];
+  ceoMatch?: { name?: string | undefined; title?: string | undefined; linkedinUrl?: string | undefined; confidence?: number | undefined } | null | undefined;
+  foundCsuiteDecisionMaker?: boolean | undefined;
+  apolloOrgEnrichment?: ApolloOrgEnrichment | null | undefined;
 }
 
 export interface FeatureSnapshotData {

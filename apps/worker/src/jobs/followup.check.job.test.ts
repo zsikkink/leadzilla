@@ -129,7 +129,7 @@ describe('handleFollowupCheckJob', () => {
           status: { in: ['messaged', 'replied'] },
           feedbackEvents: {
             none: {
-              eventType: { in: ['UNSUBSCRIBED', 'MEETING_BOOKED', 'DEAL_WON', 'BOUNCED'] },
+              eventType: { in: ['NOT_INTERESTED', 'MEETING_BOOKED', 'DEAL_WON', 'BOUNCED'] },
             },
           },
         },
@@ -211,7 +211,7 @@ describe('handleFollowupCheckJob', () => {
         lead: {
           feedbackEvents: {
             some: {
-              eventType: { in: ['UNSUBSCRIBED', 'MEETING_BOOKED', 'DEAL_WON', 'BOUNCED'] },
+              eventType: { in: ['NOT_INTERESTED', 'MEETING_BOOKED', 'DEAL_WON', 'BOUNCED'] },
             },
           },
         },
@@ -253,7 +253,7 @@ describe('handleFollowupCheckJob', () => {
           status: 'messaged',
           feedbackEvents: {
             none: {
-              eventType: { in: ['UNSUBSCRIBED', 'MEETING_BOOKED', 'DEAL_WON', 'BOUNCED'] },
+              eventType: { in: ['NOT_INTERESTED', 'MEETING_BOOKED', 'DEAL_WON', 'BOUNCED'] },
             },
           },
         },

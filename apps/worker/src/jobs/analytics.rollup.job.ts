@@ -229,8 +229,7 @@ export async function handleAnalyticsRollupJob(
 
       const bouncedCount = await prisma.feedbackEvent.count({
         where: {
-          // NOT_INTERESTED replaces UNSUBSCRIBED (Phase 0 migration). Cast until Prisma regenerated.
-          eventType: { in: ['BOUNCED', 'NOT_INTERESTED'] as unknown as ('BOUNCED' | 'UNSUBSCRIBED')[] },
+          eventType: { in: ['BOUNCED', 'NOT_INTERESTED'] },
           createdAt: { gte: dayStart, lt: dayEnd },
         },
       });
