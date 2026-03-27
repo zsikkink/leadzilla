@@ -42,8 +42,8 @@ export default function BusinessIntelligencePage() {
         // Join with business_conversions for AI insights
         const { data: conversions, error: convErr } = await supabase
           .from('business_conversions')
-          .select('businessId, businessInsights')
-          .order('createdAt', { ascending: false })
+          .select('business_id, business_insights')
+          .order('created_at', { ascending: false })
           .limit(100);
 
         if (convErr) throw convErr;
@@ -55,11 +55,11 @@ export default function BusinessIntelligencePage() {
         }
 
         // Get unique business IDs
-        const bizIds = [...new Set(conversions.map((c) => c.businessId))];
+        const bizIds = [...new Set(conversions.map((c) => c.business_id))];
         const insightsMap = new Map<string, string | null>();
         for (const c of conversions) {
-          if (!insightsMap.has(c.businessId)) {
-            insightsMap.set(c.businessId, c.businessInsights);
+          if (!insightsMap.has(c.business_id)) {
+            insightsMap.set(c.business_id, c.business_insights);
           }
         }
 
@@ -101,7 +101,7 @@ export default function BusinessIntelligencePage() {
   if (adminAccess.isLoading) {
     return (
       <div className="space-y-4">
-        <LeadsNav active="main" />
+        <LeadsNav active="business-intel" />
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           Verifying admin access...
@@ -113,7 +113,7 @@ export default function BusinessIntelligencePage() {
   if (!adminAccess.isAllowed) {
     return (
       <div className="space-y-4">
-        <LeadsNav active="main" />
+        <LeadsNav active="business-intel" />
         <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
           <p className="text-sm text-muted-foreground">
             {adminAccess.error ?? 'Admin access is required for business intelligence.'}
@@ -132,7 +132,7 @@ export default function BusinessIntelligencePage() {
         </p>
       </div>
 
-      <LeadsNav active="main" />
+      <LeadsNav active="business-intel" />
 
       {error && (
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">

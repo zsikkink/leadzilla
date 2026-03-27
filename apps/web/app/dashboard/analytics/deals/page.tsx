@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
+import { toast } from 'sonner';
 
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
@@ -393,8 +394,8 @@ export default function DealsPage() {
       dealWonEvents.refetch();
       dealLostEvents.refetch();
       meetingEvents.refetch();
-    } catch {
-      // Silently fail — the deal row will remain visible so the user can retry
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete deal');
     } finally {
       setDeletingEventId(null);
       setConfirmDeleteId(null);

@@ -37,6 +37,7 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'r
 import { toast } from 'sonner';
 
 import { AboutBusinessCard } from '../../../../src/components/about-business-card.js';
+import { ConfirmModal, useConfirmModal } from '../../../../src/components/confirm-modal.js';
 import { LeadStatusBadge } from '../../../../src/components/lead-status-badge.js';
 import { ScoreBandBadge } from '../../../../src/components/score-band-badge.js';
 import { ScoringBreakdown } from '../../../../src/components/scoring-breakdown.js';
@@ -823,6 +824,11 @@ function EditableTeamMembers({
   const [showAddForm, setShowAddForm] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
 
+  // Delete confirmation modal state
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{ memberId: string; memberName: string } | null>(null);
+  const { shouldSkip: shouldSkipDeleteConfirm } = useConfirmModal('confirm-remove-member');
+
   // Form state for editing
   const [editName, setEditName] = useState('');
   const [editTitle, setEditTitle] = useState('');
@@ -949,8 +955,16 @@ function EditableTeamMembers({
     }
   };
 
-  const handleDelete = async (memberId: string, memberName: string) => {
-    if (!window.confirm(`Remove ${memberName} from the team?`)) return;
+  const requestDelete = (memberId: string, memberName: string) => {
+    if (shouldSkipDeleteConfirm()) {
+      void executeDelete(memberId, memberName);
+      return;
+    }
+    setPendingDelete({ memberId, memberName });
+    setDeleteModalOpen(true);
+  };
+
+  const executeDelete = async (memberId: string, memberName: string) => {
     setSavingId(memberId);
     try {
       const supabase = getSupabaseBrowserClient();
@@ -1239,7 +1253,7 @@ function EditableTeamMembers({
                     <button
                       type="button"
                       title="Remove"
-                      onClick={() => void handleDelete(tm.id, tm.fullName)}
+                      onClick={() => requestDelete(tm.id, tm.fullName)}
                       disabled={isSaving}
                       className="rounded-md p-1 text-muted-foreground/40 transition-colors hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50"
                     >
@@ -1252,6 +1266,26 @@ function EditableTeamMembers({
           );
         })}
       </div>
+
+      {/* Remove team member confirmation modal */}
+      <ConfirmModal
+        isOpen={deleteModalOpen}
+        title="Remove Team Member"
+        message={pendingDelete ? `Remove ${pendingDelete.memberName} from the team?` : ''}
+        confirmLabel="Remove"
+        variant="danger"
+        onConfirm={() => {
+          setDeleteModalOpen(false);
+          if (pendingDelete) void executeDelete(pendingDelete.memberId, pendingDelete.memberName);
+          setPendingDelete(null);
+        }}
+        onCancel={() => {
+          setDeleteModalOpen(false);
+          setPendingDelete(null);
+        }}
+        showDontAsk
+        dontAskKey="confirm-remove-member"
+      />
     </div>
   );
 }

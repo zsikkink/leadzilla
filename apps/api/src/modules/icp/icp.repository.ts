@@ -648,6 +648,20 @@ export class PrismaIcpRepository extends StubIcpRepository {
   override async deleteIcpProfile(icpId: string): Promise<void> {
     try {
       await prisma.$transaction(async (tx) => {
+        // Null-out nullable FK references so they don't block ICP deletion.
+        await tx.businessConversion.updateMany({
+          where: { icpProfileId: icpId },
+          data: { icpProfileId: null },
+        });
+        await tx.leadRejection.updateMany({
+          where: { icpProfileId: icpId },
+          data: { icpProfileId: null },
+        });
+        await tx.managerRecommendationRecord.updateMany({
+          where: { icpProfileId: icpId },
+          data: { icpProfileId: null },
+        });
+
         // Delete dependent records that reference this ICP (Prisma cascades are
         // application-level — explicit deletes inside the transaction are safer
         // and produce clearer errors when something blocks deletion).
@@ -679,6 +693,8 @@ export class PrismaIcpRepository extends StubIcpRepository {
           );
         }
       }
+      // Catch-all: log full error so we can identify any remaining FK blockers
+      console.error('[deleteIcpProfile] Transaction failed for icpId=%s:', icpId, error);
       throw error;
     }
   }

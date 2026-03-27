@@ -20,6 +20,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
 import { AboutBusinessCard } from '@/components/about-business-card.js';
+import { ConfirmModal, useConfirmModal } from '@/components/confirm-modal.js';
 import { CustomSelect } from '@/components/custom-select.js';
 import { LeadsNav } from '@/components/leads-nav.js';
 import { useApiQuery } from '@/hooks/use-api-query.js';
@@ -622,6 +623,13 @@ export default function ContactRecoveryPage() {
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [businessEnrichment, setBusinessEnrichment] = useState<RecoveryBusinessEnrichment | null>(null);
 
+  // Confirmation modal state
+  const [rejectModalOpen, setRejectModalOpen] = useState(false);
+  const [approveModalOpen, setApproveModalOpen] = useState(false);
+  const [pendingActionItem, setPendingActionItem] = useState<ContactRecoveryItem | null>(null);
+  const { shouldSkip: shouldSkipRejectConfirm } = useConfirmModal('confirm-reject-recovery');
+  const { shouldSkip: shouldSkipApproveConfirm } = useConfirmModal('confirm-approve-recovery');
+
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query.trim()), 250);
     return () => clearTimeout(timer);
@@ -677,11 +685,16 @@ export default function ContactRecoveryPage() {
 
   const totalPages = recovery.data ? Math.max(1, Math.ceil(recovery.data.total / recovery.data.pageSize)) : 1;
 
-  async function handleReject(item: ContactRecoveryItem): Promise<void> {
-    if (!window.confirm(`Reject "${item.business.name}" from the contact recovery queue?`)) {
+  function requestReject(item: ContactRecoveryItem): void {
+    if (shouldSkipRejectConfirm()) {
+      void executeReject(item);
       return;
     }
+    setPendingActionItem(item);
+    setRejectModalOpen(true);
+  }
 
+  async function executeReject(item: ContactRecoveryItem): Promise<void> {
     setRejectingId(item.id);
     try {
       await apiClient.rejectContactRecoveryItem(item.id);
@@ -695,11 +708,16 @@ export default function ContactRecoveryPage() {
     }
   }
 
-  async function handleApprove(item: ContactRecoveryItem): Promise<void> {
-    if (!window.confirm(`Create a lead from "${item.business.name}" using the best available contact?`)) {
+  function requestApprove(item: ContactRecoveryItem): void {
+    if (shouldSkipApproveConfirm()) {
+      void executeApprove(item);
       return;
     }
+    setPendingActionItem(item);
+    setApproveModalOpen(true);
+  }
 
+  async function executeApprove(item: ContactRecoveryItem): Promise<void> {
     setApprovingId(item.id);
     try {
       const headers: Record<string, string> = { 'content-type': 'application/json' };
@@ -838,9 +856,9 @@ export default function ContactRecoveryPage() {
             <RecoveryDetailPanel
               item={selected}
               rejecting={rejectingId === selected.id}
-              onReject={() => void handleReject(selected)}
+              onReject={() => requestReject(selected)}
               approving={approvingId === selected.id}
-              onApprove={() => void handleApprove(selected)}
+              onApprove={() => requestApprove(selected)}
               enrichment={businessEnrichment}
             />
           </div>
@@ -856,6 +874,46 @@ export default function ContactRecoveryPage() {
           </div>
         )}
       </div>
+
+      {/* Reject recovery confirmation modal */}
+      <ConfirmModal
+        isOpen={rejectModalOpen}
+        title="Reject Recovery Item"
+        message={pendingActionItem ? `Reject "${pendingActionItem.business.name}" from the contact recovery queue?` : ''}
+        confirmLabel="Reject"
+        variant="danger"
+        onConfirm={() => {
+          setRejectModalOpen(false);
+          if (pendingActionItem) void executeReject(pendingActionItem);
+          setPendingActionItem(null);
+        }}
+        onCancel={() => {
+          setRejectModalOpen(false);
+          setPendingActionItem(null);
+        }}
+        showDontAsk
+        dontAskKey="confirm-reject-recovery"
+      />
+
+      {/* Approve recovery confirmation modal */}
+      <ConfirmModal
+        isOpen={approveModalOpen}
+        title="Create Lead"
+        message={pendingActionItem ? `Create a lead from "${pendingActionItem.business.name}" using the best available contact?` : ''}
+        confirmLabel="Create Lead"
+        variant="info"
+        onConfirm={() => {
+          setApproveModalOpen(false);
+          if (pendingActionItem) void executeApprove(pendingActionItem);
+          setPendingActionItem(null);
+        }}
+        onCancel={() => {
+          setApproveModalOpen(false);
+          setPendingActionItem(null);
+        }}
+        showDontAsk
+        dontAskKey="confirm-approve-recovery"
+      />
     </div>
   );
 }

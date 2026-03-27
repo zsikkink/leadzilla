@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
+import { ConfirmModal, useConfirmModal } from '../../../src/components/confirm-modal.js';
 import { CustomSelect } from '../../../src/components/custom-select.js';
 import { LeadsNav } from '../../../src/components/leads-nav.js';
 import { LeadStatusBadge } from '../../../src/components/lead-status-badge.js';
@@ -167,6 +168,11 @@ export default function LeadsPage() {
   const [rejectedLoading, setRejectedLoading] = useState(false);
   const [unrejectingLead, setUnrejectingLead] = useState<string | null>(null);
 
+  // Reject confirmation modal state
+  const [rejectModalOpen, setRejectModalOpen] = useState(false);
+  const [pendingReject, setPendingReject] = useState<{ leadId: string; firstName: string; lastName: string } | null>(null);
+  const { shouldSkip: shouldSkipRejectConfirm } = useConfirmModal('confirm-reject-lead');
+
   useEffect(() => {
     const tab = searchParams.get('tab');
     setActiveTab(tab === 'rejected' ? 'rejected' : 'active');
@@ -264,10 +270,16 @@ export default function LeadsPage() {
     return () => { cancelled = true; };
   }, [activeTab, apiClient]);
 
-  const handleReject = async (leadId: string, firstName: string, lastName: string) => {
-    const confirmed = window.confirm(`Reject lead "${firstName} ${lastName}"? They will be moved to the Rejected tab.`);
-    if (!confirmed) return;
+  const requestReject = (leadId: string, firstName: string, lastName: string) => {
+    if (shouldSkipRejectConfirm()) {
+      void executeReject(leadId, firstName, lastName);
+      return;
+    }
+    setPendingReject({ leadId, firstName, lastName });
+    setRejectModalOpen(true);
+  };
 
+  const executeReject = async (leadId: string, firstName: string, lastName: string) => {
     setRejectingLead(leadId);
     try {
       const baseUrl = getWebEnv().NEXT_PUBLIC_API_BASE_URL;
@@ -581,7 +593,7 @@ export default function LeadsPage() {
                               title="Reject lead"
                               disabled={rejectingLead === lead.id}
                               className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-red-500/15 hover:text-red-400 disabled:opacity-50"
-                              onClick={() => handleReject(lead.id, lead.firstName ?? '', lead.lastName ?? '')}
+                              onClick={() => requestReject(lead.id, lead.firstName ?? '', lead.lastName ?? '')}
                             >
                               {rejectingLead === lead.id ? (
                                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -782,6 +794,27 @@ export default function LeadsPage() {
           </div>
         </div>
       )}
+
+      {/* Reject lead confirmation modal */}
+      <ConfirmModal
+        isOpen={rejectModalOpen}
+        title="Reject Lead"
+        message={pendingReject ? `Reject lead "${pendingReject.firstName} ${pendingReject.lastName}"? They will be moved to the Rejected tab.` : ''}
+        confirmLabel="Reject"
+        variant="danger"
+        onConfirm={() => {
+          setRejectModalOpen(false);
+          if (pendingReject) {
+            void executeReject(pendingReject.leadId, pendingReject.firstName, pendingReject.lastName);
+          }
+        }}
+        onCancel={() => {
+          setRejectModalOpen(false);
+          setPendingReject(null);
+        }}
+        showDontAsk
+        dontAskKey="confirm-reject-lead"
+      />
     </div>
   );
 }

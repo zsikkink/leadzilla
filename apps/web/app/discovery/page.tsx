@@ -32,6 +32,7 @@ import { toast } from 'sonner';
 
 import { useApiQuery } from '../../src/hooks/use-api-query.js';
 import { useAuth } from '../../src/hooks/use-auth.js';
+import { MENA_CITIES } from '../../src/lib/countries.js';
 import {
   DEFAULT_MESSAGING_ROLE,
   DEFAULT_MESSAGING_SYSTEM_PROMPT,
@@ -511,6 +512,8 @@ const ADDITIONAL_SETTING_LABELS: Record<string, string> = {
   auto_approve_enabled: 'Auto-Approve Messages',
   auto_approve_score_min: 'Auto-Approve Min Score',
   auto_approve_score_max: 'Auto-Approve Max Score',
+  auto_draft_enabled: 'Auto Draft Messages',
+  auto_draft_min_score: 'Auto Draft Min Score',
   messagingRole: 'Messaging Role',
   messagingSystemPrompt: 'Messaging System Prompt',
 };
@@ -559,32 +562,50 @@ function CountriesCitiesManager({
 
         if (cancelled) return;
 
-        // Get existing countryCities from pipeline_settings
+        // 1. Start with MENA_CITIES as baseline (deep-copy arrays)
+        const merged: CountryCityData = {};
+        for (const [country, cities] of Object.entries(MENA_CITIES)) {
+          merged[country] = [...cities];
+        }
+
+        // 2. Merge existing pipeline_settings countryCities on top (user additions override baseline)
         const setting = settingsRes.items.find((i) => i.key === 'countryCities');
         const existing: CountryCityData =
           setting?.value && typeof setting.value === 'object'
             ? (setting.value as CountryCityData)
             : {};
 
-        // Extract unique countries from all ICPs' targetCountries
+        for (const [country, cities] of Object.entries(existing)) {
+          if (country in merged) {
+            // Merge: keep baseline cities, add any user-added cities not in baseline
+            const baseSet = new Set(merged[country]);
+            for (const city of cities) {
+              if (!baseSet.has(city)) {
+                merged[country] = [...(merged[country] ?? []), city];
+              }
+            }
+          } else {
+            merged[country] = [...cities];
+          }
+        }
+
+        // 3. Merge ICP targetCountries on top (add any ICP-only countries with empty cities)
         const icpCountries = new Set(
           icpsRes.items.flatMap((icp) => icp.targetCountries),
         );
 
-        // Merge: add any ICP country not already present (with empty cities array)
-        const merged = { ...existing };
-        let hasNewCountries = false;
         for (const country of icpCountries) {
           if (country && !(country in merged)) {
             merged[country] = [];
-            hasNewCountries = true;
           }
         }
 
         setCountryCities(merged);
 
-        // Persist the merged list so new ICP countries stick in pipeline_settings
-        if (hasNewCountries) {
+        // Persist the merged result so MENA baseline + ICP countries stick in pipeline_settings
+        const existingJson = JSON.stringify(existing);
+        const mergedJson = JSON.stringify(merged);
+        if (existingJson !== mergedJson) {
           await apiClient.updatePipelineSetting('countryCities', merged);
         }
       } catch {
@@ -810,6 +831,8 @@ export default function ControlsSettingsPage() {
   const [autoApproveEnabled, setAutoApproveEnabled] = useState(false);
   const [autoApproveScoreMin, setAutoApproveScoreMin] = useState(0.5);
   const [autoApproveScoreMax, setAutoApproveScoreMax] = useState(1.0);
+  const [autoDraftEnabled, setAutoDraftEnabled] = useState(false);
+  const [autoDraftMinScore, setAutoDraftMinScore] = useState(60);
   const [messagingRole, setMessagingRole] = useState('');
   const [messagingSystemPrompt, setMessagingSystemPrompt] = useState('');
   const [hasChanges, setHasChanges] = useState(false);
@@ -829,6 +852,8 @@ export default function ControlsSettingsPage() {
       let nextAutoApproveEnabled = false;
       let nextAutoApproveScoreMin = 0.5;
       let nextAutoApproveScoreMax = 1.0;
+      let nextAutoDraftEnabled = false;
+      let nextAutoDraftMinScore = 60;
       let nextMessagingRole = '';
       let nextMessagingSystemPrompt = '';
 
@@ -844,6 +869,13 @@ export default function ControlsSettingsPage() {
           const value = Number(item.value);
           if (!Number.isNaN(value)) {
             nextAutoApproveScoreMax = value;
+          }
+        } else if (item.key === 'auto_draft_enabled') {
+          nextAutoDraftEnabled = item.value === true || item.value === 'true';
+        } else if (item.key === 'auto_draft_min_score') {
+          const value = Number(item.value);
+          if (!Number.isNaN(value)) {
+            nextAutoDraftMinScore = value;
           }
         } else if (item.key === 'messagingRole') {
           nextMessagingRole = String(item.value ?? '');
@@ -874,6 +906,8 @@ export default function ControlsSettingsPage() {
       setAutoApproveEnabled(nextAutoApproveEnabled);
       setAutoApproveScoreMin(nextAutoApproveScoreMin);
       setAutoApproveScoreMax(nextAutoApproveScoreMax);
+      setAutoDraftEnabled(nextAutoDraftEnabled);
+      setAutoDraftMinScore(nextAutoDraftMinScore);
       setMessagingRole(nextMessagingRole);
       setMessagingSystemPrompt(nextMessagingSystemPrompt);
       setHasChanges(false);
@@ -882,6 +916,8 @@ export default function ControlsSettingsPage() {
         auto_approve_enabled: nextAutoApproveEnabled,
         auto_approve_score_min: nextAutoApproveScoreMin,
         auto_approve_score_max: nextAutoApproveScoreMax,
+        auto_draft_enabled: nextAutoDraftEnabled,
+        auto_draft_min_score: nextAutoDraftMinScore,
         messagingRole: nextMessagingRole,
         messagingSystemPrompt: nextMessagingSystemPrompt,
       };
@@ -939,6 +975,8 @@ export default function ControlsSettingsPage() {
       auto_approve_enabled: autoApproveEnabled,
       auto_approve_score_min: autoApproveScoreMin,
       auto_approve_score_max: autoApproveScoreMax,
+      auto_draft_enabled: autoDraftEnabled,
+      auto_draft_min_score: autoDraftMinScore,
       messagingRole,
       messagingSystemPrompt,
     };
@@ -1021,6 +1059,8 @@ export default function ControlsSettingsPage() {
     autoApproveEnabled,
     autoApproveScoreMax,
     autoApproveScoreMin,
+    autoDraftEnabled,
+    autoDraftMinScore,
     messagingRole,
     messagingSystemPrompt,
     settings,
@@ -1031,6 +1071,8 @@ export default function ControlsSettingsPage() {
     setAutoApproveEnabled(false);
     setAutoApproveScoreMin(0.5);
     setAutoApproveScoreMax(1.0);
+    setAutoDraftEnabled(false);
+    setAutoDraftMinScore(60);
     setMessagingRole('');
     setMessagingSystemPrompt('');
     setHasChanges(true);
@@ -1397,7 +1439,7 @@ export default function ControlsSettingsPage() {
                     <div className="min-w-0">
                       <p className="text-sm font-bold tracking-tight">Auto-Approve Messages</p>
                       <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground/50">
-                        Automatically send messages for leads within the score range
+                        Automatically approve and send messages for leads scoring within the range below
                       </p>
                     </div>
                   </div>
@@ -1417,48 +1459,105 @@ export default function ControlsSettingsPage() {
                     <span
                       className={cn(
                         'pointer-events-none absolute h-5 w-5 rounded-full bg-white shadow-lg transition-transform',
-                        autoApproveEnabled ? 'translate-x-[26px]' : 'translate-x-[2px]',
+                        autoApproveEnabled ? 'translate-x-[26px]' : 'translate-x-0',
                       )}
                     />
                   </button>
                 </div>
-                {autoApproveEnabled ? (
-                  <div className="mt-3 space-y-2 pl-11">
-                    <p className="text-[10px] font-medium text-muted-foreground/40">Score range for auto-approve:</p>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={autoApproveScoreMin}
-                        onChange={(e) => {
-                          setAutoApproveScoreMin(Number(e.target.value));
-                          setHasChanges(true);
-                        }}
-                        className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
-                        aria-label="Min auto-approve score"
-                      />
-                      <span className="text-[10px] text-muted-foreground/40">&le; score &le;</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={autoApproveScoreMax}
-                        onChange={(e) => {
-                          setAutoApproveScoreMax(Number(e.target.value));
-                          setHasChanges(true);
-                        }}
-                        className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
-                        aria-label="Max auto-approve score"
-                      />
-                    </div>
-                    {autoApproveScoreMin > autoApproveScoreMax ? (
-                      <p className="text-[10px] font-medium text-red-400">Min must be ≤ Max</p>
-                    ) : null}
+                <div className="mt-3 space-y-2 pl-11">
+                  <p className="text-[10px] font-medium text-muted-foreground/40">Score range for auto-approve:</p>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={autoApproveScoreMin}
+                      onChange={(e) => {
+                        setAutoApproveScoreMin(Number(e.target.value));
+                        setHasChanges(true);
+                      }}
+                      className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
+                      aria-label="Min auto-approve score"
+                    />
+                    <span className="text-[10px] text-muted-foreground/40">&le; score &le;</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={autoApproveScoreMax}
+                      onChange={(e) => {
+                        setAutoApproveScoreMax(Number(e.target.value));
+                        setHasChanges(true);
+                      }}
+                      className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
+                      aria-label="Max auto-approve score"
+                    />
                   </div>
-                ) : null}
+                  {autoApproveScoreMin > autoApproveScoreMax ? (
+                    <p className="text-[10px] font-medium text-red-400">Min must be ≤ Max</p>
+                  ) : null}
+                </div>
+              </div>
+
+              {/* Auto Draft Messages */}
+              <div className="rounded-xl border border-border/30 bg-zbooni-dark/40 p-4 transition-colors hover:border-border/50">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.04]">
+                      <Mail className="h-4 w-4 text-blue-400" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold tracking-tight">Auto Draft Messages</p>
+                      <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground/50">
+                        Automatically generate message drafts for newly qualified leads
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={autoDraftEnabled}
+                    onClick={() => {
+                      setAutoDraftEnabled(!autoDraftEnabled);
+                      setHasChanges(true);
+                    }}
+                    className={cn(
+                      'relative inline-flex h-6 w-12 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors',
+                      autoDraftEnabled ? 'bg-blue-500' : 'bg-muted/40',
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'pointer-events-none absolute h-5 w-5 rounded-full bg-white shadow-lg transition-transform',
+                        autoDraftEnabled ? 'translate-x-[26px]' : 'translate-x-0',
+                      )}
+                    />
+                  </button>
+                </div>
+                <div className="mt-3 space-y-2 pl-11">
+                  <p className="text-[10px] font-medium text-muted-foreground/40">Minimum score for auto-draft:</p>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={autoDraftMinScore}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        if (!Number.isNaN(n) && n >= 0 && n <= 100) {
+                          setAutoDraftMinScore(n);
+                          setHasChanges(true);
+                        }
+                      }}
+                      className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
+                      aria-label="Minimum score for auto-draft"
+                    />
+                    <span className="text-[10px] text-muted-foreground/40">out of 100</span>
+                  </div>
+                </div>
               </div>
 
               {/* Read-only follow-up cadence display */}
