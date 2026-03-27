@@ -46,6 +46,11 @@ interface RecoverableQueuedMessageSend {
   scheduledAt: Date | null;
 }
 
+interface RecoverableSendingMessageSend {
+  id: string;
+  updatedAt: Date;
+}
+
 function buildRecoveredMessageSendPayload(
   send: RecoverableQueuedMessageSend,
 ): MessageSendJobPayload {
@@ -119,6 +124,85 @@ export async function recoverStaleQueuedMessageSends(
   return staleQueuedSends.length;
 }
 
+async function quarantineStaleSendingMessageSends(
+  logger: MessageSendRecoveryLogger,
+  now: Date = new Date(),
+): Promise<number> {
+  const staleBefore = new Date(now.getTime() - STALE_QUEUED_MESSAGE_SEND_THRESHOLD_MS);
+
+  const staleSendingSends = await prisma.messageSend.findMany({
+    where: {
+      status: 'SENDING',
+      updatedAt: { lt: staleBefore },
+    },
+    orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
+    take: STALE_QUEUED_MESSAGE_SEND_BATCH_SIZE,
+    select: {
+      id: true,
+      updatedAt: true,
+    },
+  });
+
+  let quarantinedCount = 0;
+
+  for (const send of staleSendingSends as RecoverableSendingMessageSend[]) {
+    const updateResult = await prisma.messageSend.updateMany({
+      where: {
+        id: send.id,
+        status: 'SENDING',
+      },
+      data: {
+        status: 'UNRESOLVED',
+      },
+    });
+
+    if (updateResult.count > 0) {
+      quarantinedCount += 1;
+      logger.warn(
+        {
+          sendId: send.id,
+          sendingSince: send.updatedAt.toISOString(),
+          staleBefore: staleBefore.toISOString(),
+        },
+        'Quarantined stale sending MessageSend',
+      );
+      continue;
+    }
+
+    logger.info(
+      {
+        sendId: send.id,
+        sendingSince: send.updatedAt.toISOString(),
+        staleBefore: staleBefore.toISOString(),
+      },
+      'Skipped stale sending MessageSend quarantine because status advanced',
+    );
+  }
+
+  logger.info(
+    {
+      staleBefore: staleBefore.toISOString(),
+      quarantinedCount,
+    },
+    'Completed stale sending MessageSend quarantine',
+  );
+
+  return quarantinedCount;
+}
+
+export async function runMessageSendRecovery(
+  logger: MessageSendRecoveryLogger,
+  deps: MessageSendRecoveryJobDependencies,
+): Promise<{ recoveredCount: number; quarantinedCount: number }> {
+  const recoveredCount = await recoverStaleQueuedMessageSends(logger, deps);
+  const quarantinedCount = await quarantineStaleSendingMessageSends(logger);
+
+  return {
+    recoveredCount,
+    quarantinedCount,
+  };
+}
+
 export async function handleMessageSendRecoveryJob(
   logger: MessageSendRecoveryLogger,
   job: Job<MessageSendRecoveryJobPayload>,
@@ -134,7 +218,7 @@ export async function handleMessageSendRecoveryJob(
   );
 
   try {
-    const recoveredCount = await recoverStaleQueuedMessageSends(logger, deps);
+    const { recoveredCount, quarantinedCount } = await runMessageSendRecovery(logger, deps);
 
     logger.info(
       {
@@ -142,6 +226,7 @@ export async function handleMessageSendRecoveryJob(
         queue: job.name,
         correlationId: job.data.correlationId ?? job.id,
         recoveredCount,
+        quarantinedCount,
       },
       'Completed message.send recovery job',
     );

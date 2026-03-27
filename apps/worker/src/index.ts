@@ -92,7 +92,7 @@ import {
 import {
   MESSAGE_SEND_RECOVERY_JOB_NAME,
   handleMessageSendRecoveryJob,
-  recoverStaleQueuedMessageSends,
+  runMessageSendRecovery,
   type MessageSendRecoveryJobPayload,
 } from './jobs/message.send.recovery.job.js';
 import {
@@ -429,8 +429,8 @@ async function main(): Promise<void> {
   await recoverApprovedInitialDraftsMissingMessageSends(logger, { boss }).catch((error: unknown) => {
     logger.warn({ error }, 'Failed manual approval MessageSend recovery on worker startup');
   });
-  await recoverStaleQueuedMessageSends(logger, { boss }).catch((error: unknown) => {
-    logger.warn({ error }, 'Failed stale queued MessageSend recovery on worker startup');
+  await runMessageSendRecovery(logger, { boss }).catch((error: unknown) => {
+    logger.warn({ error }, 'Failed message.send recovery on worker startup');
   });
   await sweepStaleDiscoveryPipelineJobs({
     boss: {
