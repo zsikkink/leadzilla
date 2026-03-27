@@ -119,8 +119,9 @@ pnpm build
 
 ## Documentation
 
-- Current repo-state / handoff: `docs/CURRENT_STATE.md`
+- Current repo-state / handoff and live production release record: `docs/CURRENT_STATE.md`
 - Canonical docs index: `docs/README.md`
+- Deployment workflow, required secrets, and current deploy caveats: `docs/DEPLOYMENT.md`
 - Current DB/schema workflow: `docs/PROD_REMOTE_DB_STRATEGY.md`
 - Current runtime DB migration status: `docs/RUNTIME_DB_ACCESS_STATUS.md`
 - Setup and onboarding: `docs/SETUP_ONBOARDING.md`

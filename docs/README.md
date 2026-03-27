@@ -2,11 +2,11 @@
 
 ## Current Canonical Docs
 
-1. `docs/CURRENT_STATE.md` — Authoritative high-level current-state and handoff doc for active architecture, boundaries, and sequencing
+1. `docs/CURRENT_STATE.md` — Authoritative high-level current-state and handoff doc for active architecture, boundaries, sequencing, and the currently verified production release
 2. `docs/PROD_REMOTE_DB_STRATEGY.md` — Canonical DB/schema workflow and operator commands
 3. `docs/RUNTIME_DB_ACCESS_STATUS.md` — Current Prisma-to-Postgres runtime migration status
 4. `docs/SETUP_ONBOARDING.md` — Fresh-clone setup and local runtime expectations
-5. `docs/DEPLOYMENT.md` — CI/deploy flow; note that the discovery console section is partially historical
+5. `docs/DEPLOYMENT.md` — CI/deploy flow, required secrets, Railway trigger behavior, and the current production deploy caveats
 6. `docs/TROUBLESHOOTING.md` — Common errors and fixes
 
 ## Supporting References

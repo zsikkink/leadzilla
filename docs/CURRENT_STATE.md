@@ -15,6 +15,29 @@ Code is still the source of truth. This doc is the fastest orientation path for 
 - Schema authority: `supabase/migrations/` is the intended canonical schema source for production.
 - Current runtime reality: the repo is still mid-transition away from Prisma. Prisma remains in parts of runtime, local/bootstrap, CI, and tests.
 
+### Current production deploy truth as of 2026-03-26
+
+- Intended release artifact SHA: `ff41b7c9b5dc481538f94d88b5510d119e8183aa`
+- Active API deployment ID: `19bab67c-7880-44d9-9227-91b110ed1a89`
+- Active worker deployment ID: `02d5d30d-dac8-4958-840c-691b9e341a52`
+- Active API image: `ghcr.io/zsikkink/lead-flood-api:production-ff41b7c9b5dc481538f94d88b5510d119e8183aa` at `sha256:220159644d4112b0841e53bfa33b5e66ca529df9583d38354d82d11981d11c1b`
+- Active worker image: `ghcr.io/zsikkink/lead-flood-worker:production-ff41b7c9b5dc481538f94d88b5510d119e8183aa` at `sha256:fcc7f08e8468493dd353dc85e1dc171491c5c5aadef0c28132be15ee16e7e3f1`
+- `/health` passed for the live API deployment.
+- `/ready` passed for the live API deployment.
+- Railway services are materially running the exact GHCR release images above. Do not infer live production from `main`, repo HEAD, or Railway repo/source metadata alone.
+- `builder=DOCKERFILE` may still appear as stale, non-blocking metadata on these image-backed deployments.
+
+### Current production durable discovery proof as of 2026-03-26
+
+- Proof run ID: `7373d5ba-79bd-4463-8144-fcb5f939258e`
+- Result: `1` root `discovery.run` `JobExecution`
+- Result: `1` linked `discovery.seed` `JobExecution`
+- Result: `1` linked `discovery.seed` `OutboxEvent`
+- Result: counts aligned
+- Result: `10` keyed `search_tasks`
+- Result: root status `completed`
+- Treat this as the current repo-recorded proof that the durable discovery path is live in production.
+
 ## 3. What is already true in code now
 
 - Normal user discovery read routes are owner-scoped through `payload.requestedByUserId`.
@@ -23,6 +46,7 @@ Code is still the source of truth. This doc is the fastest orientation path for 
 - Discovery-admin leads/search-task helper reads in `apps/web/src/lib/discovery-admin.ts` use the Next admin proxy and `/v1/admin/*` routes instead of browser-direct Supabase reads.
 - The discovery leads/search-task pages were audited and already use that helper/proxy path.
 - Release validation is materially more truthful than before: CI now includes required SQL-first validation lanes for built API `/ready` and built worker startup/schema-guard checks against a disposable database bootstrapped from `supabase/migrations/`.
+- `.github/workflows/deploy.yml` production deploy now uses `RAILWAY_PROJECT_TOKEN` with Railway GraphQL `environmentTriggersDeploy`, and the production migration lane pins Supabase CLI `2.67.1` before `pnpm db:link` and `pnpm db:migrate:prod`.
 
 ## 4. Current highest-risk remaining issues
 
@@ -103,10 +127,6 @@ Code is still the source of truth. This doc is the fastest orientation path for 
 
 ## 8. Known stale or historical docs
 
-- `docs/DEPLOYMENT.md`
-  - Why stale/historical: the discovery console section still describes browser-direct Supabase reads and UI-created `job_requests` as the current flow.
-  - Read instead: `docs/CURRENT_STATE.md` plus the current discovery/admin code.
-
 - `docs/schema-capture/2026-03-14/`
   - Why stale/historical: historical schema capture and audit material, not an active migration input.
   - Read instead: `docs/PROD_REMOTE_DB_STRATEGY.md`.
@@ -122,6 +142,8 @@ Code is still the source of truth. This doc is the fastest orientation path for 
 - Preserve unrelated changes.
 - Do not assume Prisma schema is canonical.
 - Do not assume browser-direct Supabase reads are still the intended design.
+- Do not assume `main` or repo HEAD is what is live in production; check the live release record in this doc first.
+- Do not assume Railway `environmentTriggersDeploy` alone selects the intended GHCR release artifact; verify service source/image selection separately when exact release control matters.
 - Be conservative around worker, auth, and admin-boundary changes.
 
 ## 10. Open questions

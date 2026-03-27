@@ -2,11 +2,8 @@
 
 Deployment is controlled by GitHub Actions.
 
-> Note
-> This doc still contains a partially historical discovery-console section that
-> describes browser-direct Supabase reads and UI-created `job_requests` as if
-> they were the current flow. For the current discovery/admin boundary and the
-> recommended next sequence, read `docs/CURRENT_STATE.md` first.
+For the currently verified live production artifact and durable discovery proof,
+read `docs/CURRENT_STATE.md` first.
 
 For remote Postgres provider setup and SQL-first migration strategy, see `docs/PROD_REMOTE_DB_STRATEGY.md`.
 
@@ -56,8 +53,10 @@ File: `.github/workflows/deploy.yml`
 - Publishes to GHCR tags:
   - `staging-<sha>`
   - `staging-latest`
-- Optional webhook trigger:
+- Optional deploy trigger:
   - `STAGING_DEPLOY_WEBHOOK`
+- Optional readiness check:
+  - `STAGING_API_READY_URL`
 - Optional smoke check:
   - `STAGING_SMOKE_URL`
 
@@ -71,14 +70,32 @@ File: `.github/workflows/deploy.yml`
 - Publishes to GHCR tags:
   - `production-<sha>`
   - `production-latest`
-- Optional webhook trigger:
-  - `PRODUCTION_DEPLOY_WEBHOOK`
+- `migrate-production-db` installs Supabase CLI `2.67.1`, runs `pnpm db:link`, then runs `pnpm db:migrate:prod`
+- `deploy-production` triggers Railway GraphQL `environmentTriggersDeploy` for the API and worker services using `Authorization: Bearer ${RAILWAY_PROJECT_TOKEN}`
+- `PRODUCTION_DEPLOY_WEBHOOK` is obsolete
+- Optional readiness check:
+  - `PRODUCTION_API_READY_URL`
 - Optional smoke check:
   - `PRODUCTION_SMOKE_URL`
+- Important:
+  - `environmentTriggersDeploy` only asks Railway to deploy the service's currently selected source/image
+  - do not assume the trigger alone selects the intended `production-<sha>` GHCR artifact
+  - exact API/worker source selection is still a manual or out-of-band Railway service configuration concern
 
-## Railway API Service
+## Current Verified Production Release
 
-The intended API runtime is Railway backed by remote Supabase Postgres.
+- Intended release artifact SHA: `ff41b7c9b5dc481538f94d88b5510d119e8183aa`
+- Active API deployment ID: `19bab67c-7880-44d9-9227-91b110ed1a89`
+- Active worker deployment ID: `02d5d30d-dac8-4958-840c-691b9e341a52`
+- API image: `ghcr.io/zsikkink/lead-flood-api:production-ff41b7c9b5dc481538f94d88b5510d119e8183aa` at `sha256:220159644d4112b0841e53bfa33b5e66ca529df9583d38354d82d11981d11c1b`
+- Worker image: `ghcr.io/zsikkink/lead-flood-worker:production-ff41b7c9b5dc481538f94d88b5510d119e8183aa` at `sha256:fcc7f08e8468493dd353dc85e1dc171491c5c5aadef0c28132be15ee16e7e3f1`
+- `/health` passed
+- `/ready` passed
+- Railway services are materially running these exact GHCR release images even if stale metadata such as `builder=DOCKERFILE` still appears on the deployment record
+
+## Railway Services
+
+The intended API and worker runtimes are Railway backed by remote Supabase Postgres.
 
 Repo deployment surface:
 
@@ -95,38 +112,40 @@ Required runtime env on Railway:
 - `SUPABASE_PROJECT_REF` or `SUPABASE_JWT_ISSUER`
 - `CORS_ORIGIN`
 
-Recommended first deploy:
+Current operating rules:
 
-```bash
-railway login
-railway link
-railway up --service <api-service>
-```
-
-In the Railway service settings:
-
-- connect the repo to the API service
-- keep the repo root as the source directory
-- set `RAILWAY_DOCKERFILE_PATH=infra/docker/Dockerfile.api` on the API service
-- set `DATABASE_URL`, `DIRECT_URL`, `SUPABASE_PROJECT_REF` or `SUPABASE_JWT_ISSUER`, and `CORS_ORIGIN`
-- set the API healthcheck path to `/ready`
-
-For the worker service:
-
-- keep the repo root as the source directory
-- set `RAILWAY_DOCKERFILE_PATH=infra/docker/Dockerfile.worker`
-- do not reuse the API `/ready` healthcheck on the worker
+- Do not assume repo-connected `main` or a bare deploy trigger is what is live in production.
+- The API and worker had to be materially switched onto the exact GHCR release images recorded above.
+- Future deploy automation and Railway source-selection cleanup are deferred work, not part of the current release record.
+- Keep the API healthcheck path on `/ready`.
+- Do not reuse the API `/ready` healthcheck on the worker.
 
 Do not add a Railway pre-deploy or release command for Prisma migrations. Production schema changes stay SQL-first via Supabase CLI as documented in `docs/PROD_REMOTE_DB_STRATEGY.md`.
 
-## Required Repository Secrets (if deployment hooks are used)
+## Required Repository Secrets
+
+This list is for `.github/workflows/deploy.yml`, not the full runtime env surface for Railway or Vercel services.
+
+Production:
+
+- `SUPABASE_ACCESS_TOKEN`
+- `SUPABASE_DB_PASSWORD`
+- `SUPABASE_PROJECT_REF`
+- `RAILWAY_PROJECT_TOKEN`
+- `PRODUCTION_API_READY_URL` (optional)
+- `PRODUCTION_SMOKE_URL` (optional)
+
+Staging:
 
 - `STAGING_DEPLOY_WEBHOOK`
+- `STAGING_API_READY_URL` (optional)
 - `STAGING_SMOKE_URL`
-- `PRODUCTION_DEPLOY_WEBHOOK`
-- `PRODUCTION_SMOKE_URL`
 
-If webhook secrets are not set, the workflow still builds and publishes images.
+Notes:
+
+- `PRODUCTION_DEPLOY_WEBHOOK` is intentionally not used by the current production workflow.
+- If `STAGING_DEPLOY_WEBHOOK` is not set, the staging workflow still builds and publishes images.
+- If `PRODUCTION_API_READY_URL`, `PRODUCTION_SMOKE_URL`, `STAGING_API_READY_URL`, or `STAGING_SMOKE_URL` are not set, the matching checks are skipped.
 
 ## Local Pre-Deploy Checklist
 
@@ -149,6 +168,15 @@ pnpm build
 Production migrations are SQL-first via Supabase CLI and the active canonical
 chain in `supabase/migrations/`.
 
+The GitHub Actions production lane pins Supabase CLI `2.67.1` and runs:
+
+```bash
+pnpm db:link
+pnpm db:migrate:prod
+```
+
+For manual operator verification around that workflow, use:
+
 ```bash
 pnpm db:link
 ENV_FILE=/tmp/leadflood-reconcile.env pnpm db:verify:prod
@@ -162,54 +190,16 @@ Then sync Prisma locally so the DB-derived client matches the applied schema:
 pnpm db:prisma:sync
 ```
 
-## Read-Only Dashboard Mode (Vercel Web + Supabase)
+## Durable Discovery Production Proof
 
-Discovery console pages (`/discovery`) read directly from Supabase via RLS and create job requests in `public.job_requests`.
-
-Web env (Vercel):
-
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
-
-Worker env:
-
-- `DATABASE_URL` (Supabase Postgres URL with `sslmode=require`)
-- `SERPAPI_DISCOVERY_ENABLED=true`
-- `SERPAPI_API_KEY`
-- `JOB_REQUEST_POLL_MS` / `JOB_REQUEST_MAX_PER_TICK` / `JOB_REQUEST_WORKER_ID` (optional)
-
-Admin promotion SQL (run in Supabase SQL editor):
-
-```sql
-insert into public.app_admins (user_id)
-values ('<auth.users.id>')
-on conflict (user_id) do nothing;
-```
-
-Job request lifecycle:
-
-1. UI inserts `public.job_requests` (`DISCOVERY_SEED` or `DISCOVERY_RUN`).
-2. Worker claims `PENDING` rows with `FOR UPDATE SKIP LOCKED`.
-3. Worker executes and writes telemetry to `public.job_runs`.
-4. Worker marks `job_requests` terminal status (`SUCCESS`/`FAILED`/`CANCELED`).
-
-Manual sanity check (SQL, no UI):
-
-```sql
-insert into public.job_requests (requested_by, request_type, params_json, idempotency_key)
-values (
-  '<auth.users.id>',
-  'DISCOVERY_RUN',
-  '{"maxTasks":20}'::jsonb,
-  'manual:discovery-run:test'
-)
-on conflict (idempotency_key) where idempotency_key is not null do nothing;
-
-select id, request_type, status, claimed_by, job_run_id, error_text, updated_at
-from public.job_requests
-order by id desc
-limit 20;
-```
+- Proof run ID: `7373d5ba-79bd-4463-8144-fcb5f939258e`
+- `1` root `discovery.run` `JobExecution`
+- `1` linked `discovery.seed` `JobExecution`
+- `1` linked `discovery.seed` `OutboxEvent`
+- counts aligned
+- `10` keyed `search_tasks`
+- root status `completed`
+- Treat this as the current repo-recorded proof that the durable discovery path is live in production.
 
 ## Data Migration: Local -> Remote
 
