@@ -20,6 +20,7 @@ export interface ScoringRunJobPayload {
   leadIds?: string[] | undefined;
   modelVersionId?: string | undefined;
   requestedByUserId?: string | undefined;
+  outboxEventId?: string | undefined;
 }
 
 export interface ScoringServiceDependencies {
@@ -57,18 +58,15 @@ export function buildScoringService(
         leadIds: input.leadIds,
         modelVersionId: input.modelVersionId,
         requestedByUserId: input.requestedByUserId,
+        outboxEventId: result.outboxEventId,
       };
 
-      try {
-        await dependencies.enqueueScoringRun(payload);
-      } catch (error: unknown) {
-        const errorMessage =
-          error instanceof Error ? error.message : 'Failed to enqueue scoring.compute job';
-        await repository.markScoringRunFailed(result.runId, errorMessage);
-        throw error;
-      }
+      await dependencies.enqueueScoringRun(payload);
 
-      return result;
+      return {
+        runId: result.runId,
+        status: result.status,
+      };
     },
     async getScoringRunStatus(runId) {
       return repository.getScoringRunStatus(runId);

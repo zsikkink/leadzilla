@@ -19,6 +19,7 @@ import {
 } from '@lead-flood/providers';
 import type { Job } from 'pg-boss';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { resolveOutboxDispatchPlan } from '../../outbox-dispatcher.js';
 import {
   handleFeaturesComputeJob,
   type FeaturesComputeJobPayload,
@@ -218,20 +219,8 @@ const ICP_FEATURES = ['Payment Links', 'WhatsApp Commerce', 'Order Management', 
 
 // Cross-stage state — populated during test execution
 let discoveredLeadId: string;
-
-// ---------------------------------------------------------------------------
-// Helper: extract boss.send payload for a specific queue
-// ---------------------------------------------------------------------------
-
-function extractBossPayload<T>(queueName: string): T {
-  const call = bossSendSpy.mock.calls.find(
-    (c: unknown[]) => c[0] === queueName,
-  );
-  if (!call) {
-    throw new Error(`No boss.send call found for queue '${queueName}'`);
-  }
-  return call[1] as T;
-}
+let scoringOutboxEventId: string | null = null;
+let scoringPayloadFromOutbox: ScoringComputeJobPayload | null = null;
 
 // ---------------------------------------------------------------------------
 // Test suite
@@ -307,6 +296,9 @@ describe('pipeline full chain: features.compute → message.send', () => {
   afterAll(async () => {
     // Clean up in reverse dependency order — use leadId captured after discovery
     if (discoveredLeadId) {
+      if (scoringOutboxEventId) {
+        await prisma.outboxEvent.deleteMany({ where: { id: scoringOutboxEventId } });
+      }
       await prisma.messageSend.deleteMany({ where: { leadId: discoveredLeadId } });
       await prisma.messageVariant.deleteMany({
         where: { messageDraft: { leadId: discoveredLeadId } },
@@ -358,18 +350,49 @@ describe('pipeline full chain: features.compute → message.send', () => {
     expect(features.has_email).toBe(true);
     expect(features.has_company_name).toBe(true);
 
-    // Verify scoring.compute was enqueued
-    const scoringPayload = extractBossPayload<ScoringComputeJobPayload>('scoring.compute');
-    expect(scoringPayload.leadIds).toEqual([discoveredLeadId]);
-    expect(scoringPayload.icpProfileId).toBe(ICP_ID);
+    const scoringRootJob = await prisma.jobExecution.findFirst({
+      where: {
+        type: 'scoring.compute',
+        leadId: discoveredLeadId,
+        status: 'queued',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(scoringRootJob).toBeTruthy();
+
+    const scoringOutboxEvents = await prisma.outboxEvent.findMany({
+      where: { type: 'scoring.compute' },
+      orderBy: { createdAt: 'desc' },
+    });
+    const scoringOutboxEvent = scoringOutboxEvents.find((event) => {
+      if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) {
+        return false;
+      }
+      return (event.payload as Record<string, unknown>).jobExecutionId === scoringRootJob!.id;
+    });
+    expect(scoringOutboxEvent).toBeTruthy();
+    expect(scoringOutboxEvent!.status).toBe('pending');
+    scoringOutboxEventId = scoringOutboxEvent!.id;
+
+    const dispatchPlan = resolveOutboxDispatchPlan('scoring.compute', scoringOutboxEvent!.payload);
+    expect(dispatchPlan).toBeTruthy();
+    scoringPayloadFromOutbox = dispatchPlan!.bossPayload as ScoringComputeJobPayload;
+
+    expect(scoringPayloadFromOutbox.leadIds).toEqual([discoveredLeadId]);
+    expect(scoringPayloadFromOutbox.icpProfileId).toBe(ICP_ID);
+
+    const scoringCall = bossSendSpy.mock.calls.find(
+      (c: unknown[]) => c[0] === 'scoring.compute',
+    );
+    expect(scoringCall).toBeUndefined();
   });
 
   // -----------------------------------------------------------------------
   // Stage 4: Scoring — produces predictions with blendedScore >= 0.5
   // -----------------------------------------------------------------------
   it('stage 3: scoring.compute produces a prediction with blendedScore >= 0.5', async () => {
-    // Extract scoring payload from features stage's boss.send
-    const scoringPayload = extractBossPayload<ScoringComputeJobPayload>('scoring.compute');
+    expect(scoringPayloadFromOutbox).toBeTruthy();
+    const scoringPayload = scoringPayloadFromOutbox!;
 
     const enqueueMessageGenerate = vi.fn().mockResolvedValue(undefined);
 

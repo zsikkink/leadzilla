@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { FEATURES_COMPUTE_IDEMPOTENCY_KEY_PATTERN as FEATURES_COMPUTE_QUEUE_KEY_PATTERN } from '@lead-flood/contracts';
 import { prisma, toInputJson } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
@@ -8,7 +8,6 @@ import { classifyError } from '../errors.js';
 
 import {
   SCORING_COMPUTE_JOB_NAME,
-  SCORING_COMPUTE_RETRY_OPTIONS,
   type ScoringComputeJobPayload,
 } from './scoring.compute.job.js';
 import { evaluateDeterministicScore } from '../scoring/deterministic.js';
@@ -1253,6 +1252,7 @@ export async function handleFeaturesComputeJob(
     });
 
     if (dependencies.enqueueScoring !== false) {
+      const scoringJobExecutionId = randomUUID();
       const scoringPayload: ScoringComputeJobPayload = {
         runId,
         mode: 'BY_LEAD_IDS',
@@ -1261,21 +1261,30 @@ export async function handleFeaturesComputeJob(
         correlationId: effectiveCorrelationId,
       };
 
-      await prisma.jobExecution.create({
-        data: {
-          type: SCORING_COMPUTE_JOB_NAME,
-          status: 'queued',
-          payload: toInputJson({
-            ...scoringPayload,
-            featureSnapshotId: snapshot.id,
-          }),
-          leadId,
-        },
-      });
+      await prisma.$transaction(async (tx) => {
+        await tx.jobExecution.create({
+          data: {
+            id: scoringJobExecutionId,
+            type: SCORING_COMPUTE_JOB_NAME,
+            status: 'queued',
+            payload: toInputJson({
+              ...scoringPayload,
+              featureSnapshotId: snapshot.id,
+            }),
+            leadId,
+          },
+        });
 
-      await dependencies.boss.send(SCORING_COMPUTE_JOB_NAME, scoringPayload, {
-        singletonKey: `scoring.compute:${runId}:${leadId}:${icpProfileId}`,
-        ...SCORING_COMPUTE_RETRY_OPTIONS,
+        await tx.outboxEvent.create({
+          data: {
+            type: SCORING_COMPUTE_JOB_NAME,
+            payload: toInputJson({
+              ...scoringPayload,
+              jobExecutionId: scoringJobExecutionId,
+            }),
+            status: 'pending',
+          },
+        });
       });
     }
 

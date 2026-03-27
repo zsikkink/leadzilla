@@ -82,7 +82,7 @@ function mapJobStatusToPipelineStatus(
 }
 
 export interface ScoringRepository {
-  createScoringRun(input: CreateScoringRunRequest): Promise<CreateScoringRunResponse>;
+  createScoringRun(input: CreateScoringRunRequest): Promise<CreateScoringRunResult>;
   markScoringRunFailed(runId: string, errorMessage: string): Promise<void>;
   getScoringRunStatus(runId: string): Promise<ScoringRunStatusResponse>;
   listScorePredictions(query: ListScorePredictionsQuery): Promise<ListScorePredictionsResponse>;
@@ -98,8 +98,12 @@ export interface ScoringRepository {
   createQualificationRule(input: CreateScoringRuleInput): Promise<QualificationRuleResponse>;
 }
 
+export interface CreateScoringRunResult extends CreateScoringRunResponse {
+  outboxEventId: string;
+}
+
 export class StubScoringRepository implements ScoringRepository {
-  async createScoringRun(_input: CreateScoringRunRequest): Promise<CreateScoringRunResponse> {
+  async createScoringRun(_input: CreateScoringRunRequest): Promise<CreateScoringRunResult> {
     throw new ScoringNotImplementedError('TODO: create scoring run persistence');
   }
 
@@ -139,26 +143,46 @@ export class StubScoringRepository implements ScoringRepository {
 }
 
 export class PrismaScoringRepository extends StubScoringRepository {
-  override async createScoringRun(input: CreateScoringRunRequest): Promise<CreateScoringRunResponse> {
+  override async createScoringRun(input: CreateScoringRunRequest): Promise<CreateScoringRunResult> {
     const runId = randomUUID();
+    const queuePayload = {
+      runId,
+      mode: input.mode,
+      icpProfileId: input.icpProfileId,
+      leadIds: input.leadIds,
+      modelVersionId: input.modelVersionId,
+      requestedByUserId: input.requestedByUserId,
+    };
 
-    await prisma.jobExecution.create({
-      data: {
-        id: runId,
-        type: SCORING_RUN_JOB_TYPE,
-        status: 'queued',
-        attempts: 0,
-        payload: toInputJson(input),
-        result: toInputJson({
-          totalItems: 0,
-          processedItems: 0,
-          failedItems: 0,
-        }),
-        error: null,
-      },
+    const { outboxEvent } = await prisma.$transaction(async (tx) => {
+      await tx.jobExecution.create({
+        data: {
+          id: runId,
+          type: SCORING_RUN_JOB_TYPE,
+          status: 'queued',
+          attempts: 0,
+          payload: toInputJson(input),
+          result: toInputJson({
+            totalItems: 0,
+            processedItems: 0,
+            failedItems: 0,
+          }),
+          error: null,
+        },
+      });
+
+      const outboxEvent = await tx.outboxEvent.create({
+        data: {
+          type: SCORING_RUN_JOB_TYPE,
+          payload: toInputJson(queuePayload),
+          status: 'pending',
+        },
+      });
+
+      return { outboxEvent };
     });
 
-    return { runId, status: 'QUEUED' };
+    return { runId, status: 'QUEUED', outboxEventId: outboxEvent.id };
   }
 
   override async markScoringRunFailed(runId: string, errorMessage: string): Promise<void> {

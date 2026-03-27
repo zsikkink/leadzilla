@@ -211,6 +211,74 @@ async function main(): Promise<void> {
     }
   };
 
+  const publishScoringCompute = async (payload: ScoringRunJobPayload): Promise<void> => {
+    const { outboxEventId, ...bossPayload } = payload;
+    if (!outboxEventId) {
+      logger.error(
+        { runId: payload.runId },
+        'Missing outbox event id for scoring.compute immediate publish',
+      );
+      return;
+    }
+
+    try {
+      await boss.send('scoring.compute', bossPayload, {
+        singletonKey: `scoring.compute:${payload.runId}`,
+        retryLimit: 3,
+        retryDelay: 30,
+        retryBackoff: true,
+      });
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Failed to enqueue scoring.compute job';
+      logger.error(
+        { error, runId: payload.runId, outboxEventId },
+        'Immediate queue publish failed; outbox retry will handle dispatch',
+      );
+
+      try {
+        await prisma.outboxEvent.update({
+          where: { id: outboxEventId },
+          data: {
+            status: 'failed',
+            attempts: {
+              increment: 1,
+            },
+            lastError: errorMessage,
+            nextAttemptAt: new Date(Date.now() + 5000),
+          },
+        });
+      } catch (updateError: unknown) {
+        logger.error(
+          { error: updateError, runId: payload.runId, outboxEventId },
+          'Failed to mark scoring outbox event for retry after publish failure',
+        );
+      }
+
+      return;
+    }
+
+    try {
+      await prisma.outboxEvent.update({
+        where: { id: outboxEventId },
+        data: {
+          status: 'sent',
+          attempts: {
+            increment: 1,
+          },
+          processedAt: new Date(),
+          nextAttemptAt: null,
+          lastError: null,
+        },
+      });
+    } catch (error: unknown) {
+      logger.error(
+        { error, runId: payload.runId, outboxEventId },
+        'Immediate scoring publish succeeded but failed to mark outbox event as sent',
+      );
+    }
+  };
+
   const triggerDiscoverySeedJob = async (
     input: RunDiscoverySeedRequest,
   ): Promise<TriggerJobRunResponse> => {
@@ -735,12 +803,7 @@ async function main(): Promise<void> {
       );
     },
     enqueueScoringRun: async (payload: ScoringRunJobPayload) => {
-      await boss.send('scoring.compute', payload, {
-        singletonKey: `scoring.compute:${payload.runId}`,
-        retryLimit: 3,
-        retryDelay: 30,
-        retryBackoff: true,
-      });
+      await publishScoringCompute(payload);
     },
     enqueueMessageSend: async (payload: MessagingSendJobPayload) => {
       await boss.send('message.send', payload, {
