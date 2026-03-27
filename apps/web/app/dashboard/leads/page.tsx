@@ -1,8 +1,7 @@
 'use client';
 
 import type { LeadScoreBand, LeadStatus } from '@lead-flood/contracts';
-import { AlertTriangle, Eye, Loader2, MessageSquare, Undo2, X } from 'lucide-react';
-import Link from 'next/link';
+import { AlertTriangle, Loader2, MessageSquare, Undo2, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -15,7 +14,6 @@ import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 import { getWebEnv } from '../../../src/lib/env.js';
 import {
-  getLeadDraftGenerationState,
   parseScoreQualificationThreshold,
 } from '../../../src/lib/lead-draft-gating.js';
 import { cn } from '../../../src/lib/utils.js';
@@ -50,48 +48,12 @@ const PAGE_SIZE_OPTIONS = [
   { value: '50', label: '50 per page' },
 ];
 
-function formatPercent(value: number): string {
-  return `${Math.round(value * 100)}%`;
-}
-
 function buildMessageQueueHref(leadId: string, draftId?: string | null): string {
   const params = new URLSearchParams({ leadId });
   if (draftId) {
     params.set('draftId', draftId);
   }
   return `/dashboard/messages?${params.toString()}`;
-}
-
-function getDraftReadinessLabel(input: {
-  reason:
-    | 'missing_icp_profile'
-    | 'missing_score'
-    | 'below_threshold'
-    | 'threshold_loading'
-    | 'threshold_unavailable'
-    | 'enabled';
-  blendedScore: number | null;
-  qualificationThreshold: number | null;
-}): string {
-  switch (input.reason) {
-    case 'enabled':
-      return 'Ready to generate';
-    case 'missing_icp_profile':
-      return 'Not ready: no ICP assigned';
-    case 'missing_score':
-      return 'Not ready: no score available';
-    case 'threshold_loading':
-      return 'Not ready: loading threshold';
-    case 'threshold_unavailable':
-      return 'Not ready: threshold unavailable';
-    case 'below_threshold':
-      if (input.blendedScore !== null && input.qualificationThreshold !== null) {
-        return `Not ready: ${formatPercent(input.blendedScore)} is below ${formatPercent(input.qualificationThreshold)}`;
-      }
-      return 'Not ready: score is below threshold';
-  }
-
-  return 'Not ready';
 }
 
 // ── Extract blended score from enrichment data ──────────
@@ -528,9 +490,9 @@ export default function LeadsPage() {
                   {(leads.data?.items ?? []).map((lead) => {
                     const enrichmentRaw = lead.latestEnrichmentNormalizedPayload ?? lead.latestEnrichmentRawPayload;
                     const blendedScore = lead.latestBlendedScore ?? extractBlendedScore(enrichmentRaw);
-                    // A2: Extract company and position from enrichment data
-                    const companyName = extractCompanyName(enrichmentRaw);
-                    const position = extractPosition(enrichmentRaw);
+                    // Use API-provided fields first, then fall back to enrichment extraction
+                    const companyName = lead.businessName ?? extractCompanyName(enrichmentRaw);
+                    const position = lead.decisionMakerTitle ?? extractPosition(enrichmentRaw);
 
                     return (
                       <tr
@@ -592,83 +554,41 @@ export default function LeadsPage() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                            {lead.status === 'qualified' && (
+                              <button
+                                type="button"
+                                title="Generate the initial draft for this qualified lead"
+                                disabled={generatingForLead === lead.id}
+                                className="rounded-md p-1.5 text-zbooni-green transition-colors hover:bg-zbooni-green/15 disabled:opacity-50"
+                                onClick={() => {
+                                  void handleGenerateMessage(
+                                    lead.id,
+                                    lead.latestIcpProfileId ?? '',
+                                    lead.firstName ?? '',
+                                    lead.latestScorePredictionId ?? null,
+                                  );
+                                }}
+                              >
+                                {generatingForLead === lead.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <MessageSquare className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                            )}
                             <button
                               type="button"
-                              onClick={() => router.push(`/dashboard/leads/${lead.id}`)}
-                              title="View details"
-                              className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-accent/50 hover:text-foreground"
+                              title="Reject lead"
+                              disabled={rejectingLead === lead.id}
+                              className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-red-500/15 hover:text-red-400 disabled:opacity-50"
+                              onClick={() => handleReject(lead.id, lead.firstName ?? '', lead.lastName ?? '')}
                             >
-                              <Eye className="h-3.5 w-3.5" />
+                              {rejectingLead === lead.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <X className="h-3.5 w-3.5" />
+                              )}
                             </button>
-                            {(() => {
-                              const draftGenerationState = getLeadDraftGenerationState({
-                                leadStatus: lead.status,
-                                hasIcpProfileId: Boolean(lead.latestIcpProfileId),
-                                blendedScore,
-                                qualificationThreshold,
-                                isQualificationThresholdLoading,
-                                qualificationThresholdError,
-                              });
-
-                              if (draftGenerationState.kind === 'hidden') return null;
-
-                              const draftDisabled = draftGenerationState.kind !== 'enabled';
-                              const readinessLabel = getDraftReadinessLabel({
-                                reason:
-                                  draftGenerationState.kind === 'enabled'
-                                    ? 'enabled'
-                                    : draftGenerationState.reason,
-                                blendedScore,
-                                qualificationThreshold,
-                              });
-                              const draftTitle = draftDisabled
-                                ? readinessLabel
-                                : 'Generate the initial draft for this qualified lead. Sending then depends on approval or auto-approval settings.';
-
-                              return (
-                                <div className="flex items-center gap-1">
-                                  <button
-                                    type="button"
-                                    title={draftTitle}
-                                    disabled={draftDisabled || generatingForLead === lead.id}
-                                    className={cn(
-                                      'rounded-md p-1.5 transition-colors disabled:opacity-50',
-                                      draftDisabled
-                                        ? 'text-muted-foreground/50 hover:bg-accent/50'
-                                        : 'text-zbooni-green hover:bg-zbooni-green/15',
-                                    )}
-                                    onClick={() => {
-                                      if (!lead.latestIcpProfileId) return;
-                                      void handleGenerateMessage(
-                                        lead.id,
-                                        lead.latestIcpProfileId,
-                                        lead.firstName ?? '',
-                                        lead.latestScorePredictionId ?? null,
-                                      );
-                                    }}
-                                  >
-                                    {generatingForLead === lead.id ? (
-                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                    ) : (
-                                      <MessageSquare className="h-3.5 w-3.5" />
-                                    )}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    title="Reject lead"
-                                    disabled={rejectingLead === lead.id}
-                                    className="rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-red-500/15 hover:text-red-400 disabled:opacity-50"
-                                    onClick={() => handleReject(lead.id, lead.firstName ?? '', lead.lastName ?? '')}
-                                  >
-                                    {rejectingLead === lead.id ? (
-                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                    ) : (
-                                      <X className="h-3.5 w-3.5" />
-                                    )}
-                                  </button>
-                                </div>
-                              );
-                            })()}
                           </div>
                         </td>
                       </tr>
@@ -823,13 +743,6 @@ export default function LeadsPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
-                        <Link
-                          href={`/dashboard/leads/${rl.leadId}`}
-                          title="View details"
-                          className="inline-flex rounded-md p-1.5 text-muted-foreground/50 transition-colors hover:bg-accent/50 hover:text-foreground"
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                        </Link>
                         <button
                           type="button"
                           title="Restore lead"

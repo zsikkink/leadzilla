@@ -38,7 +38,6 @@ import {
 } from '../../src/lib/messaging-defaults.js';
 // NOTE: Global messagingInstructions removed — per-ICP instructions on ICP detail page are the canonical source.
 import { buildPipelineSettingsSavePlan } from '../../src/lib/pipeline-settings-save-plan.js';
-import { MENA_COUNTRIES } from '../../src/lib/countries.js';
 import { cn } from '../../src/lib/utils.js';
 
 // ── Setting types ──────────────────────────────────────────────────────
@@ -535,7 +534,11 @@ interface CountryCityData {
 function CountriesCitiesManager({
   apiClient,
 }: {
-  apiClient: { listPipelineSettings: () => Promise<{ items: Array<{ key: string; value: unknown }> }>; updatePipelineSetting: (key: string, value: unknown) => Promise<unknown> };
+  apiClient: {
+    listPipelineSettings: () => Promise<{ items: Array<{ key: string; value: unknown }> }>;
+    updatePipelineSetting: (key: string, value: unknown) => Promise<unknown>;
+    listIcps: (query?: { page: number; pageSize: number; q?: string | undefined; isActive?: boolean | undefined }) => Promise<{ items: Array<{ targetCountries: string[] }> }>;
+  };
 }) {
   const [countryCities, setCountryCities] = useState<CountryCityData>({});
   const [loading, setLoading] = useState(true);
@@ -546,12 +549,52 @@ function CountriesCitiesManager({
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    void apiClient.listPipelineSettings().then(({ items }) => {
-      const setting = items.find((i) => i.key === 'countryCities');
-      if (setting?.value && typeof setting.value === 'object') {
-        setCountryCities(setting.value as CountryCityData);
+    let cancelled = false;
+    async function loadAndMerge() {
+      try {
+        const [settingsRes, icpsRes] = await Promise.all([
+          apiClient.listPipelineSettings(),
+          apiClient.listIcps({ page: 1, pageSize: 100 }),
+        ]);
+
+        if (cancelled) return;
+
+        // Get existing countryCities from pipeline_settings
+        const setting = settingsRes.items.find((i) => i.key === 'countryCities');
+        const existing: CountryCityData =
+          setting?.value && typeof setting.value === 'object'
+            ? (setting.value as CountryCityData)
+            : {};
+
+        // Extract unique countries from all ICPs' targetCountries
+        const icpCountries = new Set(
+          icpsRes.items.flatMap((icp) => icp.targetCountries),
+        );
+
+        // Merge: add any ICP country not already present (with empty cities array)
+        const merged = { ...existing };
+        let hasNewCountries = false;
+        for (const country of icpCountries) {
+          if (country && !(country in merged)) {
+            merged[country] = [];
+            hasNewCountries = true;
+          }
+        }
+
+        setCountryCities(merged);
+
+        // Persist the merged list so new ICP countries stick in pipeline_settings
+        if (hasNewCountries) {
+          await apiClient.updatePipelineSetting('countryCities', merged);
+        }
+      } catch {
+        // ignore — settings may not exist yet
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    }).catch(() => undefined).finally(() => setLoading(false));
+    }
+    void loadAndMerge();
+    return () => { cancelled = true; };
   }, [apiClient]);
 
   const save = async (data: CountryCityData) => {
@@ -597,16 +640,6 @@ function CountriesCitiesManager({
       ...countryCities,
       [country]: (countryCities[country] ?? []).filter((c) => c !== city),
     };
-    void save(updated);
-  };
-
-  const addMenaCountries = () => {
-    const updated = { ...countryCities };
-    for (const c of MENA_COUNTRIES) {
-      if (!(c in updated)) {
-        updated[c] = [];
-      }
-    }
     void save(updated);
   };
 
@@ -753,24 +786,14 @@ function CountriesCitiesManager({
                 </button>
               </div>
             ) : (
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowCountryInput(true)}
-                  className="inline-flex items-center gap-1.5 rounded-full bg-zbooni-teal/10 px-3 py-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:bg-zbooni-teal/20"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Add Country
-                </button>
-                <button
-                  type="button"
-                  onClick={addMenaCountries}
-                  className="inline-flex items-center gap-1.5 rounded-full bg-zbooni-green/10 px-3 py-1.5 text-xs font-medium text-zbooni-green transition-colors hover:bg-zbooni-green/20"
-                >
-                  <Globe className="h-3.5 w-3.5" />
-                  Add All MENA
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setShowCountryInput(true)}
+                className="inline-flex items-center gap-1.5 rounded-full bg-zbooni-teal/10 px-3 py-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:bg-zbooni-teal/20"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add Country
+              </button>
             )}
           </div>
         </>

@@ -89,6 +89,7 @@ export const ContactRecoverySnapshotSchema = z
       })
       .nullable()
       .optional(),
+    rejectedReason: z.string().nullable().optional(),
   })
   .strict();
 

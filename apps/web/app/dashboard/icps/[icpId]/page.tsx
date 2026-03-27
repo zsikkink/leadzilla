@@ -30,7 +30,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
 import { CustomSelect } from '../../../../src/components/custom-select.js';
-import { MENA_COUNTRIES } from '../../../../src/lib/countries.js';
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
 
@@ -230,28 +229,24 @@ function EditableTags({ label, tags, onSave, tagClassName }: EditableTagsProps) 
 function CountrySelector({
   countries,
   onSave,
-  allKnownCountries,
+  pipelineCountries,
 }: {
   countries: string[];
   onSave: (countries: string[]) => Promise<boolean>;
-  allKnownCountries?: string[] | undefined;
+  pipelineCountries: string[];
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(countries);
   const [isSaving, setIsSaving] = useState(false);
-  const [customCountry, setCustomCountry] = useState('');
 
   useEffect(() => {
     if (!editing) {
       setDraft(countries);
-      setCustomCountry('');
     }
   }, [editing, countries]);
 
-  // Merge MENA_COUNTRIES with any additional countries found across all ICPs
-  const knownSet = new Set([...MENA_COUNTRIES, ...(allKnownCountries ?? [])]);
-  const allCountries = Array.from(knownSet).sort();
-  const available = allCountries.filter((c) => !draft.includes(c));
+  // Countries come from pipeline_settings (Controls & Settings page) — the single source of truth
+  const available = pipelineCountries.filter((c) => !draft.includes(c)).sort();
 
   const remove = (country: string) => setDraft(draft.filter((c) => c !== country));
 
@@ -271,15 +266,7 @@ function CountrySelector({
     }
   };
 
-  const addCustom = () => {
-    const trimmed = customCountry.trim();
-    if (trimmed && !draft.includes(trimmed)) {
-      setDraft([...draft, trimmed]);
-      setCustomCountry('');
-    }
-  };
-
-  const cancel = () => { setDraft(countries); setCustomCountry(''); setEditing(false); };
+  const cancel = () => { setDraft(countries); setEditing(false); };
 
   return (
     <div className="group">
@@ -320,25 +307,11 @@ function CountrySelector({
               placeholder="Add country..."
               className="w-48"
             />
-          ) : null}
-          <div className="flex items-center gap-1.5">
-            <input
-              value={customCountry}
-              onChange={(e) => setCustomCountry(e.target.value)}
-              placeholder="Or type country name..."
-              className="h-7 w-44 rounded-lg border border-border/50 bg-zbooni-dark/60 px-2 text-xs focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-              disabled={isSaving}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  addCustom();
-                }
-              }}
-            />
-            <button type="button" onClick={addCustom} disabled={isSaving || !customCountry.trim()} className="rounded-lg p-1 text-zbooni-teal hover:bg-zbooni-teal/10 disabled:opacity-50">
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-          </div>
+          ) : (
+            <p className="text-[10px] text-muted-foreground/50 italic">
+              All countries assigned. Add more in Controls & Settings.
+            </p>
+          )}
           <div className="flex items-center gap-1.5">
             <button type="button" onClick={() => void save()} disabled={isSaving} className="rounded-lg p-1 text-zbooni-green hover:bg-zbooni-green/10 disabled:opacity-50">
               {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
@@ -1157,13 +1130,18 @@ export default function IcpDetailPage() {
     [icpId],
   );
 
-  // Load all ICPs to collect every targetCountry in use across the system
-  const allIcps = useApiQuery(
-    useCallback(() => apiClient.listIcps({ page: 1, pageSize: 100 }), [apiClient]),
+  // Load countries from pipeline_settings (Controls & Settings) — single source of truth
+  const pipelineSettings = useApiQuery(
+    useCallback(() => apiClient.listPipelineSettings(), [apiClient]),
   );
-  const allKnownCountries = allIcps.data
-    ? Array.from(new Set(allIcps.data.items.flatMap((i) => i.targetCountries)))
-    : [];
+  const pipelineCountries: string[] = (() => {
+    if (!pipelineSettings.data) return [];
+    const setting = pipelineSettings.data.items.find((i: { key: string }) => i.key === 'countryCities');
+    if (setting?.value && typeof setting.value === 'object') {
+      return Object.keys(setting.value as Record<string, unknown>);
+    }
+    return [];
+  })();
 
   useEffect(() => {
     if (icp.data) {
@@ -1324,7 +1302,7 @@ export default function IcpDetailPage() {
           <CountrySelector
             countries={profile.targetCountries}
             onSave={(val) => handleUpdate({ targetCountries: val })}
-            allKnownCountries={allKnownCountries}
+            pipelineCountries={pipelineCountries}
           />
           <div />
         </div>

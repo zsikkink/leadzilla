@@ -1165,6 +1165,8 @@ async function main(): Promise<void> {
             businessCountry: lead.business?.country ?? null,
             businessCity: lead.business?.city ?? null,
             businessCategory: lead.business?.category ?? null,
+            businessName: lead.business?.name ?? null,
+            decisionMakerTitle: lead.decisionMakerTitle ?? null,
           };
         }),
         qualityMetrics,

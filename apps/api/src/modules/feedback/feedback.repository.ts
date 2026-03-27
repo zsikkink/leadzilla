@@ -16,6 +16,7 @@ export interface FeedbackRepository {
   ingestFeedbackEvent(input: IngestFeedbackEventRequest): Promise<IngestFeedbackEventResponse>;
   listFeedbackEvents(query: ListFeedbackEventsQuery): Promise<ListFeedbackEventsResponse>;
   getFeedbackSummary(query: FeedbackSummaryQuery): Promise<FeedbackSummaryResponse>;
+  deleteFeedbackEvent(eventId: string): Promise<boolean>;
 }
 
 export class StubFeedbackRepository implements FeedbackRepository {
@@ -33,6 +34,10 @@ export class StubFeedbackRepository implements FeedbackRepository {
 
   async getFeedbackSummary(_query: FeedbackSummaryQuery): Promise<FeedbackSummaryResponse> {
     throw new FeedbackNotImplementedError('TODO: get feedback summary persistence');
+  }
+
+  async deleteFeedbackEvent(_eventId: string): Promise<boolean> {
+    throw new FeedbackNotImplementedError('TODO: delete feedback event persistence');
   }
 }
 
@@ -182,5 +187,12 @@ export class PrismaFeedbackRepository extends StubFeedbackRepository {
       bouncedCount: countByEventType(groups, 'BOUNCED'),
       notInterestedCount: countByEventType(groups, 'NOT_INTERESTED'),
     };
+  }
+
+  override async deleteFeedbackEvent(eventId: string): Promise<boolean> {
+    const existing = await prisma.feedbackEvent.findUnique({ where: { id: eventId }, select: { id: true } });
+    if (!existing) return false;
+    await prisma.feedbackEvent.delete({ where: { id: eventId } });
+    return true;
   }
 }

@@ -740,28 +740,56 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         return ErrorResponseSchema.parse({ error: 'Lead not found', requestId: request.id });
       }
 
-      // Determine what status to restore.
-      // Restore to `qualified` when the latest score still passes threshold,
-      // otherwise restore to `scored`; if no score exists, restore to `new`.
-      const latestScore = await prisma.leadScorePrediction.findFirst({
-        where: { leadId },
-        orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }],
-        select: { blendedScore: true },
-      });
+      if (lead.status !== 'rejected') {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: `Lead is not rejected (current status: ${lead.status})`,
+          requestId: request.id,
+        });
+      }
 
-      const qualificationThreshold = await getScoreQualificationThresholdSetting(0.5);
+      try {
+        // Determine what status to restore.
+        // Restore to `qualified` when the latest score still passes threshold,
+        // otherwise restore to `scored`; if no score exists, restore to `new`.
+        const latestScore = await prisma.leadScorePrediction.findFirst({
+          where: { leadId },
+          orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }],
+          select: { blendedScore: true },
+        });
 
-      const restoredStatus: LeadStatus = latestScore
-        ? (latestScore.blendedScore >= qualificationThreshold ? 'qualified' : 'scored')
-        : 'new';
+        const qualificationThreshold = await getScoreQualificationThresholdSetting(0.5);
 
-      await prisma.$transaction([
-        prisma.leadRejection.deleteMany({ where: { leadId } }),
-        prisma.lead.update({ where: { id: leadId }, data: { status: restoredStatus } }),
-      ]);
+        const restoredStatus: LeadStatus = latestScore
+          ? (latestScore.blendedScore >= qualificationThreshold ? 'qualified' : 'scored')
+          : 'new';
 
-      reply.status(204);
-      return;
+        await prisma.$transaction([
+          prisma.leadRejection.deleteMany({ where: { leadId } }),
+          prisma.lead.update({ where: { id: leadId }, data: { status: restoredStatus } }),
+        ]);
+
+        reply.status(204);
+        return;
+      } catch (error: unknown) {
+        console.error('[unreject] Error unrejecting lead %s:', leadId, error);
+        if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2025') {
+          // LeadRejection record may not exist — still update lead status
+          const latestScore = await prisma.leadScorePrediction.findFirst({
+            where: { leadId },
+            orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }],
+            select: { blendedScore: true },
+          });
+          const qualificationThreshold = await getScoreQualificationThresholdSetting(0.5);
+          const restoredStatus: LeadStatus = latestScore
+            ? (latestScore.blendedScore >= qualificationThreshold ? 'qualified' : 'scored')
+            : 'new';
+          await prisma.lead.update({ where: { id: leadId }, data: { status: restoredStatus } });
+          reply.status(204);
+          return;
+        }
+        throw error;
+      }
     });
 
     api.get('/v1/leads/rejected', async (request, reply) => {

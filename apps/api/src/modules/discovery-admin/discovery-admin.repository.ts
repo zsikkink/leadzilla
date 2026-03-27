@@ -1434,6 +1434,9 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
         businessName: business.name,
       };
     } catch (error: unknown) {
+      // Log the actual error for debugging — raw 500s from approve are hard to trace
+      console.error('[approveContactRecoveryItem] Error approving recovery item %s:', id, error);
+
       // P2002 = unique constraint violation — candidate's email already exists as a lead
       if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2002') {
         const existingLead = await prisma.lead.findFirst({
@@ -1458,6 +1461,16 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
           };
         }
       }
+
+      // P2003 = FK constraint violation (e.g. businessId no longer valid)
+      if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2003') {
+        const meta = error.meta as Record<string, unknown> | undefined;
+        const fieldName = (meta?.field_name as string) ?? 'unknown field';
+        throw new DiscoveryAdminBadRequestError(
+          `Cannot create lead from recovery item: foreign key constraint failed on ${fieldName}`,
+        );
+      }
+
       throw error;
     }
   }

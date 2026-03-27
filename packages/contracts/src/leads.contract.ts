@@ -169,6 +169,8 @@ export const LeadInspectionResponseSchema = z
     businessCountry: z.string().nullable(),
     businessCity: z.string().nullable(),
     businessCategory: z.string().nullable(),
+    businessName: z.string().nullable().optional(),
+    decisionMakerTitle: z.string().nullable().optional(),
   })
   .strict();
 

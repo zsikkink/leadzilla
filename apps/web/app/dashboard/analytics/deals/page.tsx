@@ -10,6 +10,7 @@ import {
   DollarSign,
   Loader2,
   Plus,
+  Trash2,
   TrendingDown,
   TrendingUp,
   Trophy,
@@ -35,6 +36,8 @@ interface DealFormData {
 interface LeadOption {
   id: string;
   label: string;
+  firstName: string;
+  lastName: string;
 }
 
 // ── Status config ────────────────────────────────────────────────────
@@ -97,8 +100,10 @@ function AddDealModal({
 
   const filteredLeads = useMemo(() => {
     if (!leadSearch.trim()) return leads.slice(0, 20);
-    const q = leadSearch.toLowerCase();
-    return leads.filter((l) => l.label.toLowerCase().includes(q)).slice(0, 20);
+    const q = leadSearch.toLowerCase().trim();
+    return leads
+      .filter((l) => l.firstName.startsWith(q) || l.lastName.startsWith(q))
+      .slice(0, 20);
   }, [leads, leadSearch]);
 
   const selectedLabel = leads.find((l) => l.id === selectedLeadId)?.label ?? '';
@@ -261,6 +266,8 @@ export default function DealsPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingEventId, setDeletingEventId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Fetch feedback summary for deal counts
   const feedback = useApiQuery<FeedbackSummaryResponse>(
@@ -301,6 +308,8 @@ export default function DealsPage() {
     if (!leads.data) return [];
     return leads.data.items.map((l) => ({
       id: l.id,
+      firstName: (l.firstName ?? '').toLowerCase(),
+      lastName: (l.lastName ?? '').toLowerCase(),
       label: `${l.firstName ?? ''} ${l.lastName ?? ''}`.trim() || l.businessCategory || l.id.slice(0, 12),
     }));
   }, [leads.data]);
@@ -373,6 +382,22 @@ export default function DealsPage() {
       setSubmitError(err instanceof Error ? err.message : 'Failed to create deal');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteDeal = async (eventId: string) => {
+    setDeletingEventId(eventId);
+    try {
+      await apiClient.deleteFeedbackEvent(eventId);
+      feedback.refetch();
+      dealWonEvents.refetch();
+      dealLostEvents.refetch();
+      meetingEvents.refetch();
+    } catch {
+      // Silently fail — the deal row will remain visible so the user can retry
+    } finally {
+      setDeletingEventId(null);
+      setConfirmDeleteId(null);
     }
   };
 
@@ -501,6 +526,38 @@ export default function DealsPage() {
                     >
                       {dealStatus}
                     </span>
+                    {confirmDeleteId === event.id ? (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={deletingEventId === event.id}
+                          onClick={() => void handleDeleteDeal(event.id)}
+                          className="rounded-lg bg-red-500/20 px-2 py-1 text-[10px] font-bold text-red-400 hover:bg-red-500/30 disabled:opacity-50"
+                        >
+                          {deletingEventId === event.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            'Delete'
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(null)}
+                          className="rounded-lg bg-white/5 px-2 py-1 text-[10px] font-bold text-muted-foreground hover:bg-white/10"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteId(event.id)}
+                        className="rounded-lg p-1.5 text-muted-foreground/30 hover:bg-red-500/10 hover:text-red-400 transition-colors"
+                        title="Remove deal"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
               );

@@ -15,7 +15,7 @@ import type {
 } from '@lead-flood/contracts';
 import { PrismaRuntime, prisma, toInputJson } from '@lead-flood/db';
 
-import { IcpNotFoundError, IcpNotImplementedError } from './icp.errors.js';
+import { IcpHasActiveDataError, IcpNotFoundError, IcpNotImplementedError } from './icp.errors.js';
 
 export interface IcpRepository {
   createIcpProfile(input: CreateIcpProfileRequest): Promise<IcpProfileResponse>;
@@ -648,18 +648,36 @@ export class PrismaIcpRepository extends StubIcpRepository {
   override async deleteIcpProfile(icpId: string): Promise<void> {
     try {
       await prisma.$transaction(async (tx) => {
-        // Delete all QualificationRules for this ICP first (FK constraint)
-        await tx.qualificationRule.deleteMany({
-          where: { icpProfileId: icpId },
-        });
+        // Delete dependent records that reference this ICP (Prisma cascades are
+        // application-level — explicit deletes inside the transaction are safer
+        // and produce clearer errors when something blocks deletion).
+        await tx.contactRecoveryItem.deleteMany({ where: { icpProfileId: icpId } });
+        await tx.messageDraft.deleteMany({ where: { icpProfileId: icpId } });
+        await tx.apolloRevealAttempt.deleteMany({ where: { icpProfileId: icpId } });
+        await tx.leadScorePrediction.deleteMany({ where: { icpProfileId: icpId } });
+        await tx.leadFeatureSnapshot.deleteMany({ where: { icpProfileId: icpId } });
+        await tx.leadDiscoveryRecord.deleteMany({ where: { icpProfileId: icpId } });
+        await tx.analyticsDailyRollup.deleteMany({ where: { icpProfileId: icpId } });
+        await tx.qualificationRule.deleteMany({ where: { icpProfileId: icpId } });
+
         // Then delete the ICP profile itself
         await tx.icpProfile.delete({
           where: { id: icpId },
         });
       });
     } catch (error: unknown) {
-      if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2025') {
-        throw new IcpNotFoundError();
+      if (error instanceof PrismaRuntime.PrismaClientKnownRequestError) {
+        if (error.code === 'P2025') {
+          throw new IcpNotFoundError();
+        }
+        if (error.code === 'P2003') {
+          // FK constraint violation — something still references this ICP
+          const meta = error.meta as Record<string, unknown> | undefined;
+          const fieldName = (meta?.field_name as string) ?? 'unknown relation';
+          throw new IcpHasActiveDataError(
+            `Cannot delete ICP: it is still referenced by ${fieldName}. Remove or reassign those records first.`,
+          );
+        }
       }
       throw error;
     }

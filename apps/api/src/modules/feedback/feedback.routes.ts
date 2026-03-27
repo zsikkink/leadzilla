@@ -89,6 +89,32 @@ export function registerFeedbackRoutes(app: FastifyInstance): void {
     }
   });
 
+  app.delete('/v1/feedback/events/:eventId', { preHandler: requireAppAdmin }, async (request, reply) => {
+    const { eventId } = request.params as { eventId: string };
+    if (!eventId) {
+      return sendValidationError(reply, request.id, 'Missing eventId parameter');
+    }
+
+    try {
+      const deleted = await service.deleteFeedbackEvent(eventId);
+      if (!deleted) {
+        reply.status(404).send(
+          ErrorResponseSchema.parse({
+            error: `Feedback event not found: ${eventId}`,
+            requestId: request.id,
+          }),
+        );
+        return;
+      }
+      reply.status(204).send();
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
   app.get('/v1/feedback/summary', async (request, reply) => {
     const parsedQuery = FeedbackSummaryQuerySchema.safeParse(request.query);
     if (!parsedQuery.success) {

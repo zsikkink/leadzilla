@@ -42,8 +42,8 @@ export default function BusinessIntelligencePage() {
         // Join with business_conversions for AI insights
         const { data: conversions, error: convErr } = await supabase
           .from('business_conversions')
-          .select('business_id, business_insights')
-          .order('created_at', { ascending: false })
+          .select('businessId, businessInsights')
+          .order('createdAt', { ascending: false })
           .limit(100);
 
         if (convErr) throw convErr;
@@ -55,11 +55,11 @@ export default function BusinessIntelligencePage() {
         }
 
         // Get unique business IDs
-        const bizIds = [...new Set(conversions.map((c) => c.business_id))];
+        const bizIds = [...new Set(conversions.map((c) => c.businessId))];
         const insightsMap = new Map<string, string | null>();
         for (const c of conversions) {
-          if (!insightsMap.has(c.business_id)) {
-            insightsMap.set(c.business_id, c.business_insights);
+          if (!insightsMap.has(c.businessId)) {
+            insightsMap.set(c.businessId, c.businessInsights);
           }
         }
 

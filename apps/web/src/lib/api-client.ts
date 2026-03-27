@@ -359,6 +359,12 @@ export class ApiClient {
     return this.request(`/v1/feedback/events${qs}`);
   }
 
+  deleteFeedbackEvent(eventId: string): Promise<void> {
+    return this.request(`/v1/feedback/events/${eventId}`, {
+      method: 'DELETE',
+    });
+  }
+
   // ── Discovery ───────────────────────────────────
   createDiscoveryRun(data: CreateDiscoveryRunRequest): Promise<CreateDiscoveryRunResponse> {
     return this.request('/v1/discovery/runs', {

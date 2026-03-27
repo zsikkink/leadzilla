@@ -850,9 +850,9 @@ function EditableTeamMembers({
         const supabase = getSupabaseBrowserClient();
         const { data, error } = await supabase
           .from('business_contacts')
-          .select('id, businessId:business_id, name, title, email, phone, linkedinUrl:linkedin_url, seniority, positionRank:position_rank, source')
-          .eq('business_id', businessId)
-          .order('position_rank', { ascending: true });
+          .select('id, businessId, name, title, email, phone, linkedinUrl, seniority, positionRank, source')
+          .eq('businessId', businessId)
+          .order('positionRank', { ascending: true });
 
         if (cancelled) return;
         if (error) {
@@ -976,16 +976,16 @@ function EditableTeamMembers({
     try {
       const supabase = getSupabaseBrowserClient();
 
-      // Set all other contacts to higher position_rank
+      // Set all other contacts to higher positionRank
       await supabase
         .from('business_contacts')
-        .update({ position_rank: 99 })
-        .eq('business_id', businessId);
+        .update({ positionRank: 99 })
+        .eq('businessId', businessId);
 
       // Set this one to rank 0
       const { error } = await supabase
         .from('business_contacts')
-        .update({ position_rank: 0 })
+        .update({ positionRank: 0 })
         .eq('id', memberId);
 
       if (error) throw error;
@@ -1019,16 +1019,16 @@ function EditableTeamMembers({
       const { data, error } = await supabase
         .from('business_contacts')
         .insert({
-          business_id: businessId,
+          businessId,
           name: addName.trim(),
           title: addTitle.trim() || null,
           email: addEmail.trim() || null,
           phone: addPhone.trim() || null,
           seniority: 'other',
-          position_rank: 50,
+          positionRank: 50,
           source: 'manual',
         })
-        .select('id, businessId:business_id, name, title, email, phone, linkedinUrl:linkedin_url, seniority, positionRank:position_rank, source')
+        .select('id, businessId, name, title, email, phone, linkedinUrl, seniority, positionRank, source')
         .single();
 
       if (error) throw error;
@@ -1630,10 +1630,15 @@ export default function LeadDetailPage() {
       </div>
 
       {/* ─── 1. About This Business (C1 — AI insights) ─── */}
-      {businessSummary || businessData?.businessInsights ? (
+      {businessSummary || businessData?.businessInsights || businessData?.businessName ? (
         <AboutBusinessCard
           category={businessSummary?.category ?? null}
-          metaDescription={businessData?.businessInsights ?? null}
+          metaDescription={
+            businessData?.businessInsights
+            ?? (businessData?.businessName
+              ? `${businessData.businessName}${businessData.websiteDomain ? ` (${businessData.websiteDomain})` : ''}`
+              : null)
+          }
           instagramBio={null}
           countryCode={businessSummary?.countryCode ?? null}
           city={businessSummary?.city ?? null}
@@ -1687,11 +1692,11 @@ export default function LeadDetailPage() {
             Intelligence Gathered
           </h2>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {enrichmentFields.map((field) => {
+            {enrichmentFields.map((field, fieldIdx) => {
               const Icon = field.icon;
               return (
                 <div
-                  key={field.label}
+                  key={`${field.label}-${fieldIdx}`}
                   className="flex items-start gap-3 rounded-xl border border-border/30 bg-zbooni-dark/40 p-3.5"
                 >
                   <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zbooni-teal/10">

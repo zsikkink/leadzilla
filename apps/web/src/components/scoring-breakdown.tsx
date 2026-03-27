@@ -56,6 +56,28 @@ interface LatestScoreData {
   };
 }
 
+// Map field keys to their qualification category (mirrors backend FIELD_KEY_CATEGORY_MAP)
+const FIELD_KEY_TO_CATEGORY: Record<string, string> = {
+  has_whatsapp: 'SALES_MOTION_FIT',
+  has_instagram: 'SALES_MOTION_FIT',
+  custom_order_signals: 'SALES_MOTION_FIT',
+  apollo_has_direct_phone: 'SALES_MOTION_FIT',
+  decision_maker_count: 'SALES_MOTION_FIT',
+  apify_has_booking_form: 'SALES_MOTION_FIT',
+  apify_payment_widget_count: 'PAYMENT_COMPLEXITY',
+  apify_has_pricing_tiers: 'PAYMENT_COMPLEXITY',
+  high_ticket_signals: 'PAYMENT_COMPLEXITY',
+  recent_activity: 'RISK_URGENCY',
+  has_booking_or_contact_form: 'RISK_URGENCY',
+  website_email_count: 'RISK_URGENCY',
+  website_phone_count: 'RISK_URGENCY',
+  follower_growth_signal: 'SWITCHING_WILLINGNESS',
+  high_engagement_signal: 'SWITCHING_WILLINGNESS',
+  social_link_count: 'SWITCHING_WILLINGNESS',
+  has_linkedin: 'SWITCHING_WILLINGNESS',
+  tech_stack_size: 'SWITCHING_WILLINGNESS',
+};
+
 interface ScoringBreakdownProps {
   leadId: string;
   blendedScore?: number | undefined;
@@ -345,9 +367,9 @@ export function ScoringBreakdown({
             Positive Signals ({positiveRules.length})
           </p>
           <div className="space-y-1.5">
-            {positiveRules.map((r) => (
+            {positiveRules.map((r, rIdx) => (
               <div
-                key={r.ruleId}
+                key={`${r.ruleId}-pos-${rIdx}`}
                 className="flex items-center gap-2 rounded-lg border border-zbooni-green/15 bg-zbooni-green/5 px-3 py-2 text-xs"
               >
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-zbooni-green" />
@@ -374,9 +396,9 @@ export function ScoringBreakdown({
             Penalties ({negativeRules.length})
           </p>
           <div className="space-y-1.5">
-            {negativeRules.map((r) => (
+            {negativeRules.map((r, rIdx) => (
               <div
-                key={r.ruleId}
+                key={`${r.ruleId}-neg-${rIdx}`}
                 className="flex items-center gap-2 rounded-lg border border-red-500/15 bg-red-500/5 px-3 py-2 text-xs"
               >
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-400" />
@@ -402,9 +424,9 @@ export function ScoringBreakdown({
             Not Matched ({missedRules.length})
           </p>
           <div className="flex flex-wrap gap-1.5">
-            {missedRules.slice(0, 8).map((r) => (
+            {missedRules.slice(0, 8).map((r, rIdx) => (
               <span
-                key={r.ruleId}
+                key={`${r.ruleId}-miss-${rIdx}`}
                 className="rounded-full border border-border/20 bg-zbooni-dark/30 px-2.5 py-1 text-[10px] font-semibold text-muted-foreground/50"
               >
                 {formatFieldKey(r.fieldKey)} <span className="text-muted-foreground/30">w:{r.weightApplied}</span>
@@ -436,9 +458,9 @@ export function ScoringBreakdown({
           </button>
           {showAllRules && (
             <div className="mt-2 space-y-1">
-              {weightedRules.map((r) => (
+              {weightedRules.map((r, rIdx) => (
                 <div
-                  key={r.ruleId}
+                  key={`${r.ruleId}-all-${rIdx}`}
                   className={cn(
                     'flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs',
                     r.matched
@@ -476,7 +498,7 @@ export function ScoringBreakdown({
                 </div>
               ))}
 
-              {/* A6: Category Bonuses sub-section */}
+              {/* A6: Category Bonuses sub-section with per-feature breakdown */}
               {categoryEntries.length > 0 && (
                 <div className="mt-3 rounded-lg border border-border/20 bg-zbooni-dark/20 p-3">
                   <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
@@ -494,7 +516,7 @@ export function ScoringBreakdown({
                       </span>
                     ) : null}
                   </p>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     {categoryEntries.map(([category, score]) => {
                       const passed = score.rate >= CATEGORY_PASS_THRESHOLD && score.matched >= 1;
                       const bonusValue = passed
@@ -502,38 +524,65 @@ export function ScoringBreakdown({
                           : qualificationPath === 'SELECTIVE' ? '+5%'
                           : '-5%')
                         : null;
+                      // Find individual features belonging to this category from rule evaluations
+                      const categoryFeatures = (deterministic?.ruleEvaluation ?? [])
+                        .filter((r) => r.ruleType !== 'HARD_FILTER' && FIELD_KEY_TO_CATEGORY[r.fieldKey] === category);
                       return (
-                        <div
-                          key={category}
-                          className={cn(
-                            'flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs',
-                            passed
-                              ? 'border-zbooni-green/10 bg-zbooni-green/[0.03]'
-                              : 'border-border/15 bg-zbooni-dark/10',
-                          )}
-                        >
-                          <span
+                        <div key={category} className="space-y-1">
+                          <div
                             className={cn(
-                              'h-1.5 w-1.5 rounded-full shrink-0',
-                              passed ? 'bg-zbooni-green' : 'bg-muted-foreground/30',
+                              'flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs',
+                              passed
+                                ? 'border-zbooni-green/10 bg-zbooni-green/[0.03]'
+                                : 'border-border/15 bg-zbooni-dark/10',
                             )}
-                          />
-                          <span className={cn(
-                            'font-semibold',
-                            passed ? 'text-foreground' : 'text-muted-foreground/50',
-                          )}>
-                            {formatFieldKey(category)}
-                          </span>
-                          <span className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground/40">
-                            <span>{score.matched}/{score.total} ({Math.round(score.rate * 100)}%)</span>
-                            {passed && bonusValue ? (
-                              <span className={bonusValue.startsWith('+') ? 'text-zbooni-green' : 'text-red-400'}>
-                                {bonusValue}
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground/30">no bonus</span>
-                            )}
-                          </span>
+                          >
+                            <span
+                              className={cn(
+                                'h-1.5 w-1.5 rounded-full shrink-0',
+                                passed ? 'bg-zbooni-green' : 'bg-muted-foreground/30',
+                              )}
+                            />
+                            <span className={cn(
+                              'font-semibold',
+                              passed ? 'text-foreground' : 'text-muted-foreground/50',
+                            )}>
+                              {formatFieldKey(category)}
+                            </span>
+                            <span className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground/40">
+                              <span>{score.matched}/{score.total} ({Math.round(score.rate * 100)}%)</span>
+                              {passed && bonusValue ? (
+                                <span className={bonusValue.startsWith('+') ? 'text-zbooni-green' : 'text-red-400'}>
+                                  {bonusValue}
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground/30">no bonus</span>
+                              )}
+                            </span>
+                          </div>
+                          {/* Per-feature breakdown within this category */}
+                          {categoryFeatures.length > 0 && (
+                            <div className="ml-4 space-y-0.5">
+                              {categoryFeatures.map((feat, fIdx) => (
+                                <div
+                                  key={`${category}-${feat.fieldKey}-${fIdx}`}
+                                  className="flex items-center gap-1.5 text-[11px]"
+                                >
+                                  <span className={cn(
+                                    'shrink-0',
+                                    feat.matched ? 'text-zbooni-green' : 'text-muted-foreground/30',
+                                  )}>
+                                    {feat.matched ? '\u2713' : '\u2717'}
+                                  </span>
+                                  <span className={cn(
+                                    feat.matched ? 'text-foreground/70' : 'text-muted-foreground/40',
+                                  )}>
+                                    {formatFieldKey(feat.fieldKey)}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
