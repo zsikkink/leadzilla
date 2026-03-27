@@ -228,7 +228,7 @@ jobs:
               --request POST \
               --url https://backboard.railway.com/graphql/v2 \
               --header "Content-Type: application/json" \
-              --header "Project-Access-Token: ${RAILWAY_PROJECT_TOKEN}" \
+              --header "Authorization: Bearer ${RAILWAY_PROJECT_TOKEN}" \
               --data '{"query":"mutation environmentTriggersDeploy($input: EnvironmentTriggersDeployInput!) { environmentTriggersDeploy(input: $input) }","variables":{"input":{"projectId":"30c6dd11-3c75-4f69-835d-60b53a0d99d5","environmentId":"2d87fd16-66c4-43b9-98dc-d738548704b0","serviceId":"5c509bb0-634b-45a8-a18d-8fbe2ba24a7f"}}}'
           )"
           RESPONSE="$response" python - <<'PY'
@@ -252,7 +252,7 @@ jobs:
               --request POST \
               --url https://backboard.railway.com/graphql/v2 \
               --header "Content-Type: application/json" \
-              --header "Project-Access-Token: ${RAILWAY_PROJECT_TOKEN}" \
+              --header "Authorization: Bearer ${RAILWAY_PROJECT_TOKEN}" \
               --data '{"query":"mutation environmentTriggersDeploy($input: EnvironmentTriggersDeployInput!) { environmentTriggersDeploy(input: $input) }","variables":{"input":{"projectId":"30c6dd11-3c75-4f69-835d-60b53a0d99d5","environmentId":"2d87fd16-66c4-43b9-98dc-d738548704b0","serviceId":"112c1d20-c841-42b8-9e88-ce56c05398e1"}}}'
           )"
           RESPONSE="$response" python - <<'PY'
