@@ -240,6 +240,77 @@ describe('dispatchPendingOutboxEvents', () => {
     expect(updated?.lastError).toContain('queue unavailable');
   });
 
+  it('uses database time to gate failed retries and stale processing reclaim', async () => {
+    const fixture = await createQueuedJobFixture();
+    const dbNow = new Date();
+
+    const failedEvent = await prisma.outboxEvent.create({
+      data: {
+        type: 'lead.enrich.stub',
+        payload: {
+          leadId: fixture.leadId,
+          jobExecutionId: fixture.jobExecutionId,
+          source: 'test',
+        },
+        status: 'failed',
+        nextAttemptAt: new Date(dbNow.getTime() + 60_000),
+      },
+    });
+    const processingEvent = await prisma.outboxEvent.create({
+      data: {
+        type: 'lead.enrich.stub',
+        payload: {
+          leadId: fixture.leadId,
+          jobExecutionId: fixture.jobExecutionId,
+          source: 'test',
+        },
+        status: 'processing',
+      },
+    });
+    createdOutboxIds.push(failedEvent.id, processingEvent.id);
+
+    await prisma.$executeRaw`
+      UPDATE "OutboxEvent"
+      SET "updatedAt" = ${new Date(dbNow.getTime() - 4 * 60 * 1000)}
+      WHERE id = ${processingEvent.id}
+    `;
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(dbNow.getTime() + 2 * 60 * 1000));
+
+    try {
+      const boss = {
+        send: vi.fn(async () => 'ok'),
+      };
+      const logger = {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+
+      const count = await dispatchPendingOutboxEvents(boss as unknown as Pick<PgBoss, 'send'>, logger);
+
+      expect(count).toBe(0);
+      expect(boss.send).not.toHaveBeenCalled();
+
+      const [failedState, processingState] = await Promise.all([
+        prisma.outboxEvent.findUnique({
+          where: { id: failedEvent.id },
+        }),
+        prisma.outboxEvent.findUnique({
+          where: { id: processingEvent.id },
+        }),
+      ]);
+
+      expect(failedState?.status).toBe('failed');
+      expect(failedState?.attempts).toBe(0);
+      expect(processingState?.status).toBe('processing');
+      expect(processingState?.attempts).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('promotes failed outbox events to dead letter after max attempts', async () => {
     const fixture = await createQueuedJobFixture();
     const event = await prisma.outboxEvent.create({
