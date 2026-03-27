@@ -38,6 +38,13 @@ Code is still the source of truth. This doc is the fastest orientation path for 
 - Result: root status `completed`
 - Treat this as the current repo-recorded proof that the durable discovery path is live in production.
 
+### Release handoff closure as of 2026-03-26
+
+- GitHub default branch: `main`
+- GitHub default branch view was confirmed at `465f231a639a2325a71dcb38cb727061c6a520f6`
+- That default-branch tip includes the validated release commit `ff41b7c9b5dc481538f94d88b5510d119e8183aa`
+- Treat this as the final repo-recorded promotion confirmation for this release handoff.
+
 ## 3. What is already true in code now
 
 - Normal user discovery read routes are owner-scoped through `payload.requestedByUserId`.
