@@ -215,17 +215,57 @@ jobs:
     needs: [build-production-images, migrate-production-db]
     environment: production
     env:
-      PRODUCTION_DEPLOY_WEBHOOK: ${{ secrets.PRODUCTION_DEPLOY_WEBHOOK }}
+      RAILWAY_PROJECT_TOKEN: ${{ secrets.RAILWAY_PROJECT_TOKEN }}
       PRODUCTION_API_READY_URL: ${{ secrets.PRODUCTION_API_READY_URL }}
       PRODUCTION_SMOKE_URL: ${{ secrets.PRODUCTION_SMOKE_URL }}
     steps:
-      - name: Trigger production deployment webhook
-        if: ${{ env.PRODUCTION_DEPLOY_WEBHOOK != '' }}
-        run: curl -fsS -X POST "$PRODUCTION_DEPLOY_WEBHOOK"
+      - name: Trigger lead-flood-api deployment
+        run: |
+          response="$(
+            curl --fail --silent --show-error \
+              --request POST \
+              --url https://backboard.railway.com/graphql/v2 \
+              --header "Content-Type: application/json" \
+              --header "Project-Access-Token: ${RAILWAY_PROJECT_TOKEN}" \
+              --data '{"query":"mutation environmentTriggersDeploy($input: EnvironmentTriggersDeployInput!) { environmentTriggersDeploy(input: $input) }","variables":{"input":{"projectId":"30c6dd11-3c75-4f69-835d-60b53a0d99d5","environmentId":"2d87fd16-66c4-43b9-98dc-d738548704b0","serviceId":"5c509bb0-634b-45a8-a18d-8fbe2ba24a7f"}}}'
+          )"
+          RESPONSE="$response" python - <<'PY'
+          import json
+          import os
+          import sys
 
-      - name: Skip deployment trigger when webhook is missing
-        if: ${{ env.PRODUCTION_DEPLOY_WEBHOOK == '' }}
-        run: echo "PRODUCTION_DEPLOY_WEBHOOK is not set; images were published only."
+          response = json.loads(os.environ["RESPONSE"])
+          if response.get("errors"):
+              print(json.dumps(response["errors"]), file=sys.stderr)
+              sys.exit(1)
+          if response.get("data", {}).get("environmentTriggersDeploy") is not True:
+              print(json.dumps(response), file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Trigger lead-flood-worker deployment
+        run: |
+          response="$(
+            curl --fail --silent --show-error \
+              --request POST \
+              --url https://backboard.railway.com/graphql/v2 \
+              --header "Content-Type: application/json" \
+              --header "Project-Access-Token: ${RAILWAY_PROJECT_TOKEN}" \
+              --data '{"query":"mutation environmentTriggersDeploy($input: EnvironmentTriggersDeployInput!) { environmentTriggersDeploy(input: $input) }","variables":{"input":{"projectId":"30c6dd11-3c75-4f69-835d-60b53a0d99d5","environmentId":"2d87fd16-66c4-43b9-98dc-d738548704b0","serviceId":"112c1d20-c841-42b8-9e88-ce56c05398e1"}}}'
+          )"
+          RESPONSE="$response" python - <<'PY'
+          import json
+          import os
+          import sys
+
+          response = json.loads(os.environ["RESPONSE"])
+          if response.get("errors"):
+              print(json.dumps(response["errors"]), file=sys.stderr)
+              sys.exit(1)
+          if response.get("data", {}).get("environmentTriggersDeploy") is not True:
+              print(json.dumps(response), file=sys.stderr)
+              sys.exit(1)
+          PY
 
       - name: Run production API readiness check
         if: ${{ env.PRODUCTION_API_READY_URL != '' }}
