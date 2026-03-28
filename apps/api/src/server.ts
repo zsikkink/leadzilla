@@ -390,6 +390,14 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
           });
         }
 
+        if (error instanceof LeadContextUnavailableError) {
+          reply.status(422);
+          return ErrorResponseSchema.parse({
+            error: error.message,
+            requestId: request.id,
+          });
+        }
+
         throw error;
       }
     });

@@ -315,6 +315,37 @@ describe('buildServer', () => {
     expect(body.error).toBe('Invalid lead payload');
   });
 
+  it('returns 422 when lead creation lacks ICP context', async () => {
+    const server = buildServer({
+      ...makeDefaultOptions(),
+      createLeadAndEnqueue: async () => {
+        throw new LeadContextUnavailableError(
+          'Lead creation requires an active ICP profile or an explicit icpProfileId',
+        );
+      },
+    });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/leads',
+      headers: authHeaders(),
+      payload: {
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+        email: 'ada@example.com',
+        source: 'manual',
+      },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        error: 'Lead creation requires an active ICP profile or an explicit icpProfileId',
+      }),
+    );
+  });
+
   it('creates backup lead from source lead context and returns leadId/jobId', async () => {
     const createBackupLeadAndEnqueue = vi.fn(async () => ({
       leadId: 'backup_lead_1',

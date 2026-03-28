@@ -485,13 +485,19 @@ async function main(): Promise<void> {
     },
     createLeadAndEnqueue: async (input) => {
       try {
-        // B5 fix: resolve icpProfileId for manual leads — use first active ICP
-        const activeIcp = await prisma.icpProfile.findFirst({
-          where: { isActive: true },
-          select: { id: true },
-          orderBy: { createdAt: 'asc' },
-        });
-        const icpProfileId = input.icpProfileId ?? activeIcp?.id ?? undefined;
+        const activeIcp = input.icpProfileId
+          ? null
+          : await prisma.icpProfile.findFirst({
+              where: { isActive: true },
+              select: { id: true },
+              orderBy: { createdAt: 'asc' },
+            });
+        const icpProfileId = input.icpProfileId ?? activeIcp?.id;
+        if (!icpProfileId) {
+          throw new LeadContextUnavailableError(
+            'Lead creation requires an active ICP profile or an explicit icpProfileId',
+          );
+        }
 
         const { lead, jobExecution, outboxEvent } = await prisma.$transaction(async (tx) => {
           const lead = await tx.lead.create({
@@ -539,7 +545,7 @@ async function main(): Promise<void> {
 
         await publishFeaturesCompute({
           leadId: lead.id,
-          icpProfileId: icpProfileId!,
+          icpProfileId,
           jobId: jobExecution.id,
           outboxEventId: outboxEvent.id,
         });
@@ -861,10 +867,20 @@ async function main(): Promise<void> {
       const lead = await prisma.lead.findUnique({
         where: { id: leadId, deletedAt: null },
         include: {
+          discoveryRecords: {
+            orderBy: [{ discoveredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+            take: 1,
+            select: { icpProfileId: true },
+          },
           enrichmentRecords: {
             orderBy: [{ enrichedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
             take: 1,
             select: { normalizedPayload: true },
+          },
+          scorePredictions: {
+            orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+            take: 1,
+            select: { icpProfileId: true },
           },
           businessConversions: {
             take: 1,
@@ -875,10 +891,13 @@ async function main(): Promise<void> {
               },
             },
           },
+          business: {
+            select: { countryCode: true, country: true, city: true, category: true },
+          },
         },
       });
       if (!lead) return null;
-      const biz = lead.businessConversions[0]?.business;
+      const biz = lead.business ?? lead.businessConversions[0]?.business;
       const conversionMetadata =
         lead.businessConversions[0]?.metadata && typeof lead.businessConversions[0].metadata === 'object' && !Array.isArray(lead.businessConversions[0].metadata)
           ? lead.businessConversions[0].metadata as Record<string, unknown>
@@ -911,7 +930,11 @@ async function main(): Promise<void> {
         businessCountry: biz?.country ?? null,
         businessCity: biz?.city ?? null,
         businessCategory: biz?.category ?? null,
-        latestIcpProfileId: lead.businessConversions[0]?.icpProfileId ?? null,
+        latestIcpProfileId:
+          lead.discoveryRecords[0]?.icpProfileId
+          ?? lead.scorePredictions[0]?.icpProfileId
+          ?? lead.businessConversions[0]?.icpProfileId
+          ?? null,
         contactDiscovery: telemetry
           ? {
               cseVerifyAttempted: telemetry.cseVerifyAttempted === true,
