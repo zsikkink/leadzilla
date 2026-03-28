@@ -1,7 +1,6 @@
 import PgBoss from 'pg-boss';
 
 import {
-  PrismaRuntime,
   assertDatabaseConnection,
   checkPipelineSchemaHealth,
   prisma,
@@ -37,6 +36,15 @@ import { buildServer, LeadAlreadyExistsError, LeadContextUnavailableError } from
 function toDayStart(value: string): Date {
   const source = new Date(value);
   return new Date(Date.UTC(source.getUTCFullYear(), source.getUTCMonth(), source.getUTCDate()));
+}
+
+function isPrismaKnownRequestError(error: unknown): error is { code: string } {
+  return (
+    typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && typeof error.code === 'string'
+  );
 }
 
 function mapContactRecoveryItem(record: {
@@ -555,7 +563,7 @@ async function main(): Promise<void> {
           jobId: jobExecution.id,
         };
       } catch (error: unknown) {
-        if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2002') {
+        if (isPrismaKnownRequestError(error) && error.code === 'P2002') {
           throw new LeadAlreadyExistsError('Lead already exists for this email');
         }
 
@@ -798,7 +806,7 @@ async function main(): Promise<void> {
           jobId: jobExecution.id,
         };
       } catch (error: unknown) {
-        if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2002') {
+        if (isPrismaKnownRequestError(error) && error.code === 'P2002') {
           throw new LeadAlreadyExistsError('Lead already exists for this email');
         }
 
