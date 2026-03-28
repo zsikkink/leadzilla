@@ -352,6 +352,26 @@ export async function dispatchPendingOutboxEvents(
         retryBackoff: true,
       });
 
+      const publishedAt = new Date();
+      if (
+        event.type === SCORING_COMPUTE_JOB_NAME &&
+        'runId' in dispatchPlan.bossPayload &&
+        dispatchPlan.jobExecutionId === dispatchPlan.bossPayload.runId
+      ) {
+        await prisma.jobExecution.updateMany({
+          where: {
+            id: dispatchPlan.jobExecutionId,
+            type: SCORING_COMPUTE_JOB_NAME,
+            status: 'queued',
+          },
+          data: {
+            status: 'running',
+            startedAt: publishedAt,
+            error: null,
+          },
+        });
+      }
+
       await prisma.outboxEvent.update({
         where: { id: event.id },
         data: {
@@ -359,7 +379,7 @@ export async function dispatchPendingOutboxEvents(
           attempts: {
             increment: 1,
           },
-          processedAt: now,
+          processedAt: publishedAt,
           lastError: null,
           nextAttemptAt: null,
         },

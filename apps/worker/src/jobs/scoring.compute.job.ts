@@ -74,6 +74,42 @@ export interface ScoringComputeJobDependencies {
   }) => Promise<void>) | undefined;
 }
 
+async function markTrackedScoringRunRunning(runId: string): Promise<void> {
+  await prisma.jobExecution.updateMany({
+    where: {
+      id: runId,
+      type: SCORING_COMPUTE_JOB_NAME,
+      status: 'queued',
+    },
+    data: {
+      status: 'running',
+      startedAt: new Date(),
+      error: null,
+    },
+  });
+}
+
+async function finalizeTrackedScoringRun(
+  runId: string,
+  status: 'completed' | 'failed',
+  error: string | null = null,
+): Promise<void> {
+  await prisma.jobExecution.updateMany({
+    where: {
+      id: runId,
+      type: SCORING_COMPUTE_JOB_NAME,
+      status: {
+        in: ['queued', 'running'],
+      },
+    },
+    data: {
+      status,
+      finishedAt: new Date(),
+      error,
+    },
+  });
+}
+
 export async function handleScoringComputeJob(
   logger: ScoringComputeLogger,
   job: Job<ScoringComputeJobPayload>,
@@ -96,6 +132,8 @@ export async function handleScoringComputeJob(
   );
 
   try {
+    await markTrackedScoringRunRunning(runId);
+
     // Dynamic qualification threshold from PipelineSetting table
     const qualificationThreshold = await getScoreQualificationThreshold();
 
@@ -127,6 +165,7 @@ export async function handleScoringComputeJob(
         },
         'No ICP targets resolved for scoring.compute job',
       );
+      await finalizeTrackedScoringRun(runId, 'completed');
       return;
     }
 
@@ -441,6 +480,8 @@ export async function handleScoringComputeJob(
       });
     }
 
+    await finalizeTrackedScoringRun(runId, 'completed');
+
     logger.info(
       {
         jobId: job.id,
@@ -453,6 +494,11 @@ export async function handleScoringComputeJob(
       'Completed scoring.compute job',
     );
   } catch (error: unknown) {
+    const errorMessage =
+      error instanceof Error ? error.message : 'Failed scoring.compute job';
+
+    await finalizeTrackedScoringRun(runId, 'failed', errorMessage).catch(() => { /* best-effort */ });
+
     // Mark JobExecution as failed for tracked leads
     const failedLeadIds = job.data.leadIds ?? [];
     if (failedLeadIds.length > 0) {
@@ -462,7 +508,7 @@ export async function handleScoringComputeJob(
           status: 'queued',
           leadId: { in: failedLeadIds },
         },
-        data: { status: 'failed', finishedAt: new Date() },
+        data: { status: 'failed', finishedAt: new Date(), error: errorMessage },
       }).catch(() => { /* best-effort */ });
     }
 

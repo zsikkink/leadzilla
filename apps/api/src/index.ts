@@ -259,6 +259,28 @@ async function main(): Promise<void> {
     }
 
     try {
+      await prisma.jobExecution.updateMany({
+        where: {
+          id: payload.runId,
+          type: 'scoring.compute',
+          status: 'queued',
+        },
+        data: {
+          status: 'running',
+          startedAt: new Date(),
+          error: null,
+        },
+      });
+    } catch (error: unknown) {
+      logger.error(
+        { error, runId: payload.runId, outboxEventId },
+        'Immediate scoring publish succeeded but failed to mark the root scoring run as running',
+      );
+
+      return;
+    }
+
+    try {
       await prisma.outboxEvent.update({
         where: { id: outboxEventId },
         data: {
