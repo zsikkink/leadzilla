@@ -39,9 +39,10 @@ export const SCORING_COMPUTE_RETRY_OPTIONS: Pick<
 };
 
 export interface ScoringComputeJobPayload
-  extends Pick<CreateScoringRunRequest, 'mode' | 'icpProfileId' | 'leadIds' | 'modelVersionId' | 'requestedByUserId'> {
+  extends Pick<CreateScoringRunRequest, 'mode' | 'icpProfileId' | 'leadIds' | 'modelVersionId'> {
   runId: string;
   correlationId?: string;
+  requestedByUserId?: string | undefined;
 }
 
 export interface ScoringComputeLogger {

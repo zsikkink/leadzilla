@@ -30,12 +30,13 @@ export const MODEL_TRAIN_RETRY_OPTIONS: Pick<
 export interface ModelTrainJobPayload
   extends Pick<
     CreateRetrainRunRequest,
-    'windowDays' | 'minSamples' | 'activateIfPass' | 'requestedByUserId'
+    'windowDays' | 'minSamples' | 'activateIfPass'
   > {
   runId: string;
   trainingRunId: string;
   trigger: TrainingTrigger;
   correlationId?: string | undefined;
+  requestedByUserId?: string | undefined;
 }
 
 export interface ModelTrainLogger {
