@@ -7,7 +7,6 @@ const {
   prismaMock,
   processOnMock,
   processExitMock,
-  serverMock,
   txMock,
 } = vi.hoisted(() => {
   const bossMock = {
