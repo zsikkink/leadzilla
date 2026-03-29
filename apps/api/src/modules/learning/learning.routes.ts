@@ -16,6 +16,7 @@ import {
   TrainingRunResponseSchema,
 } from '@lead-flood/contracts';
 
+import { requireAppAdminAccess, requireAuthenticatedUserId } from '../../auth/guard.js';
 import { LearningNotFoundError, LearningNotImplementedError } from './learning.errors.js';
 import { PrismaLearningRepository } from './learning.repository.js';
 import { buildLearningService } from './learning.service.js';
@@ -55,15 +56,28 @@ function handleModuleError(error: unknown, request: FastifyRequest, reply: Fasti
 export function registerLearningRoutes(app: FastifyInstance): void {
   const repository = new PrismaLearningRepository();
   const service = buildLearningService(repository);
+  const requireAppAdmin = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await requireAppAdminAccess(request, reply))) {
+      return reply;
+    }
+  };
 
-  app.post('/v1/learning/runs/retrain', async (request, reply) => {
+  app.post('/v1/learning/runs/retrain', { preHandler: requireAppAdmin }, async (request, reply) => {
     const parsed = CreateRetrainRunRequestSchema.safeParse(request.body);
     if (!parsed.success) {
       return sendValidationError(reply, request.id, 'Invalid retrain run payload');
     }
 
+    const userId = requireAuthenticatedUserId(request, reply);
+    if (!userId) {
+      return;
+    }
+
     try {
-      const result = await service.createRetrainRun(parsed.data);
+      const result = await service.createRetrainRun({
+        ...parsed.data,
+        requestedByUserId: userId,
+      });
       return CreateRetrainRunResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
@@ -163,7 +177,7 @@ export function registerLearningRoutes(app: FastifyInstance): void {
     }
   });
 
-  app.post('/v1/learning/models/:modelVersionId/activate', async (request, reply) => {
+  app.post('/v1/learning/models/:modelVersionId/activate', { preHandler: requireAppAdmin }, async (request, reply) => {
     const parsedParams = ModelVersionIdParamsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return sendValidationError(reply, request.id, 'Invalid model version id');

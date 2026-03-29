@@ -18,6 +18,7 @@ import {
   ScoringRunStatusResponseSchema,
 } from '@lead-flood/contracts';
 
+import { requireAppAdminAccess, requireAuthenticatedUserId } from '../../auth/guard.js';
 import { ScoringNotImplementedError } from './scoring.errors.js';
 import { PrismaScoringRepository } from './scoring.repository.js';
 import {
@@ -63,15 +64,28 @@ export function registerScoringRoutes(
           throw new ScoringNotImplementedError('Scoring queue publisher is not configured');
         },
   });
+  const requireAppAdmin = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await requireAppAdminAccess(request, reply))) {
+      return reply;
+    }
+  };
 
-  app.post('/v1/scoring/runs', async (request, reply) => {
+  app.post('/v1/scoring/runs', { preHandler: requireAppAdmin }, async (request, reply) => {
     const parsed = CreateScoringRunRequestSchema.safeParse(request.body);
     if (!parsed.success) {
       return sendValidationError(reply, request.id, 'Invalid scoring run payload');
     }
 
+    const userId = requireAuthenticatedUserId(request, reply);
+    if (!userId) {
+      return;
+    }
+
     try {
-      const result = await service.createScoringRun(parsed.data);
+      const result = await service.createScoringRun({
+        ...parsed.data,
+        requestedByUserId: userId,
+      });
       return CreateScoringRunResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
@@ -215,7 +229,7 @@ export function registerScoringRoutes(
     name: z.string().min(1).max(120),
   }).strict();
 
-  app.post('/v1/scoring/rules', async (request, reply) => {
+  app.post('/v1/scoring/rules', { preHandler: requireAppAdmin }, async (request, reply) => {
     const parsed = CreateScoringRuleBodySchema.safeParse(request.body);
     if (!parsed.success) {
       return sendValidationError(reply, request.id, 'Invalid qualification rule payload');

@@ -103,3 +103,21 @@ export const requireAppAdminAccess: AppAdminGuard = async (
   );
   return false;
 };
+
+export function requireAuthenticatedUserId(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): string | null {
+  const userId = request.user?.sub;
+  if (userId) {
+    return userId;
+  }
+
+  reply.status(401).send(
+    ErrorResponseSchema.parse({
+      error: 'Authentication required',
+      requestId: request.id,
+    }),
+  );
+  return null;
+}
