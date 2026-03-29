@@ -332,7 +332,7 @@ export class PrismaLearningRepository extends StubLearningRepository {
 
   override async activateModel(
     modelVersionId: string,
-    input: ActivateModelRequest,
+    _input: ActivateModelRequest,
   ): Promise<ModelVersionResponse> {
     const existing = await prisma.modelVersion.findUnique({
       where: { id: modelVersionId },
@@ -342,19 +342,17 @@ export class PrismaLearningRepository extends StubLearningRepository {
     }
 
     const activated = await prisma.$transaction(async (tx) => {
-      if (input.retirePreviousActive) {
-        await tx.modelVersion.updateMany({
-          where: {
-            modelType: existing.modelType,
-            stage: 'ACTIVE',
-            id: { not: modelVersionId },
-          },
-          data: {
-            stage: 'ARCHIVED',
-            retiredAt: new Date(),
-          },
-        });
-      }
+      await tx.modelVersion.updateMany({
+        where: {
+          modelType: existing.modelType,
+          stage: 'ACTIVE',
+          id: { not: modelVersionId },
+        },
+        data: {
+          stage: 'ARCHIVED',
+          retiredAt: new Date(),
+        },
+      });
 
       return tx.modelVersion.update({
         where: { id: modelVersionId },

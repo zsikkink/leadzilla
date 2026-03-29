@@ -241,6 +241,14 @@ export async function ensureBaselineModelVersion(): Promise<string> {
 
   try {
     const created = await prisma.$transaction(async (tx) => {
+      const existingActive = await tx.modelVersion.findFirst({
+        where: {
+          modelType: 'LOGISTIC_REGRESSION',
+          stage: 'ACTIVE',
+        },
+        select: { id: true },
+      });
+
       const trainingRun = await tx.trainingRun.create({
         data: {
           modelType: 'LOGISTIC_REGRESSION',
@@ -265,7 +273,7 @@ export async function ensureBaselineModelVersion(): Promise<string> {
           trainingRunId: trainingRun.id,
           modelType: 'LOGISTIC_REGRESSION',
           versionTag: BASELINE_MODEL_VERSION_TAG,
-          stage: 'ACTIVE',
+          stage: existingActive ? 'ARCHIVED' : 'ACTIVE',
           featureSchemaJson: {
             sourceVersion: BASELINE_FEATURE_EXTRACTOR_VERSION,
             keys: TRAINED_MODEL_FEATURE_KEYS,
@@ -275,7 +283,7 @@ export async function ensureBaselineModelVersion(): Promise<string> {
           deterministicWeightsJson: {},
           checksum: deterministicChecksum(checksumSource),
           trainedAt: now,
-          activatedAt: now,
+          ...(existingActive ? { retiredAt: now } : { activatedAt: now }),
         },
       });
     });

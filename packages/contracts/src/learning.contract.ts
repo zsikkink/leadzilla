@@ -131,7 +131,7 @@ export const ListModelVersionsResponseSchema = z
 export const ActivateModelRequestSchema = z
   .object({
     activatedByUserId: z.string().min(1),
-    retirePreviousActive: z.boolean().default(true),
+    retirePreviousActive: z.literal(true).default(true),
   })
   .strict();
 

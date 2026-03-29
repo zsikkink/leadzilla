@@ -265,4 +265,88 @@ describe('learning.routes authz', () => {
     expect(dbMocks.prisma.trainingRun.create).not.toHaveBeenCalled();
     expect(enqueueModelTrain).not.toHaveBeenCalled();
   });
+
+  it('activates a model by retiring other active versions for the same model type', async () => {
+    currentUserId = ADMIN_USER_ID;
+    dbMocks.query.mockResolvedValue({
+      rows: [{ isAdmin: true }],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/learning/models/model_1/activate',
+      payload: {
+        activatedByUserId: ADMIN_USER_ID,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      id: 'model_1',
+      trainingRunId: 'training_run_1',
+      modelType: 'LOGISTIC_REGRESSION',
+      versionTag: 'v1',
+      stage: 'ACTIVE',
+      featureSchemaJson: {},
+      coefficientsJson: {},
+      intercept: null,
+      deterministicWeightsJson: {},
+      artifactUri: null,
+      checksum: 'checksum',
+      trainedAt: '2026-03-20T00:00:00.000Z',
+      activatedAt: '2026-03-21T00:00:00.000Z',
+      retiredAt: null,
+      createdAt: '2026-03-20T00:00:00.000Z',
+      updatedAt: '2026-03-21T00:00:00.000Z',
+    });
+    expect(dbMocks.prisma.modelVersion.updateMany).toHaveBeenCalledWith({
+      where: {
+        modelType: 'LOGISTIC_REGRESSION',
+        stage: 'ACTIVE',
+        id: { not: 'model_1' },
+      },
+      data: {
+        stage: 'ARCHIVED',
+        retiredAt: expect.any(Date),
+      },
+    });
+    expect(dbMocks.prisma.modelVersion.update).toHaveBeenCalledWith({
+      where: { id: 'model_1' },
+      data: {
+        stage: 'ACTIVE',
+        activatedAt: expect.any(Date),
+      },
+    });
+
+    const retireOrder = dbMocks.prisma.modelVersion.updateMany.mock.invocationCallOrder[0];
+    const activateOrder = dbMocks.prisma.modelVersion.update.mock.invocationCallOrder[0];
+    expect(retireOrder).toBeDefined();
+    expect(activateOrder).toBeDefined();
+    expect(retireOrder!).toBeLessThan(activateOrder!);
+  });
+
+  it('rejects model activation payloads that attempt to keep a prior active model', async () => {
+    currentUserId = ADMIN_USER_ID;
+    dbMocks.query.mockResolvedValue({
+      rows: [{ isAdmin: true }],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/learning/models/model_1/activate',
+      payload: {
+        activatedByUserId: ADMIN_USER_ID,
+        retirePreviousActive: false,
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: 'Invalid activate model payload',
+      requestId: expect.any(String),
+    });
+    expect(dbMocks.prisma.modelVersion.findUnique).not.toHaveBeenCalled();
+    expect(dbMocks.prisma.modelVersion.updateMany).not.toHaveBeenCalled();
+    expect(dbMocks.prisma.modelVersion.update).not.toHaveBeenCalled();
+  });
 });

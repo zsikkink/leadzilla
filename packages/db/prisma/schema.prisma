@@ -465,6 +465,8 @@ model TrainingRun {
   @@index([status, createdAt])
 }
 
+/// The canonical SQL migration chain enforces at most one ACTIVE row per
+/// modelType via a partial unique index that Prisma cannot express here.
 model ModelVersion {
   id                     String              @id @default(cuid())
   trainingRunId          String
