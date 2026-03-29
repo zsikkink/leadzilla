@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { validateSupabaseRuntimeDatabaseUrl } from '@lead-flood/db/runtime-database-url-policy';
 
 const LEGACY_GOOGLE_CSE_ENV_KEYS = [
   'GOOGLE_SEARCH_ENABLED',
@@ -14,9 +15,6 @@ const LEGACY_GOOGLE_CSE_ENV_KEYS = [
   'CUSTOMSEARCH_API_KEY',
   'CUSTOMSEARCH_ENGINE_ID',
 ] as const;
-
-const LOCAL_DATABASE_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
-const SUPABASE_HOST_SUFFIXES = ['.supabase.co', '.supabase.com'] as const;
 
 const optionalNonEmptyString = () =>
   z.preprocess((value) => {
@@ -89,6 +87,12 @@ const ApiEnvSchema = z.object({
 
 export type ApiEnv = z.infer<typeof ApiEnvSchema>;
 
+const API_RUNTIME_DATABASE_URL_VALIDATION = {
+  invalidConfigurationLabel: 'Invalid API environment configuration',
+  servicePath: 'apps/api',
+  poolerConnectionLimitContext: 'API runtime stability',
+} as const;
+
 function withPortFallback(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   if (source.API_PORT || !source.PORT) {
     return source;
@@ -98,71 +102,6 @@ function withPortFallback(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     ...source,
     API_PORT: source.PORT,
   };
-}
-
-function parseDatabaseUrl(name: 'DATABASE_URL' | 'DIRECT_URL', value: string): URL {
-  let parsed: URL;
-
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new Error(
-      `Invalid API environment configuration:\n${name}: must be a valid postgres connection string`,
-    );
-  }
-
-  if (parsed.protocol !== 'postgresql:' && parsed.protocol !== 'postgres:') {
-    throw new Error(
-      `Invalid API environment configuration:\n${name}: must use the postgres:// or postgresql:// protocol`,
-    );
-  }
-
-  return parsed;
-}
-
-function isSupabaseHost(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return SUPABASE_HOST_SUFFIXES.some(
-    (suffix) => normalized === suffix.slice(1) || normalized.endsWith(suffix),
-  );
-}
-
-function validateRuntimeDatabaseUrl(
-  name: 'DATABASE_URL' | 'DIRECT_URL',
-  value: string,
-  source: Pick<ApiEnv, 'APP_ENV' | 'NODE_ENV'>,
-): void {
-  if (source.APP_ENV === 'test' || source.APP_ENV === 'ci' || source.NODE_ENV === 'test') {
-    return;
-  }
-
-  const parsed = parseDatabaseUrl(name, value);
-  const hostname = parsed.hostname.toLowerCase();
-
-  if (LOCAL_DATABASE_HOSTS.has(hostname)) {
-    throw new Error(
-      `Invalid API environment configuration:\n${name}: apps/api is configured for remote Supabase only. Replace the localhost lead_flood URL with the remote Supabase connection string in apps/api/.env.local or Railway service variables.`,
-    );
-  }
-
-  if (!isSupabaseHost(hostname)) {
-    throw new Error(
-      `Invalid API environment configuration:\n${name}: expected a Supabase Postgres host, received "${parsed.hostname}"`,
-    );
-  }
-
-  if (parsed.searchParams.get('sslmode') !== 'require') {
-    throw new Error(
-      `Invalid API environment configuration:\n${name}: remote Supabase URLs must include sslmode=require`,
-    );
-  }
-
-  const isSupabasePooler = hostname.includes('pooler.supabase.com');
-  if (name === 'DATABASE_URL' && isSupabasePooler && !parsed.searchParams.get('connection_limit')) {
-    throw new Error(
-      'Invalid API environment configuration:\nDATABASE_URL: Supabase pooler URLs should include connection_limit=3 for API runtime stability',
-    );
-  }
 }
 
 export function loadApiEnv(source: NodeJS.ProcessEnv): ApiEnv {
@@ -182,8 +121,18 @@ export function loadApiEnv(source: NodeJS.ProcessEnv): ApiEnv {
     throw new Error(`Invalid API environment configuration:\n${issues.join('\n')}`);
   }
 
-  validateRuntimeDatabaseUrl('DATABASE_URL', parsed.data.DATABASE_URL, parsed.data);
-  validateRuntimeDatabaseUrl('DIRECT_URL', parsed.data.DIRECT_URL, parsed.data);
+  validateSupabaseRuntimeDatabaseUrl(
+    'DATABASE_URL',
+    parsed.data.DATABASE_URL,
+    parsed.data,
+    API_RUNTIME_DATABASE_URL_VALIDATION,
+  );
+  validateSupabaseRuntimeDatabaseUrl(
+    'DIRECT_URL',
+    parsed.data.DIRECT_URL,
+    parsed.data,
+    API_RUNTIME_DATABASE_URL_VALIDATION,
+  );
 
   const hasIssuer = !!parsed.data.SUPABASE_JWT_ISSUER;
   const hasProjectRef = !!parsed.data.SUPABASE_PROJECT_REF;

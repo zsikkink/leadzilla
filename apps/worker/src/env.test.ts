@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { loadWorkerEnv } from './env.js';
 
+const remoteSupabaseRuntimeUrl =
+  'postgresql://postgres:postgres@db.cbcgrzvqidtrtrtnzlso.supabase.co:5432/postgres?sslmode=require';
+const remoteSupabasePoolerUrl =
+  'postgresql://postgres:postgres@aws-0-us-east-1.pooler.supabase.com:6543/postgres?sslmode=require&connection_limit=3';
+
 describe('loadWorkerEnv', () => {
   it('parses required worker variables', () => {
     const env = loadWorkerEnv({
@@ -89,6 +94,75 @@ describe('loadWorkerEnv', () => {
         GOOGLE_SEARCH_API_KEY: 'legacy-key',
       }),
     ).toThrowError('Google CSE is deprecated and not supported');
+  });
+
+  it('allows localhost postgres urls in ci app env for built-runtime validation', () => {
+    expect(() =>
+      loadWorkerEnv({
+        DATABASE_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood_release_runtime',
+        APP_ENV: 'ci',
+        NODE_ENV: 'production',
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects localhost postgres urls outside ci/test validation', () => {
+    expect(() =>
+      loadWorkerEnv({
+        DATABASE_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood',
+        APP_ENV: 'local',
+        NODE_ENV: 'production',
+      }),
+    ).toThrow(/configured for remote Supabase only/);
+  });
+
+  it('rejects non-Supabase postgres hosts outside ci/test validation', () => {
+    expect(() =>
+      loadWorkerEnv({
+        DATABASE_URL: 'postgresql://postgres:postgres@db.example.com:5432/postgres?sslmode=require',
+        APP_ENV: 'local',
+        NODE_ENV: 'production',
+      }),
+    ).toThrow(/expected a Supabase Postgres host/);
+  });
+
+  it('rejects remote Supabase urls without sslmode=require outside ci/test validation', () => {
+    expect(() =>
+      loadWorkerEnv({
+        DATABASE_URL: 'postgresql://postgres:postgres@db.cbcgrzvqidtrtrtnzlso.supabase.co:5432/postgres',
+        APP_ENV: 'local',
+        NODE_ENV: 'production',
+      }),
+    ).toThrow(/sslmode=require/);
+  });
+
+  it('rejects Supabase pooler urls without connection_limit outside ci/test validation', () => {
+    expect(() =>
+      loadWorkerEnv({
+        DATABASE_URL:
+          'postgresql://postgres:postgres@aws-0-us-east-1.pooler.supabase.com:6543/postgres?sslmode=require',
+        APP_ENV: 'local',
+        NODE_ENV: 'production',
+      }),
+    ).toThrow(/connection_limit=3/);
+  });
+
+  it('accepts a valid remote Supabase runtime DATABASE_URL outside ci/test validation', () => {
+    expect(() =>
+      loadWorkerEnv({
+        DATABASE_URL: remoteSupabaseRuntimeUrl,
+        APP_ENV: 'local',
+        NODE_ENV: 'production',
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      loadWorkerEnv({
+        DATABASE_URL: remoteSupabasePoolerUrl,
+        APP_ENV: 'local',
+        NODE_ENV: 'production',
+      }),
+    ).not.toThrow();
   });
 
   it('treats blank optional provider and notification vars as unset', () => {

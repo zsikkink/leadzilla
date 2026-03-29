@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
+    },
+    "./runtime-database-url-policy": {
+      "types": "./dist/src/runtime-database-url-policy.d.ts",
+      "default": "./dist/src/runtime-database-url-policy.js"
     }
   },
   "files": [

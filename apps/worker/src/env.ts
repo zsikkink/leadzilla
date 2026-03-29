@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { validateSupabaseRuntimeDatabaseUrl } from '@lead-flood/db/runtime-database-url-policy';
 
 const envBoolean = z.preprocess((value) => {
   if (typeof value === 'boolean') {
@@ -57,6 +58,12 @@ const LEGACY_GOOGLE_CSE_ENV_KEYS = [
   'CUSTOMSEARCH_API_KEY',
   'CUSTOMSEARCH_ENGINE_ID',
 ] as const;
+
+const WORKER_RUNTIME_DATABASE_URL_VALIDATION = {
+  invalidConfigurationLabel: 'Invalid worker environment configuration',
+  servicePath: 'apps/worker',
+  poolerConnectionLimitContext: 'worker runtime stability',
+} as const;
 
 function findLegacyGoogleCseEnvKeys(source: NodeJS.ProcessEnv): string[] {
   const explicitMatches = LEGACY_GOOGLE_CSE_ENV_KEYS.filter((key) => key in source);
@@ -178,6 +185,13 @@ export function loadWorkerEnv(source: NodeJS.ProcessEnv): WorkerEnv {
     const issues = parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`);
     throw new Error(`Invalid worker environment configuration:\n${issues.join('\n')}`);
   }
+
+  validateSupabaseRuntimeDatabaseUrl(
+    'DATABASE_URL',
+    parsed.data.DATABASE_URL,
+    parsed.data,
+    WORKER_RUNTIME_DATABASE_URL_VALIDATION,
+  );
 
   return parsed.data;
 }
