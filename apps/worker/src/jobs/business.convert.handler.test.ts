@@ -38,6 +38,12 @@ const { dbMock, txMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => (
     },
   },
   txMock: {
+    jobExecution: {
+      create: vi.fn(),
+    },
+    outboxEvent: {
+      create: vi.fn(),
+    },
     lead: {
       findMany: vi.fn(),
       findFirst: vi.fn(),
@@ -162,7 +168,7 @@ function makeDeps(enqueueFeaturesCompute = vi.fn()): BusinessConvertJobDependenc
   };
 }
 
-describe('handleBusinessConvertJob reused-lead rediscovery handling', () => {
+describe('handleBusinessConvertJob features handoff behavior', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
@@ -267,7 +273,9 @@ describe('handleBusinessConvertJob reused-lead rediscovery handling', () => {
       deletedAt: null,
       businessId: 'business_1',
     });
-    txMock.lead.create.mockResolvedValue({ id: 'lead_new_1' });
+    txMock.lead.create.mockResolvedValue({ id: 'lead_new_1', businessId: 'business_1' });
+    txMock.jobExecution.create.mockResolvedValue({ id: 'features_run_1' });
+    txMock.outboxEvent.create.mockResolvedValue({ id: 'outbox_1' });
     txMock.businessConversion.create.mockResolvedValue({ id: 'conversion_1' });
     txMock.businessContact.createMany.mockResolvedValue({ count: 2 });
     txMock.discoveryCostEvent.create.mockResolvedValue({ id: 'cost_1' });
@@ -275,6 +283,98 @@ describe('handleBusinessConvertJob reused-lead rediscovery handling', () => {
     pipelineSettingsMock.isProviderWithinBudget.mockResolvedValue(true);
     trackerMock.tryFinalizeDiscoveryRun.mockResolvedValue(undefined);
     trackerMock.checkLeadTargetReached.mockResolvedValue(false);
+  });
+
+  it('persists a durable features.compute handoff inside the new-lead transaction', async () => {
+    const enqueueFeaturesCompute = vi.fn();
+    txMock.lead.findFirst.mockResolvedValueOnce(null);
+
+    await handleBusinessConvertJob(
+      logger,
+      makeJob({
+        businessId: 'business_1',
+        discoveryRunId: 'run_old',
+        icpProfileId: 'icp_1',
+        correlationId: 'corr_1',
+      }),
+      makeDeps(enqueueFeaturesCompute),
+    );
+
+    expect(txMock.lead.create).toHaveBeenCalledTimes(1);
+    expect(txMock.jobExecution.create).toHaveBeenCalledWith({
+      data: {
+        type: 'features.compute',
+        status: 'queued',
+        payload: {
+          leadId: 'lead_new_1',
+          icpProfileId: 'icp_1',
+          snapshotVersion: 1,
+          correlationId: 'corr_1',
+        },
+        leadId: 'lead_new_1',
+      },
+      select: { id: true },
+    });
+    expect(txMock.outboxEvent.create).toHaveBeenCalledWith({
+      data: {
+        type: 'features.compute',
+        payload: {
+          leadId: 'lead_new_1',
+          icpProfileId: 'icp_1',
+          snapshotVersion: 1,
+          runId: 'features_run_1',
+          correlationId: 'corr_1',
+        },
+        status: 'pending',
+      },
+      select: { id: true },
+    });
+    expect(enqueueFeaturesCompute).not.toHaveBeenCalled();
+    expect(trackerMock.checkLeadTargetReached).toHaveBeenCalledWith('run_old', logger);
+    expect(trackerMock.tryFinalizeDiscoveryRun).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: 'business_1',
+        leadId: 'lead_new_1',
+        discoveryRunId: 'run_old',
+        icpProfileId: 'icp_1',
+        featuresComputeRunId: 'features_run_1',
+        outboxEventId: 'outbox_1',
+      }),
+      'Persisted durable features.compute handoff for newly created lead',
+    );
+  });
+
+  it('does not create a second durable handoff when business.convert replays the same new-lead outcome', async () => {
+    const enqueueFeaturesCompute = vi.fn();
+    txMock.lead.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'lead_new_1',
+        deletedAt: null,
+        businessId: 'business_1',
+      });
+
+    const replayPayload = {
+      businessId: 'business_1',
+      discoveryRunId: 'run_old',
+      icpProfileId: 'icp_1',
+      correlationId: 'corr_1',
+    } satisfies BusinessConvertJobPayload;
+
+    await handleBusinessConvertJob(logger, makeJob(replayPayload), makeDeps(enqueueFeaturesCompute));
+    await handleBusinessConvertJob(logger, makeJob(replayPayload), makeDeps(enqueueFeaturesCompute));
+
+    expect(txMock.jobExecution.create).toHaveBeenCalledTimes(1);
+    expect(txMock.outboxEvent.create).toHaveBeenCalledTimes(1);
+    expect(enqueueFeaturesCompute).toHaveBeenCalledTimes(1);
+    expect(enqueueFeaturesCompute).toHaveBeenCalledWith({
+      runId: 'run_old',
+      leadId: 'lead_new_1',
+      icpProfileId: 'icp_1',
+      snapshotVersion: 1,
+      correlationId: 'corr_1',
+    });
   });
 
   it('restores current ICP lineage and re-enters features when a reused lead lacks a current ICP score', async () => {

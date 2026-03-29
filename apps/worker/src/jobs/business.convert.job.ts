@@ -17,6 +17,10 @@ import {
   type CandidateAdjudicationResult,
   type LlmExtractionConfig,
 } from '../utils/llm-extraction.js';
+import {
+  FEATURES_COMPUTE_JOB_NAME,
+  type FeaturesComputeJobPayload,
+} from './features.compute.job.js';
 
 // ── Constants ──────────────────────────────────────────────────────────
 export const BUSINESS_CONVERT_JOB_NAME = 'business.convert';
@@ -290,10 +294,63 @@ export interface BusinessConvertLogger {
   error: (object: Record<string, unknown>, message: string) => void;
 }
 
+interface DurableFeaturesComputeHandoff {
+  runId: string;
+  outboxEventId: string;
+}
+
+type DurableFeaturesComputeWriter = Pick<Prisma.TransactionClient, 'jobExecution' | 'outboxEvent'>;
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 function isCacheValid(scrapedAt: Date | null): boolean {
   if (!scrapedAt) return false;
   return Date.now() - scrapedAt.getTime() < SCRAPE_CACHE_TTL_MS;
+}
+
+async function persistDurableFeaturesComputeHandoff(
+  tx: DurableFeaturesComputeWriter,
+  input: {
+    leadId: string;
+    icpProfileId: string;
+    snapshotVersion: number;
+    correlationId?: string | undefined;
+  },
+): Promise<DurableFeaturesComputeHandoff> {
+  const jobExecutionPayload = {
+    leadId: input.leadId,
+    icpProfileId: input.icpProfileId,
+    snapshotVersion: input.snapshotVersion,
+    ...(input.correlationId !== undefined ? { correlationId: input.correlationId } : {}),
+  };
+
+  const jobExecution = await tx.jobExecution.create({
+    data: {
+      type: FEATURES_COMPUTE_JOB_NAME,
+      status: 'queued',
+      payload: toInputJson(jobExecutionPayload),
+      leadId: input.leadId,
+    },
+    select: { id: true },
+  });
+
+  const outboxPayload: FeaturesComputeJobPayload = {
+    ...jobExecutionPayload,
+    runId: jobExecution.id,
+  };
+
+  const outboxEvent = await tx.outboxEvent.create({
+    data: {
+      type: FEATURES_COMPUTE_JOB_NAME,
+      payload: toInputJson(outboxPayload),
+      status: 'pending',
+    },
+    select: { id: true },
+  });
+
+  return {
+    runId: jobExecution.id,
+    outboxEventId: outboxEvent.id,
+  };
 }
 
 function scoreCandidateConfidence(input: {
@@ -2620,7 +2677,26 @@ export async function handleBusinessConvertJob(
     // Record cost events inside transaction
     await persistCostEvents(tx as unknown as typeof prisma, discoveryRunId, businessId, costEvents);
 
-    return { lead, isNew: true };
+    const featuresComputeHandoff =
+      !shouldAutoReject && !isDraftedLead
+        ? await persistDurableFeaturesComputeHandoff(tx, {
+            leadId: lead.id,
+            icpProfileId,
+            snapshotVersion: 1,
+            correlationId: effectiveCorrelationId,
+          })
+        : null;
+
+    return {
+      lead,
+      isNew: true,
+      ...(featuresComputeHandoff
+        ? {
+            featuresComputeRunId: featuresComputeHandoff.runId,
+            featuresComputeOutboxEventId: featuresComputeHandoff.outboxEventId,
+          }
+        : {}),
+    };
   });
 
   await prisma.contactRecoveryItem.deleteMany({
@@ -2652,6 +2728,21 @@ export async function handleBusinessConvertJob(
     throw new Error('business.convert invariant violated: missing lead for persisted tx result');
   }
   const requiredLeadId = txLeadId!;
+  const durableFeaturesComputeRunId =
+    'featuresComputeRunId' in txResult ? txResult.featuresComputeRunId : null;
+  const durableFeaturesComputeOutboxEventId =
+    'featuresComputeOutboxEventId' in txResult ? txResult.featuresComputeOutboxEventId : null;
+
+  if (
+    txResult.isNew &&
+    !shouldAutoReject &&
+    !isDraftedLead &&
+    (!durableFeaturesComputeRunId || !durableFeaturesComputeOutboxEventId)
+  ) {
+    throw new Error(
+      'business.convert invariant violated: missing durable features.compute handoff for new lead',
+    );
+  }
 
   if (txResult.isNew) {
     // New leads still write the full canonical lineage/enrichment records here.
@@ -2804,19 +2895,16 @@ export async function handleBusinessConvertJob(
     }
   }
 
-  // ── 9. Enqueue features.compute if lead is newly created and NOT auto-rejected ─
-  if (txResult.isNew && !shouldAutoReject && !isDraftedLead && deps.enqueueFeaturesCompute) {
-    await deps.enqueueFeaturesCompute({
-      runId: discoveryRunId,
-      leadId: requiredLeadId,
-      icpProfileId,
-      snapshotVersion: 1,
-      correlationId: effectiveCorrelationId,
-    });
-
+  // ── 9. New leads persist the features.compute handoff transactionally ─
+  if (txResult.isNew && durableFeaturesComputeRunId && durableFeaturesComputeOutboxEventId) {
     logger.info(
-      { ...logCtx, leadId: txLeadId },
-      'Enqueued features.compute for newly created lead',
+      {
+        ...logCtx,
+        leadId: txLeadId,
+        featuresComputeRunId: durableFeaturesComputeRunId,
+        outboxEventId: durableFeaturesComputeOutboxEventId,
+      },
+      'Persisted durable features.compute handoff for newly created lead',
     );
   }
 
