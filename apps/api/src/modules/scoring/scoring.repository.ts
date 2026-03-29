@@ -19,6 +19,10 @@ import { prisma, toInputJson } from '@lead-flood/db';
 
 import { ScoringNotImplementedError, ScoringRunNotFoundError } from './scoring.errors.js';
 
+type CreateScoringRunInput = CreateScoringRunRequest & {
+  requestedByUserId?: string | undefined;
+};
+
 export interface CreateScoringRuleInput {
   icpProfileId: string;
   fieldKey: string;
@@ -82,7 +86,7 @@ function mapJobStatusToPipelineStatus(
 }
 
 export interface ScoringRepository {
-  createScoringRun(input: CreateScoringRunRequest): Promise<CreateScoringRunResult>;
+  createScoringRun(input: CreateScoringRunInput): Promise<CreateScoringRunResult>;
   markScoringRunFailed(runId: string, errorMessage: string): Promise<void>;
   getScoringRunStatus(runId: string): Promise<ScoringRunStatusResponse>;
   listScorePredictions(query: ListScorePredictionsQuery): Promise<ListScorePredictionsResponse>;
@@ -103,7 +107,7 @@ export interface CreateScoringRunResult extends CreateScoringRunResponse {
 }
 
 export class StubScoringRepository implements ScoringRepository {
-  async createScoringRun(_input: CreateScoringRunRequest): Promise<CreateScoringRunResult> {
+  async createScoringRun(_input: CreateScoringRunInput): Promise<CreateScoringRunResult> {
     throw new ScoringNotImplementedError('TODO: create scoring run persistence');
   }
 
@@ -143,7 +147,7 @@ export class StubScoringRepository implements ScoringRepository {
 }
 
 export class PrismaScoringRepository extends StubScoringRepository {
-  override async createScoringRun(input: CreateScoringRunRequest): Promise<CreateScoringRunResult> {
+  override async createScoringRun(input: CreateScoringRunInput): Promise<CreateScoringRunResult> {
     const runId = randomUUID();
     const queuePayload = {
       runId,

@@ -37,7 +37,6 @@ export const CreateRetrainRunRequestSchema = z
     minSamples: z.number().int().min(20).default(100),
     trigger: TrainingTriggerSchema.default('MANUAL'),
     activateIfPass: z.boolean().default(true),
-    requestedByUserId: z.string().min(1).optional(),
   })
   .strict();
 

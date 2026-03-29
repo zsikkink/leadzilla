@@ -16,8 +16,12 @@ import { prisma } from '@lead-flood/db';
 
 import { LearningNotFoundError, LearningNotImplementedError } from './learning.errors.js';
 
+type CreateRetrainRunInput = CreateRetrainRunRequest & {
+  requestedByUserId?: string | undefined;
+};
+
 export interface LearningRepository {
-  createRetrainRun(input: CreateRetrainRunRequest): Promise<CreateRetrainRunResponse>;
+  createRetrainRun(input: CreateRetrainRunInput): Promise<CreateRetrainRunResponse>;
   listTrainingRuns(query: ListTrainingRunsQuery): Promise<ListTrainingRunsResponse>;
   getTrainingRun(trainingRunId: string): Promise<TrainingRunResponse>;
   listModelVersions(query: ListModelVersionsQuery): Promise<ListModelVersionsResponse>;
@@ -30,7 +34,7 @@ export interface LearningRepository {
 }
 
 export class StubLearningRepository implements LearningRepository {
-  async createRetrainRun(_input: CreateRetrainRunRequest): Promise<CreateRetrainRunResponse> {
+  async createRetrainRun(_input: CreateRetrainRunInput): Promise<CreateRetrainRunResponse> {
     throw new LearningNotImplementedError('TODO: create retrain run persistence');
   }
 
@@ -180,7 +184,7 @@ function mapModelEvaluationToResponse(evaluation: {
 }
 
 export class PrismaLearningRepository extends StubLearningRepository {
-  override async createRetrainRun(input: CreateRetrainRunRequest): Promise<CreateRetrainRunResponse> {
+  override async createRetrainRun(input: CreateRetrainRunInput): Promise<CreateRetrainRunResponse> {
     const now = new Date();
     const trainingWindowEnd = now;
     const trainingWindowStart = new Date(now);

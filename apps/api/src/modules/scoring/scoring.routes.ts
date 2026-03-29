@@ -82,10 +82,11 @@ export function registerScoringRoutes(
     }
 
     try {
-      const result = await service.createScoringRun({
+      const createScoringRunInput = {
         ...parsed.data,
         requestedByUserId: userId,
-      });
+      };
+      const result = await service.createScoringRun(createScoringRunInput);
       return CreateScoringRunResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {

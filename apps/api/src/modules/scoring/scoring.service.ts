@@ -13,6 +13,10 @@ import type {
 
 import type { CreateScoringRuleInput, ScoringRepository } from './scoring.repository.js';
 
+type CreateScoringRunInput = CreateScoringRunRequest & {
+  requestedByUserId?: string | undefined;
+};
+
 export interface ScoringRunJobPayload {
   runId: string;
   mode?: string | undefined;
@@ -28,7 +32,7 @@ export interface ScoringServiceDependencies {
 }
 
 export interface ScoringService {
-  createScoringRun(input: CreateScoringRunRequest): Promise<CreateScoringRunResponse>;
+  createScoringRun(input: CreateScoringRunInput): Promise<CreateScoringRunResponse>;
   getScoringRunStatus(runId: string): Promise<ScoringRunStatusResponse>;
   listScorePredictions(query: ListScorePredictionsQuery): Promise<ListScorePredictionsResponse>;
   getLatestLeadScore(leadId: string, query: LatestLeadScoreQuery): Promise<LatestLeadScoreResponse>;

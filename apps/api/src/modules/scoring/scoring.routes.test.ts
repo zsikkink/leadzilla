@@ -137,7 +137,7 @@ describe('scoring.routes authz', () => {
     expect(dbMocks.prisma.qualificationRule.create).not.toHaveBeenCalled();
   });
 
-  it('creates scoring runs under the authenticated admin even when the client supplies requestedByUserId', async () => {
+  it('creates scoring runs under the authenticated admin', async () => {
     currentUserId = ADMIN_USER_ID;
     dbMocks.query.mockResolvedValue({
       rows: [{ isAdmin: true }],
@@ -148,7 +148,6 @@ describe('scoring.routes authz', () => {
       url: '/v1/scoring/runs',
       payload: {
         mode: 'ALL_ACTIVE_ICPS',
-        requestedByUserId: 'spoofed-user',
       },
     });
 
@@ -180,5 +179,30 @@ describe('scoring.routes authz', () => {
         requestedByUserId: ADMIN_USER_ID,
       }),
     );
+  });
+
+  it('rejects public scoring run payloads that include requestedByUserId', async () => {
+    currentUserId = ADMIN_USER_ID;
+    dbMocks.query.mockResolvedValue({
+      rows: [{ isAdmin: true }],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/scoring/runs',
+      payload: {
+        mode: 'ALL_ACTIVE_ICPS',
+        requestedByUserId: 'spoofed-user',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: 'Invalid scoring run payload',
+      requestId: expect.any(String),
+    });
+    expect(dbMocks.prisma.jobExecution.create).not.toHaveBeenCalled();
+    expect(dbMocks.prisma.outboxEvent.create).not.toHaveBeenCalled();
+    expect(enqueueScoringRun).not.toHaveBeenCalled();
   });
 });

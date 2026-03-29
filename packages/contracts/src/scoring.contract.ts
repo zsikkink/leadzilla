@@ -37,7 +37,6 @@ export const CreateScoringRunRequestSchema = z
     icpProfileId: z.string().min(1).optional(),
     leadIds: z.array(z.string().min(1)).min(1).optional(),
     modelVersionId: z.string().min(1).optional(),
-    requestedByUserId: z.string().min(1).optional(),
   })
   .strict()
   .superRefine((v, ctx) => {

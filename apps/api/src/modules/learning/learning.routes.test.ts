@@ -149,7 +149,38 @@ describe('learning.routes authz', () => {
     expect(dbMocks.prisma.modelVersion.update).not.toHaveBeenCalled();
   });
 
-  it('creates retrain runs under the authenticated admin even when the client supplies requestedByUserId', async () => {
+  it('creates retrain runs under the authenticated admin', async () => {
+    currentUserId = ADMIN_USER_ID;
+    dbMocks.query.mockResolvedValue({
+      rows: [{ isAdmin: true }],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/learning/runs/retrain',
+      payload: {
+        windowDays: 90,
+        minSamples: 100,
+        trigger: 'MANUAL',
+        activateIfPass: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      trainingRunId: 'training_run_1',
+      status: 'QUEUED',
+    });
+    expect(dbMocks.prisma.trainingRun.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          triggeredByUserId: ADMIN_USER_ID,
+        }),
+      }),
+    );
+  });
+
+  it('rejects public retrain run payloads that include requestedByUserId', async () => {
     currentUserId = ADMIN_USER_ID;
     dbMocks.query.mockResolvedValue({
       rows: [{ isAdmin: true }],
@@ -167,17 +198,11 @@ describe('learning.routes authz', () => {
       },
     });
 
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({
-      trainingRunId: 'training_run_1',
-      status: 'QUEUED',
+      error: 'Invalid retrain run payload',
+      requestId: expect.any(String),
     });
-    expect(dbMocks.prisma.trainingRun.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          triggeredByUserId: ADMIN_USER_ID,
-        }),
-      }),
-    );
+    expect(dbMocks.prisma.trainingRun.create).not.toHaveBeenCalled();
   });
 });

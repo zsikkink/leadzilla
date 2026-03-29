@@ -74,10 +74,11 @@ export function registerLearningRoutes(app: FastifyInstance): void {
     }
 
     try {
-      const result = await service.createRetrainRun({
+      const createRetrainRunInput = {
         ...parsed.data,
         requestedByUserId: userId,
-      });
+      };
+      const result = await service.createRetrainRun(createRetrainRunInput);
       return CreateRetrainRunResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
