@@ -4,7 +4,7 @@ import type { ResendAdapter, TrengoAdapter } from '@lead-flood/providers';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
-import { classifyError } from '../errors.js';
+import { RetryableError, classifyError } from '../errors.js';
 import type { EmailRateLimiter } from '../messaging/email-rate-limiter.js';
 import type { WhatsAppRateLimiter } from '../messaging/rate-limiter.js';
 import { computeNextFollowUpAfter } from '../utils/jitter.js';
@@ -47,6 +47,7 @@ export interface MessageSendJobDependencies {
 
 const LEAD_STATUSES_BEFORE_FIRST_SEND = ['qualified', 'drafted'] as const;
 const SEND_STATUSES_RECOVERABLE_AFTER_PROVIDER_SUCCESS = ['DELIVERED', 'REPLIED', 'BOUNCED'] as const;
+const POST_CLAIM_INDETERMINATE_FAILURE_CODE = 'POST_CLAIM_INDETERMINATE';
 
 function isRecoverablePostSuccessStatus(
   status: string,
@@ -260,11 +261,41 @@ export async function handleMessageSendJob(
           `Email sent successfully via Resend (variant=${variantKey})`,
         );
       } else if (result.status === 'retryable_error') {
+        const requeued = await requeueIfSending(sendId);
+        if (!requeued) {
+          logger.warn(
+            { jobId: job.id, sendId, status: send.status },
+            'MessageSend state advanced before retry reset; skipping stale retry update',
+          );
+          return;
+        }
+
         logger.warn(
           { jobId: job.id, sendId, failure: result.failure },
-          'Email send returned retryable error after claim; leaving send in SENDING to avoid duplicate replay',
+          'Email send returned safe retryable error after claim; resetting send to QUEUED for automatic retry',
         );
-        return;
+
+        throw new RetryableError(
+          `Email send can be replayed safely after provider rejection: ${result.failure.message}`,
+          result.failure,
+        );
+      } else if (result.status === 'indeterminate_error') {
+        const markedUnresolved = await markUnresolvedIfSending(
+          sendId,
+          buildIndeterminateFailureReason('Email', result.failure.message),
+        );
+        if (!markedUnresolved) {
+          logger.warn(
+            { jobId: job.id, sendId, status: send.status },
+            'MessageSend state advanced before unresolved write; skipping stale unresolved update',
+          );
+          return;
+        }
+
+        logger.error(
+          { jobId: job.id, sendId, failure: result.failure },
+          'Email send outcome is indeterminate after claim; quarantined for manual resolution',
+        );
       } else {
         const markedFailed = await markFailedIfSending(
           sendId,
@@ -409,11 +440,41 @@ export async function handleMessageSendJob(
           `WhatsApp message sent via Trengo (variant=${variantKey})`,
         );
       } else if (result.status === 'retryable_error') {
+        const requeued = await requeueIfSending(sendId);
+        if (!requeued) {
+          logger.warn(
+            { jobId: job.id, sendId, status: send.status },
+            'MessageSend state advanced before retry reset; skipping stale retry update',
+          );
+          return;
+        }
+
         logger.warn(
           { jobId: job.id, sendId, failure: result.failure },
-          'WhatsApp send returned retryable error after claim; leaving send in SENDING to avoid duplicate replay',
+          'WhatsApp send returned safe retryable error after claim; resetting send to QUEUED for automatic retry',
         );
-        return;
+
+        throw new RetryableError(
+          `WhatsApp send can be replayed safely after provider rejection: ${result.failure.message}`,
+          result.failure,
+        );
+      } else if (result.status === 'indeterminate_error') {
+        const markedUnresolved = await markUnresolvedIfSending(
+          sendId,
+          buildIndeterminateFailureReason('WhatsApp', result.failure.message),
+        );
+        if (!markedUnresolved) {
+          logger.warn(
+            { jobId: job.id, sendId, status: send.status },
+            'MessageSend state advanced before unresolved write; skipping stale unresolved update',
+          );
+          return;
+        }
+
+        logger.error(
+          { jobId: job.id, sendId, failure: result.failure },
+          'WhatsApp send outcome is indeterminate after claim; quarantined for manual resolution',
+        );
       } else {
         const markedFailed = await markFailedIfSending(
           sendId,
@@ -605,6 +666,45 @@ async function markSentIfSending(
       sentAt: new Date(),
       followUpNumber: data.followUpNumber,
       nextFollowUpAfter: data.nextFollowUpAfter,
+    },
+  });
+
+  return result.count > 0;
+}
+
+function buildIndeterminateFailureReason(channelLabel: 'Email' | 'WhatsApp', failureMessage: string): string {
+  return `${channelLabel} send outcome is indeterminate after provider request: ${failureMessage}`;
+}
+
+async function requeueIfSending(sendId: string): Promise<boolean> {
+  const result = await prisma.messageSend.updateMany({
+    where: {
+      id: sendId,
+      status: 'SENDING',
+    },
+    data: {
+      status: 'QUEUED',
+      failureCode: null,
+      failureReason: null,
+    },
+  });
+
+  return result.count > 0;
+}
+
+async function markUnresolvedIfSending(
+  sendId: string,
+  failureReason: string,
+): Promise<boolean> {
+  const result = await prisma.messageSend.updateMany({
+    where: {
+      id: sendId,
+      status: 'SENDING',
+    },
+    data: {
+      status: 'UNRESOLVED',
+      failureCode: POST_CLAIM_INDETERMINATE_FAILURE_CODE,
+      failureReason,
     },
   });
 

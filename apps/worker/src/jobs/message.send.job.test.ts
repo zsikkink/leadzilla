@@ -39,6 +39,7 @@ import {
   type MessageSendJobDependencies,
   type MessageSendJobPayload,
 } from './message.send.job.js';
+import { RetryableError } from '../errors.js';
 
 function makeJob(data: MessageSendJobPayload): Job<MessageSendJobPayload> {
   return {
@@ -57,6 +58,22 @@ const logger = {
 function makeDeps(sendEmail: () => Promise<{
   status: 'success';
   providerMessageId: string;
+} | {
+  status: 'retryable_error';
+  failure: {
+    classification: 'retryable';
+    statusCode: number;
+    message: string;
+    raw: null;
+  };
+} | {
+  status: 'indeterminate_error';
+  failure: {
+    classification: 'indeterminate';
+    statusCode: number | null;
+    message: string;
+    raw: null;
+  };
 } | {
   status: 'terminal_error';
   failure: {
@@ -592,13 +609,13 @@ describe('handleMessageSendJob stale retry safety', () => {
     );
   });
 
-  it('leaves the send in SENDING on retryable provider errors after claim', async () => {
+  it('re-queues email sends and throws for safe retryable provider rejections after claim', async () => {
     const sendEmail = vi.fn(async () => ({
       status: 'retryable_error' as const,
       failure: {
         classification: 'retryable' as const,
-        statusCode: 503,
-        message: 'temporary outage',
+        statusCode: 429,
+        message: 'rate limited',
         raw: null,
       },
     }));
@@ -615,7 +632,65 @@ describe('handleMessageSendJob stale retry safety', () => {
       } as unknown as MessageSendJobDependencies['trengoAdapter'],
     };
 
-    dbMock.prisma.messageSend.updateMany.mockResolvedValueOnce({ count: 1 });
+    dbMock.prisma.messageSend.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 1 });
+
+    await expect(handleMessageSendJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        sendId: 'send_1',
+        messageDraftId: 'draft_1',
+        messageVariantId: 'variant_1',
+        idempotencyKey: 'idem_1',
+        channel: 'EMAIL',
+      }),
+      deps,
+    )).rejects.toBeInstanceOf(RetryableError);
+
+    expect(sendEmail).toHaveBeenCalled();
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenCalledTimes(2);
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        id: 'send_1',
+        status: 'QUEUED',
+      },
+      data: {
+        status: 'SENDING',
+      },
+    });
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenNthCalledWith(2, {
+      where: {
+        id: 'send_1',
+        status: 'SENDING',
+      },
+      data: {
+        status: 'QUEUED',
+        failureCode: null,
+        failureReason: null,
+      },
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ sendId: 'send_1' }),
+      'Email send returned safe retryable error after claim; resetting send to QUEUED for automatic retry',
+    );
+  });
+
+  it('moves indeterminate email outcomes to UNRESOLVED immediately after claim', async () => {
+    const sendEmail = vi.fn(async () => ({
+      status: 'indeterminate_error' as const,
+      failure: {
+        classification: 'indeterminate' as const,
+        statusCode: null,
+        message: 'ECONNRESET',
+        raw: null,
+      },
+    }));
+
+    dbMock.prisma.messageSend.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 1 });
 
     await handleMessageSendJob(
       logger,
@@ -627,23 +702,183 @@ describe('handleMessageSendJob stale retry safety', () => {
         idempotencyKey: 'idem_1',
         channel: 'EMAIL',
       }),
-      deps,
+      makeDeps(sendEmail),
     );
 
-    expect(sendEmail).toHaveBeenCalled();
-    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenCalledTimes(1);
-    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenCalledWith({
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenNthCalledWith(2, {
       where: {
         id: 'send_1',
-        status: 'QUEUED',
+        status: 'SENDING',
       },
       data: {
+        status: 'UNRESOLVED',
+        failureCode: 'POST_CLAIM_INDETERMINATE',
+        failureReason: 'Email send outcome is indeterminate after provider request: ECONNRESET',
+      },
+    });
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ sendId: 'send_1' }),
+      'Email send outcome is indeterminate after claim; quarantined for manual resolution',
+    );
+  });
+
+  it('re-queues WhatsApp sends and throws for safe retryable provider rejections after claim', async () => {
+    dbMock.prisma.messageSend.findUnique.mockResolvedValueOnce({
+      id: 'send_1',
+      leadId: 'lead_1',
+      status: 'QUEUED',
+      channel: 'WHATSAPP',
+      followUpNumber: 0,
+      idempotencyKey: 'idem_1',
+      messageVariant: {
+        variantKey: 'variant_a',
+        subject: null,
+        bodyText: 'Body copy',
+        bodyHtml: null,
+      },
+      lead: {
+        id: 'lead_1',
+        email: 'ada@example.com',
+        phone: '+15555550123',
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+        deletedAt: null,
+      },
+    });
+
+    dbMock.prisma.messageSend.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 1 });
+
+    const deps = {
+      resendAdapter: {
+        isConfigured: true,
+        sendEmail: vi.fn(),
+      } as unknown as MessageSendJobDependencies['resendAdapter'],
+      trengoAdapter: {
+        isConfigured: true,
+        sendMessage: vi.fn(),
+        sendTemplateMessage: vi.fn(async () => ({
+          status: 'retryable_error' as const,
+          failure: {
+            classification: 'retryable' as const,
+            statusCode: 429,
+            message: 'rate limited',
+            raw: null,
+          },
+        })),
+      } as unknown as MessageSendJobDependencies['trengoAdapter'],
+    };
+
+    await expect(handleMessageSendJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        sendId: 'send_1',
+        messageDraftId: 'draft_1',
+        messageVariantId: 'variant_1',
+        idempotencyKey: 'idem_1',
+        channel: 'WHATSAPP',
+      }),
+      deps,
+    )).rejects.toBeInstanceOf(RetryableError);
+
+    expect(deps.trengoAdapter.sendTemplateMessage).toHaveBeenCalledWith({
+      recipientPhoneNumber: '+15555550123',
+      params: ['Ada', 'Body copy'],
+    });
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenNthCalledWith(2, {
+      where: {
+        id: 'send_1',
         status: 'SENDING',
+      },
+      data: {
+        status: 'QUEUED',
+        failureCode: null,
+        failureReason: null,
       },
     });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ sendId: 'send_1' }),
-      'Email send returned retryable error after claim; leaving send in SENDING to avoid duplicate replay',
+      'WhatsApp send returned safe retryable error after claim; resetting send to QUEUED for automatic retry',
+    );
+  });
+
+  it('moves indeterminate WhatsApp outcomes to UNRESOLVED immediately after claim', async () => {
+    dbMock.prisma.messageSend.findUnique.mockResolvedValueOnce({
+      id: 'send_1',
+      leadId: 'lead_1',
+      status: 'QUEUED',
+      channel: 'WHATSAPP',
+      followUpNumber: 0,
+      idempotencyKey: 'idem_1',
+      messageVariant: {
+        variantKey: 'variant_a',
+        subject: null,
+        bodyText: 'Body copy',
+        bodyHtml: null,
+      },
+      lead: {
+        id: 'lead_1',
+        email: 'ada@example.com',
+        phone: '+15555550123',
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+        deletedAt: null,
+      },
+    });
+
+    dbMock.prisma.messageSend.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 1 });
+
+    const deps = {
+      resendAdapter: {
+        isConfigured: true,
+        sendEmail: vi.fn(),
+      } as unknown as MessageSendJobDependencies['resendAdapter'],
+      trengoAdapter: {
+        isConfigured: true,
+        sendMessage: vi.fn(),
+        sendTemplateMessage: vi.fn(async () => ({
+          status: 'indeterminate_error' as const,
+          failure: {
+            classification: 'indeterminate' as const,
+            statusCode: 500,
+            message: 'Trengo API returned status 500',
+            raw: null,
+          },
+        })),
+      } as unknown as MessageSendJobDependencies['trengoAdapter'],
+    };
+
+    await handleMessageSendJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        sendId: 'send_1',
+        messageDraftId: 'draft_1',
+        messageVariantId: 'variant_1',
+        idempotencyKey: 'idem_1',
+        channel: 'WHATSAPP',
+      }),
+      deps,
+    );
+
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenNthCalledWith(2, {
+      where: {
+        id: 'send_1',
+        status: 'SENDING',
+      },
+      data: {
+        status: 'UNRESOLVED',
+        failureCode: 'POST_CLAIM_INDETERMINATE',
+        failureReason: 'WhatsApp send outcome is indeterminate after provider request: Trengo API returned status 500',
+      },
+    });
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ sendId: 'send_1' }),
+      'WhatsApp send outcome is indeterminate after claim; quarantined for manual resolution',
     );
   });
 });

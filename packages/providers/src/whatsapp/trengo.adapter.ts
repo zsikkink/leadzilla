@@ -18,7 +18,7 @@ export interface TrengoDirectMessageRequest {
 }
 
 export interface TrengoFailure {
-  classification: 'retryable' | 'terminal';
+  classification: 'retryable' | 'indeterminate' | 'terminal';
   statusCode: number | null;
   message: string;
   raw: unknown;
@@ -27,14 +27,18 @@ export interface TrengoFailure {
 export type TrengoSendResult =
   | { status: 'success'; providerMessageId: string; ticketId?: string | undefined }
   | { status: 'retryable_error'; failure: TrengoFailure }
+  | { status: 'indeterminate_error'; failure: TrengoFailure }
   | { status: 'terminal_error'; failure: TrengoFailure };
 
 const DEFAULT_BASE_URL = 'https://app.trengo.com/api/v2';
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-function classifyStatus(statusCode: number): 'retryable' | 'terminal' {
-  if (statusCode === 429 || statusCode >= 500) {
+function classifyStatus(statusCode: number): 'retryable' | 'indeterminate' | 'terminal' {
+  if (statusCode === 429) {
     return 'retryable';
+  }
+  if (statusCode >= 500) {
+    return 'indeterminate';
   }
   return 'terminal';
 }
@@ -159,9 +163,9 @@ export class TrengoAdapter {
       });
     } catch (error: unknown) {
       return {
-        status: 'retryable_error',
+        status: 'indeterminate_error',
         failure: {
-          classification: 'retryable',
+          classification: 'indeterminate',
           statusCode: null,
           message: error instanceof Error ? error.message : 'Trengo request failed',
           raw: error,
@@ -183,7 +187,9 @@ export class TrengoAdapter {
       };
       return classification === 'retryable'
         ? { status: 'retryable_error', failure }
-        : { status: 'terminal_error', failure };
+        : classification === 'indeterminate'
+          ? { status: 'indeterminate_error', failure }
+          : { status: 'terminal_error', failure };
     }
 
     try {

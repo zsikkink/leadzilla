@@ -84,7 +84,7 @@ describe('ResendAdapter integration', () => {
     expect(result.failure.message).toContain('RESEND_API_KEY');
   });
 
-  it('classifies 429 as retryable', async () => {
+  it('classifies 429 as retryable when the provider explicitly rejects the send', async () => {
     const fetchImpl = vi.fn(async () => {
       return new Response(JSON.stringify({ error: 'rate limit' }), { status: 429 });
     }) as unknown as typeof fetch;
@@ -93,9 +93,11 @@ describe('ResendAdapter integration', () => {
     const result = await adapter.sendEmail(SEND_REQUEST);
 
     expect(result.status).toBe('retryable_error');
+    if (result.status !== 'retryable_error') throw new Error('Expected retryable_error');
+    expect(result.failure.classification).toBe('retryable');
   });
 
-  it('classifies 500 as retryable', async () => {
+  it('classifies 500 as indeterminate when provider acceptance cannot be ruled out', async () => {
     const fetchImpl = vi.fn(async () => {
       return new Response(JSON.stringify({ error: 'internal' }), { status: 500 });
     }) as unknown as typeof fetch;
@@ -103,7 +105,9 @@ describe('ResendAdapter integration', () => {
     const adapter = new ResendAdapter({ apiKey: 're_test', fetchImpl });
     const result = await adapter.sendEmail(SEND_REQUEST);
 
-    expect(result.status).toBe('retryable_error');
+    expect(result.status).toBe('indeterminate_error');
+    if (result.status !== 'indeterminate_error') throw new Error('Expected indeterminate_error');
+    expect(result.failure.classification).toBe('indeterminate');
   });
 
   it('classifies 400 as terminal', async () => {
@@ -117,7 +121,7 @@ describe('ResendAdapter integration', () => {
     expect(result.status).toBe('terminal_error');
   });
 
-  it('returns retryable_error on network failure', async () => {
+  it('returns indeterminate_error on network failure', async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error('ECONNREFUSED');
     }) as unknown as typeof fetch;
@@ -125,8 +129,9 @@ describe('ResendAdapter integration', () => {
     const adapter = new ResendAdapter({ apiKey: 're_test', fetchImpl });
     const result = await adapter.sendEmail(SEND_REQUEST);
 
-    expect(result.status).toBe('retryable_error');
-    if (result.status !== 'retryable_error') throw new Error('Expected retryable_error');
+    expect(result.status).toBe('indeterminate_error');
+    if (result.status !== 'indeterminate_error') throw new Error('Expected indeterminate_error');
+    expect(result.failure.classification).toBe('indeterminate');
     expect(result.failure.message).toBe('ECONNREFUSED');
   });
 

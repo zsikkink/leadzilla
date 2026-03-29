@@ -15,7 +15,7 @@ export interface ResendSendEmailRequest {
 }
 
 export interface ResendFailure {
-  classification: 'retryable' | 'terminal';
+  classification: 'retryable' | 'indeterminate' | 'terminal';
   statusCode: number | null;
   message: string;
   raw: unknown;
@@ -24,15 +24,19 @@ export interface ResendFailure {
 export type ResendSendResult =
   | { status: 'success'; providerMessageId: string }
   | { status: 'retryable_error'; failure: ResendFailure }
+  | { status: 'indeterminate_error'; failure: ResendFailure }
   | { status: 'terminal_error'; failure: ResendFailure };
 
 const DEFAULT_FROM_EMAIL = 'noreply@leadflood.io';
 const DEFAULT_BASE_URL = 'https://api.resend.com';
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-function classifyStatus(statusCode: number): 'retryable' | 'terminal' {
-  if (statusCode === 429 || statusCode >= 500) {
+function classifyStatus(statusCode: number): 'retryable' | 'indeterminate' | 'terminal' {
+  if (statusCode === 429) {
     return 'retryable';
+  }
+  if (statusCode >= 500) {
+    return 'indeterminate';
   }
   return 'terminal';
 }
@@ -100,9 +104,9 @@ export class ResendAdapter {
       });
     } catch (error: unknown) {
       return {
-        status: 'retryable_error',
+        status: 'indeterminate_error',
         failure: {
-          classification: 'retryable',
+          classification: 'indeterminate',
           statusCode: null,
           message: error instanceof Error ? error.message : 'Resend request failed',
           raw: error,
@@ -124,7 +128,9 @@ export class ResendAdapter {
       };
       return classification === 'retryable'
         ? { status: 'retryable_error', failure }
-        : { status: 'terminal_error', failure };
+        : classification === 'indeterminate'
+          ? { status: 'indeterminate_error', failure }
+          : { status: 'terminal_error', failure };
     }
 
     try {
