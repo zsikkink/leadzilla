@@ -36,4 +36,32 @@ describe('registerWorkerSchedules', () => {
     );
     expect(discoverySeedSchedules).toHaveLength(1);
   });
+
+  it('registers scheduled retraining through the schedule wrapper queue without a static trainingRunId', async () => {
+    const schedule = vi.fn(async () => null);
+
+    await registerWorkerSchedules({ schedule } as never, {
+      discoveryScheduleEnabled: true,
+    });
+
+    const scheduledRetrainCall = (schedule.mock.calls as unknown[][]).find(
+      (call) => call[0] === 'model.train.schedule',
+    );
+
+    expect(scheduledRetrainCall).toBeDefined();
+    expect(scheduledRetrainCall?.[1]).toBe('0 3 * * 1');
+    expect(scheduledRetrainCall?.[2]).toEqual({
+      trigger: 'SCHEDULED',
+      windowDays: 90,
+      minSamples: 100,
+      activateIfPass: true,
+      correlationId: 'scheduler:model.train',
+    });
+    expect(scheduledRetrainCall?.[2]).not.toHaveProperty('trainingRunId');
+    expect(scheduledRetrainCall?.[3]).toEqual(
+      expect.objectContaining({
+        singletonKey: 'schedule:model.train',
+      }),
+    );
+  });
 });

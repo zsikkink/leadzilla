@@ -29,6 +29,7 @@ import type { ReplyClassifyJobPayload } from '@lead-flood/contracts';
 
 import type { AnalyticsRollupJobPayload } from './modules/analytics/analytics.service.js';
 import type { DiscoveryRunJobPayload } from './modules/discovery/discovery.service.js';
+import type { LearningModelTrainJobPayload } from './modules/learning/learning.service.js';
 import type { MessageGenerateJobPayload, MessagingSendJobPayload } from './modules/messaging/messaging.service.js';
 import type { ScoringRunJobPayload } from './modules/scoring/scoring.service.js';
 import { buildServer, LeadAlreadyExistsError, LeadContextUnavailableError } from './server.js';
@@ -145,6 +146,7 @@ async function main(): Promise<void> {
   await boss.createQueue('message.send', { name: 'message.send', policy: 'short' });
   await boss.createQueue('message.generate', { name: 'message.generate', policy: 'short' });
   await boss.createQueue('analytics.rollup');
+  await boss.createQueue('model.train');
   await boss.createQueue('reply.classify');
   await boss.createQueue('discovery.seed');
   await boss.createQueue('discovery.run_search_task');
@@ -875,6 +877,15 @@ async function main(): Promise<void> {
     },
     enqueueScoringRun: async (payload: ScoringRunJobPayload) => {
       await publishScoringCompute(payload);
+    },
+    enqueueModelTrain: async (payload: LearningModelTrainJobPayload) => {
+      await boss.send('model.train', payload, {
+        singletonKey: `model.train:${payload.trainingRunId}`,
+        retryLimit: 1,
+        retryDelay: 300,
+        retryBackoff: true,
+        deadLetter: 'model.train.dead_letter',
+      });
     },
     enqueueMessageSend: async (payload: MessagingSendJobPayload) => {
       await boss.send('message.send', payload, {

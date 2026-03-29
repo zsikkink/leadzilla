@@ -22,6 +22,7 @@ type CreateRetrainRunInput = CreateRetrainRunRequest & {
 
 export interface LearningRepository {
   createRetrainRun(input: CreateRetrainRunInput): Promise<CreateRetrainRunResponse>;
+  markTrainingRunFailed(trainingRunId: string, errorMessage: string): Promise<void>;
   listTrainingRuns(query: ListTrainingRunsQuery): Promise<ListTrainingRunsResponse>;
   getTrainingRun(trainingRunId: string): Promise<TrainingRunResponse>;
   listModelVersions(query: ListModelVersionsQuery): Promise<ListModelVersionsResponse>;
@@ -36,6 +37,10 @@ export interface LearningRepository {
 export class StubLearningRepository implements LearningRepository {
   async createRetrainRun(_input: CreateRetrainRunInput): Promise<CreateRetrainRunResponse> {
     throw new LearningNotImplementedError('TODO: create retrain run persistence');
+  }
+
+  async markTrainingRunFailed(_trainingRunId: string, _errorMessage: string): Promise<void> {
+    throw new LearningNotImplementedError('TODO: update training run failure state');
   }
 
   async listTrainingRuns(_query: ListTrainingRunsQuery): Promise<ListTrainingRunsResponse> {
@@ -208,6 +213,17 @@ export class PrismaLearningRepository extends StubLearningRepository {
       trainingRunId: run.id,
       status: run.status,
     };
+  }
+
+  override async markTrainingRunFailed(trainingRunId: string, errorMessage: string): Promise<void> {
+    await prisma.trainingRun.update({
+      where: { id: trainingRunId },
+      data: {
+        status: 'FAILED',
+        endedAt: new Date(),
+        errorMessage,
+      },
+    });
   }
 
   override async listTrainingRuns(query: ListTrainingRunsQuery): Promise<ListTrainingRunsResponse> {

@@ -19,7 +19,11 @@ import {
 import { requireAppAdminAccess, requireAuthenticatedUserId } from '../../auth/guard.js';
 import { LearningNotFoundError, LearningNotImplementedError } from './learning.errors.js';
 import { PrismaLearningRepository } from './learning.repository.js';
-import { buildLearningService } from './learning.service.js';
+import { buildLearningService, type LearningModelTrainJobPayload } from './learning.service.js';
+
+export interface LearningRouteDependencies {
+  enqueueModelTrain?: ((payload: LearningModelTrainJobPayload) => Promise<void>) | undefined;
+}
 
 function sendValidationError(reply: FastifyReply, requestId: string, message: string) {
   reply.status(400);
@@ -53,9 +57,18 @@ function handleModuleError(error: unknown, request: FastifyRequest, reply: Fasti
   return false;
 }
 
-export function registerLearningRoutes(app: FastifyInstance): void {
+export function registerLearningRoutes(
+  app: FastifyInstance,
+  dependencies?: LearningRouteDependencies,
+): void {
   const repository = new PrismaLearningRepository();
-  const service = buildLearningService(repository);
+  const service = buildLearningService(repository, {
+    enqueueModelTrain: dependencies?.enqueueModelTrain
+      ? dependencies.enqueueModelTrain
+      : async () => {
+          throw new LearningNotImplementedError('Learning queue publisher is not configured');
+        },
+  });
   const requireAppAdmin = async (request: FastifyRequest, reply: FastifyReply) => {
     if (!(await requireAppAdminAccess(request, reply))) {
       return reply;

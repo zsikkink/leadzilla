@@ -38,7 +38,11 @@ import {
   type ManagerAnalyzeJobPayload,
   MANAGER_ANALYZE_RETRY_OPTIONS,
 } from './jobs/manager.analyze.job.js';
-import { MODEL_TRAIN_JOB_NAME, type ModelTrainJobPayload, MODEL_TRAIN_RETRY_OPTIONS } from './jobs/model.train.job.js';
+import {
+  MODEL_TRAIN_SCHEDULE_JOB_NAME,
+  type ModelTrainScheduleJobPayload,
+  MODEL_TRAIN_SCHEDULE_RETRY_OPTIONS,
+} from './jobs/model.train.schedule.job.js';
 import {
   SCORING_COMPUTE_JOB_NAME,
   type ScoringComputeJobPayload,
@@ -147,24 +151,19 @@ export async function registerWorkerSchedules(
     },
   );
 
-  // B6 fix: Generate unique trainingRunId per invocation to avoid PK collisions.
-  // pg-boss schedule sends a new job each cron tick — the static ID was causing
-  // duplicate TrainingRun upserts to collide with old records.
   await boss.schedule(
-    MODEL_TRAIN_JOB_NAME,
+    MODEL_TRAIN_SCHEDULE_JOB_NAME,
     '0 3 * * 1',
     {
-      runId: `scheduled:model.train:${Date.now()}`,
-      trainingRunId: `scheduled:model.train:${Date.now()}`,
       trigger: 'SCHEDULED',
       windowDays: 90,
       minSamples: 100,
       activateIfPass: true,
       correlationId: 'scheduler:model.train',
-    } satisfies ModelTrainJobPayload,
+    } satisfies ModelTrainScheduleJobPayload,
     {
       singletonKey: 'schedule:model.train',
-      ...MODEL_TRAIN_RETRY_OPTIONS,
+      ...MODEL_TRAIN_SCHEDULE_RETRY_OPTIONS,
     },
   );
 

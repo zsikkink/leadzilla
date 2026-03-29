@@ -63,6 +63,7 @@ import { registerEnrichmentRoutes } from './modules/enrichment/enrichment.routes
 import { registerFeedbackRoutes } from './modules/feedback/feedback.routes.js';
 import { registerIcpRoutes } from './modules/icp/icp.routes.js';
 import { registerLearningRoutes } from './modules/learning/learning.routes.js';
+import type { LearningModelTrainJobPayload } from './modules/learning/learning.service.js';
 import { registerMessagingRoutes, type MessagingRouteDependencies } from './modules/messaging/messaging.routes.js';
 import type { MessageGenerateJobPayload, MessagingSendJobPayload } from './modules/messaging/messaging.service.js';
 import { registerScoringRoutes } from './modules/scoring/scoring.routes.js';
@@ -225,6 +226,7 @@ export interface BuildServerOptions {
   createBackupLeadAndEnqueue?: ((sourceLeadId: string, input: CreateLeadRequest) => Promise<{ leadId: string; jobId: string }>) | undefined;
   enqueueDiscoveryRun?: (payload: DiscoveryRunJobPayload) => Promise<void>;
   enqueueScoringRun?: (payload: ScoringRunJobPayload) => Promise<void>;
+  enqueueModelTrain?: ((payload: LearningModelTrainJobPayload) => Promise<void>) | undefined;
   enqueueMessageSend?: (payload: MessagingSendJobPayload) => Promise<void>;
   enqueueMessageGenerate?: ((payload: MessageGenerateJobPayload) => Promise<void>) | undefined;
   enqueueAnalyticsRollup?: ((payload: AnalyticsRollupJobPayload) => Promise<void>) | undefined;
@@ -927,7 +929,11 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     } else {
       registerMessagingRoutes(api);
     }
-    registerLearningRoutes(api);
+    if (options.enqueueModelTrain) {
+      registerLearningRoutes(api, { enqueueModelTrain: options.enqueueModelTrain });
+    } else {
+      registerLearningRoutes(api);
+    }
     registerFeedbackRoutes(api);
     if (options.enqueueAnalyticsRollup) {
       registerAnalyticsRoutes(api, {

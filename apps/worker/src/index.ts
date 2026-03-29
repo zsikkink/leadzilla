@@ -107,6 +107,11 @@ import {
   type ModelTrainJobPayload,
 } from './jobs/model.train.job.js';
 import {
+  MODEL_TRAIN_SCHEDULE_JOB_NAME,
+  handleModelTrainScheduleJob,
+  type ModelTrainScheduleJobPayload,
+} from './jobs/model.train.schedule.job.js';
+import {
   NOTIFY_SALES_JOB_NAME,
   handleNotifySalesJob,
   type NotifySalesJobPayload,
@@ -755,6 +760,12 @@ async function main(): Promise<void> {
           );
         },
       }),
+  );
+  await registerWorker<ModelTrainScheduleJobPayload>(
+    boss,
+    logger,
+    MODEL_TRAIN_SCHEDULE_JOB_NAME,
+    (jobLogger, job) => handleModelTrainScheduleJob(jobLogger, job, { boss }),
   );
   await registerWorker<ModelTrainJobPayload>(
     boss,

@@ -9,13 +9,31 @@ import type {
   ListTrainingRunsQuery,
   ListTrainingRunsResponse,
   ModelVersionResponse,
+  TrainingTrigger,
   TrainingRunResponse,
 } from '@lead-flood/contracts';
 
 import type { LearningRepository } from './learning.repository.js';
 
+export type CreateRetrainRunInput = CreateRetrainRunRequest & {
+  requestedByUserId?: string | undefined;
+};
+
+export interface LearningModelTrainJobPayload
+  extends Pick<CreateRetrainRunRequest, 'windowDays' | 'minSamples' | 'activateIfPass'> {
+  runId: string;
+  trainingRunId: string;
+  trigger: TrainingTrigger;
+  correlationId?: string | undefined;
+  requestedByUserId?: string | undefined;
+}
+
+export interface LearningServiceDependencies {
+  enqueueModelTrain: (payload: LearningModelTrainJobPayload) => Promise<void>;
+}
+
 export interface LearningService {
-  createRetrainRun(input: CreateRetrainRunRequest): Promise<CreateRetrainRunResponse>;
+  createRetrainRun(input: CreateRetrainRunInput): Promise<CreateRetrainRunResponse>;
   listTrainingRuns(query: ListTrainingRunsQuery): Promise<ListTrainingRunsResponse>;
   getTrainingRun(trainingRunId: string): Promise<TrainingRunResponse>;
   listModelVersions(query: ListModelVersionsQuery): Promise<ListModelVersionsResponse>;
@@ -27,11 +45,46 @@ export interface LearningService {
   activateModel(modelVersionId: string, input: ActivateModelRequest): Promise<ModelVersionResponse>;
 }
 
-export function buildLearningService(repository: LearningRepository): LearningService {
+function formatModelTrainEnqueueFailure(error: unknown): string {
+  return `Failed to enqueue model.train job: ${error instanceof Error ? error.message : String(error)}`;
+}
+
+export function buildLearningService(
+  repository: LearningRepository,
+  dependencies: LearningServiceDependencies,
+): LearningService {
   return {
     async createRetrainRun(input) {
       // TODO: validate minimum sample constraints before scheduling.
-      return repository.createRetrainRun(input);
+      const result = await repository.createRetrainRun(input);
+
+      if (result.status === 'QUEUED') {
+        try {
+          await dependencies.enqueueModelTrain({
+            runId: result.trainingRunId,
+            trainingRunId: result.trainingRunId,
+            trigger: input.trigger,
+            windowDays: input.windowDays,
+            minSamples: input.minSamples,
+            activateIfPass: input.activateIfPass,
+            ...(input.requestedByUserId !== undefined
+              ? { requestedByUserId: input.requestedByUserId }
+              : {}),
+          });
+        } catch (error: unknown) {
+          try {
+            await repository.markTrainingRunFailed(
+              result.trainingRunId,
+              formatModelTrainEnqueueFailure(error),
+            );
+          } catch {
+            // Preserve the original enqueue error for the caller.
+          }
+          throw error;
+        }
+      }
+
+      return result;
     },
     async listTrainingRuns(query) {
       // TODO: add default ordering by createdAt desc.

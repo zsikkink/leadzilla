@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const ADMIN_USER_ID = '11111111-1111-4111-8111-111111111111';
 const NON_ADMIN_USER_ID = '22222222-2222-4222-8222-222222222222';
+const enqueueModelTrain = vi.fn();
 
 const { dbMocks } = vi.hoisted(() => ({
   dbMocks: {
@@ -11,6 +12,7 @@ const { dbMocks } = vi.hoisted(() => ({
       $transaction: vi.fn(),
       trainingRun: {
         create: vi.fn(),
+        update: vi.fn(),
       },
       modelVersion: {
         findUnique: vi.fn(),
@@ -45,6 +47,10 @@ describe('learning.routes authz', () => {
     dbMocks.prisma.trainingRun.create.mockResolvedValue({
       id: 'training_run_1',
       status: 'QUEUED',
+    });
+    dbMocks.prisma.trainingRun.update.mockResolvedValue({
+      id: 'training_run_1',
+      status: 'FAILED',
     });
     dbMocks.prisma.modelVersion.findUnique.mockResolvedValue({
       id: 'model_1',
@@ -97,7 +103,9 @@ describe('learning.routes authz', () => {
         : null;
     });
 
-    registerLearningRoutes(app);
+    registerLearningRoutes(app, {
+      enqueueModelTrain,
+    });
     await app.ready();
   });
 
@@ -127,6 +135,7 @@ describe('learning.routes authz', () => {
       [NON_ADMIN_USER_ID],
     );
     expect(dbMocks.prisma.trainingRun.create).not.toHaveBeenCalled();
+    expect(enqueueModelTrain).not.toHaveBeenCalled();
   });
 
   it('returns 403 for non-admin users on model activation', async () => {
@@ -178,6 +187,56 @@ describe('learning.routes authz', () => {
         }),
       }),
     );
+    expect(enqueueModelTrain).toHaveBeenCalledWith({
+      runId: 'training_run_1',
+      trainingRunId: 'training_run_1',
+      trigger: 'MANUAL',
+      windowDays: 90,
+      minSamples: 100,
+      activateIfPass: true,
+      requestedByUserId: ADMIN_USER_ID,
+    });
+    expect(dbMocks.prisma.trainingRun.update).not.toHaveBeenCalled();
+  });
+
+  it('marks the created training run failed when manual retrain enqueue fails', async () => {
+    currentUserId = ADMIN_USER_ID;
+    dbMocks.query.mockResolvedValue({
+      rows: [{ isAdmin: true }],
+    });
+    enqueueModelTrain.mockRejectedValueOnce(new Error('pg-boss unavailable'));
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/learning/runs/retrain',
+      payload: {
+        windowDays: 90,
+        minSamples: 100,
+        trigger: 'MANUAL',
+        activateIfPass: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(dbMocks.prisma.trainingRun.create).toHaveBeenCalledTimes(1);
+    expect(enqueueModelTrain).toHaveBeenCalledTimes(1);
+    expect(dbMocks.prisma.trainingRun.update).toHaveBeenCalledWith({
+      where: { id: 'training_run_1' },
+      data: {
+        status: 'FAILED',
+        endedAt: expect.any(Date),
+        errorMessage: 'Failed to enqueue model.train job: pg-boss unavailable',
+      },
+    });
+
+    const trainingRunCreateOrder = dbMocks.prisma.trainingRun.create.mock.invocationCallOrder[0];
+    const enqueueOrder = enqueueModelTrain.mock.invocationCallOrder[0];
+    const trainingRunFailOrder = dbMocks.prisma.trainingRun.update.mock.invocationCallOrder[0];
+    expect(trainingRunCreateOrder).toBeDefined();
+    expect(enqueueOrder).toBeDefined();
+    expect(trainingRunFailOrder).toBeDefined();
+    expect(trainingRunCreateOrder!).toBeLessThan(enqueueOrder!);
+    expect(enqueueOrder!).toBeLessThan(trainingRunFailOrder!);
   });
 
   it('rejects public retrain run payloads that include requestedByUserId', async () => {
@@ -204,5 +263,6 @@ describe('learning.routes authz', () => {
       requestId: expect.any(String),
     });
     expect(dbMocks.prisma.trainingRun.create).not.toHaveBeenCalled();
+    expect(enqueueModelTrain).not.toHaveBeenCalled();
   });
 });

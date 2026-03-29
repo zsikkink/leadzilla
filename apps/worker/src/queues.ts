@@ -32,6 +32,10 @@ import {
 import { NOTIFY_SALES_JOB_NAME, NOTIFY_SALES_RETRY_OPTIONS } from './jobs/notify.sales.job.js';
 import { MODEL_EVALUATE_JOB_NAME, MODEL_EVALUATE_RETRY_OPTIONS } from './jobs/model.evaluate.job.js';
 import { MODEL_TRAIN_JOB_NAME, MODEL_TRAIN_RETRY_OPTIONS } from './jobs/model.train.job.js';
+import {
+  MODEL_TRAIN_SCHEDULE_JOB_NAME,
+  MODEL_TRAIN_SCHEDULE_RETRY_OPTIONS,
+} from './jobs/model.train.schedule.job.js';
 import { REPLY_CLASSIFY_JOB_NAME, REPLY_CLASSIFY_RETRY_OPTIONS } from './jobs/reply.classify.job.js';
 import {
   MANAGER_ANALYZE_JOB_NAME,
@@ -179,6 +183,13 @@ export const WORKER_QUEUE_DEFINITIONS: readonly WorkerQueueDefinition[] = [
   {
     name: MODEL_TRAIN_JOB_NAME,
     retryOptions: normalizeRetryOptions(MODEL_TRAIN_JOB_NAME, MODEL_TRAIN_RETRY_OPTIONS),
+  },
+  {
+    name: MODEL_TRAIN_SCHEDULE_JOB_NAME,
+    retryOptions: normalizeRetryOptions(
+      MODEL_TRAIN_SCHEDULE_JOB_NAME,
+      MODEL_TRAIN_SCHEDULE_RETRY_OPTIONS,
+    ),
   },
   {
     name: MODEL_EVALUATE_JOB_NAME,
