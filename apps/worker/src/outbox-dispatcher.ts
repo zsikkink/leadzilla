@@ -55,6 +55,25 @@ export interface OutboxDispatchLogger {
   error: (object: Record<string, unknown>, message: string) => void;
 }
 
+async function markTrackedJobRunning(
+  jobExecutionId: string,
+  type: typeof FEATURES_COMPUTE_JOB_NAME | typeof SCORING_COMPUTE_JOB_NAME,
+  startedAt: Date,
+): Promise<void> {
+  await prisma.jobExecution.updateMany({
+    where: {
+      id: jobExecutionId,
+      type,
+      status: 'queued',
+    },
+    data: {
+      status: 'running',
+      startedAt,
+      error: null,
+    },
+  });
+}
+
 function isLegacyOutboxPayload(payload: unknown): payload is LegacyOutboxPayload {
   if (!payload || typeof payload !== 'object') {
     return false;
@@ -353,23 +372,14 @@ export async function dispatchPendingOutboxEvents(
       });
 
       const publishedAt = new Date();
-      if (
+      if (event.type === FEATURES_COMPUTE_JOB_NAME) {
+        await markTrackedJobRunning(dispatchPlan.jobExecutionId, FEATURES_COMPUTE_JOB_NAME, publishedAt);
+      } else if (
         event.type === SCORING_COMPUTE_JOB_NAME &&
         'runId' in dispatchPlan.bossPayload &&
         dispatchPlan.jobExecutionId === dispatchPlan.bossPayload.runId
       ) {
-        await prisma.jobExecution.updateMany({
-          where: {
-            id: dispatchPlan.jobExecutionId,
-            type: SCORING_COMPUTE_JOB_NAME,
-            status: 'queued',
-          },
-          data: {
-            status: 'running',
-            startedAt: publishedAt,
-            error: null,
-          },
-        });
+        await markTrackedJobRunning(dispatchPlan.jobExecutionId, SCORING_COMPUTE_JOB_NAME, publishedAt);
       }
 
       await prisma.outboxEvent.update({

@@ -71,6 +71,39 @@ describe('dispatchPendingOutboxEvents', () => {
     };
   }
 
+  async function createFeaturesComputeDispatchFixture() {
+    const lead = await prisma.lead.create({
+      data: {
+        firstName: 'Feature',
+        lastName: 'Dispatch',
+        email: `features-outbox-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@lead-flood.local`,
+        source: 'test',
+        status: 'new',
+      },
+    });
+    createdLeadIds.push(lead.id);
+
+    const jobExecution = await prisma.jobExecution.create({
+      data: {
+        type: 'features.compute',
+        status: 'queued',
+        payload: {
+          leadId: lead.id,
+          icpProfileId: 'icp_1',
+          snapshotVersion: 1,
+        },
+        leadId: lead.id,
+      },
+    });
+    createdJobIds.push(jobExecution.id);
+
+    return {
+      leadId: lead.id,
+      jobExecutionId: jobExecution.id,
+      icpProfileId: 'icp_1',
+    };
+  }
+
   beforeEach(async () => {
     await prisma.outboxEvent.deleteMany({
       where: {
@@ -198,6 +231,68 @@ describe('dispatchPendingOutboxEvents', () => {
     });
     expect(updated?.status).toBe('sent');
     expect(updated?.attempts).toBe(1);
+  });
+
+  it('marks tracked features.compute runs running after publish and suppresses replay once already running', async () => {
+    const fixture = await createFeaturesComputeDispatchFixture();
+    const firstEvent = await prisma.outboxEvent.create({
+      data: {
+        type: 'features.compute',
+        payload: {
+          runId: fixture.jobExecutionId,
+          leadId: fixture.leadId,
+          icpProfileId: fixture.icpProfileId,
+          snapshotVersion: 1,
+        },
+        status: 'pending',
+      },
+    });
+    createdOutboxIds.push(firstEvent.id);
+
+    const boss = {
+      send: vi.fn(async () => 'ok'),
+    };
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    const firstCount = await dispatchPendingOutboxEvents(boss as unknown as Pick<PgBoss, 'send'>, logger);
+
+    expect(firstCount).toBe(1);
+    expect(boss.send).toHaveBeenCalledTimes(1);
+
+    const publishedJob = await prisma.jobExecution.findUnique({
+      where: { id: fixture.jobExecutionId },
+    });
+    expect(publishedJob?.status).toBe('running');
+    expect(publishedJob?.startedAt).not.toBeNull();
+
+    const replayEvent = await prisma.outboxEvent.create({
+      data: {
+        type: 'features.compute',
+        payload: {
+          runId: fixture.jobExecutionId,
+          leadId: fixture.leadId,
+          icpProfileId: fixture.icpProfileId,
+          snapshotVersion: 1,
+        },
+        status: 'pending',
+      },
+    });
+    createdOutboxIds.push(replayEvent.id);
+
+    const replayCount = await dispatchPendingOutboxEvents(boss as unknown as Pick<PgBoss, 'send'>, logger);
+
+    expect(replayCount).toBe(0);
+    expect(boss.send).toHaveBeenCalledTimes(1);
+
+    const suppressedReplay = await prisma.outboxEvent.findUnique({
+      where: { id: replayEvent.id },
+    });
+    expect(suppressedReplay?.status).toBe('sent');
+    expect(suppressedReplay?.lastError).toContain('already running');
   });
 
   it('marks outbox events as failed and schedules retry when publish fails', async () => {

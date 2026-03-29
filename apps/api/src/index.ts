@@ -164,6 +164,21 @@ async function main(): Promise<void> {
     jobId: string;
     outboxEventId: string;
   }): Promise<void> => {
+    const markTrackedFeaturesComputeRunning = async (): Promise<void> => {
+      await prisma.jobExecution.updateMany({
+        where: {
+          id: input.jobId,
+          type: 'features.compute',
+          status: 'queued',
+        },
+        data: {
+          status: 'running',
+          startedAt: new Date(),
+          error: null,
+        },
+      });
+    };
+
     try {
       await boss.send(
         'features.compute',
@@ -184,19 +199,6 @@ async function main(): Promise<void> {
           retryBackoff: true,
         },
       );
-
-      await prisma.outboxEvent.update({
-        where: { id: input.outboxEventId },
-        data: {
-          status: 'sent',
-          attempts: {
-            increment: 1,
-          },
-          processedAt: new Date(),
-          nextAttemptAt: null,
-          lastError: null,
-        },
-      });
     } catch (error: unknown) {
       const errorMessage =
         error instanceof Error ? error.message : 'Failed to enqueue features.compute job';
@@ -216,6 +218,39 @@ async function main(): Promise<void> {
           nextAttemptAt: new Date(Date.now() + 5000),
         },
       });
+
+      return;
+    }
+
+    try {
+      await markTrackedFeaturesComputeRunning();
+    } catch (error: unknown) {
+      logger.error(
+        { error, leadId: input.leadId, jobId: input.jobId, outboxEventId: input.outboxEventId },
+        'Immediate features.compute publish succeeded but failed to mark the tracked run as running',
+      );
+
+      return;
+    }
+
+    try {
+      await prisma.outboxEvent.update({
+        where: { id: input.outboxEventId },
+        data: {
+          status: 'sent',
+          attempts: {
+            increment: 1,
+          },
+          processedAt: new Date(),
+          nextAttemptAt: null,
+          lastError: null,
+        },
+      });
+    } catch (error: unknown) {
+      logger.error(
+        { error, leadId: input.leadId, jobId: input.jobId, outboxEventId: input.outboxEventId },
+        'Immediate features.compute publish succeeded but failed to mark outbox event as sent',
+      );
     }
   };
 

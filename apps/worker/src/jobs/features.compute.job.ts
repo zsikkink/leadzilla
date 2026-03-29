@@ -48,6 +48,42 @@ export interface FeaturesComputeDependencies {
   enqueueScoring?: boolean;
 }
 
+async function markTrackedFeaturesComputeRunRunning(runId: string): Promise<void> {
+  await prisma.jobExecution.updateMany({
+    where: {
+      id: runId,
+      type: FEATURES_COMPUTE_JOB_NAME,
+      status: 'queued',
+    },
+    data: {
+      status: 'running',
+      startedAt: new Date(),
+      error: null,
+    },
+  });
+}
+
+async function finalizeTrackedFeaturesComputeRun(
+  runId: string,
+  status: 'completed' | 'failed',
+  error: string | null = null,
+): Promise<void> {
+  await prisma.jobExecution.updateMany({
+    where: {
+      id: runId,
+      type: FEATURES_COMPUTE_JOB_NAME,
+      status: {
+        in: ['queued', 'running'],
+      },
+    },
+    data: {
+      status,
+      finishedAt: new Date(),
+      error,
+    },
+  });
+}
+
 export const FEATURE_EXTRACTOR_VERSION = 'features_v2';
 export const DRIFT_DETECTION_MIN_BATCH_SIZE = 5;
 export const DRIFT_DETECTION_THRESHOLD = 0.3;
@@ -656,6 +692,8 @@ export async function handleFeaturesComputeJob(
   );
 
   try {
+    await markTrackedFeaturesComputeRunRunning(runId);
+
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
     });
@@ -671,6 +709,7 @@ export async function handleFeaturesComputeJob(
         },
         lead?.deletedAt ? 'Skipping soft-deleted lead' : 'Skipping features.compute job because lead was not found',
       );
+      await finalizeTrackedFeaturesComputeRun(runId, 'completed');
       return;
     }
 
@@ -694,6 +733,7 @@ export async function handleFeaturesComputeJob(
         },
         'Skipping features.compute job because icpProfile was not found',
       );
+      await finalizeTrackedFeaturesComputeRun(runId, 'completed');
       return;
     }
 
@@ -1354,6 +1394,8 @@ export async function handleFeaturesComputeJob(
       );
     }
 
+    await finalizeTrackedFeaturesComputeRun(runId, 'completed');
+
     logger.info(
       {
         jobId: job.id,
@@ -1367,6 +1409,11 @@ export async function handleFeaturesComputeJob(
       'Completed features.compute job',
     );
   } catch (error: unknown) {
+    const errorMessage =
+      error instanceof Error ? error.message : 'Failed features.compute job';
+
+    await finalizeTrackedFeaturesComputeRun(runId, 'failed', errorMessage).catch(() => { /* best-effort */ });
+
     logger.error(
       {
         jobId: job.id,
