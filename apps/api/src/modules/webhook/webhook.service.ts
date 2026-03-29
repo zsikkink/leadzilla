@@ -12,14 +12,39 @@ export interface WebhookServiceDependencies {
   enqueueReplyClassify?: ((payload: ReplyClassifyJobPayload) => Promise<void>) | undefined;
 }
 
+async function enqueueReplyClassification(
+  event: {
+    id: string;
+    leadId: string;
+    messageSendId: string;
+    replyText: string | null;
+  },
+  messageId: TrengoWebhookPayload['data']['id'],
+  deps?: WebhookServiceDependencies | undefined,
+): Promise<void> {
+  if (!deps?.enqueueReplyClassify) {
+    return;
+  }
+
+  await deps.enqueueReplyClassify({
+    runId: `reply.classify:${event.id}`,
+    feedbackEventId: event.id,
+    replyText: event.replyText,
+    leadId: event.leadId,
+    messageSendId: event.messageSendId,
+    correlationId: `webhook:trengo:${messageId}`,
+  });
+}
+
 /**
  * Process an inbound Trengo webhook event.
  *
- * 1. Correlate to a MessageSend via providerConversationId
- * 2. Create a FeedbackEvent with source=WEBHOOK, eventType=REPLIED
- * 3. Idempotency via dedupeKey = `trengo:<message_id>`
+ * 1. Idempotency via dedupeKey = `trengo:<message_id>`
+ * 2. Correlate to a MessageSend via providerConversationId
+ * 3. Create a FeedbackEvent with source=WEBHOOK, eventType=REPLIED
  * 4. Cancel pending follow-ups for this lead
  * 5. Enqueue reply classification
+ * 6. On duplicate replay, re-enqueue classification if the durable reply is still unclassified
  */
 export async function processTrengoWebhook(
   payload: TrengoWebhookPayload,
@@ -30,6 +55,41 @@ export async function processTrengoWebhook(
   const conversationId = payload.data.conversation_id;
   const contactPhone = payload.data.contact?.phone ?? null;
   const replyText = payload.data.message?.body ?? null;
+
+  // Check for duplicate delivery before doing any writes
+  const existingEvent = await prisma.feedbackEvent.findUnique({
+    where: { dedupeKey },
+    select: {
+      id: true,
+      dedupeKey: true,
+      leadId: true,
+      messageSendId: true,
+      replyText: true,
+      replyClassification: true,
+    },
+  });
+
+  if (existingEvent) {
+    if (!existingEvent.replyClassification && existingEvent.messageSendId) {
+      await enqueueReplyClassification(
+        {
+          id: existingEvent.id,
+          leadId: existingEvent.leadId,
+          messageSendId: existingEvent.messageSendId,
+          replyText: existingEvent.replyText,
+        },
+        messageId,
+        deps,
+      );
+    }
+
+    return {
+      feedbackEventId: existingEvent.id,
+      dedupeKey: existingEvent.dedupeKey,
+      skipped: true,
+      reason: 'DUPLICATE_WEBHOOK',
+    };
+  }
 
   // Find the correlated MessageSend
   let messageSend: { id: string; leadId: string } | null = null;
@@ -66,21 +126,6 @@ export async function processTrengoWebhook(
       dedupeKey,
       skipped: true,
       reason: 'NO_CORRELATED_MESSAGE_SEND',
-    };
-  }
-
-  // Check for duplicate delivery before doing any writes
-  const existingEvent = await prisma.feedbackEvent.findUnique({
-    where: { dedupeKey },
-    select: { id: true, dedupeKey: true },
-  });
-
-  if (existingEvent) {
-    return {
-      feedbackEventId: existingEvent.id,
-      dedupeKey: existingEvent.dedupeKey,
-      skipped: true,
-      reason: 'DUPLICATE_WEBHOOK',
     };
   }
 
@@ -122,16 +167,16 @@ export async function processTrengoWebhook(
   });
 
   // Enqueue reply classification (outside transaction — pg-boss is separate)
-  if (deps?.enqueueReplyClassify) {
-    await deps.enqueueReplyClassify({
-      runId: `reply.classify:${event.id}`,
-      feedbackEventId: event.id,
-      replyText,
+  await enqueueReplyClassification(
+    {
+      id: event.id,
       leadId: messageSend.leadId,
       messageSendId: messageSend.id,
-      correlationId: `webhook:trengo:${messageId}`,
-    });
-  }
+      replyText,
+    },
+    messageId,
+    deps,
+  );
 
   return {
     feedbackEventId: event.id,

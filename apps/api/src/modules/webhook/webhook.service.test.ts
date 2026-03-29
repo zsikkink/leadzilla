@@ -1,3 +1,4 @@
+import type { TrengoWebhookPayload } from '@lead-flood/contracts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const txMock = {
@@ -77,6 +78,16 @@ describe('webhook service SENDING quarantine tolerance', () => {
   });
 
   it('allows Trengo reply webhook reconciliation from UNRESOLVED', async () => {
+    const payload: TrengoWebhookPayload = {
+      event: 'message.created',
+      data: {
+        id: 1,
+        conversation_id: 42,
+        contact: { phone: '+15555550123' },
+        message: { body: 'reply text' },
+      },
+    };
+
     prismaMock.messageSend.findFirst.mockResolvedValue({
       id: 'send_1',
       leadId: 'lead_1',
@@ -84,25 +95,16 @@ describe('webhook service SENDING quarantine tolerance', () => {
     prismaMock.feedbackEvent.findUnique.mockResolvedValue(null);
     txMock.feedbackEvent.upsert.mockResolvedValue({
       id: 'feedback_1',
-      dedupeKey: 'trengo:msg_1',
+      dedupeKey: 'trengo:1',
     });
     txMock.messageSend.update.mockResolvedValue({ id: 'send_1' });
     txMock.messageSend.updateMany.mockResolvedValue({ count: 0 });
 
     const { processTrengoWebhook } = await import('./webhook.service.js');
 
-    await expect(
-      processTrengoWebhook({
-        data: {
-          id: 'msg_1',
-          conversation_id: 'ticket_42',
-          contact: { phone: '+15555550123' },
-          message: { body: 'reply text' },
-        },
-      } as never),
-    ).resolves.toEqual({
+    await expect(processTrengoWebhook(payload)).resolves.toEqual({
       feedbackEventId: 'feedback_1',
-      dedupeKey: 'trengo:msg_1',
+      dedupeKey: 'trengo:1',
       skipped: false,
     });
 
@@ -113,6 +115,113 @@ describe('webhook service SENDING quarantine tolerance', () => {
         repliedAt: expect.any(Date),
       },
     });
+  });
+
+  it('recovers a failed post-commit Trengo classify enqueue on duplicate replay', async () => {
+    const payload: TrengoWebhookPayload = {
+      event: 'message.created',
+      data: {
+        id: 1,
+        conversation_id: 42,
+        contact: { phone: '+15555550123' },
+        message: { body: 'reply text' },
+      },
+    };
+
+    prismaMock.feedbackEvent.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'feedback_1',
+        dedupeKey: 'trengo:1',
+        leadId: 'lead_1',
+        messageSendId: 'send_1',
+        replyText: 'reply text',
+        replyClassification: null,
+      });
+    prismaMock.messageSend.findFirst.mockResolvedValue({
+      id: 'send_1',
+      leadId: 'lead_1',
+    });
+    txMock.feedbackEvent.upsert.mockResolvedValue({
+      id: 'feedback_1',
+      dedupeKey: 'trengo:1',
+    });
+    txMock.messageSend.update.mockResolvedValue({ id: 'send_1' });
+    txMock.messageSend.updateMany.mockResolvedValue({ count: 0 });
+    const enqueueReplyClassify = vi.fn()
+      .mockRejectedValueOnce(new Error('pg-boss unavailable'))
+      .mockResolvedValueOnce(undefined);
+
+    const { processTrengoWebhook } = await import('./webhook.service.js');
+
+    await expect(
+      processTrengoWebhook(payload, { enqueueReplyClassify }),
+    ).rejects.toThrow('pg-boss unavailable');
+
+    await expect(
+      processTrengoWebhook(payload, { enqueueReplyClassify }),
+    ).resolves.toEqual({
+      feedbackEventId: 'feedback_1',
+      dedupeKey: 'trengo:1',
+      skipped: true,
+      reason: 'DUPLICATE_WEBHOOK',
+    });
+
+    expect(enqueueReplyClassify).toHaveBeenNthCalledWith(1, {
+      runId: 'reply.classify:feedback_1',
+      feedbackEventId: 'feedback_1',
+      replyText: 'reply text',
+      leadId: 'lead_1',
+      messageSendId: 'send_1',
+      correlationId: 'webhook:trengo:1',
+    });
+    expect(enqueueReplyClassify).toHaveBeenNthCalledWith(2, {
+      runId: 'reply.classify:feedback_1',
+      feedbackEventId: 'feedback_1',
+      replyText: 'reply text',
+      leadId: 'lead_1',
+      messageSendId: 'send_1',
+      correlationId: 'webhook:trengo:1',
+    });
+    expect(prismaMock.messageSend.findFirst).toHaveBeenCalledTimes(1);
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-enqueue reply classification on duplicate Trengo replay when classification already exists', async () => {
+    const payload: TrengoWebhookPayload = {
+      event: 'message.created',
+      data: {
+        id: 1,
+        conversation_id: 42,
+        contact: { phone: '+15555550123' },
+        message: { body: 'reply text' },
+      },
+    };
+
+    prismaMock.feedbackEvent.findUnique.mockResolvedValue({
+      id: 'feedback_1',
+      dedupeKey: 'trengo:1',
+      leadId: 'lead_1',
+      messageSendId: 'send_1',
+      replyText: 'reply text',
+      replyClassification: 'INTERESTED',
+    });
+    const enqueueReplyClassify = vi.fn().mockResolvedValue(undefined);
+
+    const { processTrengoWebhook } = await import('./webhook.service.js');
+
+    await expect(
+      processTrengoWebhook(payload, { enqueueReplyClassify }),
+    ).resolves.toEqual({
+      feedbackEventId: 'feedback_1',
+      dedupeKey: 'trengo:1',
+      skipped: true,
+      reason: 'DUPLICATE_WEBHOOK',
+    });
+
+    expect(enqueueReplyClassify).not.toHaveBeenCalled();
+    expect(prismaMock.messageSend.findFirst).not.toHaveBeenCalled();
+    expect(prismaMock.$transaction).not.toHaveBeenCalled();
   });
 
   it('allows Resend bounce reconciliation from UNRESOLVED', async () => {
