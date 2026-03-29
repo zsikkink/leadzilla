@@ -17,11 +17,15 @@ describe('health contracts', () => {
         status: 'ok',
         missingTables: [],
         missingEnumValues: [],
+        unexpectedTablePrivileges: [],
+        unexpectedDefaultPrivileges: [],
       },
     });
 
     expect(parsed.status).toBe('ready');
     expect(parsed.db).toBe('ok');
     expect(parsed.schema.status).toBe('ok');
+    expect(parsed.schema.unexpectedTablePrivileges).toEqual([]);
+    expect(parsed.schema.unexpectedDefaultPrivileges).toEqual([]);
   });
 });

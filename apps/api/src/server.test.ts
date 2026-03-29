@@ -222,7 +222,9 @@ describe('buildServer', () => {
       checkSchemaHealth: async () => ({
         status: 'fail',
         missingTables: ['contact_recovery_items'],
-        missingEnumValues: ['CostEventProvider:GOOGLE_CUSTOM_SEARCH'],
+        missingEnumValues: ['MessageSendStatus:UNRESOLVED'],
+        unexpectedTablePrivileges: ['public.MessageSend:authenticated:SELECT,UPDATE'],
+        unexpectedDefaultPrivileges: ['postgres:public:TABLES:anon:INSERT,SELECT'],
       }),
     });
     servers.push(server);
@@ -236,7 +238,9 @@ describe('buildServer', () => {
       schema: {
         status: 'fail',
         missingTables: ['contact_recovery_items'],
-        missingEnumValues: ['CostEventProvider:GOOGLE_CUSTOM_SEARCH'],
+        missingEnumValues: ['MessageSendStatus:UNRESOLVED'],
+        unexpectedTablePrivileges: ['public.MessageSend:authenticated:SELECT,UPDATE'],
+        unexpectedDefaultPrivileges: ['postgres:public:TABLES:anon:INSERT,SELECT'],
       },
     });
   });

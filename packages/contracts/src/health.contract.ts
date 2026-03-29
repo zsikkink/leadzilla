@@ -8,6 +8,8 @@ export const ReadySchemaHealthSchema = z.object({
   status: z.union([z.literal('ok'), z.literal('fail')]),
   missingTables: z.array(z.string()),
   missingEnumValues: z.array(z.string()),
+  unexpectedTablePrivileges: z.array(z.string()).optional(),
+  unexpectedDefaultPrivileges: z.array(z.string()).optional(),
 });
 
 export const ReadyResponseSchema = z.object({
