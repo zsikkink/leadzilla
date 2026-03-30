@@ -152,6 +152,7 @@ jobs:
 
   build-production-images:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'production' }}
+    needs: verify-production-main-ref
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -163,6 +164,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -196,6 +199,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -228,7 +233,15 @@ jobs:
       RAILWAY_PROJECT_TOKEN: ${{ secrets.RAILWAY_PROJECT_TOKEN }}
       PRODUCTION_API_READY_URL: ${{ secrets.PRODUCTION_API_READY_URL }}
       PRODUCTION_SMOKE_URL: ${{ secrets.PRODUCTION_SMOKE_URL }}
+      SMOKE_WEB_BASE_URL: ${{ secrets.PRODUCTION_SMOKE_WEB_BASE_URL }}
+      SMOKE_API_BASE_URL: ${{ secrets.PRODUCTION_SMOKE_API_BASE_URL }}
+      SMOKE_CORS_ORIGIN: ${{ secrets.PRODUCTION_SMOKE_CORS_ORIGIN }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
       - name: Trigger lead-flood-api deployment
         run: |
           response="$(
@@ -289,6 +302,20 @@ jobs:
           echo "Production API /ready check timed out: $PRODUCTION_API_READY_URL"
           exit 1
 
+      - name: Run required repo-owned production smoke check
+        run: bash scripts/release/smoke-production.sh
+
       - name: Run production supplemental smoke check
         if: ${{ env.PRODUCTION_SMOKE_URL != '' }}
         run: curl -fsS "$PRODUCTION_SMOKE_URL"
+
+  verify-production-main-ref:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'production' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail closed unless the production dispatch ref is main
+        run: |
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "Production deploys must be dispatched from refs/heads/main, received ${GITHUB_REF}." >&2
+            exit 1
+          fi
