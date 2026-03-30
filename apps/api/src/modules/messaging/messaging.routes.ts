@@ -12,8 +12,11 @@ import {
   MessageDraftResponseSchema,
   MessageSendIdParamsSchema,
   MessageSendResponseSchema,
+  MessageVariantIdParamsSchema,
+  MessageVariantResponseSchema,
   RejectMessageDraftRequestSchema,
   SendMessageRequestSchema,
+  UpdateMessageVariantRequestSchema,
   ConversationLeadIdParamsSchema,
   ConversationResponseSchema,
 } from '@lead-flood/contracts';
@@ -235,6 +238,31 @@ export function registerMessagingRoutes(
         rejectedByUserId: userId,
       });
       return MessageDraftResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.patch('/v1/messaging/variants/:variantId', async (request, reply) => {
+    const parsedParams = MessageVariantIdParamsSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return sendValidationError(reply, request.id, 'Invalid message variant id');
+    }
+
+    const parsedBody = UpdateMessageVariantRequestSchema.safeParse(request.body);
+    if (!parsedBody.success) {
+      return sendValidationError(reply, request.id, 'Invalid update variant payload');
+    }
+
+    try {
+      const result = await service.updateMessageVariant(
+        parsedParams.data.variantId,
+        parsedBody.data,
+      );
+      return MessageVariantResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;

@@ -39,6 +39,7 @@ import type {
   ListRejectedLeadsQuery,
   ListRejectedLeadsResponse,
   MessageDraftResponse,
+  MessageVariantResponse,
   ModelMetricsResponse,
   PipelineStatsResponse,
   QualificationRuleResponse,
@@ -80,8 +81,14 @@ export class ApiClient {
 
   private async request<T>(path: string, options?: RequestInit): Promise<T> {
     const token = this.getToken();
+    const method = (options?.method ?? 'GET').toUpperCase();
+    const hasBody = options?.body !== undefined && options?.body !== null;
     const headers: Record<string, string> = {
-      'content-type': 'application/json',
+      // Only set content-type for requests that have a body — Fastify rejects
+      // empty bodies when content-type is application/json.
+      ...(hasBody || (method !== 'DELETE' && method !== 'GET' && method !== 'HEAD')
+        ? { 'content-type': 'application/json' }
+        : {}),
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     };
 
@@ -283,6 +290,13 @@ export class ApiClient {
   }): Promise<GenerateMessageDraftResponse> {
     return this.request('/v1/messaging/drafts/generate', {
       method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  updateVariant(variantId: string, data: { bodyText: string; subject?: string | undefined }): Promise<MessageVariantResponse> {
+    return this.request(`/v1/messaging/variants/${variantId}`, {
+      method: 'PATCH',
       body: JSON.stringify(data),
     });
   }

@@ -14,6 +14,7 @@ import type {
   MessageVariantResponse,
   RejectMessageDraftRequest,
   SendMessageRequest,
+  UpdateMessageVariantRequest,
 } from '@lead-flood/contracts';
 import { PrismaRuntime, prisma } from '@lead-flood/db';
 
@@ -62,6 +63,7 @@ export interface MessagingRepository {
   getMessageSend(sendId: string): Promise<MessageSendResponse>;
   getConversation(leadId: string): Promise<ConversationResponse>;
   createMessageSendForApproval(input: CreateMessageSendForApprovalInput): Promise<MessageSendResponse>;
+  updateMessageVariant(variantId: string, input: UpdateMessageVariantRequest): Promise<MessageVariantResponse>;
 }
 
 export class StubMessagingRepository implements MessagingRepository {
@@ -129,6 +131,10 @@ export class StubMessagingRepository implements MessagingRepository {
 
   async createMessageSendForApproval(_input: CreateMessageSendForApprovalInput): Promise<MessageSendResponse> {
     throw new MessagingNotImplementedError('TODO: create message send for approval persistence');
+  }
+
+  async updateMessageVariant(_variantId: string, _input: UpdateMessageVariantRequest): Promise<MessageVariantResponse> {
+    throw new MessagingNotImplementedError('TODO: update message variant persistence');
   }
 }
 
@@ -676,6 +682,27 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
     entries.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
     return { leadId, entries };
+  }
+
+  override async updateMessageVariant(
+    variantId: string,
+    input: UpdateMessageVariantRequest,
+  ): Promise<MessageVariantResponse> {
+    try {
+      const variant = await prisma.messageVariant.update({
+        where: { id: variantId },
+        data: {
+          bodyText: input.bodyText,
+          ...(input.subject !== undefined ? { subject: input.subject } : {}),
+        },
+      });
+      return mapVariantToResponse(variant);
+    } catch (error: unknown) {
+      if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2025') {
+        throw new MessagingNotFoundError('Message variant not found');
+      }
+      throw error;
+    }
   }
 
   override async createMessageSendForApproval(
