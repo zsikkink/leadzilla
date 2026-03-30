@@ -21,16 +21,11 @@ import { cn } from '../../../src/lib/utils.js';
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
-  { value: 'new', label: 'New' },
-  { value: 'processing', label: 'Processing' },
-  { value: 'enriched', label: 'Enriched' },
-  { value: 'scored', label: 'Scored' },
   { value: 'qualified', label: 'Qualified' },
   { value: 'drafted', label: 'Drafted' },
   { value: 'messaged', label: 'Messaged' },
   { value: 'replied', label: 'Replied' },
   { value: 'cold', label: 'Cold' },
-  { value: 'stuck', label: 'Stuck' },
   { value: 'failed', label: 'Failed' },
 ];
 

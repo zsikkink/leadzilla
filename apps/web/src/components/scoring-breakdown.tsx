@@ -82,12 +82,14 @@ interface ScoringBreakdownProps {
   leadId: string;
   blendedScore?: number | undefined;
   scoreBand?: string | undefined;
+  blendLabel?: string | undefined;
 }
 
 export function ScoringBreakdown({
   leadId,
   blendedScore,
   scoreBand,
+  blendLabel,
 }: ScoringBreakdownProps) {
   const { apiClient } = useAuth();
   const [snapshot, setSnapshot] = useState<FeatureSnapshot | null>(null);
@@ -243,6 +245,11 @@ export function ScoringBreakdown({
       <h2 className="mb-4 flex items-center gap-2 text-base font-bold tracking-tight">
         <Brain className="h-4 w-4 text-zbooni-teal" />
         Scoring Breakdown
+        {blendLabel && (
+          <span className="ml-auto text-[10px] font-semibold text-muted-foreground/50">
+            {blendLabel}
+          </span>
+        )}
       </h2>
 
       {/* Score summary cards */}
@@ -340,7 +347,7 @@ export function ScoringBreakdown({
               const isPositive = rate >= 50;
               return (
                 <div
-                  key={cat}
+                  key={`cat-${cat}`}
                   className={cn(
                     'rounded-lg border px-2.5 py-1.5 text-xs',
                     isPositive

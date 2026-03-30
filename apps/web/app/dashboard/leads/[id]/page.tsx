@@ -30,13 +30,15 @@ import {
   TrendingUp,
   User,
   Users,
+  X,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { toast } from 'sonner';
 
-import { AboutBusinessCard } from '../../../../src/components/about-business-card.js';
+import { AboutBusinessCard, parseBusinessDataForCard } from '../../../../src/components/about-business-card.js';
+import type { AboutBusinessCardProps } from '../../../../src/components/about-business-card.js';
 import { ConfirmModal, useConfirmModal } from '../../../../src/components/confirm-modal.js';
 import { LeadStatusBadge } from '../../../../src/components/lead-status-badge.js';
 import { ScoreBandBadge } from '../../../../src/components/score-band-badge.js';
@@ -1438,6 +1440,83 @@ export default function LeadDetailPage() {
     }
   };
 
+  // ── A1: Fetch full business data from Supabase for AboutBusinessCard ──
+  const [businessCardData, setBusinessCardData] = useState<AboutBusinessCardProps | null>(null);
+
+  // ── A3: Blend label from pipeline_settings ─────────────
+  const [blendLabel, setBlendLabel] = useState<string>('Score (100% Rule-Based)');
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+
+    async function loadBusinessData() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+
+        // Step 1: Get businessId from Lead table (PascalCase = quoted)
+        const { data: leadRow } = await supabase
+          .from('Lead')
+          .select('"businessId"')
+          .eq('id', id)
+          .single();
+
+        if (cancelled || !leadRow) return;
+        const bizId = (leadRow as Record<string, unknown>).businessId;
+        if (typeof bizId !== 'string') return;
+
+        // Step 2: Fetch full business row for AboutBusinessCard
+        const { data: bizRow } = await supabase
+          .from('businesses')
+          .select('*')
+          .eq('id', bizId)
+          .single();
+
+        if (cancelled || !bizRow) return;
+        setBusinessCardData(parseBusinessDataForCard(bizRow as Record<string, unknown>));
+      } catch {
+        // Silently fail — business data is supplementary
+      }
+    }
+
+    void loadBusinessData();
+    return () => { cancelled = true; };
+  }, [id]);
+
+  // ── A3: Load blend setting ─────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBlend() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data } = await supabase
+          .from('pipeline_settings')
+          .select('key, "valueJson"')
+          .eq('key', 'deterministicAiBlend')
+          .single();
+
+        if (cancelled || !data) return;
+        const raw = (data as Record<string, unknown>).valueJson;
+        const val = typeof raw === 'number' ? raw : Number(raw);
+        if (Number.isFinite(val) && val >= 0 && val <= 100) {
+          const detPct = Math.round(val);
+          const aiPct = 100 - detPct;
+          if (aiPct === 0) {
+            setBlendLabel('Score (100% Rule-Based)');
+          } else {
+            setBlendLabel(`Score (${detPct}% Rule-Based / ${aiPct}% AI)`);
+          }
+        }
+      } catch {
+        // Use default label
+      }
+    }
+
+    void loadBlend();
+    return () => { cancelled = true; };
+  }, []);
+
   const l = lead.data;
   const businessName = useMemo(
     () => getBusinessNameFromLead(l ?? null) ?? (businessData?.businessName || null),
@@ -1663,8 +1742,10 @@ export default function LeadDetailPage() {
         ) : null}
       </div>
 
-      {/* ─── 1. About This Business (C1 — AI insights) ─── */}
-      {businessSummary || businessData?.businessInsights || businessData?.businessName ? (
+      {/* ─── 1. About This Business (C1 — AI insights + D1 full business data) ─── */}
+      {businessCardData ? (
+        <AboutBusinessCard {...businessCardData} businessInsights={conversionData.businessInsights} />
+      ) : businessSummary || businessData?.businessInsights || businessData?.businessName ? (
         <AboutBusinessCard
           category={businessSummary?.category ?? null}
           metaDescription={
@@ -1780,6 +1861,7 @@ export default function LeadDetailPage() {
         leadId={id}
         blendedScore={scoreInfo?.blendedScore}
         scoreBand={scoreInfo?.scoreBand}
+        blendLabel={blendLabel}
       />
 
       {/* Score Reasoning */}
