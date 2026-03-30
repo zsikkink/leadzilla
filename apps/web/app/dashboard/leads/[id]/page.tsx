@@ -8,6 +8,8 @@ import {
   Brain,
   Briefcase,
   Building2,
+  Check,
+  Edit2,
   ExternalLink,
   Globe,
   Inbox,
@@ -19,15 +21,19 @@ import {
   Phone,
   RefreshCw,
   Shield,
+  Star,
+  Trash2,
   TrendingUp,
   User,
   Users,
+  X,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { useCallback, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 
-import { AboutBusinessCard } from '../../../../src/components/about-business-card.js';
+import { AboutBusinessCard, parseBusinessDataForCard } from '../../../../src/components/about-business-card.js';
+import type { AboutBusinessCardProps } from '../../../../src/components/about-business-card.js';
 import { LeadStatusBadge } from '../../../../src/components/lead-status-badge.js';
 import { ScoreBandBadge } from '../../../../src/components/score-band-badge.js';
 import { ScoringBreakdown } from '../../../../src/components/scoring-breakdown.js';
@@ -40,6 +46,7 @@ import {
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
 import { countryName } from '../../../../src/lib/countries.js';
+import { getSupabaseBrowserClient } from '../../../../src/lib/supabase-client.js';
 import { getTeamMemberTier, sortTeamMembers } from '../../../../src/lib/team-members.js';
 
 interface EnrichmentField {
@@ -609,18 +616,193 @@ export default function LeadDetailPage() {
     }
   };
 
+  // ── A1: Fetch full business data from Supabase ──────────
+  const [businessCardData, setBusinessCardData] = useState<AboutBusinessCardProps | null>(null);
+  const [businessId, setBusinessId] = useState<string | null>(null);
+
+  // ── A2: Team members from business_contacts (editable) ──
+  const [dbTeamMembers, setDbTeamMembers] = useState<TeamMember[]>([]);
+  const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editTitle, setEditTitle] = useState('');
+  const [memberSaving, setMemberSaving] = useState(false);
+
+  // ── A3: Blend label from pipeline_settings ─────────────
+  const [blendLabel, setBlendLabel] = useState<string>('Score (100% Rule-Based)');
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+
+    async function loadBusinessData() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+
+        // Step 1: Get businessId from Lead table (PascalCase = quoted)
+        const { data: leadRow } = await supabase
+          .from('Lead')
+          .select('"businessId"')
+          .eq('id', id)
+          .single();
+
+        if (cancelled || !leadRow) return;
+        const bizId = (leadRow as Record<string, unknown>).businessId;
+        if (typeof bizId !== 'string') return;
+        setBusinessId(bizId);
+
+        // Step 2: Fetch full business row
+        const { data: bizRow } = await supabase
+          .from('businesses')
+          .select('*')
+          .eq('id', bizId)
+          .single();
+
+        if (cancelled || !bizRow) return;
+        setBusinessCardData(parseBusinessDataForCard(bizRow as Record<string, unknown>));
+
+        // Step 3: Fetch business_contacts for team member CRUD
+        const { data: contacts } = await supabase
+          .from('business_contacts')
+          .select('*')
+          .eq('businessId', bizId)
+          .order('positionRank', { ascending: true });
+
+        if (cancelled || !contacts) return;
+        setDbTeamMembers(
+          (contacts as Record<string, unknown>[]).map((c) => ({
+            id: String(c.id),
+            fullName: String(c.name ?? ''),
+            jobTitle: typeof c.title === 'string' ? c.title : null,
+            email: typeof c.email === 'string' ? c.email : null,
+            phone: typeof c.phone === 'string' ? c.phone : null,
+            linkedinUrl: typeof c.linkedinUrl === 'string' ? c.linkedinUrl : null,
+            seniority: typeof c.seniority === 'string' ? c.seniority : null,
+            positionRank: typeof c.positionRank === 'number' ? c.positionRank : null,
+            source: typeof c.source === 'string' ? c.source : null,
+            fromBusinessContacts: true,
+          })),
+        );
+      } catch {
+        // Silently fail — business data is supplementary
+      }
+    }
+
+    void loadBusinessData();
+    return () => { cancelled = true; };
+  }, [id]);
+
+  // ── A3: Load blend setting ─────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBlend() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data } = await supabase
+          .from('pipeline_settings')
+          .select('key, "valueJson"')
+          .eq('key', 'deterministicAiBlend')
+          .single();
+
+        if (cancelled || !data) return;
+        const raw = (data as Record<string, unknown>).valueJson;
+        const val = typeof raw === 'number' ? raw : Number(raw);
+        if (Number.isFinite(val) && val >= 0 && val <= 100) {
+          const detPct = Math.round(val);
+          const aiPct = 100 - detPct;
+          if (aiPct === 0) {
+            setBlendLabel('Score (100% Rule-Based)');
+          } else {
+            setBlendLabel(`Score (${detPct}% Rule-Based / ${aiPct}% AI)`);
+          }
+        }
+      } catch {
+        // Use default label
+      }
+    }
+
+    void loadBlend();
+    return () => { cancelled = true; };
+  }, []);
+
+  // ── A2: Team member CRUD handlers ──────────────────────
+  const handleSaveEdit = async (memberId: string) => {
+    if (!businessId) return;
+    setMemberSaving(true);
+    try {
+      const supabase = getSupabaseBrowserClient();
+      await supabase
+        .from('business_contacts')
+        .update({ name: editName, title: editTitle || null })
+        .eq('id', memberId);
+
+      setDbTeamMembers((prev) =>
+        prev.map((m) =>
+          m.id === memberId ? { ...m, fullName: editName, jobTitle: editTitle || null } : m,
+        ),
+      );
+      setEditingMemberId(null);
+    } catch {
+      // Keep editing state on failure
+    } finally {
+      setMemberSaving(false);
+    }
+  };
+
+  const handleDeleteMember = async (memberId: string) => {
+    if (!businessId) return;
+    try {
+      const supabase = getSupabaseBrowserClient();
+      await supabase
+        .from('business_contacts')
+        .delete()
+        .eq('id', memberId);
+
+      setDbTeamMembers((prev) => prev.filter((m) => m.id !== memberId));
+    } catch {
+      // Silently fail
+    }
+  };
+
+  const handleSetPrimary = async (memberId: string) => {
+    if (!businessId) return;
+    try {
+      const supabase = getSupabaseBrowserClient();
+      // Set all contacts for this business to non-primary (rank 99)
+      await supabase
+        .from('business_contacts')
+        .update({ positionRank: 99 })
+        .eq('businessId', businessId);
+
+      // Set the selected contact as primary (rank 0)
+      await supabase
+        .from('business_contacts')
+        .update({ positionRank: 0 })
+        .eq('id', memberId);
+
+      setDbTeamMembers((prev) =>
+        prev
+          .map((m) => ({
+            ...m,
+            positionRank: m.id === memberId ? 0 : 99,
+          }))
+          .sort((a, b) => (a.positionRank ?? 99) - (b.positionRank ?? 99)),
+      );
+    } catch {
+      // Silently fail
+    }
+  };
+
   const l = lead.data;
   const businessName = useMemo(() => getBusinessNameFromLead(l ?? null), [l]);
-  const teamMembers = useMemo(() => buildTeamMembersFromLead(l ?? null), [l]);
+  const teamMembers = useMemo(() => {
+    // Prefer DB team members if available, fall back to contact discovery
+    if (dbTeamMembers.length > 0) return dbTeamMembers;
+    return buildTeamMembersFromLead(l ?? null);
+  }, [l, dbTeamMembers]);
   const businessSummary = useMemo(() => {
-    if (!l) {
-      return null;
-    }
-
-    if (!businessName && !l.businessCategory && !l.businessCountryCode && !l.businessCity) {
-      return null;
-    }
-
+    if (!l) return null;
+    if (!businessName && !l.businessCategory && !l.businessCountryCode && !l.businessCity) return null;
     return {
       category: l.businessCategory ?? null,
       countryCode: l.businessCountryCode ?? null,
@@ -773,8 +955,10 @@ export default function LeadDetailPage() {
         ) : null}
       </div>
 
-      {/* About This Business (D1) */}
-      {businessSummary ? (
+      {/* About This Business (D1) — full business data from Supabase */}
+      {businessCardData ? (
+        <AboutBusinessCard {...businessCardData} />
+      ) : businessSummary ? (
         <AboutBusinessCard
           category={businessSummary.category}
           metaDescription={null}
@@ -791,6 +975,7 @@ export default function LeadDetailPage() {
         leadId={id}
         blendedScore={scoreInfo?.blendedScore}
         scoreBand={scoreInfo?.scoreBand}
+        blendLabel={blendLabel}
       />
 
       {/* Score Reasoning */}
@@ -919,89 +1104,166 @@ export default function LeadDetailPage() {
           </h2>
           <div className="grid gap-2.5 sm:grid-cols-2">
             {sortedTeamMembers.map((tm, idx) => {
-              const isPrimary = leadEmailNormalized
-                ? normalizeEmail(tm.email) === leadEmailNormalized
-                : idx === 0;
+              const isPrimary = tm.fromBusinessContacts
+                ? tm.positionRank === 0
+                : leadEmailNormalized
+                  ? normalizeEmail(tm.email) === leadEmailNormalized
+                  : idx === 0;
               const isDecisionMaker = isExecutiveOrDirector(tm);
               const seniorityLabel = tm.seniority ? tm.seniority.charAt(0).toUpperCase() + tm.seniority.slice(1) : null;
+              const isEditing = editingMemberId === tm.id;
 
               return (
                 <div
                   key={tm.id}
                   className="rounded-lg border border-border/25 bg-zbooni-dark/35 p-3"
                 >
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-[11px] font-bold text-amber-400">
-                      {tm.fullName.charAt(0)}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <p className="truncate text-sm font-semibold">{tm.fullName}</p>
-                        {isPrimary ? (
-                          <span className="rounded-full border border-zbooni-green/40 bg-zbooni-green/20 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-zbooni-green">
-                            Primary
-                          </span>
-                        ) : null}
-                        {isDecisionMaker && !isPrimary ? (
-                          <span className="rounded-full border border-amber-400/40 bg-amber-400/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-300">
-                            Decision Maker
-                          </span>
-                        ) : null}
-                        {seniorityLabel && seniorityLabel.toLowerCase() !== 'other' ? (
-                          <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-blue-300">
-                            {seniorityLabel}
-                          </span>
-                        ) : null}
-                        {tm.source ? (
-                          <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                            {tm.source}
-                          </span>
-                        ) : null}
+                  {isEditing ? (
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        placeholder="Full name"
+                        className="w-full rounded-md border border-border/30 bg-zbooni-dark/60 px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/40"
+                      />
+                      <input
+                        type="text"
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        placeholder="Job title"
+                        className="w-full rounded-md border border-border/30 bg-zbooni-dark/60 px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/40"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          disabled={memberSaving || !editName.trim()}
+                          onClick={() => void handleSaveEdit(tm.id)}
+                          className="inline-flex items-center gap-1 rounded-md bg-zbooni-green/20 px-2.5 py-1 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/30 disabled:opacity-50"
+                        >
+                          {memberSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingMemberId(null)}
+                          className="inline-flex items-center gap-1 rounded-md bg-muted/20 px-2.5 py-1 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/30"
+                        >
+                          <X className="h-3 w-3" />
+                          Cancel
+                        </button>
                       </div>
-                      {tm.jobTitle ? (
-                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground/60">{tm.jobTitle}</p>
-                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-[11px] font-bold text-amber-400">
+                        {tm.fullName.charAt(0)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <p className="truncate text-sm font-semibold">{tm.fullName}</p>
+                          {isPrimary ? (
+                            <span className="rounded-full border border-zbooni-green/40 bg-zbooni-green/20 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-zbooni-green">
+                              Primary
+                            </span>
+                          ) : null}
+                          {isDecisionMaker && !isPrimary ? (
+                            <span className="rounded-full border border-amber-400/40 bg-amber-400/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-300">
+                              Decision Maker
+                            </span>
+                          ) : null}
+                          {seniorityLabel && seniorityLabel.toLowerCase() !== 'other' ? (
+                            <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-blue-300">
+                              {seniorityLabel}
+                            </span>
+                          ) : null}
+                          {tm.source ? (
+                            <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                              {tm.source}
+                            </span>
+                          ) : null}
+                        </div>
+                        {tm.jobTitle ? (
+                          <p className="mt-0.5 truncate text-[11px] text-muted-foreground/60">{tm.jobTitle}</p>
+                        ) : null}
 
-                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px]">
-                        {tm.email ? (
-                          <a
-                            href={`mailto:${tm.email}`}
-                            className="inline-flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green"
-                          >
-                            <Mail className="h-3.5 w-3.5" />
-                            <span className="font-mono">{tm.email}</span>
-                          </a>
-                        ) : (
-                          <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-medium text-muted-foreground/60">
-                            No email found
-                          </span>
+                        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px]">
+                          {tm.email ? (
+                            <a
+                              href={`mailto:${tm.email}`}
+                              className="inline-flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green"
+                            >
+                              <Mail className="h-3.5 w-3.5" />
+                              <span className="font-mono">{tm.email}</span>
+                            </a>
+                          ) : (
+                            <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-medium text-muted-foreground/60">
+                              No email found
+                            </span>
+                          )}
+
+                          {tm.phone ? (
+                            <a
+                              href={`tel:${tm.phone}`}
+                              className="inline-flex items-center gap-1 text-muted-foreground/80 transition-colors hover:text-foreground"
+                            >
+                              <Phone className="h-3.5 w-3.5" />
+                              {tm.phone}
+                            </a>
+                          ) : null}
+
+                          {tm.linkedinUrl ? (
+                            <a
+                              href={tm.linkedinUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green"
+                            >
+                              <Linkedin className="h-3.5 w-3.5" />
+                              LinkedIn
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          ) : null}
+                        </div>
+
+                        {/* Edit/Delete/Set Primary actions for DB-backed team members */}
+                        {tm.fromBusinessContacts && (
+                          <div className="mt-2 flex items-center gap-2 border-t border-border/15 pt-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingMemberId(tm.id);
+                                setEditName(tm.fullName);
+                                setEditTitle(tm.jobTitle ?? '');
+                              }}
+                              className="inline-flex items-center gap-1 text-[10px] font-semibold text-muted-foreground/50 transition-colors hover:text-zbooni-teal"
+                            >
+                              <Edit2 className="h-3 w-3" />
+                              Edit
+                            </button>
+                            {!isPrimary && (
+                              <button
+                                type="button"
+                                onClick={() => void handleSetPrimary(tm.id)}
+                                className="inline-flex items-center gap-1 text-[10px] font-semibold text-muted-foreground/50 transition-colors hover:text-zbooni-green"
+                              >
+                                <Star className="h-3 w-3" />
+                                Set Primary
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => void handleDeleteMember(tm.id)}
+                              className="inline-flex items-center gap-1 text-[10px] font-semibold text-muted-foreground/50 transition-colors hover:text-red-400"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              Delete
+                            </button>
+                          </div>
                         )}
-
-                        {tm.phone ? (
-                          <a
-                            href={`tel:${tm.phone}`}
-                            className="inline-flex items-center gap-1 text-muted-foreground/80 transition-colors hover:text-foreground"
-                          >
-                            <Phone className="h-3.5 w-3.5" />
-                            {tm.phone}
-                          </a>
-                        ) : null}
-
-                        {tm.linkedinUrl ? (
-                          <a
-                            href={tm.linkedinUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green"
-                          >
-                            <Linkedin className="h-3.5 w-3.5" />
-                            LinkedIn
-                            <ExternalLink className="h-3 w-3" />
-                          </a>
-                        ) : null}
                       </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               );
             })}

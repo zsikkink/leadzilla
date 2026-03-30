@@ -40,12 +40,14 @@ interface ScoringBreakdownProps {
   leadId: string;
   blendedScore?: number | undefined;
   scoreBand?: string | undefined;
+  blendLabel?: string | undefined;
 }
 
 export function ScoringBreakdown({
   leadId,
   blendedScore,
   scoreBand,
+  blendLabel,
 }: ScoringBreakdownProps) {
   const { apiClient } = useAuth();
   const [snapshot, setSnapshot] = useState<FeatureSnapshot | null>(null);
@@ -151,6 +153,11 @@ export function ScoringBreakdown({
       <h2 className="mb-4 flex items-center gap-2 text-base font-bold tracking-tight">
         <Brain className="h-4 w-4 text-zbooni-teal" />
         Scoring Breakdown
+        {blendLabel && (
+          <span className="ml-auto text-[10px] font-semibold text-muted-foreground/50">
+            {blendLabel}
+          </span>
+        )}
       </h2>
 
       {/* Score summary bar */}
@@ -207,7 +214,7 @@ export function ScoringBreakdown({
           <div className="space-y-1.5">
             {hardFilters.map((hf) => (
               <div
-                key={hf.ruleId}
+                key={`hard-${hf.ruleId}`}
                 className={cn(
                   'flex items-center gap-2 rounded-lg border px-3 py-2 text-xs',
                   hf.matched
@@ -240,7 +247,7 @@ export function ScoringBreakdown({
           <div className="space-y-1.5">
             {positiveRules.map((r) => (
               <div
-                key={r.ruleId}
+                key={`positive-${r.ruleId}`}
                 className="flex items-center gap-2 rounded-lg border border-zbooni-green/15 bg-zbooni-green/5 px-3 py-2 text-xs"
               >
                 <span className="font-semibold text-zbooni-green">
@@ -268,7 +275,7 @@ export function ScoringBreakdown({
           <div className="space-y-1.5">
             {failingRules.map((r) => (
               <div
-                key={r.ruleId}
+                key={`failing-${r.ruleId}`}
                 className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2 text-xs text-muted-foreground/60"
               >
                 <span className="font-semibold">
@@ -302,7 +309,7 @@ export function ScoringBreakdown({
             <div className="mt-2 space-y-1">
               {allRules.map((r) => (
                 <div
-                  key={r.ruleId}
+                  key={`all-${r.ruleId}`}
                   className={cn(
                     'flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs',
                     r.matched
