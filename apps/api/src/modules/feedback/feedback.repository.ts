@@ -16,7 +16,7 @@ export interface FeedbackRepository {
   ingestFeedbackEvent(input: IngestFeedbackEventRequest): Promise<IngestFeedbackEventResponse>;
   listFeedbackEvents(query: ListFeedbackEventsQuery): Promise<ListFeedbackEventsResponse>;
   getFeedbackSummary(query: FeedbackSummaryQuery): Promise<FeedbackSummaryResponse>;
-  deleteFeedbackEvent(eventId: string): Promise<boolean>;
+  deleteFeedbackEvent(eventId: string): Promise<void>;
 }
 
 export class StubFeedbackRepository implements FeedbackRepository {
@@ -36,7 +36,7 @@ export class StubFeedbackRepository implements FeedbackRepository {
     throw new FeedbackNotImplementedError('TODO: get feedback summary persistence');
   }
 
-  async deleteFeedbackEvent(_eventId: string): Promise<boolean> {
+  async deleteFeedbackEvent(_eventId: string): Promise<void> {
     throw new FeedbackNotImplementedError('TODO: delete feedback event persistence');
   }
 }
@@ -146,6 +146,36 @@ export class PrismaFeedbackRepository extends StubFeedbackRepository {
     };
   }
 
+  override async deleteFeedbackEvent(id: string): Promise<void> {
+    try {
+      await prisma.$transaction(async (tx) => {
+        // Nullify FK references from TrainingLabel (onDelete: SetNull in schema,
+        // but explicit nullification is safer in a transaction)
+        await tx.trainingLabel.updateMany({
+          where: { feedbackEventId: id },
+          data: { feedbackEventId: null },
+        });
+
+        await tx.feedbackEvent.delete({
+          where: { id },
+        });
+      });
+    } catch (error: unknown) {
+      if (error instanceof PrismaRuntime.PrismaClientKnownRequestError) {
+        if (error.code === 'P2025') {
+          // Record not found — nothing to delete
+          return;
+        }
+        if (error.code === 'P2003') {
+          throw new Error(
+            `Cannot delete feedback event: it has dependent records that prevent deletion (${error.meta?.field_name ?? 'unknown'})`,
+          );
+        }
+      }
+      throw error;
+    }
+  }
+
   override async getFeedbackSummary(query: FeedbackSummaryQuery): Promise<FeedbackSummaryResponse> {
     const dateFilter: Prisma.FeedbackEventWhereInput['occurredAt'] = {
       ...(query.from !== undefined ? { gte: new Date(query.from) } : {}),
@@ -189,10 +219,4 @@ export class PrismaFeedbackRepository extends StubFeedbackRepository {
     };
   }
 
-  override async deleteFeedbackEvent(eventId: string): Promise<boolean> {
-    const existing = await prisma.feedbackEvent.findUnique({ where: { id: eventId }, select: { id: true } });
-    if (!existing) return false;
-    await prisma.feedbackEvent.delete({ where: { id: eventId } });
-    return true;
-  }
 }

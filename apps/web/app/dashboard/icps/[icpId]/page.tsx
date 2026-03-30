@@ -1534,6 +1534,10 @@ export default function IcpDetailPage() {
               </div>
             </div>
 
+            <p className="mb-2 text-sm text-muted-foreground">
+              This will permanently delete this ICP and all its qualification rules,
+              scoring data, discovery records, and message history.
+            </p>
             <p className="mb-6 text-sm text-muted-foreground">
               If this ICP has active leads or running discovery jobs, deletion will be blocked and you will see an error explaining why.
             </p>

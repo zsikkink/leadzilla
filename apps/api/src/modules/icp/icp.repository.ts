@@ -646,6 +646,15 @@ export class PrismaIcpRepository extends StubIcpRepository {
   }
 
   override async deleteIcpProfile(icpId: string): Promise<void> {
+    // Verify the ICP exists before attempting deletion
+    const icp = await prisma.icpProfile.findUnique({
+      where: { id: icpId },
+      select: { id: true },
+    });
+    if (!icp) {
+      throw new IcpNotFoundError();
+    }
+
     try {
       await prisma.$transaction(async (tx) => {
         // Null-out nullable FK references so they don't block ICP deletion.

@@ -490,6 +490,10 @@ export interface DiscoveryAdminRepository {
     id: string,
     requestedByUserId?: string | undefined,
   ): Promise<CancelDiscoveryRunResult>;
+  approveContactRecoveryItem(
+    id: string,
+    approvedByUserId: string,
+  ): Promise<{ leadId: string; businessName: string }>;
   getDiscoveryRunDetail(id: string): Promise<{
     run: {
       id: string;
@@ -506,10 +510,6 @@ export interface DiscoveryAdminRepository {
     };
     leads: DiscoveryRunLeadItem[];
   }>;
-  approveContactRecoveryItem(
-    id: string,
-    approvedByUserId: string,
-  ): Promise<{ leadId: string; businessName: string }>;
 }
 
 export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository {

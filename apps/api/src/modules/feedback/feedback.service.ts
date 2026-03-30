@@ -20,7 +20,7 @@ export interface FeedbackService {
   ingestFeedbackEvent(input: IngestFeedbackEventRequest): Promise<IngestFeedbackEventResponse>;
   listFeedbackEvents(query: ListFeedbackEventsQuery): Promise<ListFeedbackEventsResponse>;
   getFeedbackSummary(query: FeedbackSummaryQuery): Promise<FeedbackSummaryResponse>;
-  deleteFeedbackEvent(eventId: string): Promise<boolean>;
+  deleteFeedbackEvent(eventId: string): Promise<void>;
 }
 
 export function buildFeedbackService(repository: FeedbackRepository): FeedbackService {

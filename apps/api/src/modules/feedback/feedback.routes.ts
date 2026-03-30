@@ -8,6 +8,7 @@ import {
   ListFeedbackEventsQuerySchema,
   ListFeedbackEventsResponseSchema,
 } from '@lead-flood/contracts';
+import { z } from 'zod';
 
 import { requireAppAdminAccess } from '../../auth/guard.js';
 import { FeedbackNotImplementedError } from './feedback.errors.js';
@@ -89,32 +90,6 @@ export function registerFeedbackRoutes(app: FastifyInstance): void {
     }
   });
 
-  app.delete('/v1/feedback/events/:eventId', { preHandler: requireAppAdmin }, async (request, reply) => {
-    const { eventId } = request.params as { eventId: string };
-    if (!eventId) {
-      return sendValidationError(reply, request.id, 'Missing eventId parameter');
-    }
-
-    try {
-      const deleted = await service.deleteFeedbackEvent(eventId);
-      if (!deleted) {
-        reply.status(404).send(
-          ErrorResponseSchema.parse({
-            error: `Feedback event not found: ${eventId}`,
-            requestId: request.id,
-          }),
-        );
-        return;
-      }
-      reply.status(204).send();
-    } catch (error: unknown) {
-      if (handleModuleError(error, request, reply)) {
-        return;
-      }
-      throw error;
-    }
-  });
-
   app.get('/v1/feedback/summary', async (request, reply) => {
     const parsedQuery = FeedbackSummaryQuerySchema.safeParse(request.query);
     if (!parsedQuery.success) {
@@ -124,6 +99,24 @@ export function registerFeedbackRoutes(app: FastifyInstance): void {
     try {
       const result = await service.getFeedbackSummary(parsedQuery.data);
       return FeedbackSummaryResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.delete('/v1/feedback/events/:id', { preHandler: requireAppAdmin }, async (request, reply) => {
+    const parsedParams = z.object({ id: z.string().min(1) }).strict().safeParse(request.params);
+    if (!parsedParams.success) {
+      return sendValidationError(reply, request.id, 'Invalid feedback event id');
+    }
+
+    try {
+      await service.deleteFeedbackEvent(parsedParams.data.id);
+      reply.status(200);
+      return { success: true, id: parsedParams.data.id };
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;
