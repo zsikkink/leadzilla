@@ -30,7 +30,6 @@ import {
   TrendingUp,
   User,
   Users,
-  X,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
