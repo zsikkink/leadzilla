@@ -1416,13 +1416,13 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
           },
         });
 
-        // Mark recovery item as approved (use REJECTED status with note in rejectedBy)
+        // Mark recovery item as approved
         await tx.contactRecoveryItem.update({
           where: { id },
           data: {
-            status: 'REJECTED',
+            status: 'APPROVED',
             rejectedAt: new Date(),
-            rejectedBy: `APPROVED:${approvedByUserId}`,
+            rejectedBy: approvedByUserId,
           },
         });
 
@@ -1449,9 +1449,9 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
           await prisma.contactRecoveryItem.update({
             where: { id },
             data: {
-              status: 'REJECTED',
+              status: 'APPROVED',
               rejectedAt: new Date(),
-              rejectedBy: `APPROVED:${approvedByUserId}`,
+              rejectedBy: approvedByUserId,
             },
           });
 

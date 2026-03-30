@@ -44,7 +44,7 @@ function mapContactRecoveryItem(record: {
   businessId: string;
   icpProfileId: string;
   discoveryRunId: string;
-  status: 'OPEN' | 'REJECTED';
+  status: 'OPEN' | 'APPROVED' | 'REJECTED';
   reason: 'NO_CONTACTS_FOUND' | 'NO_EMAIL' | 'DECISION_MAKER_IDENTIFIED';
   evidenceScore: number;
   candidateCount: number;
@@ -1300,7 +1300,7 @@ async function main(): Promise<void> {
         return null;
       }
 
-      // Already rejected (or approved via REJECTED+APPROVED: prefix) — skip re-rejection
+      // Already rejected or approved — skip re-rejection
       if (existing.status !== 'OPEN') {
         // Return the current state instead of re-rejecting
         const current = await prisma.contactRecoveryItem.findUnique({

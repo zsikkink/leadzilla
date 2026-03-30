@@ -25,6 +25,7 @@ enum LeadStatus {
 
 enum ContactRecoveryStatus {
   OPEN
+  APPROVED
   REJECTED
 }
 
