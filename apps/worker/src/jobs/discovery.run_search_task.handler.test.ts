@@ -11,6 +11,10 @@ const { discoveryMock, dbMock, trackerMock } = vi.hoisted(() => ({
   },
   dbMock: {
     prisma: {
+      jobRun: {
+        update: vi.fn(),
+        updateMany: vi.fn(),
+      },
       jobExecution: {
         findUnique: vi.fn(),
         updateMany: vi.fn(),
@@ -88,6 +92,8 @@ describe('handleDiscoveryRunSearchTaskJob rediscovery reconciliation', () => {
       result: {},
     });
     dbMock.prisma.jobExecution.updateMany.mockResolvedValue({ count: 1 });
+    dbMock.prisma.jobRun.update.mockResolvedValue({});
+    dbMock.prisma.jobRun.updateMany.mockResolvedValue({ count: 1 });
     dbMock.prisma.businessConversion.findMany.mockResolvedValue([]);
     trackerMock.isLeadTargetReached.mockResolvedValue(false);
     trackerMock.markSearchTasksComplete.mockResolvedValue(undefined);
@@ -125,6 +131,129 @@ describe('handleDiscoveryRunSearchTaskJob rediscovery reconciliation', () => {
         enqueuedPrequalifyCount: 1,
       }),
       'Enqueued business.prequalify for existing businesses observed in the current search task',
+    );
+  });
+
+  it('does not rewrite a failed parent job run back to RUNNING during later slot progress updates', async () => {
+    const jobRunId = randomUUID();
+
+    dbMock.prisma.jobRun.updateMany.mockResolvedValue({ count: 0 });
+
+    await handleDiscoveryRunSearchTaskJob(
+      logger,
+      makeJob({
+        jobRunId,
+      }),
+      {
+        boss: { send: vi.fn() },
+        provider: {} as never,
+        config: {} as never,
+      },
+    );
+
+    expect(dbMock.prisma.jobRun.update).not.toHaveBeenCalled();
+    expect(dbMock.prisma.jobRun.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: jobRunId,
+        status: 'RUNNING',
+        finishedAt: null,
+      },
+      data: expect.objectContaining({
+        status: 'RUNNING',
+        countersJson: expect.objectContaining({
+          tasks_processed: 1,
+          done: 1,
+          failed: 0,
+          skipped: 0,
+        }),
+      }),
+    });
+  });
+
+  it('does not rewrite a failed parent job run back to SUCCESS after a later bounded slot completes', async () => {
+    const jobRunId = randomUUID();
+
+    dbMock.prisma.jobRun.updateMany.mockResolvedValue({ count: 0 });
+
+    await handleDiscoveryRunSearchTaskJob(
+      logger,
+      makeJob({
+        jobRunId,
+        maxTasks: 1,
+      }),
+      {
+        boss: { send: vi.fn() },
+        provider: {} as never,
+        config: {} as never,
+      },
+    );
+
+    expect(dbMock.prisma.jobRun.update).not.toHaveBeenCalled();
+    expect(dbMock.prisma.jobRun.updateMany).toHaveBeenNthCalledWith(
+      1,
+      {
+        where: {
+          id: jobRunId,
+          status: 'RUNNING',
+          finishedAt: null,
+        },
+        data: expect.objectContaining({
+          status: 'RUNNING',
+        }),
+      },
+    );
+    expect(dbMock.prisma.jobRun.updateMany).toHaveBeenNthCalledWith(
+      2,
+      {
+        where: {
+          id: jobRunId,
+          status: 'RUNNING',
+          finishedAt: null,
+        },
+        data: expect.objectContaining({
+          status: 'SUCCESS',
+          finishedAt: expect.any(Date),
+          durationMs: expect.any(Number),
+          errorText: null,
+        }),
+      },
+    );
+  });
+
+  it('still finalizes a bounded parent job run successfully when it is still mutable', async () => {
+    const jobRunId = randomUUID();
+
+    dbMock.prisma.jobRun.updateMany.mockResolvedValue({ count: 1 });
+
+    await handleDiscoveryRunSearchTaskJob(
+      logger,
+      makeJob({
+        jobRunId,
+        maxTasks: 1,
+      }),
+      {
+        boss: { send: vi.fn() },
+        provider: {} as never,
+        config: {} as never,
+      },
+    );
+
+    expect(dbMock.prisma.jobRun.update).not.toHaveBeenCalled();
+    expect(dbMock.prisma.jobRun.updateMany).toHaveBeenNthCalledWith(
+      2,
+      {
+        where: {
+          id: jobRunId,
+          status: 'RUNNING',
+          finishedAt: null,
+        },
+        data: expect.objectContaining({
+          status: 'SUCCESS',
+          finishedAt: expect.any(Date),
+          durationMs: expect.any(Number),
+          errorText: null,
+        }),
+      },
     );
   });
 });

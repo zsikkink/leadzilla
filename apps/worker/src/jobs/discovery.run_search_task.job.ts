@@ -203,8 +203,12 @@ function nextPollDelaySeconds(status: 'EMPTY' | 'DONE' | 'FAILED' | 'SKIPPED'): 
 }
 
 async function updateJobRunProgress(jobRunId: string, state: RunState): Promise<void> {
-  await prisma.jobRun.update({
-    where: { id: jobRunId },
+  await prisma.jobRun.updateMany({
+    where: {
+      id: jobRunId,
+      status: 'RUNNING',
+      finishedAt: null,
+    },
     data: {
       status: 'RUNNING',
       countersJson: toInputJson({
@@ -312,8 +316,12 @@ async function finalizeJobRun(
   }
   state.finalized = true;
 
-  await prisma.jobRun.update({
-    where: { id: jobRunId },
+  await prisma.jobRun.updateMany({
+    where: {
+      id: jobRunId,
+      status: 'RUNNING',
+      finishedAt: null,
+    },
     data: {
       status,
       finishedAt: new Date(),
