@@ -150,8 +150,8 @@ export function registerIcpRoutes(app: FastifyInstance, _dependencies?: IcpRoute
 
     try {
       await service.deleteIcpProfile(parsedParams.data.icpId);
-      reply.status(204);
-      return;
+      reply.status(200);
+      return { success: true, icpId: parsedParams.data.icpId };
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;

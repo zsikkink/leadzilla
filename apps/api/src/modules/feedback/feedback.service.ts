@@ -20,6 +20,7 @@ export interface FeedbackService {
   ingestFeedbackEvent(input: IngestFeedbackEventRequest): Promise<IngestFeedbackEventResponse>;
   listFeedbackEvents(query: ListFeedbackEventsQuery): Promise<ListFeedbackEventsResponse>;
   getFeedbackSummary(query: FeedbackSummaryQuery): Promise<FeedbackSummaryResponse>;
+  deleteFeedbackEvent(id: string): Promise<void>;
 }
 
 export function buildFeedbackService(repository: FeedbackRepository): FeedbackService {
@@ -38,6 +39,9 @@ export function buildFeedbackService(repository: FeedbackRepository): FeedbackSe
     async getFeedbackSummary(query) {
       // TODO: join summary with messaging funnel context.
       return repository.getFeedbackSummary(query);
+    },
+    async deleteFeedbackEvent(id) {
+      return repository.deleteFeedbackEvent(id);
     },
   };
 }

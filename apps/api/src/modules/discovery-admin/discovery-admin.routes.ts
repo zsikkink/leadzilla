@@ -551,6 +551,29 @@ export function registerDiscoveryAdminRoutes(
     }
   });
 
+  // ── Approve a contact recovery item (creates lead, removes recovery item) ──
+  app.post('/v1/leads/recovery/:id/approve', async (request, reply) => {
+    const userId = requireAuthenticatedUserId(request, reply);
+    if (!userId) {
+      return;
+    }
+
+    const parsedParams = DiscoveryRunIdParamsSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return sendValidationError(reply, request.id, 'Invalid contact recovery id');
+    }
+
+    try {
+      const result = await service.approveContactRecoveryItem(parsedParams.data.id, userId);
+      return result;
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
   // ── B5: Get discovery run detail with converted leads ──
   app.get('/v1/discovery-admin/runs/:id', async (request, reply) => {
     if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {

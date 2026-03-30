@@ -15,6 +15,7 @@ import type {
 
 import { DiscoveryAdminNotImplementedError } from './discovery-admin.errors.js';
 import type {
+  ApproveContactRecoveryResult,
   CancelDiscoveryRunResult,
   DiscoveryAdminListStaleApolloRevealAttemptsQuery,
   DiscoveryAdminListStaleApolloRevealAttemptsResponse,
@@ -57,6 +58,10 @@ export interface DiscoveryAdminService {
     id: string,
     requestedByUserId?: string | undefined,
   ): Promise<CancelDiscoveryRunResult>;
+  approveContactRecoveryItem(
+    id: string,
+    approvedBy: string,
+  ): Promise<ApproveContactRecoveryResult>;
   getDiscoveryRunDetail(id: string): Promise<Awaited<ReturnType<DiscoveryAdminRepository['getDiscoveryRunDetail']>>>;
 }
 
@@ -112,6 +117,9 @@ export function buildDiscoveryAdminService(
     },
     async cancelDiscoveryRun(id, requestedByUserId) {
       return repository.cancelDiscoveryRun(id, requestedByUserId);
+    },
+    async approveContactRecoveryItem(id, approvedBy) {
+      return repository.approveContactRecoveryItem(id, approvedBy);
     },
     async getDiscoveryRunDetail(id) {
       return repository.getDiscoveryRunDetail(id);

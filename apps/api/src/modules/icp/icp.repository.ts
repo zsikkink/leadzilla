@@ -646,13 +646,50 @@ export class PrismaIcpRepository extends StubIcpRepository {
   }
 
   override async deleteIcpProfile(icpId: string): Promise<void> {
+    // Verify the ICP exists before attempting deletion
+    const icp = await prisma.icpProfile.findUnique({
+      where: { id: icpId },
+      select: { id: true },
+    });
+    if (!icp) {
+      throw new IcpNotFoundError();
+    }
+
     try {
-      await prisma.icpProfile.delete({
-        where: { id: icpId },
+      await prisma.$transaction(async (tx) => {
+        // 1. Nullify icpProfileId on tables that reference it
+        //    without a Prisma FK relation (plain string columns)
+        await tx.businessConversion.updateMany({
+          where: { icpProfileId: icpId },
+          data: { icpProfileId: null },
+        });
+        await tx.leadRejection.updateMany({
+          where: { icpProfileId: icpId },
+          data: { icpProfileId: null },
+        });
+        await tx.managerRecommendationRecord.updateMany({
+          where: { icpProfileId: icpId },
+          data: { icpProfileId: null },
+        });
+
+        // 2. Delete the ICP — schema-level onDelete: Cascade handles:
+        //    QualificationRules, LeadDiscoveryRecords, LeadFeatureSnapshots,
+        //    LeadScorePredictions, ApolloRevealAttempts, AnalyticsDailyRollups,
+        //    MessageDrafts, ContactRecoveryItems
+        await tx.icpProfile.delete({
+          where: { id: icpId },
+        });
       });
     } catch (error: unknown) {
-      if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2025') {
-        throw new IcpNotFoundError();
+      if (error instanceof PrismaRuntime.PrismaClientKnownRequestError) {
+        if (error.code === 'P2025') {
+          throw new IcpNotFoundError();
+        }
+        if (error.code === 'P2003') {
+          throw new IcpNotFoundError(
+            `Cannot delete ICP: it still has dependent records that prevent deletion. Foreign key constraint: ${error.meta?.field_name ?? 'unknown'}`,
+          );
+        }
       }
       throw error;
     }

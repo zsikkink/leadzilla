@@ -1394,8 +1394,12 @@ export default function IcpDetailPage() {
               </div>
             </div>
 
+            <p className="mb-2 text-sm text-muted-foreground">
+              This will permanently delete this ICP and all its qualification rules,
+              scoring data, discovery records, and message history.
+            </p>
             <p className="mb-6 text-sm text-muted-foreground">
-              All associated qualification rules, scoring data, and message history linked to this ICP will be affected. This action cannot be undone.
+              Leads will be unlinked but not deleted. This action cannot be undone.
             </p>
 
             <div className="flex items-center gap-3">

@@ -11,7 +11,7 @@ import type {
   ListJobRunsResponse,
   MessageSendStatus,
 } from '@lead-flood/contracts';
-import { prisma, type Prisma } from '@lead-flood/db';
+import { PrismaRuntime, prisma, type Prisma } from '@lead-flood/db';
 
 import { DiscoveryAdminBadRequestError, DiscoveryAdminNotFoundError } from './discovery-admin.errors.js';
 
@@ -467,6 +467,13 @@ function toIsoString(value: Date | string | null): string | null {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
+export interface ApproveContactRecoveryResult {
+  success: boolean;
+  leadId: string;
+  recoveryItemId: string;
+  alreadyExisted: boolean;
+}
+
 export interface DiscoveryAdminRepository {
   listLeads(query: AdminListLeadsQuery): Promise<AdminListLeadsResponse>;
   getLeadById(id: string): Promise<AdminLeadDetailResponse>;
@@ -490,6 +497,10 @@ export interface DiscoveryAdminRepository {
     id: string,
     requestedByUserId?: string | undefined,
   ): Promise<CancelDiscoveryRunResult>;
+  approveContactRecoveryItem(
+    id: string,
+    approvedBy: string,
+  ): Promise<ApproveContactRecoveryResult>;
   getDiscoveryRunDetail(id: string): Promise<{
     run: {
       id: string;
@@ -1326,6 +1337,107 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
         updatedAt: run.updatedAt.toISOString(),
       },
       leads,
+    };
+  }
+
+  async approveContactRecoveryItem(
+    id: string,
+    _approvedBy: string,
+  ): Promise<ApproveContactRecoveryResult> {
+    // 1. Fetch the recovery item with business + snapshot
+    const item = await prisma.contactRecoveryItem.findUnique({
+      where: { id },
+      include: {
+        business: {
+          select: {
+            id: true,
+            name: true,
+            websiteDomain: true,
+          },
+        },
+      },
+    });
+
+    if (!item) {
+      throw new DiscoveryAdminNotFoundError('Contact recovery item not found');
+    }
+
+    if (item.status === 'REJECTED') {
+      throw new DiscoveryAdminBadRequestError('Cannot approve a rejected recovery item');
+    }
+
+    // 2. Extract best candidate from snapshot
+    const snapshot =
+      item.recoverySnapshot && typeof item.recoverySnapshot === 'object' && !Array.isArray(item.recoverySnapshot)
+        ? (item.recoverySnapshot as Record<string, unknown>)
+        : null;
+
+    const candidates = Array.isArray(snapshot?.topCandidates) ? snapshot.topCandidates as Array<Record<string, unknown>> : [];
+    const bestCandidate = candidates[0] ?? null;
+
+    const candidateName = typeof bestCandidate?.name === 'string' ? bestCandidate.name : '';
+    const candidateEmail = typeof bestCandidate?.email === 'string' ? bestCandidate.email : null;
+    const candidateTitle = typeof bestCandidate?.title === 'string' ? bestCandidate.title : null;
+    const candidatePhone = typeof bestCandidate?.phone === 'string' ? bestCandidate.phone : null;
+
+    // Split name into first/last
+    const nameParts = candidateName.trim().split(/\s+/);
+    const firstName = nameParts[0] || 'Recovery';
+    const lastName = nameParts.slice(1).join(' ') || 'Contact';
+
+    // 3. Generate placeholder email if no real email — unique per business
+    const email = candidateEmail || `placeholder-${item.businessId}@recovery.local`;
+
+    // 4. Create lead with idempotent upsert handling
+    let leadId: string;
+    let alreadyExisted = false;
+
+    try {
+      const lead = await prisma.lead.create({
+        data: {
+          firstName,
+          lastName,
+          email,
+          source: 'CONTACT_RECOVERY',
+          status: 'qualified',
+          businessId: item.businessId,
+          ...(candidateTitle ? { decisionMakerTitle: candidateTitle } : {}),
+          ...(candidatePhone ? { decisionMakerPhone: candidatePhone } : {}),
+        },
+      });
+      leadId = lead.id;
+    } catch (error: unknown) {
+      // P2002 = unique constraint violation (email already exists)
+      if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2002') {
+        // Lead with this email already exists — find it and link
+        const existing = await prisma.lead.findUnique({
+          where: { email },
+          select: { id: true },
+        });
+        if (!existing) {
+          throw new DiscoveryAdminBadRequestError(
+            'Lead email conflict but could not find existing lead',
+          );
+        }
+        leadId = existing.id;
+        alreadyExisted = true;
+      } else {
+        throw error;
+      }
+    }
+
+    // 5. Delete the recovery item (it's resolved — no APPROVED status in enum)
+    await prisma.contactRecoveryItem.delete({
+      where: { id },
+    }).catch(() => {
+      // Item may have been concurrently deleted — acceptable
+    });
+
+    return {
+      success: true,
+      leadId,
+      recoveryItemId: id,
+      alreadyExisted,
     };
   }
 }
