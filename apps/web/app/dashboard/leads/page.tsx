@@ -725,9 +725,9 @@ export default function LeadsPage() {
                       </span>
                       {rl.reasonDetails.length > 0 ? (
                         <div className="mt-1 flex flex-wrap gap-1">
-                          {rl.reasonDetails.map((detail) => (
+                          {rl.reasonDetails.map((detail, detailIdx) => (
                             <span
-                              key={`${rl.id}-${detail}`}
+                              key={`${rl.id}-${detail}-${detailIdx}`}
                               className="inline-flex rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300"
                             >
                               {detail.replace(/_/g, ' ')}

@@ -306,19 +306,26 @@ export function AboutBusinessCard(props: AboutBusinessCardProps) {
       </h2>
 
       <div className="space-y-4">
-        {/* Overview: Category + Description */}
+        {/* Overview: Category + Description / AI Insights */}
         <div className="space-y-2">
           {category && (
             <span className="inline-block rounded-full bg-zbooni-teal/10 px-2.5 py-0.5 text-[11px] font-semibold text-zbooni-teal">
               {category}
             </span>
           )}
-          {metaDescription ? (
+          {hasAiInsights ? (
+            <div className="flex items-start gap-2">
+              <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+              <p className="text-sm text-foreground/80 leading-relaxed">
+                {descriptionText}
+              </p>
+            </div>
+          ) : metaDescription ? (
             <p className="text-sm text-muted-foreground/70 leading-relaxed">{metaDescription}</p>
           ) : (
             <p className="text-sm text-muted-foreground/40 italic">No description available</p>
           )}
-          {instagramBio && (
+          {instagramBio && !hasAiInsights && (
             <p className="text-xs italic text-muted-foreground/60 leading-relaxed">
               &ldquo;{instagramBio}&rdquo;
             </p>
@@ -385,28 +392,7 @@ export function AboutBusinessCard(props: AboutBusinessCardProps) {
           </div>
         )}
 
-        {/* AI Insights or Description */}
-        <div>
-          {hasAiInsights ? (
-            <div className="flex items-start gap-2">
-              <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
-              <p className="text-sm text-foreground/80 leading-relaxed">
-                {descriptionText}
-              </p>
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground/70 leading-relaxed">
-              {descriptionText}
-            </p>
-          )}
-        </div>
-
-        {/* Instagram Bio — only show if no AI insights (avoid redundancy) */}
-        {instagramBio && !hasAiInsights && (
-          <p className="text-xs italic text-muted-foreground/60 leading-relaxed">
-            &ldquo;{instagramBio}&rdquo;
-          </p>
-        )}
+        {/* AI Insights and Instagram Bio are now shown in the Overview section above */}
 
         {/* Location */}
         {locationText && (
