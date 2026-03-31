@@ -106,6 +106,9 @@ export const GetLeadResponseSchema = z.object({
   phoneSource: z.string().nullable().optional(),
   businessEmail: z.string().nullable().optional(),
   contactDiscovery: LeadContactDiscoverySchema.nullable().optional(),
+  businessId: z.string().nullable().optional(),
+  websiteDomain: z.string().nullable().optional(),
+  icpProfileName: z.string().nullable().optional(),
 });
 
 export const GetJobStatusResponseSchema = z.object({

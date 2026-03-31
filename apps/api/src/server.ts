@@ -197,6 +197,9 @@ export interface LeadRecord {
   phoneSource?: string | null | undefined;
   businessEmail?: string | null | undefined;
   contactDiscovery?: unknown | null | undefined;
+  businessId?: string | null | undefined;
+  websiteDomain?: string | null | undefined;
+  icpProfileName?: string | null | undefined;
 }
 
 export interface JobRecord {
@@ -523,6 +526,22 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         });
       }
 
+      // Fetch business domain and ICP name for the detail view
+      const [businessInfo, icpInfo] = await Promise.all([
+        lead.businessId
+          ? prisma.business.findUnique({
+              where: { id: lead.businessId },
+              select: { websiteDomain: true },
+            })
+          : null,
+        lead.latestIcpProfileId
+          ? prisma.icpProfile.findUnique({
+              where: { id: lead.latestIcpProfileId },
+              select: { name: true },
+            })
+          : null,
+      ]);
+
       return GetLeadResponseSchema.parse({
         ...lead,
         email: normalizeLeadEmail(lead.email),
@@ -536,6 +555,9 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         phoneSource: lead.phoneSource ?? null,
         businessEmail: lead.businessEmail ?? null,
         contactDiscovery: lead.contactDiscovery ?? null,
+        businessId: lead.businessId ?? null,
+        websiteDomain: businessInfo?.websiteDomain ?? lead.websiteDomain ?? null,
+        icpProfileName: icpInfo?.name ?? lead.icpProfileName ?? null,
       });
     });
 
@@ -889,6 +911,125 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         finishedAt: job.finishedAt?.toISOString() ?? null,
         updatedAt: job.updatedAt.toISOString(),
       });
+    });
+
+    // ── Business Contacts ───────────────────────────────────────
+    api.post('/v1/business-contacts', async (request, reply) => {
+      const bodySchema = z.object({
+        businessId: z.string().min(1),
+        name: z.string().min(1),
+        title: z.string().optional(),
+        email: z.string().email().optional(),
+        phone: z.string().optional(),
+        linkedinUrl: z.string().optional(),
+      });
+      const parsed = bodySchema.safeParse(request.body);
+      if (!parsed.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'Invalid business contact payload',
+          requestId: request.id,
+        });
+      }
+
+      const business = await prisma.business.findUnique({
+        where: { id: parsed.data.businessId },
+        select: { id: true },
+      });
+      if (!business) {
+        reply.status(404);
+        return ErrorResponseSchema.parse({
+          error: 'Business not found',
+          requestId: request.id,
+        });
+      }
+
+      const contact = await prisma.businessContact.create({
+        data: {
+          businessId: parsed.data.businessId,
+          name: parsed.data.name,
+          ...(parsed.data.title ? { title: parsed.data.title } : {}),
+          ...(parsed.data.email ? { email: parsed.data.email } : {}),
+          ...(parsed.data.phone ? { phone: parsed.data.phone } : {}),
+          ...(parsed.data.linkedinUrl ? { linkedinUrl: parsed.data.linkedinUrl } : {}),
+          positionRank: 99,
+          source: 'manual',
+        },
+      });
+
+      reply.status(201);
+      return {
+        id: contact.id,
+        businessId: contact.businessId,
+        name: contact.name,
+        title: contact.title,
+        email: contact.email,
+        phone: contact.phone,
+        linkedinUrl: contact.linkedinUrl,
+        positionRank: contact.positionRank,
+        source: contact.source,
+        createdAt: contact.createdAt.toISOString(),
+      };
+    });
+
+    api.patch('/v1/business-contacts/:id/primary', async (request, reply) => {
+      const parsedParams = z.object({ id: z.string().min(1) }).safeParse(request.params);
+      if (!parsedParams.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'Invalid business contact id',
+          requestId: request.id,
+        });
+      }
+
+      const contactId = parsedParams.data.id;
+      const contact = await prisma.businessContact.findUnique({
+        where: { id: contactId },
+        select: { id: true, businessId: true, name: true, email: true },
+      });
+      if (!contact) {
+        reply.status(404);
+        return ErrorResponseSchema.parse({
+          error: 'Business contact not found',
+          requestId: request.id,
+        });
+      }
+
+      // Reset all siblings to rank 99, then set this one to rank 0
+      await prisma.$transaction([
+        prisma.businessContact.updateMany({
+          where: { businessId: contact.businessId },
+          data: { positionRank: 99 },
+        }),
+        prisma.businessContact.update({
+          where: { id: contactId },
+          data: { positionRank: 0 },
+        }),
+      ]);
+
+      // Ripple effect: update the linked Lead's name/email
+      const conversion = await prisma.businessConversion.findFirst({
+        where: { businessId: contact.businessId },
+        select: { leadId: true },
+      });
+      if (conversion?.leadId) {
+        const nameParts = contact.name.split(' ');
+        const firstName = nameParts[0] ?? contact.name;
+        const lastName = nameParts.slice(1).join(' ');
+        const updateData: Prisma.LeadUpdateInput = {};
+        if (firstName) updateData.firstName = firstName;
+        if (lastName) updateData.lastName = lastName;
+        if (contact.email) updateData.email = contact.email;
+        if (Object.keys(updateData).length > 0) {
+          await prisma.lead.update({
+            where: { id: conversion.leadId },
+            data: updateData,
+          });
+        }
+      }
+
+      reply.status(200);
+      return { ok: true };
     });
 
     registerIcpRoutes(api, {

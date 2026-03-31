@@ -425,6 +425,21 @@ export class ApiClient {
     return this.request('/v1/stats/pipeline');
   }
 
+  // ── Business Contacts ────────────────────────────
+  createBusinessContact(data: {
+    businessId: string;
+    name: string;
+    title?: string | undefined;
+    email?: string | undefined;
+    phone?: string | undefined;
+    linkedinUrl?: string | undefined;
+  }): Promise<unknown> {
+    return this.request('/v1/business-contacts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   // ── Settings ───────────────────────────────────
   listPipelineSettings(): Promise<{ items: { key: string; value: unknown; updatedAt: string }[] }> {
     return this.request('/v1/settings/pipeline');

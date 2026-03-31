@@ -1,4 +1,5 @@
-import { Building2, MapPin, Star } from 'lucide-react';
+import { Building2, ExternalLink, MapPin, Star, Tag } from 'lucide-react';
+import Link from 'next/link';
 
 import { countryName } from '../lib/countries.js';
 
@@ -10,6 +11,9 @@ interface AboutBusinessCardProps {
   city: string | null;
   rating: number | null;
   reviewCount: number | null;
+  icpProfileName?: string | null | undefined;
+  websiteDomain?: string | null | undefined;
+  businessId?: string | null | undefined;
 }
 
 export function AboutBusinessCard({
@@ -20,6 +24,9 @@ export function AboutBusinessCard({
   city,
   rating,
   reviewCount,
+  icpProfileName,
+  websiteDomain,
+  businessId,
 }: AboutBusinessCardProps) {
   const location = [countryCode ? countryName(countryCode) : null, city]
     .filter(Boolean)
@@ -33,12 +40,40 @@ export function AboutBusinessCard({
       </h2>
 
       <div className="space-y-3">
-        {/* Category */}
-        {category && (
-          <div className="flex items-center gap-2">
-            <span className="rounded-full bg-zbooni-teal/10 px-2.5 py-0.5 text-[11px] font-semibold text-zbooni-teal">
-              {category}
-            </span>
+        {/* Category + ICP + Website + Business Intel */}
+        {(category || icpProfileName || websiteDomain || businessId) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {category && (
+              <span className="rounded-full bg-zbooni-teal/10 px-2.5 py-0.5 text-[11px] font-semibold text-zbooni-teal">
+                {category}
+              </span>
+            )}
+            {icpProfileName && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-purple-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-purple-300">
+                <Tag className="h-3 w-3" />
+                {icpProfileName}
+              </span>
+            )}
+            {websiteDomain && (
+              <a
+                href={`https://${websiteDomain}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-full border border-border/30 px-2.5 py-0.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:text-zbooni-teal"
+              >
+                <ExternalLink className="h-3 w-3" />
+                {websiteDomain}
+              </a>
+            )}
+            {businessId && (
+              <Link
+                href={`/dashboard/leads/businesses?selected=${businessId}`}
+                className="inline-flex items-center gap-1 rounded-full border border-border/30 px-2.5 py-0.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:text-zbooni-teal"
+              >
+                <Building2 className="h-3 w-3" />
+                Business Intel
+              </Link>
+            )}
           </div>
         )}
 

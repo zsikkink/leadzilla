@@ -17,11 +17,13 @@ import {
   MapPin,
   Monitor,
   Phone,
+  Plus,
   RefreshCw,
   Shield,
   TrendingUp,
   User,
   Users,
+  X,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
@@ -582,6 +584,9 @@ export default function LeadDetailPage() {
   );
   const [isCreatingBackup, setIsCreatingBackup] = useState(false);
   const [backupSuccess, setBackupSuccess] = useState<string | null>(null);
+  const [showAddMemberForm, setShowAddMemberForm] = useState(false);
+  const [isAddingMember, setIsAddingMember] = useState(false);
+  const [addMemberForm, setAddMemberForm] = useState({ name: '', title: '', email: '', phone: '' });
 
   const maxFollowUpNumber = useMemo(() => {
     if (!sends.data?.items.length) return -1;
@@ -606,6 +611,28 @@ export default function LeadDetailPage() {
       setBackupSuccess(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setIsCreatingBackup(false);
+    }
+  };
+
+  const handleAddMember = async () => {
+    if (!addMemberForm.name.trim() || !l?.businessId) return;
+    setIsAddingMember(true);
+    try {
+      await apiClient.createBusinessContact({
+        businessId: l.businessId,
+        name: addMemberForm.name.trim(),
+        ...(addMemberForm.title.trim() ? { title: addMemberForm.title.trim() } : {}),
+        ...(addMemberForm.email.trim() ? { email: addMemberForm.email.trim() } : {}),
+        ...(addMemberForm.phone.trim() ? { phone: addMemberForm.phone.trim() } : {}),
+      });
+      setAddMemberForm({ name: '', title: '', email: '', phone: '' });
+      setShowAddMemberForm(false);
+      lead.refetch();
+    } catch (err) {
+      // Show error inline — don't throw
+      console.error('Failed to add team member:', err);
+    } finally {
+      setIsAddingMember(false);
     }
   };
 
@@ -783,6 +810,9 @@ export default function LeadDetailPage() {
           city={businessSummary.city}
           rating={null}
           reviewCount={null}
+          icpProfileName={l.icpProfileName ?? null}
+          websiteDomain={l.websiteDomain ?? null}
+          businessId={l.businessId ?? null}
         />
       ) : null}
 
@@ -912,11 +942,85 @@ export default function LeadDetailPage() {
       {/* Team Members */}
       {sortedTeamMembers.length > 0 ? (
         <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-            <Users className="h-4 w-4 text-amber-400" />
-            Team Members
-            <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">{sortedTeamMembers.length}</span>
-          </h2>
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-base font-bold tracking-tight flex items-center gap-2">
+              <Users className="h-4 w-4 text-amber-400" />
+              Team Members
+              <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">{sortedTeamMembers.length}</span>
+            </h2>
+            {l.businessId && !showAddMemberForm ? (
+              <button
+                type="button"
+                onClick={() => setShowAddMemberForm(true)}
+                className="inline-flex items-center gap-1 rounded-lg border border-border/50 px-2.5 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add Member
+              </button>
+            ) : null}
+          </div>
+          {showAddMemberForm && l.businessId ? (
+            <div className="mb-4 rounded-lg border border-border/40 bg-zbooni-dark/30 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-xs font-semibold text-muted-foreground">New Team Member</p>
+                <button
+                  type="button"
+                  onClick={() => { setShowAddMemberForm(false); setAddMemberForm({ name: '', title: '', email: '', phone: '' }); }}
+                  className="text-muted-foreground/60 hover:text-foreground transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <input
+                  type="text"
+                  placeholder="Name *"
+                  value={addMemberForm.name}
+                  onChange={(e) => setAddMemberForm((f) => ({ ...f, name: e.target.value }))}
+                  className="rounded-md border border-border/40 bg-background/50 px-3 py-2 text-sm outline-none focus:border-zbooni-teal"
+                />
+                <input
+                  type="text"
+                  placeholder="Title"
+                  value={addMemberForm.title}
+                  onChange={(e) => setAddMemberForm((f) => ({ ...f, title: e.target.value }))}
+                  className="rounded-md border border-border/40 bg-background/50 px-3 py-2 text-sm outline-none focus:border-zbooni-teal"
+                />
+                <input
+                  type="email"
+                  placeholder="Email"
+                  value={addMemberForm.email}
+                  onChange={(e) => setAddMemberForm((f) => ({ ...f, email: e.target.value }))}
+                  className="rounded-md border border-border/40 bg-background/50 px-3 py-2 text-sm outline-none focus:border-zbooni-teal"
+                />
+                <input
+                  type="tel"
+                  placeholder="Phone"
+                  value={addMemberForm.phone}
+                  onChange={(e) => setAddMemberForm((f) => ({ ...f, phone: e.target.value }))}
+                  className="rounded-md border border-border/40 bg-background/50 px-3 py-2 text-sm outline-none focus:border-zbooni-teal"
+                />
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleAddMember}
+                  disabled={!addMemberForm.name.trim() || isAddingMember}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-zbooni-teal/20 px-3 py-1.5 text-xs font-semibold text-zbooni-teal transition-colors hover:bg-zbooni-teal/30 disabled:opacity-50"
+                >
+                  {isAddingMember ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                  Save
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowAddMemberForm(false); setAddMemberForm({ name: '', title: '', email: '', phone: '' }); }}
+                  className="rounded-lg px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : null}
           <div className="grid gap-2.5 sm:grid-cols-2">
             {sortedTeamMembers.map((tm, idx) => {
               const isPrimary = leadEmailNormalized
