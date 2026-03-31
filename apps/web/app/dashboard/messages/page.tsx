@@ -253,10 +253,16 @@ export default function MessagesPage() {
     () => sortedItems.filter((d) => d.approvalStatus === 'PENDING'),
     [sortedItems],
   );
-  // Use total from API when filtering by PENDING, otherwise count current page items
-  const pendingCount = statusFilter === 'PENDING'
-    ? (drafts.data?.total ?? pendingDrafts.length)
-    : pendingDrafts.length;
+
+  // Fetch global pending count (independent of current page/filter)
+  const globalPendingCount = useApiQuery(
+    useCallback(
+      () => apiClient.listDrafts({ page: 1, pageSize: 1, approvalStatus: 'PENDING' as MessageApprovalStatus }),
+      [apiClient],
+    ),
+    [],
+  );
+  const pendingCount = globalPendingCount.data?.total ?? pendingDrafts.length;
 
   // Visible items (filter out optimistically hidden ones), already sorted newest first
   const visibleItems: MessageDraftResponse[] = useMemo(
@@ -378,8 +384,9 @@ export default function MessagesPage() {
 
   const refreshQueueData = useCallback(() => {
     drafts.refetch();
+    globalPendingCount.refetch();
     setSendRefreshNonce((current) => current + 1);
-  }, [drafts]);
+  }, [drafts, globalPendingCount]);
 
   useEffect(() => {
     setPage(1);
@@ -387,23 +394,69 @@ export default function MessagesPage() {
   }, [leadIdFilter]);
 
   const handleAutoApproveAll = async () => {
-    if (!drafts.data) return;
-    const pending = drafts.data.items.filter((d) => d.approvalStatus === 'PENDING');
-    if (pending.length === 0) return;
-
     setApproving(true);
     const userId = user?.id ?? 'unknown';
+    const toastId = toast.loading('Fetching all pending drafts...');
+
     try {
-      for (const draft of pending) {
-        const firstVariant = draft.variants[0];
-        await apiClient.approveDraft(draft.id, {
-          approvedByUserId: userId,
-          selectedVariantId: firstVariant?.id,
+      // Fetch all pending drafts across all pages (pageSize max is 100)
+      const allPending: MessageDraftResponse[] = [];
+      let fetchPage = 1;
+      let totalPending = 0;
+
+      let hasMore = true;
+      while (hasMore) {
+        const result = await apiClient.listDrafts({
+          page: fetchPage,
+          pageSize: 100,
+          approvalStatus: 'PENDING' as MessageApprovalStatus,
         });
+        allPending.push(...result.items);
+        totalPending = result.total;
+
+        if (allPending.length >= totalPending || result.items.length === 0) {
+          hasMore = false;
+        } else {
+          fetchPage++;
+        }
       }
+
+      if (allPending.length === 0) {
+        toast.dismiss(toastId);
+        toast.info('No pending drafts to approve');
+        setApproving(false);
+        return;
+      }
+
+      let approved = 0;
+      let failed = 0;
+      toast.loading(`Approving... 0 of ${allPending.length}`, { id: toastId });
+
+      for (const draft of allPending) {
+        try {
+          const firstVariant = draft.variants[0];
+          await apiClient.approveDraft(draft.id, {
+            approvedByUserId: userId,
+            selectedVariantId: firstVariant?.id,
+          });
+          approved++;
+        } catch {
+          failed++;
+        }
+        toast.loading(`Approving... ${approved + failed} of ${allPending.length}`, { id: toastId });
+      }
+
+      toast.dismiss(toastId);
+      if (failed === 0) {
+        toast.success(`Approved all ${approved} pending drafts`);
+      } else {
+        toast.error(`Approved ${approved} of ${allPending.length} drafts (${failed} failed)`);
+      }
+
       refreshQueueData();
     } catch {
-      // Individual failures are tolerable
+      toast.dismiss(toastId);
+      toast.error('Failed to fetch pending drafts');
     } finally {
       setApproving(false);
     }
@@ -556,39 +609,14 @@ export default function MessagesPage() {
 
   return (
     <div className="space-y-5 pb-24">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-extrabold tracking-tight">Message Queue</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            {drafts.data ? `${drafts.data.total} drafts` : 'Loading...'}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground/60">
-            Drafts appear here only after an operator triggers generation from a qualified lead. Review them here, then approve or reject; approved initial drafts queue their send automatically unless auto-approval already handled it.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {pendingCount > 0 ? (
-            <button
-              type="button"
-              disabled={approving}
-              onClick={handleAutoApproveAll}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-zbooni-green/20 px-3.5 py-2 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/30 disabled:opacity-50"
-            >
-              <CheckCheck className="h-3.5 w-3.5" />
-              {approving ? 'Approving...' : `Approve All (${pendingCount})`}
-            </button>
-          ) : null}
-          <CustomSelect
-            value={statusFilter ?? ''}
-            onChange={(v) => {
-              setStatusFilter((v || undefined) as MessageApprovalStatus | undefined);
-              setPage(1);
-              clearSelection();
-            }}
-            options={APPROVAL_OPTIONS}
-            placeholder="All statuses"
-          />
-        </div>
+      <div>
+        <h1 className="text-2xl font-extrabold tracking-tight">Message Queue</h1>
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          {drafts.data ? `${drafts.data.total} drafts` : 'Loading...'}
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground/60">
+          Drafts appear here only after an operator triggers generation from a qualified lead. Review them here, then approve or reject; approved initial drafts queue their send automatically unless auto-approval already handled it.
+        </p>
       </div>
 
       <div className="rounded-xl border border-border/40 bg-card/70 px-4 py-3">
@@ -618,24 +646,51 @@ export default function MessagesPage() {
         <p className="mt-2 text-sm text-muted-foreground">{approvalModeSummary.body}</p>
       </div>
 
-      {/* Select-all row */}
-      {visiblePendingIds.size > 0 ? (
-        <div className="flex items-center gap-3 rounded-xl border border-border/30 bg-card/50 px-4 py-2.5">
-          <BulkCheckbox
-            checked={allVisiblePendingSelected}
-            indeterminate={someVisiblePendingSelected}
-            onChange={toggleSelectAll}
-            label={allVisiblePendingSelected ? 'Deselect all pending drafts' : 'Select all pending drafts'}
-          />
-          <span className="text-xs font-medium text-muted-foreground">
-            {allVisiblePendingSelected
-              ? `All ${visiblePendingIds.size} pending selected`
-              : someVisiblePendingSelected
-                ? `${selectedPendingCount} selected`
-                : 'Select pending drafts'}
-          </span>
+      {/* Controls row: select-all + approve-all + status filter */}
+      <div className="flex items-center justify-between rounded-xl border border-border/30 bg-card/50 px-4 py-2.5">
+        <div className="flex items-center gap-3">
+          {visiblePendingIds.size > 0 ? (
+            <>
+              <BulkCheckbox
+                checked={allVisiblePendingSelected}
+                indeterminate={someVisiblePendingSelected}
+                onChange={toggleSelectAll}
+                label={allVisiblePendingSelected ? 'Deselect all pending drafts' : 'Select all pending drafts'}
+              />
+              <span className="text-xs font-medium text-muted-foreground">
+                {allVisiblePendingSelected
+                  ? `All ${visiblePendingIds.size} pending selected`
+                  : someVisiblePendingSelected
+                    ? `${selectedPendingCount} selected`
+                    : 'Select pending drafts'}
+              </span>
+            </>
+          ) : null}
         </div>
-      ) : null}
+        <div className="flex items-center gap-3">
+          {pendingCount > 0 ? (
+            <button
+              type="button"
+              disabled={approving}
+              onClick={handleAutoApproveAll}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-zbooni-green/20 px-3.5 py-2 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/30 disabled:opacity-50"
+            >
+              <CheckCheck className="h-3.5 w-3.5" />
+              {approving ? 'Approving...' : `Approve All (${pendingCount})`}
+            </button>
+          ) : null}
+          <CustomSelect
+            value={statusFilter ?? ''}
+            onChange={(v) => {
+              setStatusFilter((v || undefined) as MessageApprovalStatus | undefined);
+              setPage(1);
+              clearSelection();
+            }}
+            options={APPROVAL_OPTIONS}
+            placeholder="All statuses"
+          />
+        </div>
+      </div>
 
       {drafts.error ? (
         <p className="text-sm text-destructive">{drafts.error}</p>
