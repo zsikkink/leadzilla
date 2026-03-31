@@ -831,7 +831,7 @@ function BraveSearchSection({ conversion }: { conversion: ConversionData }) {
 
 // ── Editable Team Members (C9) ─────────────────────────────
 
-function EditableTeamMembers({
+function _EditableTeamMembers({
   leadId: _leadId,
   leadEmail,
   businessId,
