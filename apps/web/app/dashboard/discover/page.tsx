@@ -511,6 +511,31 @@ export default function DiscoverPage() {
     });
   };
 
+  // Cities for the country selected in the left panel
+  const citiesForSelectedCountry = useMemo(() => {
+    if (!selectedCountryForCities) return [];
+    return COUNTRY_CITIES[selectedCountryForCities] ?? [];
+  }, [selectedCountryForCities]);
+
+  // Count of selected cities per country (for badge display)
+  const selectedCityCountByCountry = useMemo(() => {
+    const counts = new Map<DiscoveryCountryCodeContract, number>();
+    for (const code of countriesForCityPicker) {
+      const countryCities = COUNTRY_CITIES[code] ?? [];
+      const count = countryCities.filter((c) => selectedCities.has(c)).length;
+      if (count > 0) counts.set(code, count);
+    }
+    return counts;
+  }, [countriesForCityPicker, selectedCities]);
+
+  // Reset selected country when available countries change
+  useEffect(() => {
+    setSelectedCountryForCities((prev) => {
+      if (prev && countriesForCityPicker.includes(prev)) return prev;
+      return countriesForCityPicker[0] ?? null;
+    });
+  }, [countriesForCityPicker]);
+
   const handleStartDiscovery = async () => {
     if (selectedIcpIds.size === 0 || selectedIcpCountryCodes.length === 0) return;
 
@@ -630,103 +655,120 @@ export default function DiscoverPage() {
             </div>
 
             <div className="space-y-4 rounded-xl border border-border/30 bg-zbooni-dark/10 p-4">
-              {/* Countries + Cities — master-detail layout */}
-              <div>
-                <div className="mb-2 flex items-center gap-1.5">
-                  <Globe className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="text-xs font-semibold text-muted-foreground">Target Countries & Cities</span>
-                  {selectedCities.size > 0 ? (
-                    <button
-                      type="button"
-                      onClick={() => setSelectedCities(new Set())}
-                      className="ml-auto text-[10px] font-medium text-muted-foreground/60 hover:text-foreground"
-                    >
-                      Clear city filters
-                    </button>
-                  ) : null}
-                </div>
-                {countriesForCityPicker.length > 0 ? (
-                  <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
-                    {/* Left: country grid with equal-size boxes */}
-                    <div className="max-h-[400px] overflow-y-auto rounded-xl border border-border/30 p-3">
-                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                        {countriesForCityPicker.map((c) => {
-                          const isActive = selectedCountryForCities === c;
-                          const cityCount = COUNTRY_CITIES[c]?.length ?? 0;
-                          const selectedInCountry = (COUNTRY_CITIES[c] ?? []).filter((city) => selectedCities.has(city)).length;
-                          return (
-                            <button
-                              key={c}
-                              type="button"
-                              onClick={() => setSelectedCountryForCities(c)}
-                              className={cn(
-                                'w-full rounded-lg border px-3 py-2 text-left text-xs font-medium transition-all duration-150',
-                                isActive
-                                  ? 'border-zbooni-teal/40 bg-zbooni-teal/10 text-zbooni-teal shadow-sm'
-                                  : 'border-border/30 bg-zbooni-dark/20 text-muted-foreground hover:border-border/50 hover:bg-zbooni-dark/40 hover:text-foreground',
-                              )}
-                            >
-                              <span className="block truncate font-semibold">{countryName(c)}</span>
-                              <span className="mt-0.5 block text-[10px] text-muted-foreground/50">
-                                {cityCount} {cityCount === 1 ? 'city' : 'cities'}
-                                {selectedInCountry > 0 ? (
-                                  <span className="ml-1 text-zbooni-teal">&middot; {selectedInCountry} selected</span>
-                                ) : null}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
+              {/* Countries + Cities — two-panel grid layout */}
+              {countriesForCityPicker.length > 0 ? (
+                <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-4">
+                  {/* LEFT: Country selector panel */}
+                  <div className="rounded-xl border border-border/40 bg-card/50 p-4 max-h-[400px] overflow-y-auto">
+                    <div className="mb-3 flex items-center gap-1.5">
+                      <Globe className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-xs font-semibold text-muted-foreground">Target Countries</span>
+                      <span className="ml-auto rounded-full bg-zbooni-teal/10 px-2 py-0.5 text-[10px] font-bold text-zbooni-teal">
+                        {countriesForCityPicker.length}
+                      </span>
                     </div>
-
-                    {/* Right: selected country's cities */}
-                    <div className="rounded-xl border border-border/30 p-3">
-                      {selectedCountryForCities ? (
-                        <>
-                          <div className="mb-3 flex items-center justify-between">
-                            <div className="flex items-center gap-1.5">
-                              <MapPin className="h-3.5 w-3.5 text-zbooni-teal" />
-                              <span className="text-xs font-semibold text-foreground">
-                                {countryName(selectedCountryForCities)}
-                              </span>
-                            </div>
-                            <span className="text-[10px] text-muted-foreground/50">
-                              optional — empty = all cities
+                    <div className="grid grid-cols-2 gap-2">
+                      {countriesForCityPicker.map((c) => {
+                        const isSelected = selectedCountryForCities === c;
+                        const cityCount = COUNTRY_CITIES[c]?.length ?? 0;
+                        const selectedCount = selectedCityCountByCountry.get(c) ?? 0;
+                        return (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => setSelectedCountryForCities(c)}
+                            className={cn(
+                              'flex items-center justify-between w-full rounded-lg border px-3 py-2.5 text-sm transition-colors',
+                              isSelected
+                                ? 'border-zbooni-teal/40 bg-zbooni-teal/[0.06] text-foreground'
+                                : 'border-border/30 bg-zbooni-dark/30 text-muted-foreground hover:border-border/50 hover:text-foreground',
+                            )}
+                          >
+                            <span className="truncate text-left font-medium">{countryName(c)}</span>
+                            <span className={cn(
+                              'ml-2 shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold',
+                              selectedCount > 0
+                                ? 'bg-zbooni-teal/15 text-zbooni-teal'
+                                : 'bg-muted/20 text-muted-foreground/50',
+                            )}>
+                              {selectedCount > 0 ? `${selectedCount}/${cityCount}` : cityCount}
                             </span>
-                          </div>
-                          {citiesForSelectedCountry.length > 0 ? (
-                            <div className="flex flex-wrap gap-1.5">
-                              {citiesForSelectedCountry.map((city) => (
-                                <PillOption
-                                  key={city}
-                                  selected={selectedCities.has(city)}
-                                  onClick={() => toggleCity(city)}
-                                  className="px-2.5 py-1 text-xs"
-                                >
-                                  {city}
-                                </PillOption>
-                              ))}
-                            </div>
-                          ) : (
-                            <p className="py-4 text-center text-xs text-muted-foreground/40">
-                              No cities mapped for this country
-                            </p>
-                          )}
-                        </>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center py-8">
-                          <MapPin className="h-6 w-6 text-muted-foreground/15" />
-                          <p className="mt-2 text-xs text-muted-foreground/40">
-                            Select a country to filter by city
-                          </p>
-                        </div>
-                      )}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
-                ) : (
+
+                  {/* RIGHT: Cities panel for selected country */}
+                  <div className="rounded-xl border border-border/40 bg-card/50 p-4 lg:sticky lg:top-20">
+                    {selectedCountryForCities ? (
+                      <>
+                        <div className="mb-3 flex items-center justify-between">
+                          <div className="flex items-center gap-1.5">
+                            <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
+                            <span className="text-xs font-semibold text-muted-foreground">
+                              {countryName(selectedCountryForCities)} Cities
+                            </span>
+                            <span className="text-[10px] text-muted-foreground/50">(optional)</span>
+                          </div>
+                          {(selectedCityCountByCountry.get(selectedCountryForCities) ?? 0) > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const countryCities = COUNTRY_CITIES[selectedCountryForCities] ?? [];
+                                setSelectedCities((prev) => {
+                                  const next = new Set(prev);
+                                  for (const c of countryCities) next.delete(c);
+                                  return next;
+                                });
+                              }}
+                              className="text-[10px] font-medium text-muted-foreground/60 hover:text-foreground"
+                            >
+                              Clear
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {citiesForSelectedCountry.map((city) => (
+                            <PillOption
+                              key={city}
+                              selected={selectedCities.has(city)}
+                              onClick={() => toggleCity(city)}
+                              className="px-2.5 py-1 text-xs"
+                            >
+                              {city}
+                            </PillOption>
+                          ))}
+                        </div>
+                        {selectedCities.size > 0 ? (
+                          <div className="mt-3 flex items-center justify-between border-t border-border/20 pt-2">
+                            <span className="text-[10px] text-muted-foreground/50">
+                              {selectedCities.size} {selectedCities.size === 1 ? 'city' : 'cities'} selected across all countries
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedCities(new Set())}
+                              className="text-[10px] font-medium text-muted-foreground/60 hover:text-foreground"
+                            >
+                              Clear all
+                            </button>
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-8 text-center">
+                        <MapPin className="h-6 w-6 text-muted-foreground/20" />
+                        <p className="mt-2 text-xs text-muted-foreground/50">Select a country to manage its cities</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  <Globe className="h-3.5 w-3.5 text-muted-foreground" />
                   <p className="text-xs text-muted-foreground/50">No mapped target countries found for the selected ICP profiles</p>
-                )}
-              </div>
+                </div>
+              )
 
               {/* Analysis toggles */}
               <div className="flex flex-wrap gap-4">
