@@ -720,7 +720,7 @@ export default function ContactRecoveryPage() {
   async function executeApprove(item: ContactRecoveryItem): Promise<void> {
     setApprovingId(item.id);
     try {
-      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      const headers: Record<string, string> = {};
       if (token) headers.authorization = `Bearer ${token}`;
       const res = await fetch(
         `${getWebEnv().NEXT_PUBLIC_API_BASE_URL}/v1/discovery-admin/recovery/${item.id}/approve`,

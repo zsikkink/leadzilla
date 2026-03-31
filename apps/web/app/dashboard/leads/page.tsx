@@ -302,7 +302,7 @@ export default function LeadsPage() {
     setUnrejectingLead(leadId);
     try {
       const baseUrl = getWebEnv().NEXT_PUBLIC_API_BASE_URL;
-      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      const headers: Record<string, string> = {};
       if (token) headers.authorization = `Bearer ${token}`;
       const res = await fetch(`${baseUrl}/v1/leads/${leadId}/unreject`, {
         method: 'PATCH',
