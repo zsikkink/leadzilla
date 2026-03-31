@@ -2,8 +2,6 @@
 
 import {
   AlertTriangle,
-  ChevronDown,
-  ChevronRight,
   DollarSign,
   Gauge,
   Globe,
@@ -686,138 +684,154 @@ function CountriesCitiesManager({
           <Loader2 className="h-4 w-4 animate-spin" /> Loading...
         </div>
       ) : (
-        <>
-          {/* Country pills */}
-          <div className="flex flex-wrap gap-2">
-            {countries.map((country) => {
-              const isExpanded = expandedCountry === country;
-              const cities = countryCities[country] ?? [];
+        <div className="grid grid-cols-[2fr_3fr] gap-6">
+          {/* LEFT PANEL — Country pills */}
+          <div className="space-y-3">
+            <div className="max-h-[500px] overflow-y-auto pr-1">
+              {countries.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {countries.map((country) => {
+                    const isSelected = expandedCountry === country;
+                    const cities = countryCities[country] ?? [];
 
-              return (
-                <div key={country} className="w-full">
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setExpandedCountry(isExpanded ? null : country)}
-                      className={cn(
-                        'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors',
-                        isExpanded
-                          ? 'bg-zbooni-teal/20 text-zbooni-teal'
-                          : 'bg-zbooni-dark/60 text-muted-foreground hover:bg-zbooni-dark/80 hover:text-foreground',
-                      )}
-                    >
-                      <Globe className="h-3 w-3" />
-                      {country}
-                      <span className="font-mono text-[10px] text-muted-foreground/50">({cities.length})</span>
-                      {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeCountry(country)}
-                      className="rounded-full p-1 text-muted-foreground/30 transition-colors hover:bg-red-500/10 hover:text-red-400"
-                      title="Remove country"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-
-                  {/* Expanded: city list */}
-                  {isExpanded ? (
-                    <div className="ml-6 mt-2 mb-3 space-y-2 rounded-xl border border-border/30 bg-zbooni-dark/20 p-3">
-                      {cities.length > 0 ? (
-                        <div className="flex flex-wrap gap-1.5">
-                          {cities.map((city) => (
-                            <span
-                              key={city}
-                              className="inline-flex items-center gap-1 rounded-full bg-zbooni-dark/60 px-2.5 py-1 text-xs text-muted-foreground"
-                            >
-                              <MapPin className="h-2.5 w-2.5" />
-                              {city}
-                              <button
-                                type="button"
-                                onClick={() => removeCity(country, city)}
-                                className="ml-0.5 rounded-full transition-colors hover:text-red-400"
-                              >
-                                <X className="h-2.5 w-2.5" />
-                              </button>
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-xs text-muted-foreground/40 italic">No cities added</p>
-                      )}
-                      <div className="flex items-center gap-1.5">
-                        <input
-                          value={newCityInputs[country] ?? ''}
-                          onChange={(e) => setNewCityInputs((prev) => ({ ...prev, [country]: e.target.value }))}
-                          placeholder="Add city..."
-                          className="h-7 w-40 rounded-full border border-border/50 bg-zbooni-dark/60 px-3 text-xs focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') addCity(country);
-                          }}
-                        />
+                    return (
+                      <div key={country} className="group inline-flex items-center gap-0.5">
                         <button
                           type="button"
-                          onClick={() => addCity(country)}
-                          className="rounded-full p-1 text-zbooni-teal transition-colors hover:bg-zbooni-teal/10"
+                          onClick={() => setExpandedCountry(isSelected ? null : country)}
+                          className={cn(
+                            'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors',
+                            isSelected
+                              ? 'bg-zbooni-teal/20 text-zbooni-teal ring-1 ring-zbooni-teal/40'
+                              : 'bg-zbooni-dark/60 text-muted-foreground hover:bg-zbooni-dark/80 hover:text-foreground',
+                          )}
                         >
-                          <Plus className="h-3.5 w-3.5" />
+                          <Globe className="h-3 w-3" />
+                          {country}
+                          <span className="font-mono text-[10px] text-muted-foreground/50">({cities.length})</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeCountry(country)}
+                          className="rounded-full p-1 text-muted-foreground/20 opacity-0 transition-all group-hover:opacity-100 hover:bg-red-500/10 hover:text-red-400"
+                          title="Remove country"
+                        >
+                          <X className="h-3 w-3" />
                         </button>
                       </div>
-                    </div>
-                  ) : null}
+                    );
+                  })}
                 </div>
-              );
-            })}
-          </div>
+              ) : (
+                <p className="py-4 text-center text-sm text-muted-foreground/40 italic">No countries configured</p>
+              )}
+            </div>
 
-          {countries.length === 0 ? (
-            <p className="py-4 text-center text-sm text-muted-foreground/40 italic">No countries configured</p>
-          ) : null}
-
-          {/* Add country */}
-          <div className="mt-4 flex items-center gap-2">
-            {showCountryInput ? (
-              <div className="flex items-center gap-1.5">
-                <input
-                  value={newCountry}
-                  onChange={(e) => setNewCountry(e.target.value)}
-                  placeholder="Country name..."
-                  className="h-8 w-40 rounded-full border border-border/50 bg-zbooni-dark/60 px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  autoFocus
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') addCountry();
-                    if (e.key === 'Escape') { setShowCountryInput(false); setNewCountry(''); }
-                  }}
-                />
+            {/* Add country */}
+            <div className="flex items-center gap-2">
+              {showCountryInput ? (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    value={newCountry}
+                    onChange={(e) => setNewCountry(e.target.value)}
+                    placeholder="Country name..."
+                    className="h-8 w-40 rounded-full border border-border/50 bg-zbooni-dark/60 px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') addCountry();
+                      if (e.key === 'Escape') { setShowCountryInput(false); setNewCountry(''); }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={addCountry}
+                    disabled={!newCountry.trim()}
+                    className="rounded-full bg-zbooni-teal/15 p-1.5 text-zbooni-teal transition-colors hover:bg-zbooni-teal/25 disabled:opacity-40"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowCountryInput(false); setNewCountry(''); }}
+                    className="rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-accent/50"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : (
                 <button
                   type="button"
-                  onClick={addCountry}
-                  disabled={!newCountry.trim()}
-                  className="rounded-full bg-zbooni-teal/15 p-1.5 text-zbooni-teal transition-colors hover:bg-zbooni-teal/25 disabled:opacity-40"
+                  onClick={() => setShowCountryInput(true)}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-zbooni-teal/10 px-3 py-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:bg-zbooni-teal/20"
                 >
                   <Plus className="h-3.5 w-3.5" />
+                  Add Country
                 </button>
-                <button
-                  type="button"
-                  onClick={() => { setShowCountryInput(false); setNewCountry(''); }}
-                  className="rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-accent/50"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+              )}
+            </div>
+          </div>
+
+          {/* RIGHT PANEL — Selected country's cities */}
+          <div className="sticky top-0 self-start">
+            {expandedCountry ? (
+              <div className="space-y-3 rounded-xl border border-border/30 bg-zbooni-dark/20 p-4">
+                <div className="flex items-center gap-2">
+                  <Globe className="h-4 w-4 text-zbooni-teal" />
+                  <h3 className="text-sm font-semibold text-foreground">{expandedCountry}</h3>
+                  <span className="font-mono text-[10px] text-muted-foreground/50">
+                    {(countryCities[expandedCountry] ?? []).length} cities
+                  </span>
+                </div>
+
+                {(countryCities[expandedCountry] ?? []).length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {(countryCities[expandedCountry] ?? []).map((city) => (
+                      <span
+                        key={city}
+                        className="inline-flex items-center gap-1 rounded-full bg-zbooni-dark/60 px-2.5 py-1 text-xs text-muted-foreground"
+                      >
+                        <MapPin className="h-2.5 w-2.5" />
+                        {city}
+                        <button
+                          type="button"
+                          onClick={() => removeCity(expandedCountry, city)}
+                          className="ml-0.5 rounded-full transition-colors hover:text-red-400"
+                        >
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground/40 italic">No cities added yet</p>
+                )}
+
+                <div className="flex items-center gap-1.5">
+                  <input
+                    value={newCityInputs[expandedCountry] ?? ''}
+                    onChange={(e) => setNewCityInputs((prev) => ({ ...prev, [expandedCountry]: e.target.value }))}
+                    placeholder="Add city..."
+                    className="h-7 w-40 rounded-full border border-border/50 bg-zbooni-dark/60 px-3 text-xs focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') addCity(expandedCountry);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => addCity(expandedCountry)}
+                    className="rounded-full p-1 text-zbooni-teal transition-colors hover:bg-zbooni-teal/10"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={() => setShowCountryInput(true)}
-                className="inline-flex items-center gap-1.5 rounded-full bg-zbooni-teal/10 px-3 py-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:bg-zbooni-teal/20"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Add Country
-              </button>
+              <div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-border/30 bg-zbooni-dark/10">
+                <p className="text-sm text-muted-foreground/40 italic">Select a country to manage its cities</p>
+              </div>
             )}
           </div>
-        </>
+        </div>
       )}
     </div>
   );
