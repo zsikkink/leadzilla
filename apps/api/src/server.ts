@@ -523,7 +523,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         });
       }
 
-      return GetLeadResponseSchema.parse({
+      const parsed = GetLeadResponseSchema.parse({
         ...lead,
         email: normalizeLeadEmail(lead.email),
         createdAt: lead.createdAt.toISOString(),
@@ -537,6 +537,62 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         businessEmail: lead.businessEmail ?? null,
         contactDiscovery: lead.contactDiscovery ?? null,
       });
+
+      // Extra fields outside contract schema for frontend use
+      const businessId = (lead as unknown as Record<string, unknown>).businessId;
+      const websiteDomain = (lead as unknown as Record<string, unknown>).websiteDomain;
+
+      // Fetch business contacts + websiteDomain if we have a businessId
+      let businessContacts: Array<{
+        id: string;
+        name: string;
+        title: string | null;
+        email: string | null;
+        phone: string | null;
+        linkedinUrl: string | null;
+        seniority: string;
+        positionRank: number;
+        source: string;
+      }> = [];
+      let resolvedWebsiteDomain: string | null = typeof websiteDomain === 'string' ? websiteDomain : null;
+      let icpProfileName: string | null = null;
+
+      if (typeof businessId === 'string') {
+        const [contacts, biz] = await Promise.all([
+          prisma.businessContact.findMany({
+            where: { businessId },
+            orderBy: { positionRank: 'asc' },
+            select: {
+              id: true, name: true, title: true, email: true, phone: true,
+              linkedinUrl: true, seniority: true, positionRank: true, source: true,
+            },
+          }),
+          !resolvedWebsiteDomain
+            ? prisma.business.findUnique({
+                where: { id: businessId },
+                select: { websiteDomain: true },
+              })
+            : null,
+        ]);
+        businessContacts = contacts;
+        if (biz?.websiteDomain) resolvedWebsiteDomain = biz.websiteDomain;
+      }
+
+      if (parsed.latestIcpProfileId) {
+        const icp = await prisma.icpProfile.findUnique({
+          where: { id: parsed.latestIcpProfileId },
+          select: { name: true },
+        });
+        if (icp) icpProfileName = icp.name;
+      }
+
+      return {
+        ...parsed,
+        businessId: typeof businessId === 'string' ? businessId : null,
+        websiteDomain: resolvedWebsiteDomain,
+        businessContacts,
+        icpProfileName,
+      };
     });
 
     api.get('/v1/leads/recovery', async (request, reply) => {
@@ -968,6 +1024,112 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     });
     registerSettingsRoutes(api);
     registerStatsRoutes(api);
+
+    // ── Business Contact CRUD ─────────────────────────────────────────────
+    const BusinessContactIdParamsSchema = z.object({ id: z.string().min(1) });
+    const UpdateBusinessContactBodySchema = z.object({
+      name: z.string().min(1).optional(),
+      title: z.string().nullable().optional(),
+      email: z.string().email().nullable().optional(),
+      phone: z.string().nullable().optional(),
+    }).refine(
+      (data) => Object.keys(data).length > 0,
+      { message: 'At least one field must be provided' },
+    );
+    const SetPrimaryBodySchema = z.object({ businessId: z.string().min(1) });
+
+    api.patch('/v1/business-contacts/:id', async (request, reply) => {
+      const parsedParams = BusinessContactIdParamsSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({ error: 'Invalid business contact id', requestId: request.id });
+      }
+      const parsedBody = UpdateBusinessContactBodySchema.safeParse(request.body);
+      if (!parsedBody.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: parsedBody.error.issues[0]?.message ?? 'Invalid update payload',
+          requestId: request.id,
+        });
+      }
+
+      try {
+        // Build update data explicitly — exactOptionalPropertyTypes forbids undefined
+        const updateData: Record<string, string | null> = {};
+        if (parsedBody.data.name !== undefined) updateData.name = parsedBody.data.name;
+        if (parsedBody.data.title !== undefined) updateData.title = parsedBody.data.title;
+        if (parsedBody.data.email !== undefined) updateData.email = parsedBody.data.email;
+        if (parsedBody.data.phone !== undefined) updateData.phone = parsedBody.data.phone;
+
+        const updated = await prisma.businessContact.update({
+          where: { id: parsedParams.data.id },
+          data: updateData,
+        });
+        return {
+          id: updated.id,
+          businessId: updated.businessId,
+          name: updated.name,
+          title: updated.title,
+          email: updated.email,
+          phone: updated.phone,
+          positionRank: updated.positionRank,
+          seniority: updated.seniority,
+          source: updated.source,
+          updatedAt: updated.updatedAt.toISOString(),
+        };
+      } catch {
+        reply.status(404);
+        return ErrorResponseSchema.parse({ error: 'Business contact not found', requestId: request.id });
+      }
+    });
+
+    api.delete('/v1/business-contacts/:id', async (request, reply) => {
+      const parsedParams = BusinessContactIdParamsSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({ error: 'Invalid business contact id', requestId: request.id });
+      }
+
+      try {
+        await prisma.businessContact.delete({ where: { id: parsedParams.data.id } });
+        reply.status(204);
+        return;
+      } catch {
+        reply.status(404);
+        return ErrorResponseSchema.parse({ error: 'Business contact not found', requestId: request.id });
+      }
+    });
+
+    api.patch('/v1/business-contacts/:id/primary', async (request, reply) => {
+      const parsedParams = BusinessContactIdParamsSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({ error: 'Invalid business contact id', requestId: request.id });
+      }
+      const parsedBody = SetPrimaryBodySchema.safeParse(request.body);
+      if (!parsedBody.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({ error: 'businessId is required', requestId: request.id });
+      }
+
+      try {
+        await prisma.$transaction([
+          prisma.businessContact.updateMany({
+            where: { businessId: parsedBody.data.businessId },
+            data: { positionRank: 99 },
+          }),
+          prisma.businessContact.update({
+            where: { id: parsedParams.data.id },
+            data: { positionRank: 0 },
+          }),
+        ]);
+        reply.status(200);
+        return { ok: true };
+      } catch {
+        reply.status(404);
+        return ErrorResponseSchema.parse({ error: 'Business contact not found', requestId: request.id });
+      }
+    });
   };
 
   app.register(protectedRoutes);
