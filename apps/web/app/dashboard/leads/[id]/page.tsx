@@ -1426,6 +1426,9 @@ export default function LeadDetailPage() {
   );
   const [isCreatingBackup, setIsCreatingBackup] = useState(false);
   const [backupSuccess, setBackupSuccess] = useState<string | null>(null);
+  const [showAddMemberForm, setShowAddMemberForm] = useState(false);
+  const [isAddingMember, setIsAddingMember] = useState(false);
+  const [addMemberForm, setAddMemberForm] = useState({ name: '', title: '', email: '', phone: '' });
 
   // Derive conversion data (Brave CEO, search results) from the correct businessData source
   const conversionData = useMemo<ConversionData>(() => {
@@ -1606,6 +1609,28 @@ export default function LeadDetailPage() {
     void loadBlend();
     return () => { cancelled = true; };
   }, []);
+
+  const handleAddMember = async () => {
+    if (!addMemberForm.name.trim() || !l?.businessId) return;
+    setIsAddingMember(true);
+    try {
+      await apiClient.createBusinessContact({
+        businessId: l.businessId,
+        name: addMemberForm.name.trim(),
+        ...(addMemberForm.title.trim() ? { title: addMemberForm.title.trim() } : {}),
+        ...(addMemberForm.email.trim() ? { email: addMemberForm.email.trim() } : {}),
+        ...(addMemberForm.phone.trim() ? { phone: addMemberForm.phone.trim() } : {}),
+      });
+      setAddMemberForm({ name: '', title: '', email: '', phone: '' });
+      setShowAddMemberForm(false);
+      lead.refetch();
+    } catch (err) {
+      // Show error inline — don't throw
+      console.error('Failed to add team member:', err);
+    } finally {
+      setIsAddingMember(false);
+    }
+  };
 
   const l = lead.data as ExtendedLeadResponse | null;
   const businessName = useMemo(
@@ -1880,6 +1905,9 @@ export default function LeadDetailPage() {
           rating={businessData?.rating ?? null}
           reviewCount={businessData?.reviewCount ?? null}
           businessInsights={conversionData.businessInsights}
+          icpProfileName={l.icpProfileName ?? null}
+          websiteDomain={l.websiteDomain ?? null}
+          businessId={l.businessId ?? null}
         />
       ) : null}
 

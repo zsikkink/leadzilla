@@ -446,6 +446,20 @@ export class ApiClient {
   }
 
   // ── Business Contacts ───────────────────────────
+  createBusinessContact(data: {
+    businessId: string;
+    name: string;
+    title?: string | undefined;
+    email?: string | undefined;
+    phone?: string | undefined;
+    linkedinUrl?: string | undefined;
+  }): Promise<unknown> {
+    return this.request('/v1/business-contacts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   updateBusinessContact(
     id: string,
     data: { name?: string; title?: string | null; email?: string | null; phone?: string | null },
@@ -479,6 +493,7 @@ export class ApiClient {
       body: JSON.stringify({ businessId }),
     });
   }
+
 
   // ── Settings ───────────────────────────────────
   listPipelineSettings(): Promise<{ items: { key: string; value: unknown; updatedAt: string }[] }> {

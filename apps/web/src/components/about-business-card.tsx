@@ -11,8 +11,10 @@ import {
   Shield,
   Sparkles,
   Star,
+  Tag,
   Wifi,
 } from 'lucide-react';
+import Link from 'next/link';
 
 import { countryName } from '../lib/countries.js';
 import {
@@ -69,6 +71,8 @@ export interface AboutBusinessCardProps {
   contactPhones?: ContactPhone[] | undefined;
   instagramHandle?: string | null | undefined;
   country?: string | null | undefined;
+  icpProfileName?: string | null | undefined;
+  businessId?: string | null | undefined;
 }
 
 function extractSocialLinks(
@@ -283,6 +287,8 @@ export function AboutBusinessCard(props: AboutBusinessCardProps) {
     contactEmails = [],
     contactPhones = [],
     country = null,
+    icpProfileName = null,
+    businessId = null,
   } = props;
 
   const locationParts = [
@@ -306,13 +312,45 @@ export function AboutBusinessCard(props: AboutBusinessCardProps) {
       </h2>
 
       <div className="space-y-4">
-        {/* Overview: Category + Description / AI Insights */}
+        {/* Inline pills: Category + ICP + Website + Business Intel */}
+        {(category || icpProfileName || websiteDomain || businessId) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {category && (
+              <span className="rounded-full bg-zbooni-teal/10 px-2.5 py-0.5 text-[11px] font-semibold text-zbooni-teal">
+                {category}
+              </span>
+            )}
+            {icpProfileName && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-purple-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-purple-300">
+                <Tag className="h-3 w-3" />
+                {icpProfileName}
+              </span>
+            )}
+            {websiteDomain && (
+              <a
+                href={`https://${websiteDomain}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-full border border-border/30 px-2.5 py-0.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:text-zbooni-teal"
+              >
+                <ExternalLink className="h-3 w-3" />
+                {websiteDomain}
+              </a>
+            )}
+            {businessId && (
+              <Link
+                href={`/dashboard/leads/businesses?selected=${businessId}`}
+                className="inline-flex items-center gap-1 rounded-full border border-border/30 px-2.5 py-0.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:text-zbooni-teal"
+              >
+                <Building2 className="h-3 w-3" />
+                Business Intel
+              </Link>
+            )}
+          </div>
+        )}
+
+        {/* Overview: Description / AI Insights */}
         <div className="space-y-2">
-          {category && (
-            <span className="inline-block rounded-full bg-zbooni-teal/10 px-2.5 py-0.5 text-[11px] font-semibold text-zbooni-teal">
-              {category}
-            </span>
-          )}
           {hasAiInsights ? (
             <div className="flex items-start gap-2">
               <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
@@ -333,25 +371,13 @@ export function AboutBusinessCard(props: AboutBusinessCardProps) {
         </div>
 
         {/* Contact Info */}
-        {(websiteDomain || phoneE164 || contactEmails.length > 0 || contactPhones.length > 0 || hasWhatsapp) && (
+        {(phoneE164 || contactEmails.length > 0 || contactPhones.length > 0 || hasWhatsapp) && (
           <div>
             <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">
               <Mail className="mr-1 inline h-3 w-3" />
               Contact Info
             </p>
             <div className="grid gap-1.5 sm:grid-cols-2">
-              {websiteDomain && (
-                <a
-                  href={`https://${websiteDomain}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2 text-xs text-zbooni-teal transition-colors hover:text-zbooni-green hover:border-border/40"
-                >
-                  <Globe className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">{websiteDomain}</span>
-                  <ExternalLink className="h-3 w-3 shrink-0 ml-auto" />
-                </a>
-              )}
               {phoneE164 && (
                 <a
                   href={`tel:${phoneE164}`}
