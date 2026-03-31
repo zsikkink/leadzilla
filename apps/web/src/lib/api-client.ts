@@ -425,6 +425,41 @@ export class ApiClient {
     return this.request('/v1/stats/pipeline');
   }
 
+  // ── Business Contacts ───────────────────────────
+  updateBusinessContact(
+    id: string,
+    data: { name?: string; title?: string | null; email?: string | null; phone?: string | null },
+  ): Promise<{
+    id: string;
+    businessId: string;
+    name: string;
+    title: string | null;
+    email: string | null;
+    phone: string | null;
+    positionRank: number;
+    seniority: string;
+    source: string;
+    updatedAt: string;
+  }> {
+    return this.request(`/v1/business-contacts/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  deleteBusinessContact(id: string): Promise<void> {
+    return this.request(`/v1/business-contacts/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  setBusinessContactPrimary(id: string, businessId: string): Promise<{ ok: boolean }> {
+    return this.request(`/v1/business-contacts/${id}/primary`, {
+      method: 'PATCH',
+      body: JSON.stringify({ businessId }),
+    });
+  }
+
   // ── Settings ───────────────────────────────────
   listPipelineSettings(): Promise<{ items: { key: string; value: unknown; updatedAt: string }[] }> {
     return this.request('/v1/settings/pipeline');

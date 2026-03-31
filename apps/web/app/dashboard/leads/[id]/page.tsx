@@ -8,6 +8,8 @@ import {
   Brain,
   Briefcase,
   Building2,
+  Crown,
+  Edit2,
   ExternalLink,
   Globe,
   Inbox,
@@ -18,10 +20,14 @@ import {
   Monitor,
   Phone,
   RefreshCw,
+  Save,
   Shield,
+  Tag,
+  Trash2,
   TrendingUp,
   User,
   Users,
+  X,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
@@ -141,6 +147,24 @@ interface _InstagramPost {
   url: string | null;
   thumbnailUrl: string | null;
   postType: 'image' | 'video' | 'carousel';
+}
+
+/** Extended lead response with extra fields injected by the API beyond the contract schema */
+interface ExtendedLeadResponse extends GetLeadResponse {
+  businessId?: string | null | undefined;
+  websiteDomain?: string | null | undefined;
+  icpProfileName?: string | null | undefined;
+  businessContacts?: Array<{
+    id: string;
+    name: string;
+    title: string | null;
+    email: string | null;
+    phone: string | null;
+    linkedinUrl: string | null;
+    seniority: string;
+    positionRank: number;
+    source: string;
+  }> | undefined;
 }
 
 function normalizeEmail(email: string | null | undefined): string | null {
@@ -583,6 +607,74 @@ export default function LeadDetailPage() {
   const [isCreatingBackup, setIsCreatingBackup] = useState(false);
   const [backupSuccess, setBackupSuccess] = useState<string | null>(null);
 
+  // ── Team member CRUD state ──────────────────────────────────────
+  const [editingContactId, setEditingContactId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{ name: string; title: string; email: string; phone: string }>({ name: '', title: '', email: '', phone: '' });
+  const [contactSaving, setContactSaving] = useState(false);
+  const [contactError, setContactError] = useState<string | null>(null);
+
+  const startEditContact = useCallback((contact: { id: string; name: string; title: string | null; email: string | null; phone: string | null }) => {
+    setEditingContactId(contact.id);
+    setEditForm({
+      name: contact.name,
+      title: contact.title ?? '',
+      email: contact.email ?? '',
+      phone: contact.phone ?? '',
+    });
+    setContactError(null);
+  }, []);
+
+  const cancelEditContact = useCallback(() => {
+    setEditingContactId(null);
+    setContactError(null);
+  }, []);
+
+  const saveEditContact = useCallback(async () => {
+    if (!editingContactId) return;
+    setContactSaving(true);
+    setContactError(null);
+    try {
+      await apiClient.updateBusinessContact(editingContactId, {
+        name: editForm.name,
+        title: editForm.title || null,
+        email: editForm.email || null,
+        phone: editForm.phone || null,
+      });
+      setEditingContactId(null);
+      lead.refetch();
+    } catch (err) {
+      setContactError(err instanceof Error ? err.message : 'Failed to save');
+    } finally {
+      setContactSaving(false);
+    }
+  }, [editingContactId, editForm, apiClient, lead]);
+
+  const deleteContact = useCallback(async (contactId: string) => {
+    setContactSaving(true);
+    setContactError(null);
+    try {
+      await apiClient.deleteBusinessContact(contactId);
+      lead.refetch();
+    } catch (err) {
+      setContactError(err instanceof Error ? err.message : 'Failed to delete');
+    } finally {
+      setContactSaving(false);
+    }
+  }, [apiClient, lead]);
+
+  const setPrimaryContact = useCallback(async (contactId: string, businessId: string) => {
+    setContactSaving(true);
+    setContactError(null);
+    try {
+      await apiClient.setBusinessContactPrimary(contactId, businessId);
+      lead.refetch();
+    } catch (err) {
+      setContactError(err instanceof Error ? err.message : 'Failed to set primary');
+    } finally {
+      setContactSaving(false);
+    }
+  }, [apiClient, lead]);
+
   const maxFollowUpNumber = useMemo(() => {
     if (!sends.data?.items.length) return -1;
     return Math.max(...sends.data.items.map((s) => s.followUpNumber ?? 0));
@@ -609,9 +701,31 @@ export default function LeadDetailPage() {
     }
   };
 
-  const l = lead.data;
+  const l = lead.data as ExtendedLeadResponse | null;
   const businessName = useMemo(() => getBusinessNameFromLead(l ?? null), [l]);
-  const teamMembers = useMemo(() => buildTeamMembersFromLead(l ?? null), [l]);
+  const contactDiscoveryMembers = useMemo(() => buildTeamMembersFromLead(l ?? null), [l]);
+
+  // Merge business_contacts (from API, editable) with contactDiscovery candidates (read-only)
+  const teamMembers = useMemo(() => {
+    const dbContacts: TeamMember[] = (l?.businessContacts ?? []).map((bc) => ({
+      id: bc.id,
+      fullName: bc.name,
+      jobTitle: bc.title,
+      email: bc.email,
+      phone: bc.phone,
+      linkedinUrl: bc.linkedinUrl,
+      seniority: bc.seniority,
+      positionRank: bc.positionRank,
+      source: bc.source,
+      fromBusinessContacts: true,
+    }));
+    // Only include contactDiscovery candidates that aren't already in business_contacts (by email match)
+    const dbEmails = new Set(dbContacts.map((c) => c.email?.toLowerCase()).filter(Boolean));
+    const discoveryOnly = contactDiscoveryMembers.filter(
+      (dm) => !dm.email || !dbEmails.has(dm.email.toLowerCase()),
+    );
+    return [...dbContacts, ...discoveryOnly];
+  }, [l, contactDiscoveryMembers]);
   const businessSummary = useMemo(() => {
     if (!l) {
       return null;
@@ -773,6 +887,38 @@ export default function LeadDetailPage() {
         ) : null}
       </div>
 
+      {/* ICP Profile pill + Website / Business Intel links */}
+      {(l.icpProfileName || l.websiteDomain || l.businessId) ? (
+        <div className="flex flex-wrap items-center gap-3">
+          {l.icpProfileName ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-purple-400/30 bg-purple-500/10 px-3 py-1 text-xs font-semibold text-purple-300">
+              <Tag className="h-3 w-3" />
+              {l.icpProfileName}
+            </span>
+          ) : null}
+          {l.websiteDomain ? (
+            <a
+              href={`https://${l.websiteDomain.replace(/^https?:\/\//, '')}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border/40 bg-card/60 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-zbooni-teal/40 hover:text-zbooni-teal"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              {l.websiteDomain}
+            </a>
+          ) : null}
+          {l.businessId ? (
+            <Link
+              href={`/dashboard/leads/businesses?selected=${l.businessId}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border/40 bg-card/60 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-amber-400/40 hover:text-amber-300"
+            >
+              <Building2 className="h-3.5 w-3.5" />
+              Business Intel
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
+
       {/* About This Business (D1) */}
       {businessSummary ? (
         <AboutBusinessCard
@@ -917,91 +1063,188 @@ export default function LeadDetailPage() {
             Team Members
             <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">{sortedTeamMembers.length}</span>
           </h2>
+          {contactError ? (
+            <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
+              {contactError}
+            </div>
+          ) : null}
           <div className="grid gap-2.5 sm:grid-cols-2">
             {sortedTeamMembers.map((tm, idx) => {
-              const isPrimary = leadEmailNormalized
-                ? normalizeEmail(tm.email) === leadEmailNormalized
-                : idx === 0;
+              const isPrimary = tm.fromBusinessContacts
+                ? tm.positionRank === 0
+                : leadEmailNormalized
+                  ? normalizeEmail(tm.email) === leadEmailNormalized
+                  : idx === 0;
               const isDecisionMaker = isExecutiveOrDirector(tm);
               const seniorityLabel = tm.seniority ? tm.seniority.charAt(0).toUpperCase() + tm.seniority.slice(1) : null;
+              const isEditing = editingContactId === tm.id;
 
               return (
                 <div
                   key={tm.id}
                   className="rounded-lg border border-border/25 bg-zbooni-dark/35 p-3"
                 >
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-[11px] font-bold text-amber-400">
-                      {tm.fullName.charAt(0)}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <p className="truncate text-sm font-semibold">{tm.fullName}</p>
-                        {isPrimary ? (
-                          <span className="rounded-full border border-zbooni-green/40 bg-zbooni-green/20 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-zbooni-green">
-                            Primary
-                          </span>
-                        ) : null}
-                        {isDecisionMaker && !isPrimary ? (
-                          <span className="rounded-full border border-amber-400/40 bg-amber-400/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-300">
-                            Decision Maker
-                          </span>
-                        ) : null}
-                        {seniorityLabel && seniorityLabel.toLowerCase() !== 'other' ? (
-                          <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-blue-300">
-                            {seniorityLabel}
-                          </span>
-                        ) : null}
-                        {tm.source ? (
-                          <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                            {tm.source}
-                          </span>
-                        ) : null}
-                      </div>
-                      {tm.jobTitle ? (
-                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground/60">{tm.jobTitle}</p>
-                      ) : null}
-
-                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px]">
-                        {tm.email ? (
-                          <a
-                            href={`mailto:${tm.email}`}
-                            className="inline-flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green"
-                          >
-                            <Mail className="h-3.5 w-3.5" />
-                            <span className="font-mono">{tm.email}</span>
-                          </a>
-                        ) : (
-                          <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-medium text-muted-foreground/60">
-                            No email found
-                          </span>
-                        )}
-
-                        {tm.phone ? (
-                          <a
-                            href={`tel:${tm.phone}`}
-                            className="inline-flex items-center gap-1 text-muted-foreground/80 transition-colors hover:text-foreground"
-                          >
-                            <Phone className="h-3.5 w-3.5" />
-                            {tm.phone}
-                          </a>
-                        ) : null}
-
-                        {tm.linkedinUrl ? (
-                          <a
-                            href={tm.linkedinUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green"
-                          >
-                            <Linkedin className="h-3.5 w-3.5" />
-                            LinkedIn
-                            <ExternalLink className="h-3 w-3" />
-                          </a>
-                        ) : null}
+                  {/* Inline edit form for business_contacts records */}
+                  {isEditing ? (
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        value={editForm.name}
+                        onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                        placeholder="Full name"
+                        className="w-full rounded-md border border-border/40 bg-zbooni-dark/60 px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-zbooni-teal/60 focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        value={editForm.title}
+                        onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))}
+                        placeholder="Job title"
+                        className="w-full rounded-md border border-border/40 bg-zbooni-dark/60 px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-zbooni-teal/60 focus:outline-none"
+                      />
+                      <input
+                        type="email"
+                        value={editForm.email}
+                        onChange={(e) => setEditForm((f) => ({ ...f, email: e.target.value }))}
+                        placeholder="Email"
+                        className="w-full rounded-md border border-border/40 bg-zbooni-dark/60 px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-zbooni-teal/60 focus:outline-none"
+                      />
+                      <input
+                        type="tel"
+                        value={editForm.phone}
+                        onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))}
+                        placeholder="Phone"
+                        className="w-full rounded-md border border-border/40 bg-zbooni-dark/60 px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-zbooni-teal/60 focus:outline-none"
+                      />
+                      <div className="flex items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={saveEditContact}
+                          disabled={contactSaving || !editForm.name.trim()}
+                          className="inline-flex items-center gap-1 rounded-md bg-zbooni-teal/20 px-2.5 py-1 text-[11px] font-semibold text-zbooni-teal transition-colors hover:bg-zbooni-teal/30 disabled:opacity-50"
+                        >
+                          {contactSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelEditContact}
+                          disabled={contactSaving}
+                          className="inline-flex items-center gap-1 rounded-md bg-muted/20 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/30 disabled:opacity-50"
+                        >
+                          <X className="h-3 w-3" />
+                          Cancel
+                        </button>
                       </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-[11px] font-bold text-amber-400">
+                        {tm.fullName.charAt(0)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <p className="truncate text-sm font-semibold">{tm.fullName}</p>
+                          {isPrimary ? (
+                            <span className="rounded-full border border-zbooni-green/40 bg-zbooni-green/20 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-zbooni-green">
+                              Primary
+                            </span>
+                          ) : null}
+                          {isDecisionMaker && !isPrimary ? (
+                            <span className="rounded-full border border-amber-400/40 bg-amber-400/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-300">
+                              Decision Maker
+                            </span>
+                          ) : null}
+                          {seniorityLabel && seniorityLabel.toLowerCase() !== 'other' ? (
+                            <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-blue-300">
+                              {seniorityLabel}
+                            </span>
+                          ) : null}
+                          {tm.source ? (
+                            <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                              {tm.source}
+                            </span>
+                          ) : null}
+                        </div>
+                        {tm.jobTitle ? (
+                          <p className="mt-0.5 truncate text-[11px] text-muted-foreground/60">{tm.jobTitle}</p>
+                        ) : null}
+
+                        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px]">
+                          {tm.email ? (
+                            <a
+                              href={`mailto:${tm.email}`}
+                              className="inline-flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green"
+                            >
+                              <Mail className="h-3.5 w-3.5" />
+                              <span className="font-mono">{tm.email}</span>
+                            </a>
+                          ) : (
+                            <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-medium text-muted-foreground/60">
+                              No email found
+                            </span>
+                          )}
+
+                          {tm.phone ? (
+                            <a
+                              href={`tel:${tm.phone}`}
+                              className="inline-flex items-center gap-1 text-muted-foreground/80 transition-colors hover:text-foreground"
+                            >
+                              <Phone className="h-3.5 w-3.5" />
+                              {tm.phone}
+                            </a>
+                          ) : null}
+
+                          {tm.linkedinUrl ? (
+                            <a
+                              href={tm.linkedinUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-zbooni-teal transition-colors hover:text-zbooni-green"
+                            >
+                              <Linkedin className="h-3.5 w-3.5" />
+                              LinkedIn
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          ) : null}
+                        </div>
+
+                        {/* CRUD actions — only for business_contacts records */}
+                        {tm.fromBusinessContacts ? (
+                          <div className="mt-2 flex items-center gap-2 border-t border-border/15 pt-2">
+                            <button
+                              type="button"
+                              onClick={() => startEditContact({ id: tm.id, name: tm.fullName, title: tm.jobTitle, email: tm.email, phone: tm.phone })}
+                              disabled={contactSaving}
+                              className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground/60 transition-colors hover:text-zbooni-teal disabled:opacity-50"
+                            >
+                              <Edit2 className="h-3 w-3" />
+                              Edit
+                            </button>
+                            {!isPrimary && l.businessId ? (
+                              <button
+                                type="button"
+                                onClick={() => setPrimaryContact(tm.id, l.businessId!)}
+                                disabled={contactSaving}
+                                className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground/60 transition-colors hover:text-zbooni-green disabled:opacity-50"
+                              >
+                                <Crown className="h-3 w-3" />
+                                Set Primary
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => deleteContact(tm.id)}
+                              disabled={contactSaving}
+                              className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground/60 transition-colors hover:text-red-400 disabled:opacity-50"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              Delete
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
