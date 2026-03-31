@@ -1426,8 +1426,7 @@ export default function LeadDetailPage() {
   );
   const [isCreatingBackup, setIsCreatingBackup] = useState(false);
   const [backupSuccess, setBackupSuccess] = useState<string | null>(null);
-  const [_showAddMemberForm, setShowAddMemberForm] = useState(false);
-  const [_isAddingMember, setIsAddingMember] = useState(false);
+  const [showAddMemberForm, setShowAddMemberForm] = useState(false);
   const [addMemberForm, setAddMemberForm] = useState({ name: '', title: '', email: '', phone: '' });
 
   // Derive conversion data (Brave CEO, search results) from the correct businessData source
@@ -1506,6 +1505,30 @@ export default function LeadDetailPage() {
       setContactSaving(false);
     }
   }, [apiClient, lead]);
+
+  const handleAddMember = useCallback(async () => {
+    const leadData = lead.data as ExtendedLeadResponse | null;
+    if (!addMemberForm.name.trim() || !leadData?.businessId) return;
+    setContactSaving(true);
+    setContactError(null);
+    try {
+      await apiClient.createBusinessContact({
+        businessId: leadData.businessId as string,
+        name: addMemberForm.name.trim(),
+        title: addMemberForm.title.trim() || undefined,
+        email: addMemberForm.email.trim() || undefined,
+        phone: addMemberForm.phone.trim() || undefined,
+      });
+      toast.success(`${addMemberForm.name.trim()} added to team`);
+      setAddMemberForm({ name: '', title: '', email: '', phone: '' });
+      setShowAddMemberForm(false);
+      lead.refetch();
+    } catch (err) {
+      setContactError(err instanceof Error ? err.message : 'Failed to add member');
+    } finally {
+      setContactSaving(false);
+    }
+  }, [apiClient, lead, addMemberForm]);
 
   const maxFollowUpNumber = useMemo(() => {
     if (!sends.data?.items.length) return -1;
@@ -1610,27 +1633,7 @@ export default function LeadDetailPage() {
     return () => { cancelled = true; };
   }, []);
 
-  const _handleAddMember = async () => {
-    if (!addMemberForm.name.trim() || !l?.businessId) return;
-    setIsAddingMember(true);
-    try {
-      await apiClient.createBusinessContact({
-        businessId: l.businessId,
-        name: addMemberForm.name.trim(),
-        ...(addMemberForm.title.trim() ? { title: addMemberForm.title.trim() } : {}),
-        ...(addMemberForm.email.trim() ? { email: addMemberForm.email.trim() } : {}),
-        ...(addMemberForm.phone.trim() ? { phone: addMemberForm.phone.trim() } : {}),
-      });
-      setAddMemberForm({ name: '', title: '', email: '', phone: '' });
-      setShowAddMemberForm(false);
-      lead.refetch();
-    } catch (err) {
-      // Show error inline — don't throw
-      console.error('Failed to add team member:', err);
-    } finally {
-      setIsAddingMember(false);
-    }
-  };
+  // handleAddMember is defined above via useCallback
 
   const l = lead.data as ExtendedLeadResponse | null;
   const businessName = useMemo(
@@ -1942,11 +1945,39 @@ export default function LeadDetailPage() {
       {/* ─── 3. Team Members (API-based CRUD) ─── */}
       {sortedTeamMembers.length > 0 ? (
         <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-            <Users className="h-4 w-4 text-amber-400" />
-            Team Members
-            <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">{sortedTeamMembers.length}</span>
-          </h2>
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-base font-bold tracking-tight flex items-center gap-2">
+              <Users className="h-4 w-4 text-amber-400" />
+              Team Members
+              <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">{sortedTeamMembers.length}</span>
+            </h2>
+            <button
+              type="button"
+              onClick={() => setShowAddMemberForm((v) => !v)}
+              className="inline-flex items-center gap-1 rounded-lg bg-zbooni-teal/10 px-2.5 py-1.5 text-[11px] font-semibold text-zbooni-teal transition-colors hover:bg-zbooni-teal/20"
+            >
+              <Plus className="h-3 w-3" /> Add Member
+            </button>
+          </div>
+          {showAddMemberForm && (
+            <div className="mb-4 rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 p-4">
+              <p className="mb-3 text-xs font-semibold text-zbooni-teal">New Team Member</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <input value={addMemberForm.name} onChange={(e) => setAddMemberForm((f) => ({ ...f, name: e.target.value }))} placeholder="Name *" className="h-8 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-zbooni-teal/30" />
+                <input value={addMemberForm.title} onChange={(e) => setAddMemberForm((f) => ({ ...f, title: e.target.value }))} placeholder="Position" className="h-8 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-zbooni-teal/30" />
+                <input value={addMemberForm.email} onChange={(e) => setAddMemberForm((f) => ({ ...f, email: e.target.value }))} placeholder="Email" type="email" className="h-8 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-zbooni-teal/30" />
+                <input value={addMemberForm.phone} onChange={(e) => setAddMemberForm((f) => ({ ...f, phone: e.target.value }))} placeholder="Phone" className="h-8 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-zbooni-teal/30" />
+              </div>
+              <div className="mt-3 flex gap-2">
+                <button type="button" onClick={() => void handleAddMember()} disabled={!addMemberForm.name.trim()} className="inline-flex items-center gap-1.5 rounded-lg bg-zbooni-teal/20 px-3 py-1.5 text-xs font-semibold text-zbooni-teal transition-colors hover:bg-zbooni-teal/30 disabled:opacity-50">
+                  <Plus className="h-3 w-3" /> Add
+                </button>
+                <button type="button" onClick={() => setShowAddMemberForm(false)} className="rounded-lg px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
           {contactError ? (
             <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
               {contactError}
