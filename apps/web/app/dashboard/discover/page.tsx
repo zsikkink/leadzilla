@@ -486,12 +486,6 @@ export default function DiscoverPage() {
     });
   };
 
-  // Cities for the country detail panel
-  const citiesForSelectedCountry = useMemo(() => {
-    if (!selectedCountryForCities) return [];
-    return COUNTRY_CITIES[selectedCountryForCities] ?? [];
-  }, [selectedCountryForCities]);
-
   // Auto-select first country when countries list changes
   useEffect(() => {
     if (countriesForCityPicker.length > 0 && (!selectedCountryForCities || !countriesForCityPicker.includes(selectedCountryForCities))) {

@@ -1426,8 +1426,8 @@ export default function LeadDetailPage() {
   );
   const [isCreatingBackup, setIsCreatingBackup] = useState(false);
   const [backupSuccess, setBackupSuccess] = useState<string | null>(null);
-  const [showAddMemberForm, setShowAddMemberForm] = useState(false);
-  const [isAddingMember, setIsAddingMember] = useState(false);
+  const [_showAddMemberForm, setShowAddMemberForm] = useState(false);
+  const [_isAddingMember, setIsAddingMember] = useState(false);
   const [addMemberForm, setAddMemberForm] = useState({ name: '', title: '', email: '', phone: '' });
 
   // Derive conversion data (Brave CEO, search results) from the correct businessData source
@@ -1610,7 +1610,7 @@ export default function LeadDetailPage() {
     return () => { cancelled = true; };
   }, []);
 
-  const handleAddMember = async () => {
+  const _handleAddMember = async () => {
     if (!addMemberForm.name.trim() || !l?.businessId) return;
     setIsAddingMember(true);
     try {
