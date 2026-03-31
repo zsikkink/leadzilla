@@ -768,7 +768,7 @@ export default function DiscoverPage() {
                   <Globe className="h-3.5 w-3.5 text-muted-foreground" />
                   <p className="text-xs text-muted-foreground/50">No mapped target countries found for the selected ICP profiles</p>
                 </div>
-              )
+              )}
 
               {/* Analysis toggles */}
               <div className="flex flex-wrap gap-4">
