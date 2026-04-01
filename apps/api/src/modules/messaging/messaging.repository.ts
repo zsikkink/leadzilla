@@ -15,7 +15,7 @@ import type {
   RejectMessageDraftRequest,
   SendMessageRequest,
 } from '@lead-flood/contracts';
-import { PrismaRuntime, prisma } from '@lead-flood/db';
+import { PrismaRuntime, prisma, toInputJson, type Prisma } from '@lead-flood/db';
 
 import {
   MessagingNotFoundError,
@@ -43,6 +43,16 @@ export interface ExistingInitialDraft {
   variantIds: string[];
 }
 
+export interface MessageSendQueueIntentResult {
+  send: MessageSendResponse;
+  outboxEventId?: string | undefined;
+}
+
+export interface ApproveMessageDraftResult {
+  draft: MessageDraftResponse;
+  initialSend?: MessageSendQueueIntentResult | undefined;
+}
+
 export interface MessagingRepository {
   generateMessageDraft(input: GenerateMessageDraftRequest): Promise<GenerateMessageDraftResponse>;
   getDraftGenerationEligibilityContext(
@@ -55,9 +65,9 @@ export interface MessagingRepository {
   getExistingInitialSendForDraft(draftId: string): Promise<MessageSendResponse | null>;
   listMessageDrafts(query: ListMessageDraftsQuery): Promise<ListMessageDraftsResponse>;
   getMessageDraft(draftId: string): Promise<MessageDraftResponse>;
-  approveMessageDraft(draftId: string, input: ApproveMessageDraftRequest): Promise<MessageDraftResponse>;
+  approveMessageDraft(draftId: string, input: ApproveMessageDraftRequest): Promise<ApproveMessageDraftResult>;
   rejectMessageDraft(draftId: string, input: RejectMessageDraftRequest): Promise<MessageDraftResponse>;
-  sendMessage(input: SendMessageRequest): Promise<MessageSendResponse>;
+  sendMessage(input: SendMessageRequest): Promise<MessageSendQueueIntentResult>;
   listMessageSends(query: ListMessageSendsQuery): Promise<ListMessageSendsResponse>;
   getMessageSend(sendId: string): Promise<MessageSendResponse>;
   getConversation(leadId: string): Promise<ConversationResponse>;
@@ -100,7 +110,7 @@ export class StubMessagingRepository implements MessagingRepository {
   async approveMessageDraft(
     _draftId: string,
     _input: ApproveMessageDraftRequest,
-  ): Promise<MessageDraftResponse> {
+  ): Promise<ApproveMessageDraftResult> {
     throw new MessagingNotImplementedError('TODO: approve message draft persistence');
   }
 
@@ -111,7 +121,7 @@ export class StubMessagingRepository implements MessagingRepository {
     throw new MessagingNotImplementedError('TODO: reject message draft persistence');
   }
 
-  async sendMessage(_input: SendMessageRequest): Promise<MessageSendResponse> {
+  async sendMessage(_input: SendMessageRequest): Promise<MessageSendQueueIntentResult> {
     throw new MessagingNotImplementedError('TODO: send message persistence');
   }
 
@@ -260,6 +270,89 @@ function variantsInclude() {
     variants: {
       orderBy: [{ variantKey: 'asc' as const }, { createdAt: 'asc' as const }],
     },
+  };
+}
+
+type MessagingTransactionClient = Prisma.TransactionClient;
+
+interface CreateQueuedMessageSendInput {
+  leadId: string;
+  messageDraftId: string;
+  messageVariantId: string;
+  channel: 'EMAIL' | 'WHATSAPP';
+  idempotencyKey: string;
+  followUpNumber: number;
+  scheduledAt?: Date | null | undefined;
+}
+
+function buildMessageSendOutboxPayload(send: PrismaMessageSend, runId: string) {
+  return {
+    runId,
+    sendId: send.id,
+    messageDraftId: send.messageDraftId,
+    messageVariantId: send.messageVariantId,
+    idempotencyKey: send.idempotencyKey,
+    channel: send.channel,
+    ...(send.scheduledAt ? { scheduledAt: send.scheduledAt.toISOString() } : {}),
+  };
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
+async function findExistingInitialSendForDraftTx(
+  tx: MessagingTransactionClient,
+  draftId: string,
+): Promise<PrismaMessageSend | null> {
+  return tx.messageSend.findFirst({
+    where: {
+      messageDraftId: draftId,
+      followUpNumber: 0,
+    },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+  });
+}
+
+async function findSendByIdempotencyKeyTx(
+  tx: MessagingTransactionClient,
+  idempotencyKey: string,
+): Promise<PrismaMessageSend | null> {
+  return tx.messageSend.findUnique({
+    where: { idempotencyKey },
+  });
+}
+
+async function createQueuedMessageSendWithOutbox(
+  tx: MessagingTransactionClient,
+  input: CreateQueuedMessageSendInput,
+  buildRunId: (sendId: string) => string,
+): Promise<MessageSendQueueIntentResult> {
+  const send = await tx.messageSend.create({
+    data: {
+      leadId: input.leadId,
+      messageDraftId: input.messageDraftId,
+      messageVariantId: input.messageVariantId,
+      channel: input.channel,
+      provider: input.channel === 'WHATSAPP' ? 'TRENGO' : 'RESEND',
+      status: 'QUEUED',
+      idempotencyKey: input.idempotencyKey,
+      followUpNumber: input.followUpNumber,
+      scheduledAt: input.scheduledAt ?? null,
+    },
+  });
+
+  const outboxEvent = await tx.outboxEvent.create({
+    data: {
+      type: 'message.send',
+      payload: toInputJson(buildMessageSendOutboxPayload(send, buildRunId(send.id))),
+      status: 'pending',
+    },
+  });
+
+  return {
+    send: mapSendToResponse(send),
+    outboxEventId: outboxEvent.id,
   };
 }
 
@@ -441,67 +534,124 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
   override async approveMessageDraft(
     draftId: string,
     input: ApproveMessageDraftRequest,
-  ): Promise<MessageDraftResponse> {
+  ): Promise<ApproveMessageDraftResult> {
     try {
-      const now = new Date();
-      const existingDraft = await prisma.messageDraft.findUnique({
-        where: { id: draftId },
-        include: variantsInclude(),
-      });
-
-      if (!existingDraft) {
-        throw new MessagingNotFoundError('Message draft not found');
-      }
-
-      if (input.selectedVariantId !== undefined) {
-        const selectedVariant = await prisma.messageVariant.findUnique({
-          where: { id: input.selectedVariantId },
-          select: { id: true, messageDraftId: true },
+      return await prisma.$transaction(async (tx) => {
+        const now = new Date();
+        const existingDraft = await tx.messageDraft.findUnique({
+          where: { id: draftId },
+          include: variantsInclude(),
         });
 
-        if (!selectedVariant) {
-          throw new MessagingNotFoundError('Message variant not found');
+        if (!existingDraft) {
+          throw new MessagingNotFoundError('Message draft not found');
         }
 
-        if (selectedVariant.messageDraftId !== draftId) {
-          throw new MessagingSendIneligibleError('Selected message variant does not belong to the requested draft.');
-        }
-
-        if (
+        const isLockedInitialDraft =
           existingDraft.followUpNumber === 0 &&
-          (existingDraft.approvalStatus === 'APPROVED' || existingDraft.approvalStatus === 'AUTO_APPROVED')
-        ) {
-          return mapDraftToResponse(existingDraft);
+          (existingDraft.approvalStatus === 'APPROVED' || existingDraft.approvalStatus === 'AUTO_APPROVED');
+
+        if (input.selectedVariantId !== undefined) {
+          const selectedVariant = await tx.messageVariant.findUnique({
+            where: { id: input.selectedVariantId },
+            select: { id: true, messageDraftId: true },
+          });
+
+          if (!selectedVariant) {
+            throw new MessagingNotFoundError('Message variant not found');
+          }
+
+          if (selectedVariant.messageDraftId !== draftId) {
+            throw new MessagingSendIneligibleError('Selected message variant does not belong to the requested draft.');
+          }
+
+          if (!isLockedInitialDraft) {
+            await tx.messageVariant.updateMany({
+              where: { messageDraftId: draftId },
+              data: { isSelected: false },
+            });
+            await tx.messageVariant.update({
+              where: { id: input.selectedVariantId },
+              data: { isSelected: true },
+            });
+          }
         }
 
-        await prisma.messageVariant.updateMany({
-          where: { messageDraftId: draftId },
-          data: { isSelected: false },
-        });
-        await prisma.messageVariant.update({
-          where: { id: input.selectedVariantId },
-          data: { isSelected: true },
-        });
-      }
+        const draft =
+          isLockedInitialDraft
+            ? (await tx.messageDraft.findUnique({
+                where: { id: draftId },
+                include: variantsInclude(),
+              })) ?? existingDraft
+            : await tx.messageDraft.update({
+                where: { id: draftId },
+                data: {
+                  approvalStatus: 'APPROVED',
+                  approvedByUserId: input.approvedByUserId,
+                  approvedAt: now,
+                },
+                include: variantsInclude(),
+              });
 
-      if (
-        existingDraft.followUpNumber === 0 &&
-        (existingDraft.approvalStatus === 'APPROVED' || existingDraft.approvalStatus === 'AUTO_APPROVED')
-      ) {
-        return mapDraftToResponse(existingDraft);
-      }
+        const mappedDraft = mapDraftToResponse(draft);
 
-      const draft = await prisma.messageDraft.update({
-        where: { id: draftId },
-        data: {
-          approvalStatus: 'APPROVED',
-          approvedByUserId: input.approvedByUserId,
-          approvedAt: now,
-        },
-        include: variantsInclude(),
+        if (draft.approvalStatus !== 'APPROVED' || draft.variants.length === 0) {
+          return { draft: mappedDraft };
+        }
+
+        const selectedVariant = draft.variants.find((variant) => variant.isSelected) ?? draft.variants[0];
+        if (!selectedVariant) {
+          return { draft: mappedDraft };
+        }
+
+        const existingInitialSend = await findExistingInitialSendForDraftTx(tx, draft.id);
+        if (existingInitialSend) {
+          return {
+            draft: mappedDraft,
+            initialSend: {
+              send: mapSendToResponse(existingInitialSend),
+            },
+          };
+        }
+
+        const idempotencyKey = `approve:${draft.id}:${selectedVariant.id}`;
+
+        try {
+          const initialSend = await createQueuedMessageSendWithOutbox(
+            tx,
+            {
+              leadId: draft.leadId,
+              messageDraftId: draft.id,
+              messageVariantId: selectedVariant.id,
+              channel: selectedVariant.channel,
+              idempotencyKey,
+              followUpNumber: 0,
+            },
+            (sendId) => `message.send:${sendId}`,
+          );
+
+          return {
+            draft: mappedDraft,
+            initialSend,
+          };
+        } catch (error: unknown) {
+          if (!isUniqueConstraintError(error)) {
+            throw error;
+          }
+
+          const duplicateSend = await findSendByIdempotencyKeyTx(tx, idempotencyKey);
+          if (!duplicateSend) {
+            throw error;
+          }
+
+          return {
+            draft: mappedDraft,
+            initialSend: {
+              send: mapSendToResponse(duplicateSend),
+            },
+          };
+        }
       });
-
-      return mapDraftToResponse(draft);
     } catch (error: unknown) {
       if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2025') {
         throw new MessagingNotFoundError('Message draft not found');
@@ -532,7 +682,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
     }
   }
 
-  override async sendMessage(input: SendMessageRequest): Promise<MessageSendResponse> {
+  override async sendMessage(input: SendMessageRequest): Promise<MessageSendQueueIntentResult> {
     const variant = await prisma.messageVariant.findUnique({
       where: { id: input.messageVariantId },
       select: {
@@ -560,24 +710,27 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
 
       const existingInitialSend = await findBlockingInitialSendForDraft(input.messageDraftId);
       if (existingInitialSend) {
-        return mapSendToResponse(existingInitialSend);
+        return {
+          send: mapSendToResponse(existingInitialSend),
+        };
       }
     }
 
-    const send = await prisma.messageSend.create({
-      data: {
-        leadId: variant.messageDraft.leadId,
-        messageDraftId: input.messageDraftId,
-        messageVariantId: input.messageVariantId,
-        channel: variant.channel,
-        provider: variant.channel === 'EMAIL' ? 'RESEND' : 'TRENGO',
-        status: 'QUEUED',
-        idempotencyKey: input.idempotencyKey,
-        scheduledAt: input.scheduledAt !== undefined ? new Date(input.scheduledAt) : null,
-      },
-    });
-
-    return mapSendToResponse(send);
+    return prisma.$transaction(async (tx) =>
+      createQueuedMessageSendWithOutbox(
+        tx,
+        {
+          leadId: variant.messageDraft.leadId,
+          messageDraftId: input.messageDraftId,
+          messageVariantId: input.messageVariantId,
+          channel: variant.channel,
+          idempotencyKey: input.idempotencyKey,
+          followUpNumber: 0,
+          scheduledAt: input.scheduledAt !== undefined ? new Date(input.scheduledAt) : null,
+        },
+        (sendId) => sendId,
+      ),
+    );
   }
 
   override async listMessageSends(query: ListMessageSendsQuery): Promise<ListMessageSendsResponse> {

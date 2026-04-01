@@ -8,6 +8,7 @@ describe('dispatchPendingOutboxEvents', () => {
   const createdOutboxIds: string[] = [];
   const createdJobIds: string[] = [];
   const createdLeadIds: string[] = [];
+  const createdIcpProfileIds: string[] = [];
 
   async function createQueuedJobFixture() {
     const lead = await prisma.lead.create({
@@ -68,6 +69,86 @@ describe('dispatchPendingOutboxEvents', () => {
     return {
       discoveryRunId: discoveryRun.id,
       seedJobExecutionId: seedJob.id,
+    };
+  }
+
+  async function createMessageSendDispatchFixture(input?: {
+    channel?: 'EMAIL' | 'WHATSAPP';
+    scheduledAt?: Date | null;
+    sendStatus?: 'QUEUED' | 'SENDING' | 'UNRESOLVED' | 'SENT' | 'DELIVERED' | 'REPLIED' | 'BOUNCED' | 'FAILED';
+  }) {
+    const channel = input?.channel ?? 'EMAIL';
+
+    const lead = await prisma.lead.create({
+      data: {
+        firstName: 'Worker',
+        lastName: 'Dispatch',
+        email: `worker-message-send-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@lead-flood.local`,
+        source: 'test',
+        status: 'new',
+      },
+    });
+    createdLeadIds.push(lead.id);
+
+    const icpProfile = await prisma.icpProfile.create({
+      data: {
+        name: `Worker Message Send ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      },
+    });
+    createdIcpProfileIds.push(icpProfile.id);
+
+    const draft = await prisma.messageDraft.create({
+      data: {
+        leadId: lead.id,
+        icpProfileId: icpProfile.id,
+        promptVersion: 'test',
+        generatedByModel: 'test',
+        approvalStatus: 'APPROVED',
+        approvedByUserId: 'user_worker',
+        approvedAt: new Date(),
+        variants: {
+          create: {
+            variantKey: 'variant_a',
+            channel,
+            subject: channel === 'EMAIL' ? 'Subject' : null,
+            bodyText: 'Hello from outbox dispatcher test',
+            isSelected: true,
+          },
+        },
+      },
+      include: {
+        variants: {
+          take: 1,
+        },
+      },
+    });
+
+    const variant = draft.variants[0];
+    if (!variant) {
+      throw new Error('Expected message draft variant fixture');
+    }
+
+    const idempotencyKey = `outbox-message-send:${draft.id}:${variant.id}:${Math.random().toString(36).slice(2, 8)}`;
+    const send = await prisma.messageSend.create({
+      data: {
+        leadId: lead.id,
+        messageDraftId: draft.id,
+        messageVariantId: variant.id,
+        channel,
+        provider: channel === 'WHATSAPP' ? 'TRENGO' : 'RESEND',
+        status: input?.sendStatus ?? 'QUEUED',
+        idempotencyKey,
+        followUpNumber: 0,
+        scheduledAt: input?.scheduledAt ?? null,
+      },
+    });
+
+    return {
+      sendId: send.id,
+      messageDraftId: draft.id,
+      messageVariantId: variant.id,
+      idempotencyKey,
+      channel,
     };
   }
 
@@ -140,6 +221,16 @@ describe('dispatchPendingOutboxEvents', () => {
         where: {
           id: {
             in: createdLeadIds.splice(0, createdLeadIds.length),
+          },
+        },
+      });
+    }
+
+    if (createdIcpProfileIds.length > 0) {
+      await prisma.icpProfile.deleteMany({
+        where: {
+          id: {
+            in: createdIcpProfileIds.splice(0, createdIcpProfileIds.length),
           },
         },
       });
@@ -231,6 +322,63 @@ describe('dispatchPendingOutboxEvents', () => {
     });
     expect(updated?.status).toBe('sent');
     expect(updated?.attempts).toBe(1);
+  });
+
+  it('dispatches pending message.send outbox rows using the queued MessageSend gate', async () => {
+    const fixture = await createMessageSendDispatchFixture();
+    const event = await prisma.outboxEvent.create({
+      data: {
+        type: 'message.send',
+        payload: {
+          runId: `message.send:${fixture.sendId}`,
+          sendId: fixture.sendId,
+          messageDraftId: fixture.messageDraftId,
+          messageVariantId: fixture.messageVariantId,
+          idempotencyKey: fixture.idempotencyKey,
+          channel: fixture.channel,
+        },
+        status: 'pending',
+      },
+    });
+    createdOutboxIds.push(event.id);
+
+    const boss = {
+      send: vi.fn(
+        async (_name: string, _payload?: unknown, _options?: Record<string, unknown>) => 'ok',
+      ),
+    };
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    const count = await dispatchPendingOutboxEvents(boss as unknown as Pick<PgBoss, 'send'>, logger);
+
+    expect(count).toBe(1);
+    expect(boss.send).toHaveBeenCalledWith(
+      'message.send',
+      expect.objectContaining({
+        runId: `message.send:${fixture.sendId}`,
+        sendId: fixture.sendId,
+        messageDraftId: fixture.messageDraftId,
+        messageVariantId: fixture.messageVariantId,
+      }),
+      expect.objectContaining({
+        singletonKey: `message.send:${fixture.sendId}`,
+        retryLimit: 5,
+        retryDelay: 90,
+        retryBackoff: true,
+        deadLetter: 'message.send.dead_letter',
+      }),
+    );
+
+    const updated = await prisma.outboxEvent.findUnique({
+      where: { id: event.id },
+    });
+    expect(updated?.status).toBe('sent');
+    expect(updated?.attempts).toBe(1);
+    expect(updated?.processedAt).not.toBeNull();
   });
 
   it('marks tracked features.compute runs running after publish and suppresses replay once already running', async () => {
@@ -333,6 +481,61 @@ describe('dispatchPendingOutboxEvents', () => {
     expect(updated?.attempts).toBe(1);
     expect(updated?.nextAttemptAt).not.toBeNull();
     expect(updated?.lastError).toContain('queue unavailable');
+  });
+
+  it('replays failed message.send outbox rows through the dispatcher instead of treating them as invalid', async () => {
+    const scheduledAt = new Date(Date.now() + 60_000);
+    const fixture = await createMessageSendDispatchFixture({ scheduledAt });
+    const event = await prisma.outboxEvent.create({
+      data: {
+        type: 'message.send',
+        payload: {
+          runId: fixture.sendId,
+          sendId: fixture.sendId,
+          messageDraftId: fixture.messageDraftId,
+          messageVariantId: fixture.messageVariantId,
+          idempotencyKey: fixture.idempotencyKey,
+          channel: fixture.channel,
+          scheduledAt: scheduledAt.toISOString(),
+        },
+        status: 'failed',
+        nextAttemptAt: new Date(Date.now() - 1_000),
+      },
+    });
+    createdOutboxIds.push(event.id);
+
+    const boss = {
+      send: vi.fn(
+        async (_name: string, _payload?: unknown, _options?: Record<string, unknown>) => 'ok',
+      ),
+    };
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    const count = await dispatchPendingOutboxEvents(boss as unknown as Pick<PgBoss, 'send'>, logger);
+
+    expect(count).toBe(1);
+    expect(boss.send).toHaveBeenCalledTimes(1);
+
+    const sendOptions = vi.mocked(boss.send).mock.calls.at(0)?.[2];
+    expect(sendOptions).toMatchObject({
+      singletonKey: `message.send:${fixture.sendId}`,
+      retryLimit: 5,
+      retryDelay: 90,
+      retryBackoff: true,
+      deadLetter: 'message.send.dead_letter',
+    });
+    expect(sendOptions?.startAfter).toEqual(scheduledAt);
+
+    const updated = await prisma.outboxEvent.findUnique({
+      where: { id: event.id },
+    });
+    expect(updated?.status).toBe('sent');
+    expect(updated?.attempts).toBe(1);
+    expect(updated?.nextAttemptAt).toBeNull();
   });
 
   it('uses database time to gate failed retries and stale processing reclaim', async () => {
@@ -443,5 +646,43 @@ describe('dispatchPendingOutboxEvents', () => {
     expect(updated?.lastError).toContain('Max dispatch attempts exceeded');
     expect(updated?.nextAttemptAt).toBeNull();
     expect(updated?.processedAt).not.toBeNull();
+  });
+
+  it('keeps malformed message.send outbox rows invalid', async () => {
+    const event = await prisma.outboxEvent.create({
+      data: {
+        type: 'message.send',
+        payload: {
+          runId: 'message.send:send_invalid',
+          messageDraftId: 'draft_invalid',
+          messageVariantId: 'variant_invalid',
+          idempotencyKey: 'invalid-payload',
+          channel: 'EMAIL',
+        },
+        status: 'pending',
+      },
+    });
+    createdOutboxIds.push(event.id);
+
+    const boss = {
+      send: vi.fn(async () => 'ok'),
+    };
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    const count = await dispatchPendingOutboxEvents(boss as unknown as Pick<PgBoss, 'send'>, logger);
+
+    expect(count).toBe(0);
+    expect(boss.send).not.toHaveBeenCalled();
+
+    const updated = await prisma.outboxEvent.findUnique({
+      where: { id: event.id },
+    });
+    expect(updated?.status).toBe('dead_letter');
+    expect(updated?.attempts).toBe(1);
+    expect(updated?.lastError).toBe('Invalid outbox payload');
   });
 });

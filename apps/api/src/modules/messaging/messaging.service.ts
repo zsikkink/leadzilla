@@ -28,6 +28,7 @@ export interface MessagingSendJobPayload {
   messageVariantId: string;
   idempotencyKey: string;
   channel: 'EMAIL' | 'WHATSAPP';
+  outboxEventId?: string | undefined;
   scheduledAt?: string | undefined;
   correlationId?: string | undefined;
 }
@@ -94,6 +95,30 @@ async function loadVerifiedQualificationThreshold(): Promise<number> {
   }
 
   return threshold;
+}
+
+function buildMessageSendJobPayload(
+  input: {
+    id: string;
+    messageDraftId: string;
+    messageVariantId: string;
+    idempotencyKey: string;
+    channel: 'EMAIL' | 'WHATSAPP';
+    scheduledAt: string | null;
+  },
+  runId: string,
+  outboxEventId?: string,
+): MessagingSendJobPayload {
+  return {
+    runId,
+    sendId: input.id,
+    messageDraftId: input.messageDraftId,
+    messageVariantId: input.messageVariantId,
+    idempotencyKey: input.idempotencyKey,
+    channel: input.channel,
+    scheduledAt: input.scheduledAt ?? undefined,
+    ...(outboxEventId ? { outboxEventId } : {}),
+  };
 }
 
 export function buildMessagingService(
@@ -169,85 +194,41 @@ export function buildMessagingService(
       const existingInitialSend = await repository.getExistingInitialSendForDraft(draftId);
       if (existingInitialSend) {
         if (existingInitialSend.status === 'QUEUED') {
-          await dependencies.enqueueMessageSend({
-            runId: `message.send:${existingInitialSend.id}`,
-            sendId: existingInitialSend.id,
-            messageDraftId: existingInitialSend.messageDraftId,
-            messageVariantId: existingInitialSend.messageVariantId,
-            idempotencyKey: existingInitialSend.idempotencyKey,
-            channel: existingInitialSend.channel,
-            scheduledAt: existingInitialSend.scheduledAt ?? undefined,
-          });
+          await dependencies.enqueueMessageSend(
+            buildMessageSendJobPayload(existingInitialSend, `message.send:${existingInitialSend.id}`),
+          );
         }
 
         return repository.getMessageDraft(draftId);
       }
 
-      const draft = await repository.approveMessageDraft(draftId, input);
+      const approval = await repository.approveMessageDraft(draftId, input);
 
-      // B4 fix: After approval, select A/B variant, create MessageSend, enqueue message.send
-      if (draft.approvalStatus === 'APPROVED' && draft.variants.length > 0) {
-        // Approval persistence is authoritative for variant selection. Once a
-        // draft is already approved, later approval calls must not redirect the
-        // initial send to a newly supplied variant id.
-        const selectedVariant = draft.variants.find((v) => v.isSelected) ?? draft.variants[0];
-
-        if (selectedVariant) {
-          const idempotencyKey = `approve:${draftId}:${selectedVariant.id}`;
-          try {
-            const send = await repository.createMessageSendForApproval({
-              leadId: draft.leadId,
-              messageDraftId: draft.id,
-              messageVariantId: selectedVariant.id,
-              channel: selectedVariant.channel,
-              idempotencyKey,
-              followUpNumber: 0,
-            });
-
-            if (send.status === 'QUEUED') {
-              await dependencies.enqueueMessageSend({
-                runId: `message.send:${send.id}`,
-                sendId: send.id,
-                messageDraftId: send.messageDraftId,
-                messageVariantId: send.messageVariantId,
-                idempotencyKey: send.idempotencyKey,
-                channel: send.channel,
-              });
-            }
-          } catch (error: unknown) {
-            // Idempotency: if MessageSend already exists (unique constraint on idempotencyKey),
-            // or enqueue fails, the send record is already QUEUED and pg-boss retry will handle it
-            dependencies.logger?.error({ err: error, draftId }, 'Failed to create/enqueue send after approval');
-          }
-        }
+      if (approval.initialSend?.send.status === 'QUEUED') {
+        await dependencies.enqueueMessageSend(
+          buildMessageSendJobPayload(
+            approval.initialSend.send,
+            `message.send:${approval.initialSend.send.id}`,
+            approval.initialSend.outboxEventId,
+          ),
+        );
       }
 
-      return draft;
+      return approval.draft;
     },
     async rejectMessageDraft(draftId, input) {
       return repository.rejectMessageDraft(draftId, input);
     },
     async sendMessage(input) {
-      const send = await repository.sendMessage(input);
+      const result = await repository.sendMessage(input);
 
-      if (send.status === 'QUEUED') {
-        try {
-          await dependencies.enqueueMessageSend({
-            runId: send.id,
-            sendId: send.id,
-            messageDraftId: send.messageDraftId,
-            messageVariantId: send.messageVariantId,
-            idempotencyKey: send.idempotencyKey,
-            channel: send.channel,
-            scheduledAt: send.scheduledAt ?? undefined,
-          });
-        } catch (error: unknown) {
-          // Send record already created with QUEUED status — pg-boss retry will handle it
-          dependencies.logger?.error({ err: error, sendId: send.id }, 'Failed to enqueue message send');
-        }
+      if (result.send.status === 'QUEUED') {
+        await dependencies.enqueueMessageSend(
+          buildMessageSendJobPayload(result.send, result.send.id, result.outboxEventId),
+        );
       }
 
-      return send;
+      return result.send;
     },
     async listMessageSends(query) {
       return repository.listMessageSends(query);

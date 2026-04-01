@@ -12,6 +12,11 @@ import {
   type FeaturesComputeJobPayload,
 } from './jobs/features.compute.job.js';
 import {
+  MESSAGE_SEND_JOB_NAME,
+  MESSAGE_SEND_RETRY_OPTIONS,
+  type MessageSendJobPayload,
+} from './jobs/message.send.job.js';
+import {
   SCORING_COMPUTE_JOB_NAME,
   type ScoringComputeJobPayload,
 } from './jobs/scoring.compute.job.js';
@@ -26,6 +31,7 @@ type SupportedOutboxPayload =
   | LegacyOutboxPayload
   | DiscoverySeedOutboxPayload
   | FeaturesComputeJobPayload
+  | MessageSendJobPayload
   | ScoringComputeJobPayload;
 type ScoringComputeOutboxPayload = ScoringComputeJobPayload & { jobExecutionId?: string };
 type DiscoverySeedOutboxPayload = DiscoverySeedJobPayload & {
@@ -34,9 +40,11 @@ type DiscoverySeedOutboxPayload = DiscoverySeedJobPayload & {
   icpProfileId: string;
   countries: string[];
 };
+type MessageSendOutboxPayload = MessageSendJobPayload;
 
 export interface OutboxDispatchPlan {
-  jobExecutionId: string;
+  jobExecutionId?: string;
+  messageSendId?: string;
   bossPayload: SupportedOutboxPayload;
   singletonKey?: string;
 }
@@ -53,6 +61,10 @@ export interface OutboxDispatchLogger {
   info: (object: Record<string, unknown>, message: string) => void;
   warn: (object: Record<string, unknown>, message: string) => void;
   error: (object: Record<string, unknown>, message: string) => void;
+}
+
+function isValidDateString(value: unknown): value is string {
+  return typeof value === 'string' && !Number.isNaN(new Date(value).getTime());
 }
 
 async function markTrackedJobRunning(
@@ -100,6 +112,23 @@ function isFeaturesComputeOutboxPayload(payload: unknown): payload is FeaturesCo
     typeof value.snapshotVersion === 'number' &&
     Number.isInteger(value.snapshotVersion) &&
     value.snapshotVersion >= 1
+  );
+}
+
+function isMessageSendOutboxPayload(payload: unknown): payload is MessageSendOutboxPayload {
+  if (!payload || typeof payload !== 'object') {
+    return false;
+  }
+
+  const value = payload as Record<string, unknown>;
+  return (
+    typeof value.runId === 'string' &&
+    typeof value.sendId === 'string' &&
+    typeof value.messageDraftId === 'string' &&
+    typeof value.messageVariantId === 'string' &&
+    typeof value.idempotencyKey === 'string' &&
+    (value.channel === 'EMAIL' || value.channel === 'WHATSAPP') &&
+    (value.scheduledAt === undefined || isValidDateString(value.scheduledAt))
   );
 }
 
@@ -153,6 +182,18 @@ export function resolveOutboxDispatchPlan(
   eventType: string,
   payload: unknown,
 ): OutboxDispatchPlan | null {
+  if (eventType === MESSAGE_SEND_JOB_NAME) {
+    if (!isMessageSendOutboxPayload(payload)) {
+      return null;
+    }
+
+    return {
+      messageSendId: payload.sendId,
+      bossPayload: payload,
+      singletonKey: `message.send:${payload.sendId}`,
+    };
+  }
+
   if (eventType === FEATURES_COMPUTE_JOB_NAME) {
     if (!isFeaturesComputeOutboxPayload(payload)) {
       return null;
@@ -220,6 +261,15 @@ export function resolveOutboxDispatchPlan(
 
 function calculateRetryDelay(attempt: number): number {
   return Math.min(MAX_RETRY_DELAY_MS, BASE_RETRY_DELAY_MS * 2 ** Math.max(0, attempt - 1));
+}
+
+function resolveMessageSendStartAfter(payload: MessageSendOutboxPayload): Date | undefined {
+  if (!payload.scheduledAt) {
+    return undefined;
+  }
+
+  const scheduledAt = new Date(payload.scheduledAt);
+  return scheduledAt.getTime() > Date.now() ? scheduledAt : undefined;
 }
 
 export async function dispatchPendingOutboxEvents(
@@ -311,75 +361,168 @@ export async function dispatchPendingOutboxEvents(
       continue;
     }
 
-    const targetJob = await prisma.jobExecution.findUnique({
-      where: { id: dispatchPlan.jobExecutionId },
-      select: { id: true, status: true },
-    });
-
-    if (!targetJob) {
-      await prisma.outboxEvent.update({
-        where: { id: event.id },
-        data: {
-          status: 'dead_letter',
-          attempts: {
-            increment: 1,
-          },
-          lastError: 'Referenced job execution was not found',
-          nextAttemptAt: null,
-          processedAt: now,
-        },
+    if (dispatchPlan.messageSendId) {
+      const targetMessageSend = await prisma.messageSend.findUnique({
+        where: { id: dispatchPlan.messageSendId },
+        select: { id: true, status: true },
       });
-      logger.warn(
-        {
-          outboxEventId: event.id,
-          jobExecutionId: dispatchPlan.jobExecutionId,
-        },
-        'Promoted outbox event to dead letter queue because target job is missing',
-      );
-      continue;
-    }
 
-    if (targetJob.status !== 'queued') {
-      await prisma.outboxEvent.update({
-        where: { id: event.id },
-        data: {
-          status: 'sent',
-          attempts: {
-            increment: 1,
+      if (!targetMessageSend) {
+        await prisma.outboxEvent.update({
+          where: { id: event.id },
+          data: {
+            status: 'dead_letter',
+            attempts: {
+              increment: 1,
+            },
+            lastError: 'Referenced message send was not found',
+            nextAttemptAt: null,
+            processedAt: now,
           },
-          lastError: `Skipped publish because target job is already ${targetJob.status}`,
-          nextAttemptAt: null,
-          processedAt: now,
-        },
+        });
+        logger.warn(
+          {
+            outboxEventId: event.id,
+            messageSendId: dispatchPlan.messageSendId,
+          },
+          'Promoted outbox event to dead letter queue because target message send is missing',
+        );
+        continue;
+      }
+
+      if (targetMessageSend.status !== 'QUEUED') {
+        await prisma.outboxEvent.update({
+          where: { id: event.id },
+          data: {
+            status: 'sent',
+            attempts: {
+              increment: 1,
+            },
+            lastError: `Skipped publish because MessageSend is already ${targetMessageSend.status}`,
+            nextAttemptAt: null,
+            processedAt: now,
+          },
+        });
+        logger.info(
+          {
+            outboxEventId: event.id,
+            messageSendId: targetMessageSend.id,
+            messageSendStatus: targetMessageSend.status,
+          },
+          'Marked outbox event as sent without publish to avoid duplicate work',
+        );
+        continue;
+      }
+    } else {
+      if (!dispatchPlan.jobExecutionId) {
+        await prisma.outboxEvent.update({
+          where: { id: event.id },
+          data: {
+            status: 'dead_letter',
+            attempts: {
+              increment: 1,
+            },
+            lastError: 'Resolved outbox dispatch plan is missing a target job execution id',
+            nextAttemptAt: null,
+            processedAt: now,
+          },
+        });
+        logger.warn(
+          {
+            outboxEventId: event.id,
+            type: event.type,
+          },
+          'Promoted outbox event to dead letter queue because the dispatch plan was incomplete',
+        );
+        continue;
+      }
+
+      const targetJob = await prisma.jobExecution.findUnique({
+        where: { id: dispatchPlan.jobExecutionId },
+        select: { id: true, status: true },
       });
-      logger.info(
-        {
-          outboxEventId: event.id,
-          jobExecutionId: targetJob.id,
-          jobStatus: targetJob.status,
-        },
-        'Marked outbox event as sent without publish to avoid duplicate work',
-      );
-      continue;
+
+      if (!targetJob) {
+        await prisma.outboxEvent.update({
+          where: { id: event.id },
+          data: {
+            status: 'dead_letter',
+            attempts: {
+              increment: 1,
+            },
+            lastError: 'Referenced job execution was not found',
+            nextAttemptAt: null,
+            processedAt: now,
+          },
+        });
+        logger.warn(
+          {
+            outboxEventId: event.id,
+            jobExecutionId: dispatchPlan.jobExecutionId,
+          },
+          'Promoted outbox event to dead letter queue because target job is missing',
+        );
+        continue;
+      }
+
+      if (targetJob.status !== 'queued') {
+        await prisma.outboxEvent.update({
+          where: { id: event.id },
+          data: {
+            status: 'sent',
+            attempts: {
+              increment: 1,
+            },
+            lastError: `Skipped publish because target job is already ${targetJob.status}`,
+            nextAttemptAt: null,
+            processedAt: now,
+          },
+        });
+        logger.info(
+          {
+            outboxEventId: event.id,
+            jobExecutionId: targetJob.id,
+            jobStatus: targetJob.status,
+          },
+          'Marked outbox event as sent without publish to avoid duplicate work',
+        );
+        continue;
+      }
     }
 
     try {
+      const messageSendStartAfter =
+        event.type === MESSAGE_SEND_JOB_NAME
+          ? resolveMessageSendStartAfter(dispatchPlan.bossPayload as MessageSendOutboxPayload)
+          : undefined;
+      const bossSendOptions =
+        event.type === MESSAGE_SEND_JOB_NAME
+          ? {
+              singletonKey: dispatchPlan.singletonKey ?? `outbox:${event.id}`,
+              ...MESSAGE_SEND_RETRY_OPTIONS,
+              ...(messageSendStartAfter ? { startAfter: messageSendStartAfter } : {}),
+            }
+          : {
+              singletonKey: dispatchPlan.singletonKey ?? `outbox:${event.id}`,
+              retryLimit: 3,
+              retryDelay: 5,
+              retryBackoff: true,
+            };
+
       await boss.send(event.type, dispatchPlan.bossPayload, {
-        singletonKey: dispatchPlan.singletonKey ?? `outbox:${event.id}`,
-        retryLimit: 3,
-        retryDelay: 5,
-        retryBackoff: true,
+        ...bossSendOptions,
       });
 
       const publishedAt = new Date();
-      if (event.type === FEATURES_COMPUTE_JOB_NAME) {
-        await markTrackedJobRunning(dispatchPlan.jobExecutionId, FEATURES_COMPUTE_JOB_NAME, publishedAt);
+      const trackedJobExecutionId = dispatchPlan.jobExecutionId;
+      if (event.type === FEATURES_COMPUTE_JOB_NAME && trackedJobExecutionId) {
+        await markTrackedJobRunning(trackedJobExecutionId, FEATURES_COMPUTE_JOB_NAME, publishedAt);
       } else if (
         event.type === SCORING_COMPUTE_JOB_NAME &&
         'runId' in dispatchPlan.bossPayload &&
-        dispatchPlan.jobExecutionId === dispatchPlan.bossPayload.runId
+        trackedJobExecutionId === dispatchPlan.bossPayload.runId
       ) {
-        await markTrackedJobRunning(dispatchPlan.jobExecutionId, SCORING_COMPUTE_JOB_NAME, publishedAt);
+        await markTrackedJobRunning(trackedJobExecutionId, SCORING_COMPUTE_JOB_NAME, publishedAt);
       }
 
       await prisma.outboxEvent.update({

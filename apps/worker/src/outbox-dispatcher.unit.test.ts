@@ -3,6 +3,23 @@ import { describe, expect, it } from 'vitest';
 import { resolveOutboxDispatchPlan } from './outbox-dispatcher.js';
 
 describe('resolveOutboxDispatchPlan', () => {
+  it('supports persisted message.send outbox payloads', () => {
+    const payload = {
+      runId: 'message.send:send_123',
+      sendId: 'send_123',
+      messageDraftId: 'draft_123',
+      messageVariantId: 'variant_123',
+      idempotencyKey: 'approve:draft_123:variant_123',
+      channel: 'EMAIL',
+    };
+
+    expect(resolveOutboxDispatchPlan('message.send', payload)).toEqual({
+      messageSendId: 'send_123',
+      bossPayload: payload,
+      singletonKey: 'message.send:send_123',
+    });
+  });
+
   it('supports persisted features.compute outbox payloads', () => {
     const payload = {
       runId: 'job_123',
@@ -126,6 +143,18 @@ describe('resolveOutboxDispatchPlan', () => {
       resolveOutboxDispatchPlan('scoring.compute', {
         mode: 'BY_ICP',
         icpProfileId: 'icp_123',
+      }),
+    ).toBeNull();
+  });
+
+  it('rejects invalid payloads for message.send', () => {
+    expect(
+      resolveOutboxDispatchPlan('message.send', {
+        runId: 'message.send:send_123',
+        messageDraftId: 'draft_123',
+        messageVariantId: 'variant_123',
+        idempotencyKey: 'approve:draft_123:variant_123',
+        channel: 'EMAIL',
       }),
     ).toBeNull();
   });

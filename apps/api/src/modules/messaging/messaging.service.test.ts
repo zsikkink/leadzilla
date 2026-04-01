@@ -55,6 +55,32 @@ function buildDraftResponse() {
   };
 }
 
+function buildSendResponse(overrides?: Partial<Record<string, unknown>>) {
+  return {
+    id: 'send_1',
+    leadId: 'lead_1',
+    messageDraftId: 'draft_1',
+    messageVariantId: 'variant_1',
+    channel: 'EMAIL' as const,
+    provider: 'RESEND' as const,
+    providerMessageId: null,
+    status: 'QUEUED' as const,
+    idempotencyKey: 'approve:draft_1:variant_1',
+    scheduledAt: null,
+    sentAt: null,
+    deliveredAt: null,
+    repliedAt: null,
+    followUpNumber: 0,
+    nextFollowUpAfter: null,
+    providerConversationId: null,
+    failureCode: null,
+    failureReason: null,
+    createdAt: '2026-03-20T00:00:00.000Z',
+    updatedAt: '2026-03-20T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
 function buildRepositoryMock(): MessagingRepository {
   return {
     generateMessageDraft: vi.fn(async () => ({
@@ -72,34 +98,24 @@ function buildRepositoryMock(): MessagingRepository {
     getExistingInitialSendForDraft: vi.fn(async () => null),
     listMessageDrafts: vi.fn(),
     getMessageDraft: vi.fn(async () => buildDraftResponse()),
-    approveMessageDraft: vi.fn(async () => buildDraftResponse()),
+    approveMessageDraft: vi.fn(async () => ({
+      draft: buildDraftResponse(),
+      initialSend: {
+        send: buildSendResponse(),
+        outboxEventId: 'outbox_1',
+      },
+    })),
     rejectMessageDraft: vi.fn(),
-    sendMessage: vi.fn(),
+    sendMessage: vi.fn(async () => ({
+      send: buildSendResponse({
+        idempotencyKey: 'ui:draft_1:variant_1:123',
+      }),
+      outboxEventId: 'outbox_1',
+    })),
     listMessageSends: vi.fn(),
     getMessageSend: vi.fn(),
     getConversation: vi.fn(),
-    createMessageSendForApproval: vi.fn(async () => ({
-      id: 'send_1',
-      leadId: 'lead_1',
-      messageDraftId: 'draft_1',
-      messageVariantId: 'variant_1',
-      channel: 'EMAIL' as const,
-      provider: 'RESEND' as const,
-      providerMessageId: null,
-      status: 'QUEUED' as const,
-      idempotencyKey: 'approve:draft_1:variant_1',
-      scheduledAt: null,
-      sentAt: null,
-      deliveredAt: null,
-      repliedAt: null,
-      followUpNumber: 0,
-      nextFollowUpAfter: null,
-      providerConversationId: null,
-      failureCode: null,
-      failureReason: null,
-      createdAt: '2026-03-20T00:00:00.000Z',
-      updatedAt: '2026-03-20T00:00:00.000Z',
-    })),
+    createMessageSendForApproval: vi.fn(async () => buildSendResponse()),
   };
 }
 
@@ -326,7 +342,10 @@ describe('buildMessagingService approveMessageDraft', () => {
     ).rejects.toThrow(MessagingSendIneligibleError);
 
     expect(repository.getExistingInitialSendForDraft).toHaveBeenCalledWith('draft_1');
-    expect(repository.createMessageSendForApproval).not.toHaveBeenCalled();
+    expect(repository.approveMessageDraft).toHaveBeenCalledWith('draft_1', {
+      approvedByUserId: 'user_1',
+      selectedVariantId: 'variant_other_draft',
+    });
     expect(enqueueMessageSend).not.toHaveBeenCalled();
   });
 
@@ -367,7 +386,6 @@ describe('buildMessagingService approveMessageDraft', () => {
     expect(result).toEqual(buildDraftResponse());
     expect(repository.getExistingInitialSendForDraft).toHaveBeenCalledWith('draft_1');
     expect(repository.approveMessageDraft).not.toHaveBeenCalled();
-    expect(repository.createMessageSendForApproval).not.toHaveBeenCalled();
     expect(enqueueMessageSend).toHaveBeenCalledWith({
       runId: 'message.send:send_existing',
       sendId: 'send_existing',
@@ -382,37 +400,43 @@ describe('buildMessagingService approveMessageDraft', () => {
   it('does not retarget an already-approved initial draft when approval is retried with a different variant', async () => {
     const repository = buildRepositoryMock();
     vi.mocked(repository.approveMessageDraft).mockResolvedValue({
-      ...buildDraftResponse(),
-      variants: [
-        {
-          id: 'variant_1',
-          messageDraftId: 'draft_1',
-          variantKey: 'variant_a',
-          channel: 'EMAIL',
-          subject: 'Subject',
-          bodyText: 'Hello',
-          bodyHtml: null,
-          ctaText: null,
-          qualityScore: null,
-          isSelected: true,
-          createdAt: '2026-03-20T00:00:00.000Z',
-          updatedAt: '2026-03-20T00:00:00.000Z',
-        },
-        {
-          id: 'variant_2',
-          messageDraftId: 'draft_1',
-          variantKey: 'variant_b',
-          channel: 'EMAIL',
-          subject: 'Alt Subject',
-          bodyText: 'Alt Hello',
-          bodyHtml: null,
-          ctaText: null,
-          qualityScore: null,
-          isSelected: false,
-          createdAt: '2026-03-20T00:00:00.000Z',
-          updatedAt: '2026-03-20T00:00:00.000Z',
-        },
-      ],
+      draft: {
+        ...buildDraftResponse(),
+        variants: [
+          {
+            id: 'variant_1',
+            messageDraftId: 'draft_1',
+            variantKey: 'variant_a',
+            channel: 'EMAIL',
+            subject: 'Subject',
+            bodyText: 'Hello',
+            bodyHtml: null,
+            ctaText: null,
+            qualityScore: null,
+            isSelected: true,
+            createdAt: '2026-03-20T00:00:00.000Z',
+            updatedAt: '2026-03-20T00:00:00.000Z',
+          },
+          {
+            id: 'variant_2',
+            messageDraftId: 'draft_1',
+            variantKey: 'variant_b',
+            channel: 'EMAIL',
+            subject: 'Alt Subject',
+            bodyText: 'Alt Hello',
+            bodyHtml: null,
+            ctaText: null,
+            qualityScore: null,
+            isSelected: false,
+            createdAt: '2026-03-20T00:00:00.000Z',
+            updatedAt: '2026-03-20T00:00:00.000Z',
+          },
+        ],
+      },
+      initialSend: {
+        send: buildSendResponse(),
+        outboxEventId: 'outbox_approval_1',
+      },
     });
     const enqueueMessageSend = vi.fn(async () => undefined);
     const service = buildMessagingService(repository, {
@@ -424,13 +448,9 @@ describe('buildMessagingService approveMessageDraft', () => {
       selectedVariantId: 'variant_2',
     });
 
-    expect(repository.createMessageSendForApproval).toHaveBeenCalledWith({
-      leadId: 'lead_1',
-      messageDraftId: 'draft_1',
-      messageVariantId: 'variant_1',
-      channel: 'EMAIL',
-      idempotencyKey: 'approve:draft_1:variant_1',
-      followUpNumber: 0,
+    expect(repository.approveMessageDraft).toHaveBeenCalledWith('draft_1', {
+      approvedByUserId: 'user_2',
+      selectedVariantId: 'variant_2',
     });
     expect(enqueueMessageSend).toHaveBeenCalledWith({
       runId: 'message.send:send_1',
@@ -439,6 +459,7 @@ describe('buildMessagingService approveMessageDraft', () => {
       messageVariantId: 'variant_1',
       idempotencyKey: 'approve:draft_1:variant_1',
       channel: 'EMAIL',
+      outboxEventId: 'outbox_approval_1',
     });
   });
 });
@@ -493,26 +514,16 @@ describe('buildMessagingService sendMessage', () => {
   it('does not enqueue again when an initial send already exists in a sent state', async () => {
     const repository = buildRepositoryMock();
     vi.mocked(repository.sendMessage).mockResolvedValue({
-      id: 'send_existing',
-      leadId: 'lead_1',
-      messageDraftId: 'draft_1',
-      messageVariantId: 'variant_existing',
-      channel: 'EMAIL',
-      provider: 'RESEND',
-      providerMessageId: 'provider_1',
-      status: 'SENT',
-      idempotencyKey: 'approve:draft_1:variant_existing',
-      scheduledAt: null,
-      sentAt: '2026-03-20T00:05:00.000Z',
-      deliveredAt: null,
-      repliedAt: null,
-      followUpNumber: 0,
-      nextFollowUpAfter: '2026-03-23T00:05:00.000Z',
-      providerConversationId: null,
-      failureCode: null,
-      failureReason: null,
-      createdAt: '2026-03-20T00:00:00.000Z',
-      updatedAt: '2026-03-20T00:05:00.000Z',
+      send: buildSendResponse({
+        id: 'send_existing',
+        messageVariantId: 'variant_existing',
+        providerMessageId: 'provider_1',
+        status: 'SENT',
+        idempotencyKey: 'approve:draft_1:variant_existing',
+        sentAt: '2026-03-20T00:05:00.000Z',
+        nextFollowUpAfter: '2026-03-23T00:05:00.000Z',
+        updatedAt: '2026-03-20T00:05:00.000Z',
+      }),
     });
     const enqueueMessageSend = vi.fn(async () => undefined);
     const service = buildMessagingService(repository, {
@@ -538,26 +549,11 @@ describe('buildMessagingService sendMessage', () => {
   it('re-enqueues the same queued initial send instead of minting a new send attempt', async () => {
     const repository = buildRepositoryMock();
     vi.mocked(repository.sendMessage).mockResolvedValue({
-      id: 'send_existing',
-      leadId: 'lead_1',
-      messageDraftId: 'draft_1',
-      messageVariantId: 'variant_existing',
-      channel: 'EMAIL',
-      provider: 'RESEND',
-      providerMessageId: null,
-      status: 'QUEUED',
-      idempotencyKey: 'approve:draft_1:variant_existing',
-      scheduledAt: null,
-      sentAt: null,
-      deliveredAt: null,
-      repliedAt: null,
-      followUpNumber: 0,
-      nextFollowUpAfter: null,
-      providerConversationId: null,
-      failureCode: null,
-      failureReason: null,
-      createdAt: '2026-03-20T00:00:00.000Z',
-      updatedAt: '2026-03-20T00:00:00.000Z',
+      send: buildSendResponse({
+        id: 'send_existing',
+        messageVariantId: 'variant_existing',
+        idempotencyKey: 'approve:draft_1:variant_existing',
+      }),
     });
     const enqueueMessageSend = vi.fn(async () => undefined);
     const service = buildMessagingService(repository, {
@@ -581,5 +577,62 @@ describe('buildMessagingService sendMessage', () => {
       channel: 'EMAIL',
       scheduledAt: undefined,
     });
+  });
+
+  it('passes the durable outbox event id through when manual send creates a new queued send', async () => {
+    const repository = buildRepositoryMock();
+    vi.mocked(repository.sendMessage).mockResolvedValue({
+      send: buildSendResponse({
+        id: 'send_new',
+        idempotencyKey: 'ui:draft_1:variant_1:new',
+      }),
+      outboxEventId: 'outbox_manual_1',
+    });
+    const enqueueMessageSend = vi.fn(async () => undefined);
+    const service = buildMessagingService(repository, {
+      enqueueMessageSend,
+    });
+
+    const result = await service.sendMessage({
+      messageDraftId: 'draft_1',
+      messageVariantId: 'variant_1',
+      idempotencyKey: 'ui:draft_1:variant_1:new',
+    });
+
+    expect(result.id).toBe('send_new');
+    expect(enqueueMessageSend).toHaveBeenCalledWith({
+      runId: 'send_new',
+      sendId: 'send_new',
+      messageDraftId: 'draft_1',
+      messageVariantId: 'variant_1',
+      idempotencyKey: 'ui:draft_1:variant_1:new',
+      channel: 'EMAIL',
+      outboxEventId: 'outbox_manual_1',
+    });
+  });
+
+  it('does not return success when re-enqueueing an existing queued send fails', async () => {
+    const repository = buildRepositoryMock();
+    vi.mocked(repository.sendMessage).mockResolvedValue({
+      send: buildSendResponse({
+        id: 'send_existing',
+        messageVariantId: 'variant_existing',
+        idempotencyKey: 'approve:draft_1:variant_existing',
+      }),
+    });
+    const enqueueMessageSend = vi.fn(async () => {
+      throw new Error('pg-boss unavailable');
+    });
+    const service = buildMessagingService(repository, {
+      enqueueMessageSend,
+    });
+
+    await expect(
+      service.sendMessage({
+        messageDraftId: 'draft_1',
+        messageVariantId: 'variant_new',
+        idempotencyKey: 'ui:draft_1:variant_new:failed-reenqueue',
+      }),
+    ).rejects.toThrow('pg-boss unavailable');
   });
 });

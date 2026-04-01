@@ -49,6 +49,15 @@ function isPrismaKnownRequestError(error: unknown): error is { code: string } {
   );
 }
 
+function resolveMessageSendStartAfter(payload: MessagingSendJobPayload): Date | undefined {
+  if (!payload.scheduledAt) {
+    return undefined;
+  }
+
+  const scheduledAt = new Date(payload.scheduledAt);
+  return scheduledAt.getTime() > Date.now() ? scheduledAt : undefined;
+}
+
 function mapContactRecoveryItem(record: {
   id: string;
   businessId: string;
@@ -343,6 +352,75 @@ async function main(): Promise<void> {
       logger.error(
         { error, runId: payload.runId, outboxEventId },
         'Immediate scoring publish succeeded but failed to mark outbox event as sent',
+      );
+    }
+  };
+
+  const publishMessageSend = async (payload: MessagingSendJobPayload): Promise<void> => {
+    const { outboxEventId, ...bossPayload } = payload;
+    const startAfter = resolveMessageSendStartAfter(payload);
+    const bossSendOptions = {
+      singletonKey: `message.send:${payload.sendId}`,
+      retryLimit: 5,
+      retryDelay: 90,
+      retryBackoff: true,
+      ...(startAfter ? { startAfter } : {}),
+    };
+
+    if (!outboxEventId) {
+      await boss.send('message.send', bossPayload, bossSendOptions);
+      return;
+    }
+
+    try {
+      await boss.send('message.send', bossPayload, bossSendOptions);
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Failed to enqueue message.send job';
+      logger.error(
+        { error, sendId: payload.sendId, outboxEventId },
+        'Immediate queue publish failed; queued MessageSend recovery will handle dispatch',
+      );
+
+      try {
+        await prisma.outboxEvent.update({
+          where: { id: outboxEventId },
+          data: {
+            status: 'failed',
+            attempts: {
+              increment: 1,
+            },
+            lastError: errorMessage,
+            nextAttemptAt: new Date(Date.now() + 5000),
+          },
+        });
+      } catch (updateError: unknown) {
+        logger.error(
+          { error: updateError, sendId: payload.sendId, outboxEventId },
+          'Failed to mark message.send outbox event for retry after publish failure',
+        );
+      }
+
+      return;
+    }
+
+    try {
+      await prisma.outboxEvent.update({
+        where: { id: outboxEventId },
+        data: {
+          status: 'sent',
+          attempts: {
+            increment: 1,
+          },
+          processedAt: new Date(),
+          nextAttemptAt: null,
+          lastError: null,
+        },
+      });
+    } catch (error: unknown) {
+      logger.error(
+        { error, sendId: payload.sendId, outboxEventId },
+        'Immediate message.send publish succeeded but failed to mark outbox event as sent',
       );
     }
   };
@@ -814,12 +892,7 @@ async function main(): Promise<void> {
       });
     },
     enqueueMessageSend: async (payload: MessagingSendJobPayload) => {
-      await boss.send('message.send', payload, {
-        singletonKey: `message.send:${payload.sendId}`,
-        retryLimit: 5,
-        retryDelay: 90,
-        retryBackoff: true,
-      });
+      await publishMessageSend(payload);
     },
     enqueueMessageGenerate: async (payload: MessageGenerateJobPayload) => {
       await boss.send('message.generate', payload, {
