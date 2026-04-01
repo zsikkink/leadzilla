@@ -1225,36 +1225,6 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       }
     });
 
-    api.patch('/v1/business-contacts/:id/primary', async (request, reply) => {
-      const parsedParams = BusinessContactIdParamsSchema.safeParse(request.params);
-      if (!parsedParams.success) {
-        reply.status(400);
-        return ErrorResponseSchema.parse({ error: 'Invalid business contact id', requestId: request.id });
-      }
-      const parsedBody = SetPrimaryBodySchema.safeParse(request.body);
-      if (!parsedBody.success) {
-        reply.status(400);
-        return ErrorResponseSchema.parse({ error: 'businessId is required', requestId: request.id });
-      }
-
-      try {
-        await prisma.$transaction([
-          prisma.businessContact.updateMany({
-            where: { businessId: parsedBody.data.businessId },
-            data: { positionRank: 99 },
-          }),
-          prisma.businessContact.update({
-            where: { id: parsedParams.data.id },
-            data: { positionRank: 0 },
-          }),
-        ]);
-        reply.status(200);
-        return { ok: true };
-      } catch {
-        reply.status(404);
-        return ErrorResponseSchema.parse({ error: 'Business contact not found', requestId: request.id });
-      }
-    });
   };
 
   app.register(protectedRoutes);
