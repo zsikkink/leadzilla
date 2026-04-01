@@ -26,6 +26,10 @@ import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 import { countryName, toDiscoveryCountryCodes } from '../../../src/lib/countries.js';
 import { cn } from '../../../src/lib/utils.js';
+import {
+  buildSingleIcpDiscoveryRequest,
+  getNextSelectedIcpId,
+} from './page.helpers.js';
 
 // ── City mapping by country ──────────────────────────────
 const COUNTRY_CITIES: Record<DiscoveryCountryCodeContract, string[]> = {
@@ -151,19 +155,21 @@ function PillOption({
   );
 }
 
-function IcpCheckbox({
+function IcpOption({
   icp,
   selected,
-  onToggle,
+  onSelect,
 }: {
   icp: IcpProfileResponse;
   selected: boolean;
-  onToggle: (id: string) => void;
+  onSelect: (id: string) => void;
 }) {
   return (
     <button
       type="button"
-      onClick={() => onToggle(icp.id)}
+      onClick={() => onSelect(icp.id)}
+      role="radio"
+      aria-checked={selected}
       className={cn(
         'flex items-start gap-3 rounded-xl border p-3 text-left transition-all duration-150',
         selected
@@ -171,19 +177,16 @@ function IcpCheckbox({
           : 'border-border/30 bg-zbooni-dark/20 hover:border-border/50 hover:bg-zbooni-dark/40',
       )}
     >
-      {/* Checkbox indicator */}
       <div
         className={cn(
-          'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 transition-colors duration-150',
+          'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors duration-150',
           selected
             ? 'border-zbooni-teal bg-zbooni-teal text-zbooni-dark'
             : 'border-border/50 bg-transparent',
         )}
       >
         {selected ? (
-          <svg className="h-3 w-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={2.5}>
-            <path d="M2 6l3 3 5-5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          <div className="h-2 w-2 rounded-full bg-zbooni-dark" />
         ) : null}
       </div>
 
@@ -338,8 +341,7 @@ function toCountryCodeFromIcpTarget(
 export default function DiscoverPage() {
   const { apiClient, user } = useAuth();
 
-  // Form state: multi-ICP selection + pipeline v2 settings
-  const [selectedIcpIds, setSelectedIcpIds] = useState<Set<string>>(new Set());
+  const [selectedIcpId, setSelectedIcpId] = useState<string | null>(null);
   const [selectedCities, setSelectedCities] = useState<Set<string>>(new Set());
   const [includeWebsiteAnalysis, setIncludeWebsiteAnalysis] = useState(true);
   const [includeSocialMediaAnalysis, setIncludeSocialMediaAnalysis] = useState(true);
@@ -428,33 +430,29 @@ export default function DiscoverPage() {
     [discoveryRuns.data, icps.data],
   );
 
-  // Derive country codes from selected ICPs
+  // Derive country codes from the selected ICP
   const selectedIcpCountryCodes = useMemo<DiscoveryCountryCodeContract[]>(() => {
-    if (!icps.data) return [];
+    if (!icps.data || !selectedIcpId) return [];
+
+    const icp = icps.data.items.find((item) => item.id === selectedIcpId);
+    if (!icp) return [];
+
     const countryCodes = new Set<DiscoveryCountryCodeContract>();
-    for (const id of selectedIcpIds) {
-      const icp = icps.data.items.find((i) => i.id === id);
-      if (icp) {
-        for (const countryNameValue of icp.targetCountries) {
-          const countryCode = toCountryCodeFromIcpTarget(countryNameValue);
-          if (countryCode) {
-            countryCodes.add(countryCode);
-          }
-        }
+    for (const countryNameValue of icp.targetCountries) {
+      const countryCode = toCountryCodeFromIcpTarget(countryNameValue);
+      if (countryCode) {
+        countryCodes.add(countryCode);
       }
     }
+
     return Array.from(countryCodes).sort((a, b) => a.localeCompare(b));
-  }, [selectedIcpIds, icps.data]);
+  }, [selectedIcpId, icps.data]);
 
   const countriesForCityPicker = useMemo<DiscoveryCountryCodeContract[]>(
-    () =>
-      selectedIcpIds.size === 0
-        ? (Object.keys(COUNTRY_CITIES) as DiscoveryCountryCodeContract[]).sort((a, b) => a.localeCompare(b))
-        : selectedIcpCountryCodes,
-    [selectedIcpIds, selectedIcpCountryCodes],
+    () => selectedIcpCountryCodes,
+    [selectedIcpCountryCodes],
   );
 
-  // Available cities based on selected ICP countries (or all countries if no ICP selected)
   const availableCities = useMemo(() => {
     const cities = new Set<string>();
     for (const country of countriesForCityPicker) {
@@ -485,39 +483,28 @@ export default function DiscoverPage() {
     });
   };
 
-  const toggleIcp = (id: string) => {
-    setSelectedIcpIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
+  const selectIcp = (id: string) => {
+    setSelectedIcpId((currentSelectedIcpId) => getNextSelectedIcpId(currentSelectedIcpId, id));
   };
 
   const handleStartDiscovery = async () => {
-    if (selectedIcpIds.size === 0 || selectedIcpCountryCodes.length === 0) return;
+    const request = buildSingleIcpDiscoveryRequest({
+      selectedIcpId,
+      countries: selectedIcpCountryCodes,
+      cities: Array.from(selectedCities),
+      includeWebsiteAnalysis,
+      includeSocialMediaAnalysis,
+      limit: parseInt(limit, 10),
+      requestedByUserId: user?.id,
+    });
+    if (!request) return;
 
     setIsSubmitting(true);
     setSubmitError(null);
 
-    const cities = selectedCities.size > 0 ? Array.from(selectedCities) : undefined;
-
     try {
-      // Single API call with all selected ICPs — limit is split server-side
-      await apiClient.createDiscoveryRun({
-        icpProfileIds: Array.from(selectedIcpIds),
-        countries: selectedIcpCountryCodes,
-        ...(cities ? { cities } : {}),
-        includeWebsiteAnalysis,
-        includeSocialMediaAnalysis,
-        limit: parseInt(limit, 10),
-        ...(user?.id ? { requestedByUserId: user.id } : {}),
-      });
+      await apiClient.createDiscoveryRun(request);
 
-      // Refresh run list to show new runs
       setRunsRefreshKey((k) => k + 1);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Failed to start discovery');
@@ -553,57 +540,74 @@ export default function DiscoverPage() {
         </h2>
 
         <div className="space-y-6">
-          {/* Step 1: Select ICPs (multi-select with checkboxes) */}
+          {/* Step 1: Select ICP */}
           <div>
             <div className="mb-3 flex items-center gap-2">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zbooni-teal/10 text-xs font-bold text-zbooni-teal">
                 1
               </span>
-              <label className="text-sm font-semibold">Select ICP Profiles</label>
-              {selectedIcpIds.size > 0 ? (
-                <span className="rounded-full bg-zbooni-teal/10 px-2 py-0.5 text-[11px] font-semibold text-zbooni-teal">
-                  {selectedIcpIds.size} selected
-                </span>
+              <label className="text-sm font-semibold">Select ICP Profile</label>
+            </div>
+            <p className="mb-3 text-xs text-muted-foreground/70">
+              Choose exactly one ICP for each discovery run.
+            </p>
+
+            {selectedIcpId ? (
+              <div className="mb-3 inline-flex items-center rounded-full bg-zbooni-teal/10 px-2.5 py-1 text-[11px] font-semibold text-zbooni-teal">
+                1 profile selected
+              </div>
+            ) : null}
+
+            {!selectedIcpId && !icps.isLoading && !icps.error ? (
+              <p className="mb-3 text-xs text-muted-foreground/60">
+                Search countries and cities will load after you choose a profile.
+              </p>
+            ) : null}
+            {selectedIcpId && selectedIcpCountryCodes.length === 0 ? (
+              <p className="mb-3 text-xs text-amber-300/80">
+                This ICP does not map to any supported discovery countries yet.
+              </p>
+            ) : null}
+
+            <div role="radiogroup" aria-label="ICP profile selection">
+              {icps.isLoading ? (
+                <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
+                  Loading profiles...
+                </div>
+              ) : null}
+
+              {!icps.isLoading && icps.error ? (
+                <div className="flex items-center gap-3 rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-400">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <span className="flex-1">Failed to load ICP profiles: {icps.error}</span>
+                  <button
+                    type="button"
+                    onClick={icps.refetch}
+                    className="shrink-0 rounded-md bg-red-500/20 px-2.5 py-1 text-xs font-semibold text-red-300 transition-colors hover:bg-red-500/30"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : null}
+
+              {icps.data && icps.data.items.length > 0 ? (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {icps.data.items.map((icp) => (
+                    <IcpOption
+                      key={icp.id}
+                      icp={icp}
+                      selected={selectedIcpId === icp.id}
+                      onSelect={selectIcp}
+                    />
+                  ))}
+                </div>
+              ) : null}
+
+              {icps.data && icps.data.items.length === 0 ? (
+                <p className="text-sm text-muted-foreground/60">No active ICP profiles found. Create one first.</p>
               ) : null}
             </div>
-
-            {icps.isLoading ? (
-              <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
-                <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
-                Loading profiles...
-              </div>
-            ) : null}
-
-            {!icps.isLoading && icps.error ? (
-              <div className="flex items-center gap-3 rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-400">
-                <AlertCircle className="h-4 w-4 shrink-0" />
-                <span className="flex-1">Failed to load ICP profiles: {icps.error}</span>
-                <button
-                  type="button"
-                  onClick={icps.refetch}
-                  className="shrink-0 rounded-md bg-red-500/20 px-2.5 py-1 text-xs font-semibold text-red-300 transition-colors hover:bg-red-500/30"
-                >
-                  Retry
-                </button>
-              </div>
-            ) : null}
-
-            {icps.data && icps.data.items.length > 0 ? (
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {icps.data.items.map((icp) => (
-                  <IcpCheckbox
-                    key={icp.id}
-                    icp={icp}
-                    selected={selectedIcpIds.has(icp.id)}
-                    onToggle={toggleIcp}
-                  />
-                ))}
-              </div>
-            ) : null}
-
-            {icps.data && icps.data.items.length === 0 ? (
-              <p className="text-sm text-muted-foreground/60">No active ICP profiles found. Create one first.</p>
-            ) : null}
           </div>
 
           {/* Step 2: Search Settings — countries, cities, analysis toggles */}
@@ -631,7 +635,11 @@ export default function DiscoverPage() {
                     ))}
                   </div>
                 ) : (
-                  <p className="text-xs text-muted-foreground/50">No mapped target countries found for the selected ICP profiles</p>
+                  <p className="text-xs text-muted-foreground/50">
+                    {selectedIcpId
+                      ? 'No mapped target countries found for the selected ICP profile.'
+                      : 'Select an ICP profile to load target countries.'}
+                  </p>
                 )}
               </div>
 
@@ -719,32 +727,20 @@ export default function DiscoverPage() {
           </div>
 
           {/* Cost Estimate */}
-          {selectedIcpIds.size > 0 && parseInt(limit, 10) > 0 ? (() => {
+          {selectedIcpId && parseInt(limit, 10) > 0 ? (() => {
             const desiredLeads = parseInt(limit, 10);
-            // Compute effective lead-per-task rate from yield (businesses/task) * conversion (leads/business)
-            const selectedLeadRates = Array.from(selectedIcpIds)
-              .map((id) => {
-                const yieldRate = yieldRates.get(id);
-                const convRate = conversionRates.get(id);
-                if (yieldRate !== undefined && convRate !== undefined) {
-                  return yieldRate * convRate;
-                }
-                if (yieldRate !== undefined) {
-                  // Have yield but no conversion data -- assume 10% conversion (conservative)
-                  return yieldRate * 0.10;
-                }
-                return undefined;
-              })
-              .filter((r): r is number => r !== undefined);
-            const avgLeadRate = selectedLeadRates.length > 0
-              ? selectedLeadRates.reduce((a, b) => a + b, 0) / selectedLeadRates.length
-              : 0.015; // default fallback: ~1.5% leads per search task
-            const hasHistoricalData = selectedLeadRates.length > 0;
+            const yieldRate = yieldRates.get(selectedIcpId);
+            const convRate = conversionRates.get(selectedIcpId);
+            const selectedLeadRate = yieldRate !== undefined && convRate !== undefined
+              ? yieldRate * convRate
+              : yieldRate !== undefined
+                ? yieldRate * 0.10
+                : undefined;
+            const avgLeadRate = selectedLeadRate ?? 0.015;
+            const hasHistoricalData = selectedLeadRate !== undefined;
             const searchBudget = Math.ceil(desiredLeads / avgLeadRate * 1.5);
-            // ~50% of discovered businesses pass prequalification and reach Hunter
             const hunterLookups = Math.ceil(searchBudget * 0.5);
             const estLeads = desiredLeads;
-            // Dollar cost: Google Places $0.01/search, Hunter $0.03/lookup (Starter plan: 2000 credits @ ~$49)
             const googlePlacesCost = searchBudget * 0.01;
             const hunterCost = hunterLookups * 0.03;
             const totalCost = googlePlacesCost + hunterCost;
@@ -791,7 +787,7 @@ export default function DiscoverPage() {
           <button
             type="button"
             onClick={handleStartDiscovery}
-            disabled={selectedIcpIds.size === 0 || selectedIcpCountryCodes.length === 0 || isSubmitting || !!isRunning}
+            disabled={!selectedIcpId || selectedIcpCountryCodes.length === 0 || isSubmitting || !!isRunning}
             className="inline-flex w-full items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-zbooni-green to-zbooni-teal px-6 py-3 text-sm font-bold text-zbooni-dark shadow-lg shadow-zbooni-green/20 transition-all hover:shadow-xl hover:shadow-zbooni-green/30 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
           >
             {isSubmitting ? (
@@ -803,9 +799,7 @@ export default function DiscoverPage() {
               ? 'Starting...'
               : isRunning
                 ? 'Discovery Running...'
-                : selectedIcpIds.size > 1
-                  ? `Start Discovery (${selectedIcpIds.size} ICPs)`
-                  : 'Start Discovery'}
+                : 'Start Discovery'}
           </button>
         </div>
       </div>
