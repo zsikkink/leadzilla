@@ -29,7 +29,6 @@ import {
   Search,
   Shield,
   Star,
-  Tag,
   Trash2,
   TrendingUp,
   User,
@@ -1858,41 +1857,9 @@ export default function LeadDetailPage() {
         ) : null}
       </div>
 
-      {/* ICP Profile pill + Website / Business Intel links */}
-      {(l.icpProfileName || l.websiteDomain || l.businessId) ? (
-        <div className="flex flex-wrap items-center gap-3">
-          {l.icpProfileName ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-purple-400/30 bg-purple-500/10 px-3 py-1 text-xs font-semibold text-purple-300">
-              <Tag className="h-3 w-3" />
-              {l.icpProfileName}
-            </span>
-          ) : null}
-          {l.websiteDomain ? (
-            <a
-              href={`https://${l.websiteDomain.replace(/^https?:\/\//, '')}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border/40 bg-card/60 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-zbooni-teal/40 hover:text-zbooni-teal"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              {l.websiteDomain}
-            </a>
-          ) : null}
-          {l.businessId ? (
-            <Link
-              href={`/dashboard/leads/businesses?selected=${l.businessId}`}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border/40 bg-card/60 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-amber-400/40 hover:text-amber-300"
-            >
-              <Building2 className="h-3.5 w-3.5" />
-              Business Intel
-            </Link>
-          ) : null}
-        </div>
-      ) : null}
-
       {/* ─── 1. About This Business (C1 — AI insights + D1 full business data) ─── */}
       {businessCardData ? (
-        <AboutBusinessCard {...businessCardData} businessInsights={conversionData.businessInsights} />
+        <AboutBusinessCard {...businessCardData} businessInsights={conversionData.businessInsights} icpProfileName={l.icpProfileName ?? undefined} websiteDomain={l.websiteDomain ?? undefined} businessId={l.businessId ?? undefined} />
       ) : businessSummary || businessData?.businessInsights || businessData?.businessName ? (
         <AboutBusinessCard
           category={businessSummary?.category ?? null}

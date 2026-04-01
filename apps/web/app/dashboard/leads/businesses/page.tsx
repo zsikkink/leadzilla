@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
   AlertTriangle,
@@ -67,6 +68,7 @@ interface BusinessRow {
   manualReviewReason?: string | null | undefined;
   manualReviewUpdatedAt?: string | null | undefined;
   leadBlendedScore?: number | null | undefined;
+  leadId?: string | null | undefined;
 }
 
 // ── Helpers for extracting scraper intelligence ────────────────────────────
@@ -406,10 +408,10 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
         </div>
         <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Qualification</p>
-          <p className={cn('mt-0.5 text-sm font-bold', biz.pre_qualified ? 'text-zbooni-green' : biz.pre_qualified === false ? 'text-red-400' : 'text-muted-foreground/60')}>
-            {biz.pre_qualified ? 'Qualified' : biz.pre_qualified === false ? 'Disqualified' : 'Pending'}
+          <p className={cn('mt-0.5 text-sm font-bold', biz.leadId ? 'text-zbooni-green' : biz.pre_qualified ? 'text-zbooni-green' : biz.pre_qualified === false ? 'text-red-400' : 'text-muted-foreground/60')}>
+            {biz.leadId ? 'Converted' : biz.pre_qualified ? 'Qualified' : biz.pre_qualified === false ? 'Disqualified' : 'Pending'}
           </p>
-          {biz.manualReviewStatus === 'OPEN' ? (
+          {!biz.leadId && biz.manualReviewStatus === 'OPEN' ? (
             <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
               Manual Review Queue
             </p>
@@ -417,10 +419,24 @@ function BusinessDetailPanel({ biz, contacts, onClose }: { biz: BusinessRow; con
         </div>
       </div>
 
-      {biz.disqualification_reason ? (
+      {/* View Lead button */}
+      {biz.leadId ? (
+        <div className="mt-3">
+          <Link
+            href={`/dashboard/leads/${biz.leadId}`}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-zbooni-teal/30 bg-zbooni-teal/10 px-3 py-1.5 text-xs font-semibold text-zbooni-teal transition-colors hover:bg-zbooni-teal/20"
+          >
+            <ExternalLink className="h-3 w-3" />
+            View Lead Detail
+          </Link>
+        </div>
+      ) : null}
+
+      {/* Only show disqualification signals when there's NO converted lead */}
+      {!biz.leadId && biz.disqualification_reason ? (
         <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-400">{biz.disqualification_reason}</div>
       ) : null}
-      {biz.manualReviewStatus === 'OPEN' ? (
+      {!biz.leadId && biz.manualReviewStatus === 'OPEN' ? (
         <div className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
           Sales manual review required: {biz.manualReviewReason === 'NO_EMAIL' ? 'decision maker found but no sendable email' : 'no confident decision maker with sendable contact'}
         </div>
@@ -813,6 +829,7 @@ export default function BusinessIntelligencePage() {
               const leadId = bizLeadMap.get(row.id);
               if (leadId) {
                 row.leadBlendedScore = leadScoreMap.get(leadId) ?? null;
+                row.leadId = leadId;
               }
             }
           }

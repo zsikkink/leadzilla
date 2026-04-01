@@ -651,7 +651,7 @@ export default function DiscoverPage() {
             <div className="space-y-4 rounded-xl border border-border/30 bg-zbooni-dark/10 p-4">
               {/* Countries + Cities — two-panel grid layout */}
               {countriesForCityPicker.length > 0 ? (
-                <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-4">
+                <div className="grid grid-cols-1 lg:grid-cols-[65fr_35fr] gap-4">
                   {/* LEFT: Country selector panel */}
                   <div className="rounded-xl border border-border/40 bg-card/50 p-4 max-h-[400px] overflow-y-auto">
                     <div className="mb-3 flex items-center gap-1.5">
@@ -661,7 +661,7 @@ export default function DiscoverPage() {
                         {countriesForCityPicker.length}
                       </span>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-3 gap-2">
                       {countriesForCityPicker.map((c) => {
                         const isSelected = selectedCountryForCities === c;
                         const cityCount = COUNTRY_CITIES[c]?.length ?? 0;
@@ -678,7 +678,7 @@ export default function DiscoverPage() {
                                 : 'border-border/30 bg-zbooni-dark/30 text-muted-foreground hover:border-border/50 hover:text-foreground',
                             )}
                           >
-                            <span className="truncate text-left font-medium">{countryName(c)}</span>
+                            <span className="truncate text-center font-medium flex-1">{countryName(c)}</span>
                             <span className={cn(
                               'ml-2 shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold',
                               selectedCount > 0
