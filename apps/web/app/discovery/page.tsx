@@ -684,40 +684,39 @@ function CountriesCitiesManager({
           <Loader2 className="h-4 w-4 animate-spin" /> Loading...
         </div>
       ) : (
-        <div className="grid grid-cols-[2fr_3fr] gap-6">
-          {/* LEFT PANEL — Country pills */}
-          <div className="space-y-3">
-            <div className="max-h-[500px] overflow-y-auto pr-1">
-              {countries.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {countries.map((country) => {
-                    const isSelected = expandedCountry === country;
-                    const cities = countryCities[country] ?? [];
+        <div className="grid grid-cols-1 lg:grid-cols-[65fr_35fr] gap-4">
+          {/* LEFT PANEL — Country pills in scrollable bordered container */}
+          <div className="rounded-xl border border-border/40 bg-card/50 p-4 max-h-[400px] overflow-y-auto">
+            {countries.length > 0 ? (
+              <div className="grid grid-cols-3 gap-2">
+                {countries.map((country) => {
+                  const isSelected = expandedCountry === country;
+                  const cities = countryCities[country] ?? [];
 
-                    return (
-                      <div key={country} className="group inline-flex items-center gap-0.5">
-                        <button
-                          type="button"
-                          onClick={() => setExpandedCountry(isSelected ? null : country)}
-                          className={cn(
-                            'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors',
-                            isSelected
-                              ? 'bg-zbooni-teal/20 text-zbooni-teal ring-1 ring-zbooni-teal/40'
-                              : 'bg-zbooni-dark/60 text-muted-foreground hover:bg-zbooni-dark/80 hover:text-foreground',
-                          )}
-                        >
-                          <Globe className="h-3 w-3" />
-                          {country}
-                          <span className="font-mono text-[10px] text-muted-foreground/50">({cities.length})</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removeCountry(country)}
-                          className="rounded-full p-1 text-muted-foreground/20 opacity-0 transition-all group-hover:opacity-100 hover:bg-red-500/10 hover:text-red-400"
-                          title="Remove country"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
+                  return (
+                    <div key={country} className="group relative">
+                      <button
+                        type="button"
+                        onClick={() => setExpandedCountry(isSelected ? null : country)}
+                        className={cn(
+                          'flex items-center justify-center w-full rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors text-center',
+                          isSelected
+                            ? 'border-zbooni-teal/40 bg-zbooni-teal/[0.06] text-zbooni-teal'
+                            : 'border-border/30 bg-zbooni-dark/30 text-muted-foreground hover:border-border/50 hover:text-foreground',
+                        )}
+                      >
+                        <Globe className="h-3 w-3 mr-1.5 shrink-0" />
+                        <span className="truncate">{country}</span>
+                        <span className="ml-1.5 shrink-0 font-mono text-[10px] text-muted-foreground/50">({cities.length})</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeCountry(country)}
+                        className="absolute -right-1 -top-1 rounded-full bg-card p-0.5 text-muted-foreground/20 opacity-0 transition-all group-hover:opacity-100 hover:bg-red-500/10 hover:text-red-400"
+                        title="Remove country"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
                       </div>
                     );
                   })}
@@ -725,7 +724,6 @@ function CountriesCitiesManager({
               ) : (
                 <p className="py-4 text-center text-sm text-muted-foreground/40 italic">No countries configured</p>
               )}
-            </div>
 
             {/* Add country */}
             <div className="flex items-center gap-2">
