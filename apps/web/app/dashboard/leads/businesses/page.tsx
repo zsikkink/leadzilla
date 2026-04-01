@@ -910,13 +910,39 @@ export default function BusinessIntelligencePage() {
   }, [selectedId, businesses]);
 
   const filtered = businesses;
-  const selected = selectedId ? businesses.find((b) => b.id === selectedId) ?? null : null;
+  const [directSelectedBiz, setDirectSelectedBiz] = useState<BusinessRow | null>(null);
+
+  // If selectedId is set via URL but not in the paginated list, fetch it directly
+  useEffect(() => {
+    if (!selectedId) { setDirectSelectedBiz(null); return; }
+    if (businesses.some((b) => b.id === selectedId)) { setDirectSelectedBiz(null); return; }
+    let cancelled = false;
+    async function fetchDirect() {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data } = await supabase
+          .from('businesses')
+          .select('id,name,country_code,country,city,category,rating,review_count,follower_count,deterministic_score,score_band,has_whatsapp,has_instagram,accepts_online_payments,recent_activity,website_domain,phone_e164,instagram_handle,pre_qualified,disqualification_reason,apify_website_scrape_json,apify_instagram_scrape_json,website_scraped_at,instagram_scraped_at,created_at,updated_at')
+          .eq('id', selectedId)
+          .single();
+        if (data && !cancelled) {
+          setDirectSelectedBiz(data as unknown as BusinessRow);
+        }
+      } catch { /* not found */ }
+    }
+    void fetchDirect();
+    return () => { cancelled = true; };
+  }, [selectedId, businesses]);
+
+  const selected = selectedId
+    ? businesses.find((b) => b.id === selectedId) ?? directSelectedBiz ?? null
+    : null;
   const totalPages = Math.ceil(total / pageSize);
   const withScrapeData = businesses.filter((b) => b.apify_website_scrape_json || b.apify_instagram_scrape_json).length;
 
   return (
     <div className="space-y-4">
-      <LeadsNav active="main" />
+      <LeadsNav active="business-intel" />
 
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">

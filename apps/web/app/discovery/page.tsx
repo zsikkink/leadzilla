@@ -686,7 +686,8 @@ function CountriesCitiesManager({
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-[65fr_35fr] gap-4">
           {/* LEFT PANEL — Country pills in scrollable bordered container */}
-          <div className="rounded-xl border border-border/40 bg-card/50 p-4 max-h-[400px] overflow-y-auto">
+          <div className="rounded-xl border border-border/40 bg-card/50 p-4 flex flex-col">
+            <div className="max-h-[350px] overflow-y-auto mb-3">
             {countries.length > 0 ? (
               <div className="grid grid-cols-3 gap-2">
                 {countries.map((country) => {
@@ -724,8 +725,9 @@ function CountriesCitiesManager({
               ) : (
                 <p className="py-4 text-center text-sm text-muted-foreground/40 italic">No countries configured</p>
               )}
+            </div>
 
-            {/* Add country */}
+            {/* Add country — pinned below scrollable grid */}
             <div className="flex items-center gap-2">
               {showCountryInput ? (
                 <div className="flex items-center gap-1.5">
