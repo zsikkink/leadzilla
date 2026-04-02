@@ -11,11 +11,18 @@ import { PrismaRuntime, prisma, type Prisma } from '@lead-flood/db';
 
 import { FeedbackNotImplementedError } from './feedback.errors.js';
 
+function normalizeFeedbackEventType(
+  eventType: string,
+): FeedbackEventResponse['eventType'] {
+  return eventType === 'UNSUBSCRIBED' ? 'NOT_INTERESTED' : (eventType as FeedbackEventResponse['eventType']);
+}
+
 export interface FeedbackRepository {
   leadExists(leadId: string): Promise<boolean>;
   ingestFeedbackEvent(input: IngestFeedbackEventRequest): Promise<IngestFeedbackEventResponse>;
   listFeedbackEvents(query: ListFeedbackEventsQuery): Promise<ListFeedbackEventsResponse>;
   getFeedbackSummary(query: FeedbackSummaryQuery): Promise<FeedbackSummaryResponse>;
+  deleteFeedbackEvent(eventId: string): Promise<void>;
 }
 
 export class StubFeedbackRepository implements FeedbackRepository {
@@ -33,6 +40,10 @@ export class StubFeedbackRepository implements FeedbackRepository {
 
   async getFeedbackSummary(_query: FeedbackSummaryQuery): Promise<FeedbackSummaryResponse> {
     throw new FeedbackNotImplementedError('TODO: get feedback summary persistence');
+  }
+
+  async deleteFeedbackEvent(_eventId: string): Promise<void> {
+    throw new FeedbackNotImplementedError('TODO: delete feedback event persistence');
   }
 }
 
@@ -54,7 +65,7 @@ function mapFeedbackEventToResponse(event: {
     id: event.id,
     leadId: event.leadId,
     messageSendId: event.messageSendId,
-    eventType: event.eventType as FeedbackEventResponse['eventType'],
+    eventType: normalizeFeedbackEventType(event.eventType),
     source: event.source as FeedbackEventResponse['source'],
     providerEventId: event.providerEventId,
     dedupeKey: event.dedupeKey,
@@ -111,7 +122,14 @@ export class PrismaFeedbackRepository extends StubFeedbackRepository {
     const where: Prisma.FeedbackEventWhereInput = {
       ...(query.leadId !== undefined ? { leadId: query.leadId } : {}),
       ...(query.messageSendId !== undefined ? { messageSendId: query.messageSendId } : {}),
-      ...(query.eventType !== undefined ? { eventType: query.eventType } : {}),
+      ...(query.eventType !== undefined
+        ? {
+            eventType:
+              query.eventType === 'NOT_INTERESTED'
+                ? { in: ['NOT_INTERESTED', 'UNSUBSCRIBED'] }
+                : query.eventType,
+          }
+        : {}),
       ...(query.source !== undefined ? { source: query.source } : {}),
       ...(query.from !== undefined || query.to !== undefined
         ? {
@@ -139,6 +157,36 @@ export class PrismaFeedbackRepository extends StubFeedbackRepository {
       pageSize: query.pageSize,
       total,
     };
+  }
+
+  override async deleteFeedbackEvent(id: string): Promise<void> {
+    try {
+      await prisma.$transaction(async (tx) => {
+        // Nullify FK references from TrainingLabel (onDelete: SetNull in schema,
+        // but explicit nullification is safer in a transaction)
+        await tx.trainingLabel.updateMany({
+          where: { feedbackEventId: id },
+          data: { feedbackEventId: null },
+        });
+
+        await tx.feedbackEvent.delete({
+          where: { id },
+        });
+      });
+    } catch (error: unknown) {
+      if (error instanceof PrismaRuntime.PrismaClientKnownRequestError) {
+        if (error.code === 'P2025') {
+          // Record not found — nothing to delete
+          return;
+        }
+        if (error.code === 'P2003') {
+          throw new Error(
+            `Cannot delete feedback event: it has dependent records that prevent deletion (${error.meta?.field_name ?? 'unknown'})`,
+          );
+        }
+      }
+      throw error;
+    }
   }
 
   override async getFeedbackSummary(query: FeedbackSummaryQuery): Promise<FeedbackSummaryResponse> {
@@ -179,8 +227,10 @@ export class PrismaFeedbackRepository extends StubFeedbackRepository {
       meetingBookedCount: countByEventType(groups, 'MEETING_BOOKED'),
       dealWonCount: countByEventType(groups, 'DEAL_WON'),
       dealLostCount: countByEventType(groups, 'DEAL_LOST'),
-      unsubscribedCount: countByEventType(groups, 'UNSUBSCRIBED'),
       bouncedCount: countByEventType(groups, 'BOUNCED'),
+      notInterestedCount:
+        countByEventType(groups, 'NOT_INTERESTED') + countByEventType(groups, 'UNSUBSCRIBED'),
     };
   }
+
 }

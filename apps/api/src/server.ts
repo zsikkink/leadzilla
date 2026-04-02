@@ -28,6 +28,8 @@ import {
   ListRejectedLeadsResponseSchema,
   RejectContactRecoveryRequestSchema,
   RejectLeadRequestSchema,
+  type LeadBusinessContact,
+  type LeadConversionContext,
   type RunDiscoverySeedRequest,
   type RunDiscoveryTasksRequest,
   type TriggerJobRunResponse,
@@ -198,6 +200,12 @@ export interface LeadRecord {
   phoneSource?: string | null | undefined;
   businessEmail?: string | null | undefined;
   contactDiscovery?: unknown | null | undefined;
+  businessId?: string | null | undefined;
+  websiteDomain?: string | null | undefined;
+  icpProfileName?: string | null | undefined;
+  businessContacts?: LeadBusinessContact[] | undefined;
+  businessProfileRaw?: unknown | null | undefined;
+  conversionContext?: LeadConversionContext | null | undefined;
 }
 
 export interface JobRecord {
@@ -546,6 +554,12 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         phoneSource: lead.phoneSource ?? null,
         businessEmail: lead.businessEmail ?? null,
         contactDiscovery: lead.contactDiscovery ?? null,
+        businessId: lead.businessId ?? null,
+        websiteDomain: lead.websiteDomain ?? null,
+        icpProfileName: lead.icpProfileName ?? null,
+        businessContacts: lead.businessContacts ?? [],
+        businessProfileRaw: lead.businessProfileRaw ?? null,
+        conversionContext: lead.conversionContext ?? { businessInsights: null, metadata: null },
       });
     });
 
@@ -750,28 +764,56 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         return ErrorResponseSchema.parse({ error: 'Lead not found', requestId: request.id });
       }
 
-      // Determine what status to restore.
-      // Restore to `qualified` when the latest score still passes threshold,
-      // otherwise restore to `scored`; if no score exists, restore to `new`.
-      const latestScore = await prisma.leadScorePrediction.findFirst({
-        where: { leadId },
-        orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }],
-        select: { blendedScore: true },
-      });
+      if (lead.status !== 'rejected') {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: `Lead is not rejected (current status: ${lead.status})`,
+          requestId: request.id,
+        });
+      }
 
-      const qualificationThreshold = await getScoreQualificationThresholdSetting(0.5);
+      try {
+        // Determine what status to restore.
+        // Restore to `qualified` when the latest score still passes threshold,
+        // otherwise restore to `scored`; if no score exists, restore to `new`.
+        const latestScore = await prisma.leadScorePrediction.findFirst({
+          where: { leadId },
+          orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }],
+          select: { blendedScore: true },
+        });
 
-      const restoredStatus: LeadStatus = latestScore
-        ? (latestScore.blendedScore >= qualificationThreshold ? 'qualified' : 'scored')
-        : 'new';
+        const qualificationThreshold = await getScoreQualificationThresholdSetting(0.5);
 
-      await prisma.$transaction([
-        prisma.leadRejection.deleteMany({ where: { leadId } }),
-        prisma.lead.update({ where: { id: leadId }, data: { status: restoredStatus } }),
-      ]);
+        const restoredStatus: LeadStatus = latestScore
+          ? (latestScore.blendedScore >= qualificationThreshold ? 'qualified' : 'scored')
+          : 'new';
 
-      reply.status(204);
-      return;
+        await prisma.$transaction([
+          prisma.leadRejection.deleteMany({ where: { leadId } }),
+          prisma.lead.update({ where: { id: leadId }, data: { status: restoredStatus } }),
+        ]);
+
+        reply.status(204);
+        return;
+      } catch (error: unknown) {
+        console.error('[unreject] Error unrejecting lead %s:', leadId, error);
+        if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2025') {
+          // LeadRejection record may not exist — still update lead status
+          const latestScore = await prisma.leadScorePrediction.findFirst({
+            where: { leadId },
+            orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }],
+            select: { blendedScore: true },
+          });
+          const qualificationThreshold = await getScoreQualificationThresholdSetting(0.5);
+          const restoredStatus: LeadStatus = latestScore
+            ? (latestScore.blendedScore >= qualificationThreshold ? 'qualified' : 'scored')
+            : 'new';
+          await prisma.lead.update({ where: { id: leadId }, data: { status: restoredStatus } });
+          reply.status(204);
+          return;
+        }
+        throw error;
+      }
     });
 
     api.get('/v1/leads/rejected', async (request, reply) => {
@@ -901,6 +943,125 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       });
     });
 
+    // ── Business Contacts ───────────────────────────────────────
+    api.post('/v1/business-contacts', { preHandler: requireAppAdmin }, async (request, reply) => {
+      const bodySchema = z.object({
+        businessId: z.string().min(1),
+        name: z.string().min(1),
+        title: z.string().optional(),
+        email: z.string().email().optional(),
+        phone: z.string().optional(),
+        linkedinUrl: z.string().optional(),
+      });
+      const parsed = bodySchema.safeParse(request.body);
+      if (!parsed.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'Invalid business contact payload',
+          requestId: request.id,
+        });
+      }
+
+      const business = await prisma.business.findUnique({
+        where: { id: parsed.data.businessId },
+        select: { id: true },
+      });
+      if (!business) {
+        reply.status(404);
+        return ErrorResponseSchema.parse({
+          error: 'Business not found',
+          requestId: request.id,
+        });
+      }
+
+      const contact = await prisma.businessContact.create({
+        data: {
+          businessId: parsed.data.businessId,
+          name: parsed.data.name,
+          ...(parsed.data.title ? { title: parsed.data.title } : {}),
+          ...(parsed.data.email ? { email: parsed.data.email } : {}),
+          ...(parsed.data.phone ? { phone: parsed.data.phone } : {}),
+          ...(parsed.data.linkedinUrl ? { linkedinUrl: parsed.data.linkedinUrl } : {}),
+          positionRank: 99,
+          source: 'manual',
+        },
+      });
+
+      reply.status(201);
+      return {
+        id: contact.id,
+        businessId: contact.businessId,
+        name: contact.name,
+        title: contact.title,
+        email: contact.email,
+        phone: contact.phone,
+        linkedinUrl: contact.linkedinUrl,
+        positionRank: contact.positionRank,
+        source: contact.source,
+        createdAt: contact.createdAt.toISOString(),
+      };
+    });
+
+    api.patch('/v1/business-contacts/:id/primary', { preHandler: requireAppAdmin }, async (request, reply) => {
+      const parsedParams = z.object({ id: z.string().min(1) }).safeParse(request.params);
+      if (!parsedParams.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'Invalid business contact id',
+          requestId: request.id,
+        });
+      }
+
+      const contactId = parsedParams.data.id;
+      const contact = await prisma.businessContact.findUnique({
+        where: { id: contactId },
+        select: { id: true, businessId: true, name: true, email: true },
+      });
+      if (!contact) {
+        reply.status(404);
+        return ErrorResponseSchema.parse({
+          error: 'Business contact not found',
+          requestId: request.id,
+        });
+      }
+
+      // Reset all siblings to rank 99, then set this one to rank 0
+      await prisma.$transaction([
+        prisma.businessContact.updateMany({
+          where: { businessId: contact.businessId },
+          data: { positionRank: 99 },
+        }),
+        prisma.businessContact.update({
+          where: { id: contactId },
+          data: { positionRank: 0 },
+        }),
+      ]);
+
+      // Ripple effect: update the linked Lead's name/email
+      const conversion = await prisma.businessConversion.findFirst({
+        where: { businessId: contact.businessId },
+        select: { leadId: true },
+      });
+      if (conversion?.leadId) {
+        const nameParts = contact.name.split(' ');
+        const firstName = nameParts[0] ?? contact.name;
+        const lastName = nameParts.slice(1).join(' ');
+        const updateData: Prisma.LeadUpdateInput = {};
+        if (firstName) updateData.firstName = firstName;
+        if (lastName) updateData.lastName = lastName;
+        if (contact.email) updateData.email = contact.email;
+        if (Object.keys(updateData).length > 0) {
+          await prisma.lead.update({
+            where: { id: conversion.leadId },
+            data: updateData,
+          });
+        }
+      }
+
+      reply.status(200);
+      return { ok: true };
+    });
+
     registerIcpRoutes(api, {
       ...(options.adminApiKey ? { adminApiKey: options.adminApiKey } : {}),
     });
@@ -954,6 +1115,81 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     });
     registerSettingsRoutes(api);
     registerStatsRoutes(api);
+
+    // ── Business Contact CRUD ─────────────────────────────────────────────
+    const BusinessContactIdParamsSchema = z.object({ id: z.string().min(1) });
+    const UpdateBusinessContactBodySchema = z.object({
+      name: z.string().min(1).optional(),
+      title: z.string().nullable().optional(),
+      email: z.string().email().nullable().optional(),
+      phone: z.string().nullable().optional(),
+    }).refine(
+      (data) => Object.keys(data).length > 0,
+      { message: 'At least one field must be provided' },
+    );
+
+    api.patch('/v1/business-contacts/:id', { preHandler: requireAppAdmin }, async (request, reply) => {
+      const parsedParams = BusinessContactIdParamsSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({ error: 'Invalid business contact id', requestId: request.id });
+      }
+      const parsedBody = UpdateBusinessContactBodySchema.safeParse(request.body);
+      if (!parsedBody.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: parsedBody.error.issues[0]?.message ?? 'Invalid update payload',
+          requestId: request.id,
+        });
+      }
+
+      try {
+        // Build update data explicitly — exactOptionalPropertyTypes forbids undefined
+        const updateData: Record<string, string | null> = {};
+        if (parsedBody.data.name !== undefined) updateData.name = parsedBody.data.name;
+        if (parsedBody.data.title !== undefined) updateData.title = parsedBody.data.title;
+        if (parsedBody.data.email !== undefined) updateData.email = parsedBody.data.email;
+        if (parsedBody.data.phone !== undefined) updateData.phone = parsedBody.data.phone;
+
+        const updated = await prisma.businessContact.update({
+          where: { id: parsedParams.data.id },
+          data: updateData,
+        });
+        return {
+          id: updated.id,
+          businessId: updated.businessId,
+          name: updated.name,
+          title: updated.title,
+          email: updated.email,
+          phone: updated.phone,
+          positionRank: updated.positionRank,
+          seniority: updated.seniority,
+          source: updated.source,
+          updatedAt: updated.updatedAt.toISOString(),
+        };
+      } catch {
+        reply.status(404);
+        return ErrorResponseSchema.parse({ error: 'Business contact not found', requestId: request.id });
+      }
+    });
+
+    api.delete('/v1/business-contacts/:id', { preHandler: requireAppAdmin }, async (request, reply) => {
+      const parsedParams = BusinessContactIdParamsSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({ error: 'Invalid business contact id', requestId: request.id });
+      }
+
+      try {
+        await prisma.businessContact.delete({ where: { id: parsedParams.data.id } });
+        reply.status(204);
+        return;
+      } catch {
+        reply.status(404);
+        return ErrorResponseSchema.parse({ error: 'Business contact not found', requestId: request.id });
+      }
+    });
+
   };
 
   app.register(protectedRoutes);

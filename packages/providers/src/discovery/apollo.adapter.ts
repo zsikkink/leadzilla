@@ -66,6 +66,48 @@ export type ApolloContactSearchResult =
       failure: { classification: 'terminal'; statusCode: number | null; message: string; raw: unknown };
     };
 
+export interface ApolloRevealEmailParams {
+  firstName: string;
+  lastName: string;
+  domain: string;
+  organizationName?: string | undefined;
+}
+
+export type ApolloRevealEmailResult =
+  | { status: 'success'; email: string | null; apolloId: string | null }
+  | { status: 'retryable_error'; failure: { classification: 'retryable'; statusCode: number | null; message: string; raw: unknown } }
+  | { status: 'terminal_error'; failure: { classification: 'terminal'; statusCode: number | null; message: string; raw: unknown } };
+
+export interface ApolloRevealPhoneParams {
+  apolloId?: string | undefined;
+  firstName?: string | undefined;
+  lastName?: string | undefined;
+  domain?: string | undefined;
+}
+
+export type ApolloRevealPhoneResult =
+  | { status: 'success'; phone: string | null; asyncPending: boolean }
+  | { status: 'retryable_error'; failure: { classification: 'retryable'; statusCode: number | null; message: string; raw: unknown } }
+  | { status: 'terminal_error'; failure: { classification: 'terminal'; statusCode: number | null; message: string; raw: unknown } };
+
+export interface ApolloOrgEnrichmentData {
+  name: string | null;
+  industry: string | null;
+  estimatedEmployees: number | null;
+  linkedinUrl: string | null;
+  primaryPhone: string | null;
+  city: string | null;
+  country: string | null;
+  foundedYear: number | null;
+  annualRevenue: string | null;
+  websiteUrl: string | null;
+}
+
+export type ApolloOrgEnrichmentResult =
+  | { status: 'success'; data: ApolloOrgEnrichmentData }
+  | { status: 'retryable_error'; failure: { classification: 'retryable'; statusCode: number | null; message: string; raw: unknown } }
+  | { status: 'terminal_error'; failure: { classification: 'terminal'; statusCode: number | null; message: string; raw: unknown } };
+
 interface ApolloPeopleSearchResponse {
   people?: unknown;
   pagination?: {
@@ -573,6 +615,269 @@ export class ApolloDiscoveryAdapter {
     const topContactTitle = normalizeString(topPerson.title);
 
     return { status: 'success', hasEmail, hasDirectPhone, topContactTitle };
+  }
+
+  async revealContactEmail(params: ApolloRevealEmailParams): Promise<ApolloRevealEmailResult> {
+    if (!this.isConfigured) {
+      return {
+        status: 'terminal_error',
+        failure: { classification: 'terminal', statusCode: null, message: 'Apollo API key not configured', raw: null },
+      };
+    }
+
+    await this.waitForRateLimit();
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}/api/v1/people/match`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': this.apiKey,
+          'user-agent': 'LeadFlood/1.0 (+https://leadflood.io)',
+        },
+        body: JSON.stringify({
+          first_name: params.firstName,
+          last_name: params.lastName,
+          domain: params.domain,
+          ...(params.organizationName ? { organization_name: params.organizationName } : {}),
+          reveal_personal_emails: true,
+        }),
+        signal: controller.signal,
+      });
+    } catch (error: unknown) {
+      return {
+        status: 'retryable_error',
+        failure: {
+          classification: 'retryable',
+          statusCode: null,
+          message: error instanceof Error ? error.message : 'Apollo email reveal request failed',
+          raw: error,
+        },
+      };
+    } finally {
+      clearTimeout(timeout);
+      this.nextAllowedRequestAt = Date.now() + this.minRequestIntervalMs;
+    }
+
+    const rawText = await response.text();
+
+    if (response.status === 429) {
+      return {
+        status: 'retryable_error',
+        failure: { classification: 'retryable', statusCode: 429, message: 'Apollo email reveal rate limited', raw: parseJsonSafe(rawText) },
+      };
+    }
+
+    if (!response.ok) {
+      if (response.status >= 500) {
+        return {
+          status: 'retryable_error',
+          failure: { classification: 'retryable', statusCode: response.status, message: `Apollo email reveal failed with status ${response.status}`, raw: parseJsonSafe(rawText) },
+        };
+      }
+      return {
+        status: 'terminal_error',
+        failure: { classification: 'terminal', statusCode: response.status, message: `Apollo email reveal failed with status ${response.status}`, raw: parseJsonSafe(rawText) },
+      };
+    }
+
+    const payload = parseJsonSafe(rawText);
+    const data = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+    const person = data.person && typeof data.person === 'object' ? (data.person as Record<string, unknown>) : null;
+
+    if (!person) {
+      return { status: 'success', email: null, apolloId: null };
+    }
+
+    const apolloId = normalizeString(person.id);
+    const email = normalizeEmail(person.email);
+
+    return { status: 'success', email, apolloId };
+  }
+
+  async revealContactPhone(params: ApolloRevealPhoneParams): Promise<ApolloRevealPhoneResult> {
+    if (!this.isConfigured) {
+      return {
+        status: 'terminal_error',
+        failure: { classification: 'terminal', statusCode: null, message: 'Apollo API key not configured', raw: null },
+      };
+    }
+
+    await this.waitForRateLimit();
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    const body: Record<string, unknown> = { reveal_phone_number: true };
+    if (params.apolloId) {
+      body.id = params.apolloId;
+    } else {
+      if (params.firstName) body.first_name = params.firstName;
+      if (params.lastName) body.last_name = params.lastName;
+      if (params.domain) body.domain = params.domain;
+    }
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}/api/v1/people/match`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': this.apiKey,
+          'user-agent': 'LeadFlood/1.0 (+https://leadflood.io)',
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (error: unknown) {
+      return {
+        status: 'retryable_error',
+        failure: {
+          classification: 'retryable',
+          statusCode: null,
+          message: error instanceof Error ? error.message : 'Apollo phone reveal request failed',
+          raw: error,
+        },
+      };
+    } finally {
+      clearTimeout(timeout);
+      this.nextAllowedRequestAt = Date.now() + this.minRequestIntervalMs;
+    }
+
+    const rawText = await response.text();
+
+    if (response.status === 429) {
+      return {
+        status: 'retryable_error',
+        failure: { classification: 'retryable', statusCode: 429, message: 'Apollo phone reveal rate limited', raw: parseJsonSafe(rawText) },
+      };
+    }
+
+    if (!response.ok) {
+      if (response.status >= 500) {
+        return {
+          status: 'retryable_error',
+          failure: { classification: 'retryable', statusCode: response.status, message: `Apollo phone reveal failed with status ${response.status}`, raw: parseJsonSafe(rawText) },
+        };
+      }
+      return {
+        status: 'terminal_error',
+        failure: { classification: 'terminal', statusCode: response.status, message: `Apollo phone reveal failed with status ${response.status}`, raw: parseJsonSafe(rawText) },
+      };
+    }
+
+    const payload = parseJsonSafe(rawText);
+    const data = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+    const person = data.person && typeof data.person === 'object' ? (data.person as Record<string, unknown>) : null;
+
+    if (!person) {
+      return { status: 'success', phone: null, asyncPending: false };
+    }
+
+    const phone = normalizeString(
+      person.sanitized_phone ??
+      (Array.isArray(person.phone_numbers) && person.phone_numbers[0] && typeof person.phone_numbers[0] === 'object'
+        ? (person.phone_numbers[0] as Record<string, unknown>).sanitized_number
+        : null),
+    );
+
+    return { status: 'success', phone, asyncPending: phone === null };
+  }
+
+  async enrichOrganization(domain: string): Promise<ApolloOrgEnrichmentResult> {
+    if (!this.isConfigured) {
+      return {
+        status: 'terminal_error',
+        failure: { classification: 'terminal', statusCode: null, message: 'Apollo API key not configured', raw: null },
+      };
+    }
+
+    await this.waitForRateLimit();
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    let response: Response;
+    try {
+      const url = new URL(`${this.baseUrl}/api/v1/organizations/enrich`);
+      url.searchParams.set('domain', domain);
+
+      response = await this.fetchImpl(url.toString(), {
+        method: 'GET',
+        headers: {
+          'x-api-key': this.apiKey,
+          'user-agent': 'LeadFlood/1.0 (+https://leadflood.io)',
+        },
+        signal: controller.signal,
+      });
+    } catch (error: unknown) {
+      return {
+        status: 'retryable_error',
+        failure: {
+          classification: 'retryable',
+          statusCode: null,
+          message: error instanceof Error ? error.message : 'Apollo org enrichment request failed',
+          raw: error,
+        },
+      };
+    } finally {
+      clearTimeout(timeout);
+      this.nextAllowedRequestAt = Date.now() + this.minRequestIntervalMs;
+    }
+
+    const rawText = await response.text();
+
+    if (response.status === 429) {
+      return {
+        status: 'retryable_error',
+        failure: { classification: 'retryable', statusCode: 429, message: 'Apollo org enrichment rate limited', raw: parseJsonSafe(rawText) },
+      };
+    }
+
+    if (!response.ok) {
+      if (response.status >= 500) {
+        return {
+          status: 'retryable_error',
+          failure: { classification: 'retryable', statusCode: response.status, message: `Apollo org enrichment failed with status ${response.status}`, raw: parseJsonSafe(rawText) },
+        };
+      }
+      return {
+        status: 'terminal_error',
+        failure: { classification: 'terminal', statusCode: response.status, message: `Apollo org enrichment failed with status ${response.status}`, raw: parseJsonSafe(rawText) },
+      };
+    }
+
+    const payload = parseJsonSafe(rawText);
+    const wrapper = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+    const org = wrapper.organization && typeof wrapper.organization === 'object' ? (wrapper.organization as Record<string, unknown>) : null;
+
+    if (!org) {
+      return { status: 'success', data: { name: null, industry: null, estimatedEmployees: null, linkedinUrl: null, primaryPhone: null, city: null, country: null, foundedYear: null, annualRevenue: null, websiteUrl: null } };
+    }
+
+    const phone = org.primary_phone && typeof org.primary_phone === 'object'
+      ? normalizeString((org.primary_phone as Record<string, unknown>).sanitized_number)
+      : normalizeString(org.primary_phone);
+
+    return {
+      status: 'success',
+      data: {
+        name: normalizeString(org.name),
+        industry: normalizeString(org.industry),
+        estimatedEmployees: typeof org.estimated_num_employees === 'number' ? org.estimated_num_employees : null,
+        linkedinUrl: normalizeString(org.linkedin_url),
+        primaryPhone: phone,
+        city: normalizeString(org.city),
+        country: normalizeString(org.country),
+        foundedYear: typeof org.founded_year === 'number' ? org.founded_year : null,
+        annualRevenue: normalizeString(org.annual_revenue_printed),
+        websiteUrl: normalizeString(org.website_url),
+      },
+    };
   }
 
   private matchesIcpFilters(lead: NormalizedDiscoveredLead, filters?: DiscoveryIcpFilters): boolean {

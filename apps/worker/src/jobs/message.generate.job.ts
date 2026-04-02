@@ -7,7 +7,6 @@ import type { Job, SendOptions } from 'pg-boss';
 import { RetryableError, classifyError } from '../errors.js';
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
 import {
-  getMessagingInstructions,
   getMessagingRole,
   getMessagingSystemPrompt,
   isManualApprovalOnlyEnabled,
@@ -561,19 +560,22 @@ export async function handleMessageGenerateJob(
     if (messageContext.teamSignal) intelligenceParts.push(`Team: ${messageContext.teamSignal}`);
     const businessIntelligence = intelligenceParts.length > 0 ? intelligenceParts.join('\n') : null;
 
-    // Load custom messaging settings from PipelineSetting (role, system prompt, instructions)
-    const [roleSetting, systemPromptSetting, instrSetting] = await Promise.all([
+    // Load custom messaging settings from PipelineSetting (role, system prompt)
+    const [roleSetting, systemPromptSetting] = await Promise.all([
       getMessagingRole(),
       getMessagingSystemPrompt(),
-      getMessagingInstructions(),
     ]);
     const customRole = roleSetting;
     const customSystemPrompt = systemPromptSetting;
-    const messagingInstructions = instrSetting;
 
-    // Extract ICP sales hook + angle from metadataJson
+    // Extract ICP metadata (sales hook, angle, messaging instructions)
     const icpMetadata = icpProfile?.metadataJson && typeof icpProfile.metadataJson === 'object'
       ? icpProfile.metadataJson as Record<string, unknown>
+      : null;
+
+    // Per-ICP messaging instructions from ICP metadataJson (Session A writes UI, we read)
+    const messagingInstructions = typeof icpMetadata?.messagingInstructions === 'string'
+      ? (icpMetadata.messagingInstructions.trim().length > 0 ? icpMetadata.messagingInstructions.trim() : null)
       : null;
     const icpHook = typeof icpMetadata?.salesHook === 'string'
       ? icpMetadata.salesHook
@@ -590,8 +592,24 @@ export async function handleMessageGenerateJob(
         ? icpAngle.trim()
         : (icpProfile?.description ? `Hook: ${icpProfile.description.split('.').at(0)?.trim()}` : null));
     const icpSegment = icpProfile?.name ?? null;
+    // Sales hook debug: log what was extracted so we can verify hooks reach OpenAI
+    logger.info(
+      { jobId: job.id, leadId, icpProfileId, salesHook: requiredIcpHook ? requiredIcpHook.slice(0, 80) : '(none)', icpSegment },
+      requiredIcpHook ? `Sales hook extracted: "${requiredIcpHook.slice(0, 50)}"` : 'No sales hook found for ICP',
+    );
     if (!requiredIcpHook) {
       logger.warn({ jobId: job.id, leadId, icpProfileId }, 'ICP sales hook missing; message quality may degrade');
+    }
+
+    // Build featuresToPitch from ICP's featureList (used in initial + follow-up messages)
+    const featuresToPitch: string[] = icpProfile?.featureList && Array.isArray(icpProfile.featureList)
+      ? (icpProfile.featureList as string[]).filter((f) => typeof f === 'string' && f.trim().length > 0)
+      : [];
+
+    // Enrich icpDescription with featuresToPitch so the LLM knows which product features to reference
+    let enrichedIcpDescription = icpProfile?.description ?? 'No ICP description available';
+    if (featuresToPitch.length > 0) {
+      enrichedIcpDescription += `\n\nKey features to pitch for this ICP segment:\n${featuresToPitch.map((f, i) => `${i + 1}. ${f}`).join('\n')}`;
     }
 
     const groundingContext = {
@@ -603,7 +621,7 @@ export async function handleMessageGenerateJob(
       featuresJson,
       scoreBand: latestScore?.scoreBand ?? 'MEDIUM',
       blendedScore: latestScore?.blendedScore ?? 0,
-      icpDescription: icpProfile?.description ?? 'No ICP description available',
+      icpDescription: enrichedIcpDescription,
       businessIntelligence,
       icpHook: requiredIcpHook,
       icpAngle,
@@ -613,6 +631,7 @@ export async function handleMessageGenerateJob(
       metadata: {
         hookUsed: requiredIcpHook ?? null,
         icpSegment,
+        featuresToPitch: featuresToPitch.length > 0 ? featuresToPitch : null,
       },
     };
 
@@ -651,15 +670,14 @@ export async function handleMessageGenerateJob(
       const hasDecisionMakerPhone = !!(lead.decisionMakerPhone && lead.decisionMakerPhone.trim() !== '');
       const hasPhone = hasDecisionMakerPhone || !!(lead.phone && lead.phone.trim() !== '');
 
-      if (blendedScore >= 0.67 && hasPhone) {
-        resolvedChannel = 'WHATSAPP';
-      } else {
-        resolvedChannel = 'EMAIL';
-      }
+      // Channel selection: phone available → WhatsApp, otherwise → Email.
+      // Score tier bands are visual only — enrichment threshold upstream controls
+      // who gets a phone lookup; here we just check the result.
+      resolvedChannel = hasPhone ? 'WHATSAPP' : 'EMAIL';
 
       logger.info(
         { jobId: job.id, leadId, blendedScore, hasDecisionMakerPhone, hasPhone, resolvedChannel },
-        'Score-based channel selection',
+        'Phone-based channel selection',
       );
     }
 

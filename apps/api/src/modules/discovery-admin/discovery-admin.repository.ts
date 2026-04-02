@@ -1,6 +1,11 @@
 import type {
+  AdminBusinessContact,
+  AdminBusinessDetailResponse,
+  AdminBusinessRow,
   AdminLeadDetailResponse,
   AdminLeadRow,
+  AdminListBusinessesQuery,
+  AdminListBusinessesResponse,
   AdminListLeadsQuery,
   AdminListLeadsResponse,
   AdminListSearchTasksQuery,
@@ -11,7 +16,7 @@ import type {
   ListJobRunsResponse,
   MessageSendStatus,
 } from '@lead-flood/contracts';
-import { prisma, type Prisma } from '@lead-flood/db';
+import { PrismaRuntime, prisma, type Prisma } from '@lead-flood/db';
 
 import { DiscoveryAdminBadRequestError, DiscoveryAdminNotFoundError } from './discovery-admin.errors.js';
 
@@ -270,6 +275,157 @@ function buildLeadOrderBy(
   return [{ createdAt: 'desc' }, { id: 'desc' }];
 }
 
+function buildBusinessWhere(query: AdminListBusinessesQuery): Prisma.BusinessWhereInput {
+  const and: Prisma.BusinessWhereInput[] = [
+    {
+      OR: [
+        { contactRecoveryItems: { none: {} } },
+        { businessConversions: { some: {} } },
+      ],
+    },
+  ];
+
+  if (query.q) {
+    and.push({
+      OR: [
+        { name: { contains: query.q, mode: 'insensitive' } },
+        { category: { contains: query.q, mode: 'insensitive' } },
+        { websiteDomain: { contains: query.q, mode: 'insensitive' } },
+        { city: { contains: query.q, mode: 'insensitive' } },
+        { instagramHandle: { contains: query.q, mode: 'insensitive' } },
+      ],
+    });
+  }
+
+  return { AND: and };
+}
+
+function readBusinessLeadBlendedScore(lead: {
+  enrichmentData: Prisma.JsonValue | null;
+  scorePredictions: Array<{ blendedScore: number | null }>;
+}): number | null {
+  const predicted = lead.scorePredictions[0]?.blendedScore;
+  if (typeof predicted === 'number') {
+    return predicted;
+  }
+
+  if (!lead.enrichmentData || typeof lead.enrichmentData !== 'object' || Array.isArray(lead.enrichmentData)) {
+    return null;
+  }
+
+  const scoreInfo = (lead.enrichmentData as Record<string, unknown>)._scoreInfo;
+  if (!scoreInfo || typeof scoreInfo !== 'object' || Array.isArray(scoreInfo)) {
+    return null;
+  }
+
+  return typeof (scoreInfo as Record<string, unknown>).blendedScore === 'number'
+    ? (scoreInfo as Record<string, unknown>).blendedScore as number
+    : null;
+}
+
+function mapBusinessContact(contact: {
+  id: string;
+  name: string;
+  title: string | null;
+  email: string | null;
+  phone: string | null;
+  linkedinUrl: string | null;
+  seniority: string;
+  positionRank: number;
+  source: string;
+}): AdminBusinessContact {
+  return {
+    id: contact.id,
+    name: contact.name,
+    title: contact.title,
+    email: contact.email,
+    phone: contact.phone,
+    linkedinUrl: contact.linkedinUrl,
+    seniority: contact.seniority,
+    positionRank: contact.positionRank,
+    source: contact.source,
+  };
+}
+
+function toBusinessRow(row: {
+  id: string;
+  name: string;
+  countryCode: string;
+  country: string | null;
+  city: string | null;
+  category: string | null;
+  rating: number | null;
+  reviewCount: number | null;
+  followerCount: number | null;
+  deterministicScore: number;
+  scoreBand: 'LOW' | 'MEDIUM' | 'HIGH' | null;
+  hasWhatsapp: boolean;
+  hasInstagram: boolean;
+  acceptsOnlinePayments: boolean;
+  recentActivity: boolean;
+  websiteDomain: string | null;
+  phoneE164: string | null;
+  instagramHandle: string | null;
+  preQualified: boolean | null;
+  disqualificationReason: string | null;
+  apifyWebsiteScrapeJson: Prisma.JsonValue | null;
+  apifyInstagramScrapeJson: Prisma.JsonValue | null;
+  websiteScrapedAt: Date | null;
+  instagramScrapedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  contactRecoveryItems: Array<{
+    status: 'OPEN' | 'APPROVED' | 'REJECTED';
+    reason: 'NO_CONTACTS_FOUND' | 'NO_EMAIL' | 'DECISION_MAKER_IDENTIFIED';
+    updatedAt: Date;
+  }>;
+  businessConversions: Array<{
+    leadId: string;
+    lead: {
+      id: string;
+      enrichmentData: Prisma.JsonValue | null;
+      scorePredictions: Array<{ blendedScore: number | null }>;
+    };
+  }>;
+}): AdminBusinessRow {
+  const latestRecovery = row.contactRecoveryItems[0] ?? null;
+  const latestConversion = row.businessConversions[0] ?? null;
+
+  return {
+    id: row.id,
+    name: row.name,
+    countryCode: row.countryCode,
+    country: row.country,
+    city: row.city,
+    category: row.category,
+    rating: row.rating,
+    reviewCount: row.reviewCount,
+    followerCount: row.followerCount,
+    deterministicScore: row.deterministicScore,
+    scoreBand: row.scoreBand,
+    hasWhatsapp: row.hasWhatsapp,
+    hasInstagram: row.hasInstagram,
+    acceptsOnlinePayments: row.acceptsOnlinePayments,
+    recentActivity: row.recentActivity,
+    websiteDomain: row.websiteDomain,
+    phoneE164: row.phoneE164,
+    instagramHandle: row.instagramHandle,
+    preQualified: row.preQualified,
+    disqualificationReason: row.disqualificationReason,
+    apifyWebsiteScrapeJson: row.apifyWebsiteScrapeJson,
+    apifyInstagramScrapeJson: row.apifyInstagramScrapeJson,
+    websiteScrapedAt: row.websiteScrapedAt?.toISOString() ?? null,
+    instagramScrapedAt: row.instagramScrapedAt?.toISOString() ?? null,
+    manualReviewStatus: latestRecovery?.status ?? null,
+    manualReviewReason: latestRecovery?.reason ?? null,
+    manualReviewUpdatedAt: latestRecovery?.updatedAt.toISOString() ?? null,
+    leadBlendedScore: latestConversion ? readBusinessLeadBlendedScore(latestConversion.lead) : null,
+    leadId: latestConversion?.leadId ?? null,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
 function buildTaskOrderBy(
   sortBy: AdminListSearchTasksQuery['sortBy'],
 ): Prisma.SearchTaskOrderByWithRelationInput[] {
@@ -468,6 +624,8 @@ function toIsoString(value: Date | string | null): string | null {
 }
 
 export interface DiscoveryAdminRepository {
+  listBusinesses(query: AdminListBusinessesQuery): Promise<AdminListBusinessesResponse>;
+  getBusinessById(id: string): Promise<AdminBusinessDetailResponse>;
   listLeads(query: AdminListLeadsQuery): Promise<AdminListLeadsResponse>;
   getLeadById(id: string): Promise<AdminLeadDetailResponse>;
   listSearchTasks(query: AdminListSearchTasksQuery): Promise<AdminListSearchTasksResponse>;
@@ -490,6 +648,10 @@ export interface DiscoveryAdminRepository {
     id: string,
     requestedByUserId?: string | undefined,
   ): Promise<CancelDiscoveryRunResult>;
+  approveContactRecoveryItem(
+    id: string,
+    approvedByUserId: string,
+  ): Promise<{ leadId: string; businessName: string }>;
   getDiscoveryRunDetail(id: string): Promise<{
     run: {
       id: string;
@@ -509,6 +671,165 @@ export interface DiscoveryAdminRepository {
 }
 
 export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository {
+  async listBusinesses(query: AdminListBusinessesQuery): Promise<AdminListBusinessesResponse> {
+    const where = buildBusinessWhere(query);
+    const [total, rows] = await Promise.all([
+      prisma.business.count({ where }),
+      prisma.business.findMany({
+        where,
+        orderBy: [{ deterministicScore: 'desc' }, { updatedAt: 'desc' }, { id: 'desc' }],
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        select: {
+          id: true,
+          name: true,
+          countryCode: true,
+          country: true,
+          city: true,
+          category: true,
+          rating: true,
+          reviewCount: true,
+          followerCount: true,
+          deterministicScore: true,
+          scoreBand: true,
+          hasWhatsapp: true,
+          hasInstagram: true,
+          acceptsOnlinePayments: true,
+          recentActivity: true,
+          websiteDomain: true,
+          phoneE164: true,
+          instagramHandle: true,
+          preQualified: true,
+          disqualificationReason: true,
+          apifyWebsiteScrapeJson: true,
+          apifyInstagramScrapeJson: true,
+          websiteScrapedAt: true,
+          instagramScrapedAt: true,
+          createdAt: true,
+          updatedAt: true,
+          contactRecoveryItems: {
+            orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+            take: 1,
+            select: {
+              status: true,
+              reason: true,
+              updatedAt: true,
+            },
+          },
+          businessConversions: {
+            orderBy: [{ convertedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+            take: 1,
+            select: {
+              leadId: true,
+              lead: {
+                select: {
+                  id: true,
+                  enrichmentData: true,
+                  scorePredictions: {
+                    orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+                    take: 1,
+                    select: { blendedScore: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ]);
+
+    return {
+      items: rows.map((row) => toBusinessRow(row)),
+      page: query.page,
+      pageSize: query.pageSize,
+      total,
+    };
+  }
+
+  async getBusinessById(id: string): Promise<AdminBusinessDetailResponse> {
+    const row = await prisma.business.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        name: true,
+        countryCode: true,
+        country: true,
+        city: true,
+        category: true,
+        rating: true,
+        reviewCount: true,
+        followerCount: true,
+        deterministicScore: true,
+        scoreBand: true,
+        hasWhatsapp: true,
+        hasInstagram: true,
+        acceptsOnlinePayments: true,
+        recentActivity: true,
+        websiteDomain: true,
+        phoneE164: true,
+        instagramHandle: true,
+        preQualified: true,
+        disqualificationReason: true,
+        apifyWebsiteScrapeJson: true,
+        apifyInstagramScrapeJson: true,
+        websiteScrapedAt: true,
+        instagramScrapedAt: true,
+        createdAt: true,
+        updatedAt: true,
+        contactRecoveryItems: {
+          orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          take: 1,
+          select: {
+            status: true,
+            reason: true,
+            updatedAt: true,
+          },
+        },
+        businessConversions: {
+          orderBy: [{ convertedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          take: 1,
+          select: {
+            leadId: true,
+            lead: {
+              select: {
+                id: true,
+                enrichmentData: true,
+                scorePredictions: {
+                  orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+                  take: 1,
+                  select: { blendedScore: true },
+                },
+              },
+            },
+          },
+        },
+        contacts: {
+          orderBy: [{ positionRank: 'asc' }, { createdAt: 'desc' }, { id: 'asc' }],
+          select: {
+            id: true,
+            name: true,
+            title: true,
+            email: true,
+            phone: true,
+            linkedinUrl: true,
+            seniority: true,
+            positionRank: true,
+            source: true,
+          },
+        },
+      },
+    });
+
+    if (!row) {
+      throw new DiscoveryAdminNotFoundError('Business not found');
+    }
+
+    return {
+      business: toBusinessRow(row),
+      selectedContacts: row.contacts.map((contact) => mapBusinessContact(contact)),
+    };
+  }
+
   async listLeads(query: AdminListLeadsQuery): Promise<AdminListLeadsResponse> {
     const where = buildLeadWhere(query);
     const [total, rows] = await Promise.all([
@@ -1327,5 +1648,143 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
       },
       leads,
     };
+  }
+
+  async approveContactRecoveryItem(
+    id: string,
+    approvedByUserId: string,
+  ): Promise<{ leadId: string; businessName: string }> {
+    // 1. Find the recovery item with its business and best candidate
+    const recoveryItem = await prisma.contactRecoveryItem.findUnique({
+      where: { id },
+      include: {
+        business: true,
+      },
+    });
+
+    if (!recoveryItem) {
+      throw new DiscoveryAdminNotFoundError(`Contact recovery item ${id} not found`);
+    }
+
+    if (recoveryItem.status !== 'OPEN') {
+      throw new DiscoveryAdminBadRequestError(
+        `Recovery item is ${recoveryItem.status}, only OPEN items can be approved`,
+      );
+    }
+
+    // Guard: business may have been deleted since the recovery item was created
+    if (!recoveryItem.business) {
+      throw new DiscoveryAdminBadRequestError(
+        'Business for this recovery item no longer exists',
+      );
+    }
+
+    const business = recoveryItem.business;
+
+    // 2. Get the snapshot data (contains topCandidates with contact info)
+    const snapshot = recoveryItem.recoverySnapshot as Record<string, unknown> | null;
+    const topCandidates = (snapshot?.topCandidates ?? []) as Array<{
+      name: string;
+      email?: string | null;
+      phone?: string | null;
+      title?: string | null;
+      seniority?: string | null;
+      linkedinUrl?: string | null;
+      isSendable?: boolean;
+    }>;
+
+    // Pick the best candidate: prefer one with a sendable email
+    const bestCandidate = topCandidates.find((c) => c.isSendable && c.email)
+      ?? topCandidates[0]
+      ?? null;
+
+    // Extract name parts from candidate
+    const candidateName = bestCandidate?.name ?? '';
+    const nameParts = candidateName.split(/\s+/);
+    const firstName = nameParts[0] ?? 'Unknown';
+    const lastName = nameParts.slice(1).join(' ') || null;
+    const email = bestCandidate?.email ?? null;
+    const phone = bestCandidate?.phone ?? null;
+
+    // Use full UUID to guarantee uniqueness when no real email available
+    const leadEmail = email ?? `recovery-${recoveryItem.id}@placeholder.local`;
+
+    // 3. Create the lead in a transaction, mark recovery item as approved
+    try {
+      const lead = await prisma.$transaction(async (tx) => {
+        // Create lead from recovery business + candidate data
+        const newLead = await tx.lead.create({
+          data: {
+            firstName,
+            lastName: lastName ?? '',
+            email: leadEmail,
+            phone: phone ?? null,
+            status: 'qualified',
+            source: 'RECOVERY_APPROVED',
+            businessId: recoveryItem.businessId,
+            enrichmentData: JSON.parse(JSON.stringify({
+              companyName: business.name,
+              title: bestCandidate?.title ?? null,
+              seniority: bestCandidate?.seniority ?? null,
+              linkedinUrl: bestCandidate?.linkedinUrl ?? null,
+              recoveryItemId: recoveryItem.id,
+              approvedBy: approvedByUserId,
+            })) as Prisma.InputJsonValue,
+          },
+        });
+
+        // Mark recovery item as approved
+        await tx.contactRecoveryItem.update({
+          where: { id },
+          data: {
+            status: 'APPROVED',
+          },
+        });
+
+        return newLead;
+      });
+
+      return {
+        leadId: lead.id,
+        businessName: business.name,
+      };
+    } catch (error: unknown) {
+      // Log the actual error for debugging — raw 500s from approve are hard to trace
+      console.error('[approveContactRecoveryItem] Error approving recovery item %s:', id, error);
+
+      // P2002 = unique constraint violation — candidate's email already exists as a lead
+      if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const existingLead = await prisma.lead.findFirst({
+          where: { email: leadEmail },
+          select: { id: true },
+        });
+
+        if (existingLead) {
+          // Still mark the recovery item as approved so it doesn't stay OPEN
+          await prisma.contactRecoveryItem.update({
+            where: { id },
+            data: {
+              status: 'APPROVED',
+            },
+          });
+
+          return {
+            leadId: existingLead.id,
+            businessName: business.name,
+          };
+        }
+      }
+
+      // P2003 = FK constraint violation (e.g. businessId no longer valid)
+      if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2003') {
+        const meta = error.meta as Record<string, unknown> | undefined;
+        const fieldName = (meta?.field_name as string) ?? 'unknown field';
+        throw new DiscoveryAdminBadRequestError(
+          `Cannot create lead from recovery item: foreign key constraint failed on ${fieldName}`,
+        );
+      }
+
+      throw error;
+    }
   }
 }

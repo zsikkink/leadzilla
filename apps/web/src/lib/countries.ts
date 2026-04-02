@@ -66,3 +66,25 @@ export const MENA_COUNTRIES = [
   'Lebanon', 'Iraq', 'Morocco', 'Tunisia', 'Algeria', 'Libya', 'Yemen',
   'Syria', 'Palestine', 'Sudan',
 ] as const;
+
+/** Comprehensive cities for all 18 MENA countries — used as baseline seed for CountriesCitiesManager */
+export const MENA_CITIES: Record<string, string[]> = {
+  UAE: ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Ras Al Khaimah', 'Fujairah', 'Umm Al Quwain', 'Al Ain'],
+  KSA: ['Riyadh', 'Jeddah', 'Mecca', 'Medina', 'Dammam', 'Khobar', 'Tabuk', 'Abha'],
+  Egypt: ['Cairo', 'Alexandria', 'Giza', 'Sharm El Sheikh'],
+  Jordan: ['Amman', 'Irbid', 'Zarqa', 'Aqaba'],
+  Bahrain: ['Manama', 'Riffa', 'Muharraq', 'Hamad Town'],
+  Kuwait: ['Kuwait City', 'Hawalli', 'Salmiya', 'Jahra'],
+  Oman: ['Muscat', 'Salalah', 'Nizwa', 'Sohar'],
+  Qatar: ['Doha', 'Al Wakrah', 'Al Khor', 'Lusail'],
+  Lebanon: ['Beirut', 'Tripoli', 'Sidon', 'Jounieh'],
+  Iraq: ['Baghdad', 'Basra', 'Erbil', 'Sulaymaniyah'],
+  Morocco: ['Casablanca', 'Rabat', 'Marrakech', 'Fez', 'Tangier'],
+  Tunisia: ['Tunis', 'Sfax', 'Sousse', 'Kairouan'],
+  Algeria: ['Algiers', 'Oran', 'Constantine', 'Annaba'],
+  Libya: ['Tripoli', 'Benghazi', 'Misrata', 'Sabha'],
+  Yemen: ['Sanaa', 'Aden', 'Taiz', 'Hodeidah'],
+  Syria: ['Damascus', 'Aleppo', 'Homs', 'Latakia'],
+  Palestine: ['Ramallah', 'Gaza', 'Hebron', 'Bethlehem', 'Nablus'],
+  Sudan: ['Khartoum', 'Omdurman', 'Port Sudan', 'Kassala'],
+};

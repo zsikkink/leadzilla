@@ -14,6 +14,7 @@ const HOP_BY_HOP_HEADERS = new Set([
 ]);
 
 const ALLOWED_ADMIN_ROOT_SEGMENTS = new Set([
+  'businesses',
   'jobs',
   'leads',
   'search-tasks',

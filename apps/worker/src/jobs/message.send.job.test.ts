@@ -12,7 +12,7 @@ const { dbMock, pipelineSettingsMock } = vi.hoisted(() => ({
         updateMany: vi.fn(),
       },
       feedbackEvent: {
-        findFirst: vi.fn(),
+        findMany: vi.fn(),
       },
       lead: {
         updateMany: vi.fn(),
@@ -122,7 +122,7 @@ describe('handleMessageSendJob stale retry safety', () => {
         deletedAt: null,
       },
     });
-    dbMock.prisma.feedbackEvent.findFirst.mockResolvedValue(null);
+    dbMock.prisma.feedbackEvent.findMany.mockResolvedValue([]);
     dbMock.prisma.messageSend.findFirst.mockResolvedValue(null);
     dbMock.prisma.messageSend.updateMany.mockResolvedValue({ count: 1 });
     dbMock.prisma.lead.updateMany.mockResolvedValue({ count: 1 });

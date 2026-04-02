@@ -116,6 +116,14 @@ function buildRepositoryMock(): MessagingRepository {
     getMessageSend: vi.fn(),
     getConversation: vi.fn(),
     createMessageSendForApproval: vi.fn(async () => buildSendResponse()),
+    updateMessageVariant: vi.fn(async (_variantId, input) => {
+      const variant = buildDraftResponse().variants[0]!;
+      return {
+        ...variant,
+        subject: input.subject ?? variant.subject,
+        bodyText: input.bodyText,
+      };
+    }),
   };
 }
 
@@ -316,6 +324,25 @@ describe('buildMessagingService generateMessageDraft', () => {
         scorePredictionId: 'score_1',
       }),
     );
+  });
+});
+
+describe('buildMessagingService updateMessageVariant', () => {
+  it('delegates variant updates to the repository', async () => {
+    const repository = buildRepositoryMock();
+    const service = buildMessagingService(repository, {
+      enqueueMessageSend: vi.fn(async () => undefined),
+    });
+
+    await service.updateMessageVariant('variant_1', {
+      subject: 'Updated subject',
+      bodyText: 'Updated body',
+    });
+
+    expect(repository.updateMessageVariant).toHaveBeenCalledWith('variant_1', {
+      subject: 'Updated subject',
+      bodyText: 'Updated body',
+    });
   });
 });
 

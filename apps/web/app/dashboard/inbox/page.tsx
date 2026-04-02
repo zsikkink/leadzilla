@@ -29,7 +29,6 @@ function classificationColor(classification: string | null): string {
     case 'INTERESTED': return 'bg-emerald-500/15 text-emerald-400';
     case 'NOT_INTERESTED': return 'bg-red-500/15 text-red-400';
     case 'OUT_OF_OFFICE': return 'bg-yellow-500/15 text-yellow-400';
-    case 'UNSUBSCRIBE': return 'bg-red-500/15 text-red-400';
     default: return 'bg-muted/20 text-muted-foreground';
   }
 }

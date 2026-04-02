@@ -32,6 +32,32 @@ Quality: `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
 - **Ripple-effect check**: Before completing any change, ask: "What other components/pages display the same data or are affected by this change?" Check sibling pages, shared components, API consumers, and settings displays. Don't just make the change — think about what it touches.
 - **Supabase must be running**: API and Worker connect to Supabase at `:54322`, NOT the Docker postgres at `:5434`. Run `supabase status` to verify. If dead, `supabase start` before doing anything.
 
+## Parallel Execution — Worktree Freshness (NEVER SKIP)
+- **Squash merge commits before launching parallel sessions.** Long merge chains from prior parallel runs cause worktree tools to branch from old ancestors, guaranteeing merge conflicts.
+- **Verify worktree base matches HEAD** after creation. If >5 commits behind, abort and recreate.
+- **Commit or stash all changes** before launching worktree agents. Uncommitted changes won't exist in the worktrees.
+
+## Parallel Execution — Mandatory Evaluator Gate (NEVER SKIP)
+- **NEVER merge a parallel session branch without running an adversarial-evaluator agent on it first.** This is NOT optional. This is NOT a suggestion. Skipping it is a protocol violation.
+- **Sequence:** Session completes → Evaluator reviews every task PASS/FAIL with evidence → Rework if ANY task fails → Loop until ALL tasks pass → THEN merge.
+- **No cycle limit.** Loop until the evaluator passes ALL tasks. If after 3 cycles the same tasks keep failing, escalate to the user with specifics — do NOT give up and merge incomplete work.
+- **The evaluator reads the ORIGINAL PLAN, not the generator's self-report.** The plan is the source of truth.
+- **The post-merge verification is a safety net, NOT a replacement for per-session evaluation.** Both must run.
+- **Generators do NOT self-evaluate.** They build, run `git diff --stat`, and stop. The evaluator judges.
+
+## Root Cause Before Fix (MANDATORY)
+- NEVER fix a bug by reading the plan description and guessing the solution.
+- Sequence: Reproduce → Trace the actual code path → Find the exact broken line with file:line → THEN fix.
+- For Supabase queries: verify column names against Prisma @map annotations AND migration SQL. Some models use snake_case (have @map), some use camelCase (no @map). NEVER assume.
+- For "data not showing": trace from DB → API response → frontend render. Find WHERE in that chain it breaks.
+- For 500 errors: read the actual error from server logs (not the frontend message).
+- "The code looks correct" is NOT evidence. Test against the running system.
+
+## Fix Means FIX, Not Redesign
+- When fixing a bug, change the MINIMUM code necessary.
+- Do not rewrite component layouts, rename variables, or "clean up" surrounding code.
+- The user tested the old version — changing the layout introduces new bugs and loses the design they approved.
+
 ## Verify (run after every change)
 ```bash
 pnpm typecheck       # 1. Types first — catches most issues

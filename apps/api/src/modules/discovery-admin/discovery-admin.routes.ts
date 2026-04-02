@@ -1,5 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
+  AdminBusinessDetailResponseSchema,
+  AdminBusinessIdParamsSchema,
+  AdminListBusinessesQuerySchema,
+  AdminListBusinessesResponseSchema,
   AdminLeadDetailResponseSchema,
   AdminLeadIdParamsSchema,
   AdminListLeadsQuerySchema,
@@ -245,6 +249,48 @@ export function registerDiscoveryAdminRoutes(
     ...(dependencies.triggerDiscoveryTaskRun
       ? { triggerDiscoveryTaskRun: dependencies.triggerDiscoveryTaskRun }
       : {}),
+  });
+
+  app.get('/v1/admin/businesses', async (request, reply) => {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
+      return;
+    }
+
+    const parsedQuery = AdminListBusinessesQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid admin businesses query');
+    }
+
+    try {
+      const result = await service.listBusinesses(parsedQuery.data);
+      return AdminListBusinessesResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.get('/v1/admin/businesses/:id', async (request, reply) => {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
+      return;
+    }
+
+    const parsedParams = AdminBusinessIdParamsSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return sendValidationError(reply, request.id, 'Invalid business id');
+    }
+
+    try {
+      const result = await service.getBusinessById(parsedParams.data.id);
+      return AdminBusinessDetailResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
   });
 
   app.get('/v1/admin/leads', async (request, reply) => {
@@ -542,6 +588,34 @@ export function registerDiscoveryAdminRoutes(
 
     try {
       const result = await service.cancelDiscoveryRun(parsedParams.data.id, userId);
+      return result;
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  // ── D1: Approve a contact recovery item (create lead from recovery business) ──
+  app.post('/v1/discovery-admin/recovery/:id/approve', async (request, reply) => {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
+      return;
+    }
+
+    const userId = requireAuthenticatedUserId(request, reply);
+    if (!userId) {
+      return;
+    }
+
+    const parsedParams = DiscoveryRunIdParamsSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return sendValidationError(reply, request.id, 'Invalid recovery item id');
+    }
+
+    try {
+      const result = await service.approveContactRecoveryItem(parsedParams.data.id, userId);
+      reply.status(201);
       return result;
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {

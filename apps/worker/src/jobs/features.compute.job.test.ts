@@ -125,7 +125,9 @@ describe('features.compute helpers', () => {
       'instagram_has_business_email',
       // v2.2 data quality
       'data_alignment_score',
+      // v4 c-suite
+      'found_csuite_decision_maker',
     ]);
-    expect(FEATURE_KEYS.length).toBe(66);
+    expect(FEATURE_KEYS.length).toBe(67);
   });
 });

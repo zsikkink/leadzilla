@@ -34,6 +34,19 @@ export const MessageSendIdParamsSchema = z
   })
   .strict();
 
+export const MessageVariantIdParamsSchema = z
+  .object({
+    variantId: z.string().min(1),
+  })
+  .strict();
+
+export const UpdateMessageVariantRequestSchema = z
+  .object({
+    subject: z.string().max(500).optional(),
+    bodyText: z.string().min(1).max(10000),
+  })
+  .strict();
+
 export const GenerateMessageDraftRequestSchema = z
   .object({
     leadId: z.string().min(1),
@@ -224,6 +237,7 @@ export type MessageChannel = z.infer<typeof MessageChannelSchema>;
 export type MessageApprovalStatus = z.infer<typeof MessageApprovalStatusSchema>;
 export type MessageSendStatus = z.infer<typeof MessageSendStatusSchema>;
 export type SendProvider = z.infer<typeof SendProviderSchema>;
+export type MessageVariantIdParams = z.infer<typeof MessageVariantIdParamsSchema>;
 export type GenerateMessageDraftStatus = z.infer<
   typeof GenerateMessageDraftStatusSchema
 >;
@@ -249,3 +263,4 @@ export type ListMessageDraftsResponse = z.infer<
 >;
 export type ListMessageSendsQuery = z.infer<typeof ListMessageSendsQuerySchema>;
 export type ListMessageSendsResponse = z.infer<typeof ListMessageSendsResponseSchema>;
+export type UpdateMessageVariantRequest = z.infer<typeof UpdateMessageVariantRequestSchema>;

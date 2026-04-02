@@ -320,6 +320,7 @@ async function main(): Promise<void> {
       ? { rateLimitPerMinute: env.INSTAGRAM_RATE_LIMIT_PER_MIN }
       : {}),
   });
+
   let discoveryRuntimeConfig: DiscoveryRuntimeConfig | null = null;
   let v2SearchProvider: V2DiscoveryProvider | null = null;
   try {
@@ -614,11 +615,6 @@ async function main(): Promise<void> {
     BUSINESS_CONVERT_JOB_NAME,
     (jobLogger, job) =>
       handleBusinessConvertJob(jobLogger, job, {
-        apolloAdapter: {
-          searchContactsByDomain: (domain) => apolloAdapter.searchContactsByDomain(domain),
-          preScreenDomain: (domain) => apolloAdapter.preScreenDomain(domain),
-          isConfigured: Boolean(env.APOLLO_API_KEY),
-        },
         hunterAdapter: {
           searchDomainContacts: (domain) => hunterAdapter.searchDomainContacts(domain),
           isConfigured: Boolean(env.HUNTER_API_KEY),
@@ -724,7 +720,7 @@ async function main(): Promise<void> {
     (jobLogger, job) =>
       handleApolloEnrichJob(jobLogger, job, {
         apolloAdapter: {
-          searchContactsByDomain: (d) => apolloAdapter.searchContactsByDomain(d),
+          searchContactsByDomain: (domain: string) => apolloAdapter.searchContactsByDomain(domain),
           isConfigured: Boolean(env.APOLLO_API_KEY),
         },
         enqueueMessageGenerate: async (payload) => {

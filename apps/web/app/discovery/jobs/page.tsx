@@ -21,6 +21,7 @@ import {
   Zap,
 } from 'lucide-react';
 
+import { CustomSelect } from '@/components/custom-select.js';
 import { useAuth } from '@/hooks/use-auth.js';
 import { useApiQuery } from '@/hooks/use-api-query.js';
 import { cn } from '@/lib/utils.js';
@@ -469,17 +470,18 @@ export default function JobsPage() {
           <p className="mt-0.5 text-sm text-muted-foreground/60">Pipeline job monitoring and trigger controls</p>
         </div>
         <div className="flex items-center gap-2">
-          <select
+          <CustomSelect
             value={String(autoRefreshIntervalMs)}
-            onChange={(e) => setAutoRefreshIntervalMs(Number(e.target.value))}
-            className="rounded-lg border border-border/40 bg-background px-3 py-2 text-xs font-medium text-foreground focus:border-zbooni-teal/50 focus:outline-none"
-          >
-            <option value="0">Auto-refresh: Off</option>
-            <option value="2000">Every 2s</option>
-            <option value="5000">Every 5s</option>
-            <option value="10000">Every 10s</option>
-            <option value="30000">Every 30s</option>
-          </select>
+            onChange={(val) => setAutoRefreshIntervalMs(Number(val))}
+            options={[
+              { value: '0', label: 'Auto-refresh: Off' },
+              { value: '2000', label: 'Every 2s' },
+              { value: '5000', label: 'Every 5s' },
+              { value: '10000', label: 'Every 10s' },
+              { value: '30000', label: 'Every 30s' },
+            ]}
+            placeholder="Auto-refresh"
+          />
           <button
             type="button"
             onClick={() => void loadData()}
@@ -586,13 +588,19 @@ export default function JobsPage() {
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <label className="text-[11px] font-medium text-muted-foreground/60">
-              Profile
-              <select value={seedProfile} onChange={(e) => setSeedProfile(e.target.value as 'default' | 'small')} className="mt-1 block w-full rounded-lg border border-border/40 bg-background px-3 py-1.5 text-xs text-foreground focus:border-zbooni-teal/50 focus:outline-none">
-                <option value="small">small</option>
-                <option value="default">default</option>
-              </select>
-            </label>
+            <div className="text-[11px] font-medium text-muted-foreground/60">
+              <span className="mb-1 block">Profile</span>
+              <CustomSelect
+                value={seedProfile}
+                onChange={(val) => setSeedProfile(val as 'default' | 'small')}
+                options={[
+                  { value: 'small', label: 'small' },
+                  { value: 'default', label: 'default' },
+                ]}
+                placeholder="Profile"
+                className="w-full"
+              />
+            </div>
             <label className="text-[11px] font-medium text-muted-foreground/60">
               Max Tasks
               <input type="number" min={1} value={seedMaxTasks} onChange={(e) => setSeedMaxTasks(Number(e.target.value) || 1)} className="mt-1 block w-full rounded-lg border border-border/40 bg-background px-3 py-1.5 text-xs font-mono text-foreground focus:border-zbooni-teal/50 focus:outline-none" />

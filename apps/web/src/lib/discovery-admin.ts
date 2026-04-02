@@ -1,4 +1,7 @@
 import {
+  AdminBusinessDetailResponseSchema,
+  AdminListBusinessesQuerySchema,
+  AdminListBusinessesResponseSchema,
   AdminLeadDetailResponseSchema,
   AdminListLeadsQuerySchema,
   AdminListLeadsResponseSchema,
@@ -12,6 +15,9 @@ import {
   RunDiscoveryTasksRequestSchema,
   TriggerJobRunResponseSchema,
   type AdminLeadDetailResponse,
+  type AdminBusinessDetailResponse,
+  type AdminListBusinessesQuery,
+  type AdminListBusinessesResponse,
   type AdminListLeadsQuery,
   type AdminListLeadsResponse,
   type AdminListSearchTasksQuery,
@@ -27,7 +33,6 @@ import {
 import { z } from 'zod';
 
 import { getWebEnv } from './env.js';
-import { getSupabaseBrowserClient } from './supabase-client.js';
 
 export type JobRequestType = 'DISCOVERY_SEED' | 'DISCOVERY_RUN';
 export type JobRequestStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELED';
@@ -139,17 +144,6 @@ function readStoredAccessToken(): string | null {
 }
 
 async function getAdminProxyAccessToken(): Promise<string | null> {
-  try {
-    const supabase = getSupabaseBrowserClient();
-    const { data, error } = await supabase.auth.getSession();
-    const accessToken = error ? null : data.session?.access_token?.trim();
-    if (accessToken) {
-      return accessToken;
-    }
-  } catch {
-    // Fall through to stored and dev-only fallback.
-  }
-
   const storedToken = readStoredAccessToken();
   if (storedToken) {
     return storedToken;
@@ -222,6 +216,14 @@ export function queryFromLeadFilters(query: AdminListLeadsQuery): string {
   });
 }
 
+export function queryFromBusinessFilters(query: AdminListBusinessesQuery): string {
+  return toQuery({
+    page: query.page,
+    pageSize: query.pageSize,
+    q: query.q,
+  });
+}
+
 export function queryFromSearchTaskFilters(query: AdminListSearchTasksQuery): string {
   return toQuery({
     page: query.page,
@@ -279,6 +281,25 @@ export async function fetchAdminLeadDetail(id: string): Promise<AdminLeadDetailR
   return requestAdminProxy(
     `leads/${encodeURIComponent(leadId)}`,
     AdminLeadDetailResponseSchema,
+  );
+}
+
+export async function fetchAdminBusinesses(query: string): Promise<AdminListBusinessesResponse> {
+  const parsed = AdminListBusinessesQuerySchema.parse(parseQueryString(query));
+  return requestAdminProxy(
+    `businesses${queryFromBusinessFilters(parsed)}`,
+    AdminListBusinessesResponseSchema,
+  );
+}
+
+export async function fetchAdminBusinessDetail(id: string): Promise<AdminBusinessDetailResponse> {
+  const businessId = id.trim();
+  if (!businessId) {
+    throw new Error('Business not found');
+  }
+  return requestAdminProxy(
+    `businesses/${encodeURIComponent(businessId)}`,
+    AdminBusinessDetailResponseSchema,
   );
 }
 

@@ -32,7 +32,7 @@ interface LeadRow {
   status: string;
 }
 
-function buildLeadListQuery(range: DateRange, page: number): ListLeadsQuery {
+function buildLeadListQuery(range: DateRange, page: number, icpProfileId?: string | undefined): ListLeadsQuery {
   const startDate = getStartDate(range);
 
   return {
@@ -41,19 +41,21 @@ function buildLeadListQuery(range: DateRange, page: number): ListLeadsQuery {
     includeRejected: true,
     includeQualityMetrics: false,
     ...(startDate ? { from: startDate.toISOString() } : {}),
+    ...(icpProfileId ? { icpProfileId } : {}),
   };
 }
 
 async function fetchLeadRows(
   apiClient: Pick<ApiClient, 'listLeads'>,
   range: DateRange,
+  icpProfileId?: string | undefined,
 ): Promise<LeadRow[]> {
   const rows: LeadRow[] = [];
   let page = 1;
   let total = 0;
 
   do {
-    const response = await apiClient.listLeads(buildLeadListQuery(range, page));
+    const response = await apiClient.listLeads(buildLeadListQuery(range, page, icpProfileId));
 
     rows.push(
       ...response.items.map((item) => ({
@@ -214,7 +216,7 @@ function GlassTooltip({
 }
 
 // ── Main component ─────────────────────────────────────────────────────────
-export function PipelineTimeSeriesChart() {
+export function PipelineTimeSeriesChart({ icpProfileId }: { icpProfileId?: string | undefined } = {}) {
   const { apiClient, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [range, setRange] = useState<DateRange>('30d');
   const [rows, setRows] = useState<LeadRow[]>([]);
@@ -244,7 +246,7 @@ export function PipelineTimeSeriesChart() {
 
     async function fetchLeads() {
       try {
-        const data = await fetchLeadRows(apiClient, range);
+        const data = await fetchLeadRows(apiClient, range, icpProfileId);
         if (cancelled) return;
 
         setRows(data);
@@ -261,7 +263,7 @@ export function PipelineTimeSeriesChart() {
     return () => {
       cancelled = true;
     };
-  }, [apiClient, isAuthenticated, isAuthLoading, range]);
+  }, [apiClient, icpProfileId, isAuthenticated, isAuthLoading, range]);
 
   const chartData = useMemo(() => bucketByDay(rows, range), [rows, range]);
 

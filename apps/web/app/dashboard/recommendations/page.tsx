@@ -254,6 +254,18 @@ function DismissDialog({
   );
 }
 
+// ── Actionable types — these can be auto-applied via the system
+// ADJUST_THRESHOLD: changes scoring threshold value
+// ADJUST_WEIGHT: changes a feature weight value
+// DISABLE_FEATURE: sets a feature weight to 0
+// Non-actionable types (PAUSE_ICP, INCREASE_VOLUME, SWITCH_SOURCE, PREFER_VARIANT)
+// require manual human action and cannot be auto-applied
+const ACTIONABLE_RECOMMENDATION_TYPES = new Set([
+  'ADJUST_THRESHOLD',
+  'ADJUST_WEIGHT',
+  'DISABLE_FEATURE',
+]);
+
 // ── Single recommendation card ──────────────────────────────
 function RecommendationCard({
   rec,
@@ -381,14 +393,20 @@ function RecommendationCard({
                   <X className="h-3 w-3" />
                   Dismiss
                 </Button>
-                <Button
-                  size="xs"
-                  className="bg-zbooni-green/15 text-zbooni-green hover:bg-zbooni-green/25"
-                  onClick={handleApply}
-                >
-                  <Check className="h-3 w-3" />
-                  Apply
-                </Button>
+                {ACTIONABLE_RECOMMENDATION_TYPES.has(rec.type) ? (
+                  <Button
+                    size="xs"
+                    className="bg-zbooni-green/15 text-zbooni-green hover:bg-zbooni-green/25"
+                    onClick={handleApply}
+                  >
+                    <Check className="h-3 w-3" />
+                    Apply
+                  </Button>
+                ) : (
+                  <span className="text-[10px] font-medium text-muted-foreground/40 italic">
+                    Manual action required
+                  </span>
+                )}
               </>
             ) : (
               <Button
@@ -421,8 +439,14 @@ export default function RecommendationsPage() {
     useCallback(() => apiClient.getStoredRecommendations(), [apiClient]),
   );
 
-  const hasRealData = data && data.items.length > 0;
-  const showPlaceholders = !isLoading && (!data || data.items.length === 0);
+  // Dedup by type+title — the manager.analyze job can create duplicate records
+  const uniqueItems = data
+    ? Array.from(
+        new Map(data.items.map((r) => [`${r.type}:${r.title}`, r])).values(),
+      )
+    : [];
+  const hasRealData = uniqueItems.length > 0;
+  const showPlaceholders = !isLoading && uniqueItems.length === 0;
 
   async function handleStatusChange(id: string, status: StoredRecommendation['status']) {
     try {
@@ -477,11 +501,11 @@ export default function RecommendationsPage() {
             <Lightbulb className="h-4 w-4 text-yellow-400" />
             <h3 className="text-sm font-bold tracking-tight">Active Recommendations</h3>
             <span className="rounded-md bg-yellow-500/10 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-yellow-400">
-              {data.items.length}
+              {uniqueItems.length}
             </span>
           </div>
           <div className="space-y-3">
-            {data.items.map((rec) => (
+            {uniqueItems.map((rec) => (
               <RecommendationCard
                 key={rec.id}
                 rec={rec}

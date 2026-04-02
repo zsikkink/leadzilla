@@ -9,8 +9,10 @@ import type {
   ListMessageSendsResponse,
   MessageDraftResponse,
   MessageSendResponse,
+  MessageVariantResponse,
   RejectMessageDraftRequest,
   SendMessageRequest,
+  UpdateMessageVariantRequest,
 } from '@lead-flood/contracts';
 import { getPipelineSetting } from '@lead-flood/db';
 
@@ -65,6 +67,7 @@ export interface MessagingService {
   listMessageSends(query: ListMessageSendsQuery): Promise<ListMessageSendsResponse>;
   getMessageSend(sendId: string): Promise<MessageSendResponse>;
   getConversation(leadId: string): Promise<ConversationResponse>;
+  updateMessageVariant(variantId: string, input: UpdateMessageVariantRequest): Promise<MessageVariantResponse>;
 }
 
 const SCORE_QUALIFICATION_THRESHOLD_KEY = 'scoreQualificationThreshold';
@@ -238,6 +241,9 @@ export function buildMessagingService(
     },
     async getConversation(leadId) {
       return repository.getConversation(leadId);
+    },
+    async updateMessageVariant(variantId, input) {
+      return repository.updateMessageVariant(variantId, input);
     },
   };
 }

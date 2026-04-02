@@ -15,7 +15,6 @@ import type {
   ListContactRecoveryItemsQuery,
   ListContactRecoveryItemsResponse,
   RunDiscoverySeedRequest,
-  RunDiscoveryTasksRequest,
   TriggerJobRunResponse,
 } from '@lead-flood/contracts';
 import {
@@ -63,7 +62,7 @@ function mapContactRecoveryItem(record: {
   businessId: string;
   icpProfileId: string;
   discoveryRunId: string;
-  status: 'OPEN' | 'REJECTED';
+  status: 'OPEN' | 'APPROVED' | 'REJECTED';
   reason: 'NO_CONTACTS_FOUND' | 'NO_EMAIL' | 'DECISION_MAKER_IDENTIFIED';
   evidenceScore: number;
   candidateCount: number;
@@ -123,6 +122,47 @@ function mapContactRecoveryItem(record: {
     snapshot,
   };
 }
+
+const leadDetailBusinessContactSelect = {
+  id: true,
+  name: true,
+  title: true,
+  email: true,
+  phone: true,
+  linkedinUrl: true,
+  seniority: true,
+  positionRank: true,
+  source: true,
+} satisfies Prisma.BusinessContactSelect;
+
+const leadDetailBusinessSelect = {
+  id: true,
+  name: true,
+  countryCode: true,
+  country: true,
+  city: true,
+  category: true,
+  rating: true,
+  reviewCount: true,
+  followerCount: true,
+  websiteDomain: true,
+  phoneE164: true,
+  instagramHandle: true,
+  hasWhatsapp: true,
+  hasInstagram: true,
+  acceptsOnlinePayments: true,
+  recentActivity: true,
+  preQualified: true,
+  disqualificationReason: true,
+  apifyWebsiteScrapeJson: true,
+  apifyInstagramScrapeJson: true,
+  websiteScrapedAt: true,
+  instagramScrapedAt: true,
+  contacts: {
+    orderBy: [{ positionRank: 'asc' }, { createdAt: 'desc' }, { id: 'asc' }],
+    select: leadDetailBusinessContactSelect,
+  },
+} satisfies Prisma.BusinessSelect;
 
 async function main(): Promise<void> {
   const env = loadApiEnv(process.env);
@@ -937,23 +977,38 @@ async function main(): Promise<void> {
           },
           businessConversions: {
             take: 1,
-            orderBy: { createdAt: 'desc' },
-            include: {
+            orderBy: [{ convertedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+            select: {
+              icpProfileId: true,
+              businessInsights: true,
+              metadata: true,
               business: {
-                select: { countryCode: true, country: true, city: true, category: true },
+                select: leadDetailBusinessSelect,
               },
             },
           },
           business: {
-            select: { countryCode: true, country: true, city: true, category: true },
+            select: leadDetailBusinessSelect,
           },
         },
       });
       if (!lead) return null;
-      const biz = lead.business ?? lead.businessConversions[0]?.business;
+      const latestConversion = lead.businessConversions[0] ?? null;
+      const biz = lead.business ?? latestConversion?.business;
+      const latestIcpProfileId =
+        lead.discoveryRecords[0]?.icpProfileId
+        ?? lead.scorePredictions[0]?.icpProfileId
+        ?? latestConversion?.icpProfileId
+        ?? null;
+      const icpProfile = latestIcpProfileId
+        ? await prisma.icpProfile.findUnique({
+            where: { id: latestIcpProfileId },
+            select: { name: true },
+          })
+        : null;
       const conversionMetadata =
-        lead.businessConversions[0]?.metadata && typeof lead.businessConversions[0].metadata === 'object' && !Array.isArray(lead.businessConversions[0].metadata)
-          ? lead.businessConversions[0].metadata as Record<string, unknown>
+        latestConversion?.metadata && typeof latestConversion.metadata === 'object' && !Array.isArray(latestConversion.metadata)
+          ? latestConversion.metadata as Record<string, unknown>
           : null;
       const contactRecovery =
         conversionMetadata?.contactRecovery && typeof conversionMetadata.contactRecovery === 'object' && !Array.isArray(conversionMetadata.contactRecovery)
@@ -983,11 +1038,26 @@ async function main(): Promise<void> {
         businessCountry: biz?.country ?? null,
         businessCity: biz?.city ?? null,
         businessCategory: biz?.category ?? null,
-        latestIcpProfileId:
-          lead.discoveryRecords[0]?.icpProfileId
-          ?? lead.scorePredictions[0]?.icpProfileId
-          ?? lead.businessConversions[0]?.icpProfileId
-          ?? null,
+        latestIcpProfileId,
+        businessId: biz?.id ?? lead.businessId ?? null,
+        websiteDomain: biz?.websiteDomain ?? null,
+        icpProfileName: icpProfile?.name ?? null,
+        businessContacts: biz?.contacts.map((contact) => ({
+          id: contact.id,
+          name: contact.name,
+          title: contact.title,
+          email: contact.email,
+          phone: contact.phone,
+          linkedinUrl: contact.linkedinUrl,
+          seniority: contact.seniority,
+          positionRank: contact.positionRank,
+          source: contact.source,
+        })) ?? [],
+        businessProfileRaw: biz ?? null,
+        conversionContext: {
+          businessInsights: latestConversion?.businessInsights ?? null,
+          metadata: latestConversion?.metadata ?? null,
+        },
         contactDiscovery: telemetry
           ? {
               cseVerifyAttempted: telemetry.cseVerifyAttempted === true,
@@ -1159,6 +1229,7 @@ async function main(): Promise<void> {
       return true;
     },
     listLeads: async (query) => {
+      try {
       const where: Prisma.LeadWhereInput = {
         deletedAt: null,
         // Exclude rejected leads by default unless includeRejected is true
@@ -1193,6 +1264,22 @@ async function main(): Promise<void> {
               },
             }
           : {}),
+        // Search filter: match firstName, lastName, or email (case-insensitive)
+        ...(query.search
+          ? {
+              AND: [
+                {
+                  OR: [
+                    { firstName: { contains: query.search, mode: 'insensitive' as const } },
+                    { lastName: { contains: query.search, mode: 'insensitive' as const } },
+                    { email: { contains: query.search, mode: 'insensitive' as const } },
+                    { business: { name: { contains: query.search, mode: 'insensitive' as const } } },
+                    { business: { category: { contains: query.search, mode: 'insensitive' as const } } },
+                  ],
+                },
+              ],
+            }
+          : {}),
       };
 
       const [total, rows] = await Promise.all([
@@ -1223,7 +1310,7 @@ async function main(): Promise<void> {
               take: 1,
             },
             business: {
-              select: { countryCode: true, country: true, city: true, category: true },
+              select: { countryCode: true, country: true, city: true, category: true, name: true },
             },
           },
         }),
@@ -1309,6 +1396,8 @@ async function main(): Promise<void> {
             businessCountry: lead.business?.country ?? null,
             businessCity: lead.business?.city ?? null,
             businessCategory: lead.business?.category ?? null,
+            businessName: lead.business?.name ?? null,
+            decisionMakerTitle: lead.decisionMakerTitle ?? null,
           };
         }),
         qualityMetrics,
@@ -1316,6 +1405,17 @@ async function main(): Promise<void> {
         pageSize: query.pageSize,
         total,
       };
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        logger.error({ error: message }, 'listLeads query failed — returning empty result');
+        return {
+          items: [],
+          qualityMetrics: undefined,
+          page: query.page,
+          pageSize: query.pageSize,
+          total: 0,
+        };
+      }
     },
     listContactRecoveryItems: async (query: ListContactRecoveryItemsQuery): Promise<ListContactRecoveryItemsResponse> => {
       const where: Prisma.ContactRecoveryItemWhereInput = {
@@ -1424,11 +1524,41 @@ async function main(): Promise<void> {
     rejectContactRecoveryItem: async ({ id, rejectedBy, reason }): Promise<ContactRecoveryDetailResponse | null> => {
       const existing = await prisma.contactRecoveryItem.findUnique({
         where: { id },
-        select: { id: true, recoverySnapshot: true },
+        select: { id: true, status: true, recoverySnapshot: true },
       });
 
       if (!existing) {
         return null;
+      }
+
+      // Already rejected or approved — skip re-rejection
+      if (existing.status !== 'OPEN') {
+        // Return the current state instead of re-rejecting
+        const current = await prisma.contactRecoveryItem.findUnique({
+          where: { id },
+          include: {
+            business: {
+              select: {
+                id: true,
+                name: true,
+                city: true,
+                country: true,
+                countryCode: true,
+                websiteDomain: true,
+                instagramHandle: true,
+                category: true,
+                deterministicScore: true,
+                scoreBand: true,
+                preQualified: true,
+                disqualificationReason: true,
+              },
+            },
+            icpProfile: {
+              select: { name: true },
+            },
+          },
+        });
+        return current ? mapContactRecoveryItem(current) : null;
       }
 
       const snapshotObject =

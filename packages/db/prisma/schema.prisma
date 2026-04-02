@@ -25,6 +25,7 @@ enum LeadStatus {
 
 enum ContactRecoveryStatus {
   OPEN
+  APPROVED
   REJECTED
 }
 
@@ -186,6 +187,7 @@ enum FeedbackEventType {
   DEAL_LOST
   UNSUBSCRIBED
   BOUNCED
+  NOT_INTERESTED
 }
 
 enum FeedbackSource {

@@ -1,0 +1,1 @@
+ALTER TYPE "ContactRecoveryStatus" ADD VALUE IF NOT EXISTS 'APPROVED';

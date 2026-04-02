@@ -48,6 +48,7 @@ export interface MessageSendJobDependencies {
 const LEAD_STATUSES_BEFORE_FIRST_SEND = ['qualified', 'drafted'] as const;
 const SEND_STATUSES_RECOVERABLE_AFTER_PROVIDER_SUCCESS = ['DELIVERED', 'REPLIED', 'BOUNCED'] as const;
 const POST_CLAIM_INDETERMINATE_FAILURE_CODE = 'POST_CLAIM_INDETERMINATE';
+const SUPPRESSION_EVENT_TYPES = new Set(['BOUNCED', 'NOT_INTERESTED', 'UNSUBSCRIBED']);
 
 function isRecoverablePostSuccessStatus(
   status: string,
@@ -117,15 +118,15 @@ export async function handleMessageSendJob(
       return;
     }
 
-    // --- Global suppression check: skip leads that have bounced or unsubscribed ---
-    const suppressionEvent = await prisma.feedbackEvent.findFirst({
+    // --- Global suppression check: skip leads that have bounced or opted out ---
+    const suppressionEvents = await prisma.feedbackEvent.findMany({
       where: {
         leadId: send.lead.id,
-        eventType: { in: ['BOUNCED', 'UNSUBSCRIBED'] },
       },
       select: { id: true, eventType: true, occurredAt: true },
       orderBy: { occurredAt: 'desc' },
     });
+    const suppressionEvent = suppressionEvents.find((event) => SUPPRESSION_EVENT_TYPES.has(event.eventType));
 
     if (suppressionEvent) {
       const reason = `Lead suppressed: ${suppressionEvent.eventType} event on ${suppressionEvent.occurredAt.toISOString()}`;

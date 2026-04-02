@@ -1,11 +1,11 @@
 'use client';
 
-import { ShieldX, Users, Wrench } from 'lucide-react';
+import { Building2, ShieldX, Users, Wrench } from 'lucide-react';
 import Link from 'next/link';
 
 import { cn } from '../lib/utils.js';
 
-type LeadsNavItem = 'main' | 'contact-recovery' | 'rejected';
+type LeadsNavItem = 'main' | 'business-intel' | 'contact-recovery' | 'rejected';
 
 const NAV_ITEMS: Array<{
   id: LeadsNavItem;
@@ -20,6 +20,13 @@ const NAV_ITEMS: Array<{
     label: 'Main Leads',
     icon: Users,
     activeClassName: 'text-foreground after:bg-zbooni-teal',
+  },
+  {
+    id: 'business-intel',
+    href: '/dashboard/leads/businesses',
+    label: 'Business Intel',
+    icon: Building2,
+    activeClassName: 'text-foreground after:bg-blue-400',
   },
   {
     id: 'contact-recovery',

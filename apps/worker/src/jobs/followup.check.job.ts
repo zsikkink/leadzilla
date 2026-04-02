@@ -48,12 +48,43 @@ interface FollowupGenerationCandidate {
   };
 }
 
-const TERMINAL_FOLLOW_UP_FEEDBACK_EVENT_TYPES = [
+const TERMINAL_FOLLOW_UP_FEEDBACK_EVENT_TYPES = new Set([
+  'NOT_INTERESTED',
   'UNSUBSCRIBED',
   'MEETING_BOOKED',
   'DEAL_WON',
   'BOUNCED',
-] satisfies Array<'UNSUBSCRIBED' | 'MEETING_BOOKED' | 'DEAL_WON' | 'BOUNCED'>;
+]);
+
+function hasTerminalFollowUpFeedback(eventType: string): boolean {
+  return TERMINAL_FOLLOW_UP_FEEDBACK_EVENT_TYPES.has(eventType);
+}
+
+async function loadTerminalFeedbackLeadIds(leadIds: string[]): Promise<Set<string>> {
+  if (leadIds.length === 0) {
+    return new Set<string>();
+  }
+
+  const feedbackEvents = await prisma.feedbackEvent.findMany({
+    where: { leadId: { in: leadIds } },
+    select: { leadId: true, eventType: true },
+  });
+
+  return new Set(
+    feedbackEvents
+      .filter((event) => hasTerminalFollowUpFeedback(event.eventType))
+      .map((event) => event.leadId),
+  );
+}
+
+async function leadHasTerminalFeedback(leadId: string): Promise<boolean> {
+  const feedbackEvents = await prisma.feedbackEvent.findMany({
+    where: { leadId },
+    select: { eventType: true },
+  });
+
+  return feedbackEvents.some((event) => hasTerminalFollowUpFeedback(event.eventType));
+}
 
 function buildFollowupGeneratePayload(
   send: FollowupGenerationCandidate,
@@ -129,13 +160,6 @@ export async function handleFollowupCheckJob(
           lead: {
             select: {
               id: true,
-              feedbackEvents: {
-                // REPLIED is intentionally excluded so OUT_OF_OFFICE responses can
-                // reschedule follow-ups via reply.classify without being canceled.
-                where: { eventType: { in: TERMINAL_FOLLOW_UP_FEEDBACK_EVENT_TYPES } },
-                select: { id: true },
-                take: 1,
-              },
             },
           },
           messageDraft: {
@@ -155,11 +179,6 @@ export async function handleFollowupCheckJob(
           lead: {
             deletedAt: null,
             status: 'messaged',
-            feedbackEvents: {
-              none: {
-                eventType: { in: TERMINAL_FOLLOW_UP_FEEDBACK_EVENT_TYPES },
-              },
-            },
           },
           followUpDrafts: {
             none: {},
@@ -182,6 +201,7 @@ export async function handleFollowupCheckJob(
 
     // Batch-fetch previously pitched features for all eligible leads, scoped by ICP
     const leadIds = [...new Set([...eligibleSends, ...staleClaimedSends].map((s) => s.leadId))];
+    const terminalFeedbackLeadIds = await loadTerminalFeedbackLeadIds(leadIds);
     const allPreviousDrafts = leadIds.length > 0
       ? await prisma.messageDraft.findMany({
           where: { leadId: { in: leadIds }, pitchedFeature: { not: null } },
@@ -203,20 +223,12 @@ export async function handleFollowupCheckJob(
     let recoveredCount = 0;
 
     for (const send of eligibleSends) {
-      // Double-check: no terminal feedback events
-      if (send.lead.feedbackEvents.length > 0) {
+      if (terminalFeedbackLeadIds.has(send.lead.id)) {
         // Stale data — cancel this follow-up
         await prisma.messageSend.updateMany({
           where: {
             id: send.id,
             nextFollowUpAfter: { not: null },
-            lead: {
-              feedbackEvents: {
-                some: {
-                  eventType: { in: TERMINAL_FOLLOW_UP_FEEDBACK_EVENT_TYPES },
-                },
-              },
-            },
           },
           data: { nextFollowUpAfter: null },
         });
@@ -237,11 +249,6 @@ export async function handleFollowupCheckJob(
           lead: {
             deletedAt: null,
             status: { in: ['messaged', 'replied'] },
-            feedbackEvents: {
-              none: {
-                eventType: { in: TERMINAL_FOLLOW_UP_FEEDBACK_EVENT_TYPES },
-              },
-            },
           },
         },
         data: { nextFollowUpAfter: null },
@@ -251,6 +258,14 @@ export async function handleFollowupCheckJob(
         logger.info(
           { jobId: job.id, sendId: send.id, leadId: send.leadId },
           'Follow-up send no longer eligible, skipping stale follow-up candidate',
+        );
+        continue;
+      }
+
+      if (await leadHasTerminalFeedback(send.lead.id)) {
+        logger.info(
+          { jobId: job.id, sendId: send.id, leadId: send.leadId },
+          'Skipping follow-up enqueue because terminal feedback arrived after claim',
         );
         continue;
       }
@@ -269,6 +284,10 @@ export async function handleFollowupCheckJob(
     // cleared, so recover only the narrow no-reply path by looking for stale
     // SENT/messaged parents with no child follow-up draft.
     for (const send of staleClaimedSends) {
+      if (terminalFeedbackLeadIds.has(send.leadId) || await leadHasTerminalFeedback(send.leadId)) {
+        continue;
+      }
+
       const previouslyPitchedFeatures =
         pitchedByLeadIcp.get(`${send.leadId}:${send.messageDraft.icpProfileId}`) ?? [];
 

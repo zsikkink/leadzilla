@@ -59,7 +59,7 @@ export interface AiScoreResult {
 }
 
 export interface ReplyClassificationResult {
-  classification: 'INTERESTED' | 'NOT_INTERESTED' | 'OUT_OF_OFFICE' | 'UNSUBSCRIBE';
+  classification: 'INTERESTED' | 'NOT_INTERESTED' | 'OUT_OF_OFFICE';
   confidence: number;
 }
 
@@ -104,7 +104,7 @@ const ScoringResponseSchema = z.object({
 });
 
 const ClassificationResponseSchema = z.object({
-  classification: z.enum(['INTERESTED', 'NOT_INTERESTED', 'OUT_OF_OFFICE', 'UNSUBSCRIBE']),
+  classification: z.enum(['INTERESTED', 'NOT_INTERESTED', 'OUT_OF_OFFICE']),
   confidence: z.number().min(0).max(1),
 });
 
@@ -362,10 +362,10 @@ export class OpenAiAdapter {
 
     const systemPrompt = [
       'You are a sales intelligence analyst for Zbooni, a UAE fintech company.',
-      'Given business data from web scraping, write exactly 2 specific, insightful observations a salesperson could reference in outreach.',
-      'Be concrete — mention specific services, products, pricing, team members, technology choices, or recent activity.',
-      'Keep each observation to 1-2 sentences.',
-      'Format: Return a JSON object with a single "insights" field containing the two observations separated by a newline.',
+      'Given business data from web scraping, respond in exactly 2-4 sentences.',
+      'Describe what the business does, who they serve, and their key offering.',
+      'Be specific and factual — mention concrete services, products, pricing, team members, or technology choices. No filler words.',
+      'Format: Return a JSON object with a single "insights" field containing the text.',
     ].join(' ');
 
     const InsightsSchema = z.object({
@@ -378,6 +378,7 @@ export class OpenAiAdapter {
       businessData,
       InsightsSchema,
       (parsed) => parsed.insights,
+      200,
     );
 
     return result;
@@ -402,9 +403,8 @@ export class OpenAiAdapter {
       'You are a reply classifier for Zbooni, a UAE fintech company.',
       'Classify the customer reply into exactly one category:',
       '- INTERESTED: The person wants to learn more, asks questions, or shows positive intent.',
-      '- NOT_INTERESTED: The person explicitly declines, says no, or shows negative intent.',
+      '- NOT_INTERESTED: The person explicitly declines, says no, shows negative intent, or asks to stop receiving messages (e.g. "stop", "remove me", "don\'t contact me").',
       '- OUT_OF_OFFICE: Auto-reply or mention of being away/unavailable/on leave.',
-      '- UNSUBSCRIBE: Asks to stop receiving messages, says "stop", "remove me", "don\'t contact me".',
       'The reply may be in any language (English, Arabic, Hindi, etc.). Classify based on intent regardless of language.',
       'Return the classification and a confidence score between 0 and 1.',
     ].join(' ');
@@ -427,6 +427,7 @@ export class OpenAiAdapter {
     userPrompt: string,
     schema: z.ZodType,
     transform: (parsed: z.infer<typeof schema>) => T,
+    maxTokens?: number | undefined,
   ): Promise<
     | { status: 'success'; data: T }
     | { status: 'retryable_error'; failure: OpenAiFailure }
@@ -458,6 +459,7 @@ export class OpenAiAdapter {
             },
           },
           temperature: 0.7,
+          ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
         }),
         signal: controller.signal,
       });
@@ -529,16 +531,28 @@ export class OpenAiAdapter {
 }
 
 // ---------- JSON Schema helper (minimal zodToJsonSchema for structured output) ----------
+//
+// OpenAI strict structured output has specific requirements:
+// 1. Nullable types must use `type: ["string", "null"]`, NOT `anyOf`
+// 2. ALL properties must be listed in `required` (even nullable ones)
+// 3. `additionalProperties: false` is mandatory
+//
+// The previous implementation used `anyOf` for nullable types and omitted nullable
+// properties from `required`. This caused OpenAI to reject the schema with a 400
+// error on every call, sending ALL messages to the fallback path.
 
 function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
   if (schema instanceof z.ZodObject) {
     const shape = schema.shape as Record<string, z.ZodType>;
     const properties: Record<string, unknown> = {};
+    // OpenAI strict mode: ALL properties must be required (including nullable ones)
     const required: string[] = [];
 
     for (const [key, value] of Object.entries(shape)) {
       properties[key] = zodToJsonSchema(value);
-      if (!(value instanceof z.ZodNullable) && !(value instanceof z.ZodOptional)) {
+      // In strict mode, every property must be in required.
+      // Optional properties are not used in our schemas, but skip them if present.
+      if (!(value instanceof z.ZodOptional)) {
         required.push(key);
       }
     }
@@ -570,9 +584,17 @@ function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
     };
   }
 
+  // OpenAI strict mode: nullable types must use array type notation, not anyOf.
+  // e.g. `type: ["string", "null"]` instead of `anyOf: [{type: "string"}, {type: "null"}]`
   if (schema instanceof z.ZodNullable) {
-    const inner = zodToJsonSchema(schema.unwrap() as z.ZodType);
-    return { anyOf: [inner, { type: 'null' }] };
+    const inner = schema.unwrap() as z.ZodType;
+    const innerSchema = zodToJsonSchema(inner);
+    const innerType = innerSchema.type as string | undefined;
+    if (innerType) {
+      return { type: [innerType, 'null'] };
+    }
+    // Fallback for complex inner types: use anyOf (non-strict would still work)
+    return { anyOf: [innerSchema, { type: 'null' }] };
   }
 
   return { type: 'string' };

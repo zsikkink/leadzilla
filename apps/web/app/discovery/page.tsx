@@ -3,14 +3,15 @@
 import {
   AlertTriangle,
   DollarSign,
-  FileText,
   Gauge,
+  Globe,
   Hash,
   Inbox,
   Loader2,
   Mail,
-  MessageCircle,
+  MapPin,
   MessageSquare,
+  Plus,
   RotateCcw,
   Save,
   Settings,
@@ -21,6 +22,7 @@ import {
   Target,
   Timer,
   UserCog,
+  X,
   Zap,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -28,10 +30,12 @@ import { toast } from 'sonner';
 
 import { useApiQuery } from '../../src/hooks/use-api-query.js';
 import { useAuth } from '../../src/hooks/use-auth.js';
+import { MENA_CITIES } from '../../src/lib/countries.js';
 import {
   DEFAULT_MESSAGING_ROLE,
   DEFAULT_MESSAGING_SYSTEM_PROMPT,
 } from '../../src/lib/messaging-defaults.js';
+// NOTE: Global messagingInstructions removed — per-ICP instructions on ICP detail page are the canonical source.
 import { buildPipelineSettingsSavePlan } from '../../src/lib/pipeline-settings-save-plan.js';
 import { cn } from '../../src/lib/utils.js';
 
@@ -506,9 +510,10 @@ const ADDITIONAL_SETTING_LABELS: Record<string, string> = {
   auto_approve_enabled: 'Auto-Approve Messages',
   auto_approve_score_min: 'Auto-Approve Min Score',
   auto_approve_score_max: 'Auto-Approve Max Score',
+  auto_draft_enabled: 'Auto Draft Messages',
+  auto_draft_min_score: 'Auto Draft Min Score',
   messagingRole: 'Messaging Role',
   messagingSystemPrompt: 'Messaging System Prompt',
-  messagingInstructions: 'Messaging Instructions',
 };
 
 function getErrorMessage(error: unknown): string {
@@ -521,6 +526,317 @@ function getErrorMessage(error: unknown): string {
   return 'unknown error';
 }
 
+// ── Countries & Cities Manager (A7) ─────────────────────────────────────
+
+interface CountryCityData {
+  [country: string]: string[];
+}
+
+function CountriesCitiesManager({
+  apiClient,
+}: {
+  apiClient: {
+    listPipelineSettings: () => Promise<{ items: Array<{ key: string; value: unknown }> }>;
+    updatePipelineSetting: (key: string, value: unknown) => Promise<unknown>;
+    listIcps: (query?: { page: number; pageSize: number; q?: string | undefined; isActive?: boolean | undefined }) => Promise<{ items: Array<{ targetCountries: string[] }> }>;
+  };
+}) {
+  const [countryCities, setCountryCities] = useState<CountryCityData>({});
+  const [loading, setLoading] = useState(true);
+  const [expandedCountry, setExpandedCountry] = useState<string | null>(null);
+  const [newCountry, setNewCountry] = useState('');
+  const [showCountryInput, setShowCountryInput] = useState(false);
+  const [newCityInputs, setNewCityInputs] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadAndMerge() {
+      try {
+        const [settingsRes, icpsRes] = await Promise.all([
+          apiClient.listPipelineSettings(),
+          apiClient.listIcps({ page: 1, pageSize: 100 }),
+        ]);
+
+        if (cancelled) return;
+
+        // 1. Start with MENA_CITIES as baseline (deep-copy arrays)
+        const merged: CountryCityData = {};
+        for (const [country, cities] of Object.entries(MENA_CITIES)) {
+          merged[country] = [...cities];
+        }
+
+        // 2. Merge existing pipeline_settings countryCities on top (user additions override baseline)
+        const setting = settingsRes.items.find((i) => i.key === 'countryCities');
+        const existing: CountryCityData =
+          setting?.value && typeof setting.value === 'object'
+            ? (setting.value as CountryCityData)
+            : {};
+
+        for (const [country, cities] of Object.entries(existing)) {
+          if (country in merged) {
+            // Merge: keep baseline cities, add any user-added cities not in baseline
+            const baseSet = new Set(merged[country]);
+            for (const city of cities) {
+              if (!baseSet.has(city)) {
+                merged[country] = [...(merged[country] ?? []), city];
+              }
+            }
+          } else {
+            merged[country] = [...cities];
+          }
+        }
+
+        // 3. Merge ICP targetCountries on top (add any ICP-only countries with empty cities)
+        const icpCountries = new Set(
+          icpsRes.items.flatMap((icp) => icp.targetCountries),
+        );
+
+        for (const country of icpCountries) {
+          if (country && !(country in merged)) {
+            merged[country] = [];
+          }
+        }
+
+        setCountryCities(merged);
+
+        // Persist the merged result so MENA baseline + ICP countries stick in pipeline_settings
+        const existingJson = JSON.stringify(existing);
+        const mergedJson = JSON.stringify(merged);
+        if (existingJson !== mergedJson) {
+          await apiClient.updatePipelineSetting('countryCities', merged);
+        }
+      } catch {
+        // ignore — settings may not exist yet
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void loadAndMerge();
+    return () => { cancelled = true; };
+  }, [apiClient]);
+
+  const save = async (data: CountryCityData) => {
+    setSaving(true);
+    try {
+      await apiClient.updatePipelineSetting('countryCities', data);
+      setCountryCities(data);
+      toast.success('Countries & cities saved');
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addCountry = () => {
+    const name = newCountry.trim();
+    if (!name || name in countryCities) return;
+    const updated = { ...countryCities, [name]: [] };
+    setNewCountry('');
+    setShowCountryInput(false);
+    setExpandedCountry(name);
+    void save(updated);
+  };
+
+  const removeCountry = (country: string) => {
+    const updated = { ...countryCities };
+    delete updated[country];
+    if (expandedCountry === country) setExpandedCountry(null);
+    void save(updated);
+  };
+
+  const addCity = (country: string) => {
+    const city = (newCityInputs[country] ?? '').trim();
+    if (!city || countryCities[country]?.includes(city)) return;
+    const updated = { ...countryCities, [country]: [...(countryCities[country] ?? []), city] };
+    setNewCityInputs((prev) => ({ ...prev, [country]: '' }));
+    void save(updated);
+  };
+
+  const removeCity = (country: string, city: string) => {
+    const updated = {
+      ...countryCities,
+      [country]: (countryCities[country] ?? []).filter((c) => c !== city),
+    };
+    void save(updated);
+  };
+
+  const countries = Object.keys(countryCities).sort();
+
+  return (
+    <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-teal/10">
+          <Globe className="h-4 w-4 text-zbooni-teal" />
+        </div>
+        <div>
+          <h2 className="text-base font-bold tracking-tight">Countries & Cities</h2>
+          <p className="text-[11px] text-muted-foreground/50">
+            Manage target countries and cities. Used in ICP selectors and discovery search filters.
+          </p>
+        </div>
+        {saving ? <Loader2 className="ml-auto h-4 w-4 animate-spin text-muted-foreground" /> : null}
+      </div>
+
+      {loading ? (
+        <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground/50">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading...
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-[65fr_35fr] gap-4">
+          {/* LEFT PANEL — Country pills in scrollable bordered container */}
+          <div className="rounded-xl border border-border/40 bg-card/50 p-4 flex flex-col">
+            <div className="max-h-[350px] overflow-y-auto mb-3">
+            {countries.length > 0 ? (
+              <div className="grid grid-cols-3 gap-2">
+                {countries.map((country) => {
+                  const isSelected = expandedCountry === country;
+                  const cities = countryCities[country] ?? [];
+
+                  return (
+                    <div key={country} className="group relative">
+                      <button
+                        type="button"
+                        onClick={() => setExpandedCountry(isSelected ? null : country)}
+                        className={cn(
+                          'flex items-center justify-center w-full rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors text-center',
+                          isSelected
+                            ? 'border-zbooni-teal/40 bg-zbooni-teal/[0.06] text-zbooni-teal'
+                            : 'border-border/30 bg-zbooni-dark/30 text-muted-foreground hover:border-border/50 hover:text-foreground',
+                        )}
+                      >
+                        <Globe className="h-3 w-3 mr-1.5 shrink-0" />
+                        <span className="truncate">{country}</span>
+                        <span className="ml-1.5 shrink-0 font-mono text-[10px] text-muted-foreground/50">({cities.length})</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeCountry(country)}
+                        className="absolute -right-1 -top-1 rounded-full bg-card p-0.5 text-muted-foreground/20 opacity-0 transition-all group-hover:opacity-100 hover:bg-red-500/10 hover:text-red-400"
+                        title="Remove country"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="py-4 text-center text-sm text-muted-foreground/40 italic">No countries configured</p>
+              )}
+            </div>
+
+            {/* Add country — pinned below scrollable grid */}
+            <div className="flex items-center gap-2">
+              {showCountryInput ? (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    value={newCountry}
+                    onChange={(e) => setNewCountry(e.target.value)}
+                    placeholder="Country name..."
+                    className="h-8 w-40 rounded-full border border-border/50 bg-zbooni-dark/60 px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') addCountry();
+                      if (e.key === 'Escape') { setShowCountryInput(false); setNewCountry(''); }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={addCountry}
+                    disabled={!newCountry.trim()}
+                    className="rounded-full bg-zbooni-teal/15 p-1.5 text-zbooni-teal transition-colors hover:bg-zbooni-teal/25 disabled:opacity-40"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowCountryInput(false); setNewCountry(''); }}
+                    className="rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-accent/50"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowCountryInput(true)}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-zbooni-teal/10 px-3 py-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:bg-zbooni-teal/20"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Add Country
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* RIGHT PANEL — Selected country's cities */}
+          <div className="sticky top-0 self-start">
+            {expandedCountry ? (
+              <div className="space-y-3 rounded-xl border border-border/30 bg-zbooni-dark/20 p-4">
+                <div className="flex items-center gap-2">
+                  <Globe className="h-4 w-4 text-zbooni-teal" />
+                  <h3 className="text-sm font-semibold text-foreground">{expandedCountry}</h3>
+                  <span className="font-mono text-[10px] text-muted-foreground/50">
+                    {(countryCities[expandedCountry] ?? []).length} cities
+                  </span>
+                </div>
+
+                {(countryCities[expandedCountry] ?? []).length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {(countryCities[expandedCountry] ?? []).map((city) => (
+                      <span
+                        key={city}
+                        className="inline-flex items-center gap-1 rounded-full bg-zbooni-dark/60 px-2.5 py-1 text-xs text-muted-foreground"
+                      >
+                        <MapPin className="h-2.5 w-2.5" />
+                        {city}
+                        <button
+                          type="button"
+                          onClick={() => removeCity(expandedCountry, city)}
+                          className="ml-0.5 rounded-full transition-colors hover:text-red-400"
+                        >
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground/40 italic">No cities added yet</p>
+                )}
+
+                <div className="flex items-center gap-1.5">
+                  <input
+                    value={newCityInputs[expandedCountry] ?? ''}
+                    onChange={(e) => setNewCityInputs((prev) => ({ ...prev, [expandedCountry]: e.target.value }))}
+                    placeholder="Add city..."
+                    className="h-7 w-40 rounded-full border border-border/50 bg-zbooni-dark/60 px-3 text-xs focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') addCity(expandedCountry);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => addCity(expandedCountry)}
+                    className="rounded-full p-1 text-zbooni-teal transition-colors hover:bg-zbooni-teal/10"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-border/30 bg-zbooni-dark/10">
+                <p className="text-sm text-muted-foreground/40 italic">Select a country to manage its cities</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────
 
 export default function ControlsSettingsPage() {
@@ -529,9 +845,10 @@ export default function ControlsSettingsPage() {
   const [autoApproveEnabled, setAutoApproveEnabled] = useState(false);
   const [autoApproveScoreMin, setAutoApproveScoreMin] = useState(0.5);
   const [autoApproveScoreMax, setAutoApproveScoreMax] = useState(1.0);
+  const [autoDraftEnabled, setAutoDraftEnabled] = useState(false);
+  const [autoDraftMinScore, setAutoDraftMinScore] = useState(60);
   const [messagingRole, setMessagingRole] = useState('');
   const [messagingSystemPrompt, setMessagingSystemPrompt] = useState('');
-  const [messagingInstructions, setMessagingInstructions] = useState('');
   const [hasChanges, setHasChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingSettings, setIsLoadingSettings] = useState(true);
@@ -549,9 +866,10 @@ export default function ControlsSettingsPage() {
       let nextAutoApproveEnabled = false;
       let nextAutoApproveScoreMin = 0.5;
       let nextAutoApproveScoreMax = 1.0;
+      let nextAutoDraftEnabled = false;
+      let nextAutoDraftMinScore = 60;
       let nextMessagingRole = '';
       let nextMessagingSystemPrompt = '';
-      let nextMessagingInstructions = '';
 
       for (const item of items) {
         if (item.key === 'auto_approve_enabled') {
@@ -566,12 +884,17 @@ export default function ControlsSettingsPage() {
           if (!Number.isNaN(value)) {
             nextAutoApproveScoreMax = value;
           }
+        } else if (item.key === 'auto_draft_enabled') {
+          nextAutoDraftEnabled = item.value === true || item.value === 'true';
+        } else if (item.key === 'auto_draft_min_score') {
+          const value = Number(item.value);
+          if (!Number.isNaN(value)) {
+            nextAutoDraftMinScore = value;
+          }
         } else if (item.key === 'messagingRole') {
           nextMessagingRole = String(item.value ?? '');
         } else if (item.key === 'messagingSystemPrompt') {
           nextMessagingSystemPrompt = String(item.value ?? '');
-        } else if (item.key === 'messagingInstructions') {
-          nextMessagingInstructions = String(item.value ?? '');
         } else if (item.key === 'scoreTierBands') {
           const val = item.value as {
             low?: number | undefined;
@@ -597,18 +920,20 @@ export default function ControlsSettingsPage() {
       setAutoApproveEnabled(nextAutoApproveEnabled);
       setAutoApproveScoreMin(nextAutoApproveScoreMin);
       setAutoApproveScoreMax(nextAutoApproveScoreMax);
+      setAutoDraftEnabled(nextAutoDraftEnabled);
+      setAutoDraftMinScore(nextAutoDraftMinScore);
       setMessagingRole(nextMessagingRole);
       setMessagingSystemPrompt(nextMessagingSystemPrompt);
-      setMessagingInstructions(nextMessagingInstructions);
       setHasChanges(false);
       loadedSettingsRef.current = {
         ...newSettings,
         auto_approve_enabled: nextAutoApproveEnabled,
         auto_approve_score_min: nextAutoApproveScoreMin,
         auto_approve_score_max: nextAutoApproveScoreMax,
+        auto_draft_enabled: nextAutoDraftEnabled,
+        auto_draft_min_score: nextAutoDraftMinScore,
         messagingRole: nextMessagingRole,
         messagingSystemPrompt: nextMessagingSystemPrompt,
-        messagingInstructions: nextMessagingInstructions,
       };
     } catch (error: unknown) {
       loadedSettingsRef.current = null;
@@ -664,9 +989,10 @@ export default function ControlsSettingsPage() {
       auto_approve_enabled: autoApproveEnabled,
       auto_approve_score_min: autoApproveScoreMin,
       auto_approve_score_max: autoApproveScoreMax,
+      auto_draft_enabled: autoDraftEnabled,
+      auto_draft_min_score: autoDraftMinScore,
       messagingRole,
       messagingSystemPrompt,
-      messagingInstructions,
     };
 
     const saveTargets = buildPipelineSettingsSavePlan({
@@ -747,7 +1073,8 @@ export default function ControlsSettingsPage() {
     autoApproveEnabled,
     autoApproveScoreMax,
     autoApproveScoreMin,
-    messagingInstructions,
+    autoDraftEnabled,
+    autoDraftMinScore,
     messagingRole,
     messagingSystemPrompt,
     settings,
@@ -758,9 +1085,10 @@ export default function ControlsSettingsPage() {
     setAutoApproveEnabled(false);
     setAutoApproveScoreMin(0.5);
     setAutoApproveScoreMax(1.0);
+    setAutoDraftEnabled(false);
+    setAutoDraftMinScore(60);
     setMessagingRole('');
     setMessagingSystemPrompt('');
-    setMessagingInstructions('');
     setHasChanges(true);
     toast.info('Settings reset to defaults — click Save to persist');
   }, []);
@@ -873,21 +1201,23 @@ export default function ControlsSettingsPage() {
           icon={Zap}
           iconColor="text-zbooni-green"
           bgColor="bg-zbooni-green/10"
-          label="Provider Status Notes"
+          label="Pipeline Providers"
         >
           <div className="space-y-2">
-            <p className="text-[10px] font-medium text-muted-foreground/40">
-              Static reference only. Live provider probes are not wired on this screen.
-            </p>
-            {['SerpAPI', 'Hunter', 'Apollo'].map((provider) => (
-              <div key={provider} className="flex items-center justify-between">
-                <span className="text-[11px] font-medium text-muted-foreground/60">
-                  {provider}
-                </span>
-                <div className="flex items-center gap-1">
-                  <AlertTriangle className="h-3 w-3 text-muted-foreground/40" />
-                  <span className="text-[10px] font-semibold text-muted-foreground/40">Not probed here</span>
+            {[
+              { name: 'Google Places', desc: 'Business discovery', color: 'text-zbooni-teal' },
+              { name: 'Hunter', desc: 'Email lookup', color: 'text-yellow-400' },
+              { name: 'Apollo', desc: 'Contact enrichment', color: 'text-purple-400' },
+              { name: 'Brave Search', desc: 'Web search / DM lookup', color: 'text-blue-400' },
+            ].map((provider) => (
+              <div key={provider.name} className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <span className={`inline-block h-1.5 w-1.5 rounded-full ${provider.color} bg-current`} />
+                  <span className="text-[11px] font-medium text-muted-foreground/60">
+                    {provider.name}
+                  </span>
                 </div>
+                <span className="text-[10px] text-muted-foreground/40">{provider.desc}</span>
               </div>
             ))}
           </div>
@@ -1051,39 +1381,6 @@ export default function ControlsSettingsPage() {
         )}
       </div>
 
-      {/* ── Messaging Instructions ────────────────────────────────────── */}
-      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-green/10">
-            <MessageCircle className="h-4 w-4 text-zbooni-green" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold tracking-tight">Messaging Instructions</h2>
-            <p className="text-[11px] text-muted-foreground/50">
-              Per-campaign tweaks appended after the system prompt (e.g. "Focus on hospitality ICPs this week")
-            </p>
-          </div>
-        </div>
-        {isLoadingSettings ? (
-          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground/50">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading saved instructions...
-          </div>
-        ) : (
-          <textarea
-            value={messagingInstructions}
-            onChange={(e) => {
-              setMessagingInstructions(e.target.value);
-              setHasChanges(true);
-            }}
-            rows={6}
-            placeholder="Enter per-campaign instructions appended after the system prompt. Example: 'Always mention our payment link feature this week. Focus on hospitality ICPs. Reference UAE market growth.'"
-            className="w-full resize-y rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none"
-            aria-label="Messaging Instructions"
-          />
-        )}
-      </div>
-
       {/* ── Pipeline Settings ───────────────────────────────────────── */}
       <div id="pipeline-settings" className="relative scroll-mt-20">
         <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-zbooni-teal/[0.02] via-transparent to-zbooni-green/[0.02]" />
@@ -1156,7 +1453,7 @@ export default function ControlsSettingsPage() {
                     <div className="min-w-0">
                       <p className="text-sm font-bold tracking-tight">Auto-Approve Messages</p>
                       <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground/50">
-                        Automatically send messages for leads within the score range
+                        Automatically approve and send messages for leads scoring within the range below
                       </p>
                     </div>
                   </div>
@@ -1176,48 +1473,105 @@ export default function ControlsSettingsPage() {
                     <span
                       className={cn(
                         'pointer-events-none absolute h-5 w-5 rounded-full bg-white shadow-lg transition-transform',
-                        autoApproveEnabled ? 'translate-x-[26px]' : 'translate-x-[2px]',
+                        autoApproveEnabled ? 'translate-x-[26px]' : 'translate-x-0',
                       )}
                     />
                   </button>
                 </div>
-                {autoApproveEnabled ? (
-                  <div className="mt-3 space-y-2 pl-11">
-                    <p className="text-[10px] font-medium text-muted-foreground/40">Score range for auto-approve:</p>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={autoApproveScoreMin}
-                        onChange={(e) => {
-                          setAutoApproveScoreMin(Number(e.target.value));
-                          setHasChanges(true);
-                        }}
-                        className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
-                        aria-label="Min auto-approve score"
-                      />
-                      <span className="text-[10px] text-muted-foreground/40">&le; score &le;</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={autoApproveScoreMax}
-                        onChange={(e) => {
-                          setAutoApproveScoreMax(Number(e.target.value));
-                          setHasChanges(true);
-                        }}
-                        className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
-                        aria-label="Max auto-approve score"
-                      />
-                    </div>
-                    {autoApproveScoreMin > autoApproveScoreMax ? (
-                      <p className="text-[10px] font-medium text-red-400">Min must be ≤ Max</p>
-                    ) : null}
+                <div className="mt-3 space-y-2 pl-11">
+                  <p className="text-[10px] font-medium text-muted-foreground/40">Score range for auto-approve:</p>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={autoApproveScoreMin}
+                      onChange={(e) => {
+                        setAutoApproveScoreMin(Number(e.target.value));
+                        setHasChanges(true);
+                      }}
+                      className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
+                      aria-label="Min auto-approve score"
+                    />
+                    <span className="text-[10px] text-muted-foreground/40">&le; score &le;</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={autoApproveScoreMax}
+                      onChange={(e) => {
+                        setAutoApproveScoreMax(Number(e.target.value));
+                        setHasChanges(true);
+                      }}
+                      className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
+                      aria-label="Max auto-approve score"
+                    />
                   </div>
-                ) : null}
+                  {autoApproveScoreMin > autoApproveScoreMax ? (
+                    <p className="text-[10px] font-medium text-red-400">Min must be ≤ Max</p>
+                  ) : null}
+                </div>
+              </div>
+
+              {/* Auto Draft Messages */}
+              <div className="rounded-xl border border-border/30 bg-zbooni-dark/40 p-4 transition-colors hover:border-border/50">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.04]">
+                      <Mail className="h-4 w-4 text-blue-400" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold tracking-tight">Auto Draft Messages</p>
+                      <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground/50">
+                        Automatically generate message drafts for newly qualified leads
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={autoDraftEnabled}
+                    onClick={() => {
+                      setAutoDraftEnabled(!autoDraftEnabled);
+                      setHasChanges(true);
+                    }}
+                    className={cn(
+                      'relative inline-flex h-6 w-12 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors',
+                      autoDraftEnabled ? 'bg-blue-500' : 'bg-muted/40',
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'pointer-events-none absolute h-5 w-5 rounded-full bg-white shadow-lg transition-transform',
+                        autoDraftEnabled ? 'translate-x-[26px]' : 'translate-x-0',
+                      )}
+                    />
+                  </button>
+                </div>
+                <div className="mt-3 space-y-2 pl-11">
+                  <p className="text-[10px] font-medium text-muted-foreground/40">Minimum score for auto-draft:</p>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={autoDraftMinScore}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        if (!Number.isNaN(n) && n >= 0 && n <= 100) {
+                          setAutoDraftMinScore(n);
+                          setHasChanges(true);
+                        }
+                      }}
+                      className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
+                      aria-label="Minimum score for auto-draft"
+                    />
+                    <span className="text-[10px] text-muted-foreground/40">out of 100</span>
+                  </div>
+                </div>
               </div>
 
               {/* Read-only follow-up cadence display */}
@@ -1256,28 +1610,8 @@ export default function ControlsSettingsPage() {
         </div>
       </div>
 
-      {/* ── Outbox Monitor ──────────────────────────────────────────── */}
-      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-teal/10">
-            <FileText className="h-4 w-4 text-zbooni-teal" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold tracking-tight">Outbox Monitor</h2>
-            <p className="text-[11px] text-muted-foreground/50">
-              Recent pipeline events and their processing status
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-col items-center justify-center py-8 text-center">
-          <FileText className="mb-2 h-8 w-8 text-muted-foreground/20" />
-          <p className="text-sm font-medium text-muted-foreground/50">No recent events</p>
-          <p className="mt-0.5 text-[11px] text-muted-foreground/30">
-            Pipeline events will appear here as discovery runs process
-          </p>
-        </div>
-      </div>
+      {/* ── Countries & Cities Management (A7) ─────────────────────── */}
+      <CountriesCitiesManager apiClient={apiClient} />
     </div>
   );
 }

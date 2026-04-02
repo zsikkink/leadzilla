@@ -87,6 +87,27 @@ export const CreateLeadResponseSchema = z.object({
   jobId: z.string().min(1),
 });
 
+export const LeadBusinessContactSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    title: z.string().nullable(),
+    email: z.string().email().nullable(),
+    phone: z.string().nullable(),
+    linkedinUrl: z.string().url().nullable(),
+    seniority: z.string().min(1),
+    positionRank: z.number().int(),
+    source: z.string().min(1),
+  })
+  .strict();
+
+export const LeadConversionContextSchema = z
+  .object({
+    businessInsights: z.string().nullable(),
+    metadata: z.unknown().nullable(),
+  })
+  .strict();
+
 export const GetLeadResponseSchema = z.object({
   id: z.string().min(1),
   firstName: z.string(),
@@ -106,6 +127,12 @@ export const GetLeadResponseSchema = z.object({
   phoneSource: z.string().nullable().optional(),
   businessEmail: z.string().nullable().optional(),
   contactDiscovery: LeadContactDiscoverySchema.nullable().optional(),
+  businessId: z.string().nullable().optional(),
+  websiteDomain: z.string().nullable().optional(),
+  icpProfileName: z.string().nullable().optional(),
+  businessContacts: z.array(LeadBusinessContactSchema).default([]),
+  businessProfileRaw: z.unknown().nullable().optional(),
+  conversionContext: LeadConversionContextSchema.nullable().optional(),
 });
 
 export const GetJobStatusResponseSchema = z.object({
@@ -129,6 +156,7 @@ export const ListLeadsQuerySchema = z
     scoreBand: LeadScoreBandSchema.optional(),
     minBlendedScore: z.coerce.number().min(0).max(1).optional(),
     includeRejected: z.coerce.boolean().default(false).optional(),
+    search: z.string().max(200).optional(),
     from: z.string().datetime().optional(),
     to: z.string().datetime().optional(),
     includeQualityMetrics: z.coerce.boolean().default(false),
@@ -168,6 +196,8 @@ export const LeadInspectionResponseSchema = z
     businessCountry: z.string().nullable(),
     businessCity: z.string().nullable(),
     businessCategory: z.string().nullable(),
+    businessName: z.string().nullable().optional(),
+    decisionMakerTitle: z.string().nullable().optional(),
   })
   .strict();
 
@@ -193,6 +223,8 @@ export type LeadContactDiscoveryCandidate = z.infer<typeof LeadContactDiscoveryC
 export type LeadContactDiscovery = z.infer<typeof LeadContactDiscoverySchema>;
 export type CreateLeadRequest = z.infer<typeof CreateLeadRequestSchema>;
 export type CreateLeadResponse = z.infer<typeof CreateLeadResponseSchema>;
+export type LeadBusinessContact = z.infer<typeof LeadBusinessContactSchema>;
+export type LeadConversionContext = z.infer<typeof LeadConversionContextSchema>;
 export type GetLeadResponse = z.infer<typeof GetLeadResponseSchema>;
 export type GetJobStatusResponse = z.infer<typeof GetJobStatusResponseSchema>;
 export type LeadScoreBand = z.infer<typeof LeadScoreBandSchema>;

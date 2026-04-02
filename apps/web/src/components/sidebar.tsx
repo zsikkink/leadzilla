@@ -8,6 +8,7 @@ import {
   BarChart3,
   ChevronsLeft,
   ChevronsRight,
+  Handshake,
   Inbox,
   LayoutDashboard,
   Lightbulb,
@@ -29,9 +30,14 @@ const DASHBOARD_NAV_ITEMS = [
   { href: '/dashboard/inbox', label: 'Inbox', icon: Inbox },
   { href: '/dashboard/icps', label: 'ICP Profiles', icon: Target },
   { href: '/dashboard/analytics', label: 'Analytics', icon: BarChart3 },
+  { href: '/dashboard/analytics/deals', label: 'Deals', icon: Handshake },
   { href: '/dashboard/recommendations', label: 'Recommendations', icon: Lightbulb },
   { href: '/dashboard/jobs', label: 'Jobs', icon: Activity },
 ] as const;
+
+// Routes that have child pages — use exact match only for these
+// to prevent double-highlighting (e.g. Analytics + Deals both lit)
+const EXACT_MATCH_ROUTES = new Set(['/dashboard/analytics']);
 
 const DEV_CONSOLE_NAV_ITEMS = [
   { href: '/discovery', label: 'Controls & Settings', icon: Settings },
@@ -139,7 +145,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           const isActive =
             href === '/dashboard'
               ? pathname === '/dashboard'
-              : pathname === href || pathname.startsWith(`${href}/`);
+              : EXACT_MATCH_ROUTES.has(href)
+                ? pathname === href
+                : pathname === href || pathname.startsWith(`${href}/`);
 
           return (
             <Link

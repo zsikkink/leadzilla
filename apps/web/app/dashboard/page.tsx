@@ -4,8 +4,8 @@ import { Calendar, DollarSign, MessageSquare, TrendingUp, Users, Zap } from 'luc
 import { useCallback, useState } from 'react';
 
 import { CustomSelect } from '../../src/components/custom-select.js';
-import { FunnelChart } from '../../src/components/funnel-chart.js';
 import { KpiCard } from '../../src/components/kpi-card.js';
+import { PipelineTimeSeriesChart } from '../../src/components/pipeline-time-series-chart.js';
 import { useAuth } from '../../src/hooks/use-auth.js';
 import { useApiQuery } from '../../src/hooks/use-api-query.js';
 
@@ -88,7 +88,12 @@ export default function DashboardPage() {
   const sentToday = funnel.data?.messagesSentCount ?? 0;
 
   // Cost per lead from analytics API (already in dollars)
-  const costPerLead = funnel.data?.costPerLead ?? 0;
+  // Show '--' when no completed runs exist (costPerLead=0 and no leads), not $0.00
+  const rawCostPerLead = funnel.data?.costPerLead ?? null;
+  const hasCompletedRuns = (funnel.data?.discoveredCount ?? 0) > 0;
+  const costPerLeadDisplay = rawCostPerLead !== null && hasCompletedRuns
+    ? `$${rawCostPerLead.toFixed(2)}`
+    : '\u2014';
 
   return (
     <div className="space-y-6">
@@ -172,26 +177,25 @@ export default function DashboardPage() {
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Cost / Lead</p>
             <div className="mt-1.5 flex items-baseline gap-1">
               <DollarSign className="h-4 w-4 text-muted-foreground/50" />
-              <p className="text-3xl font-extrabold tracking-tight">{costPerLead.toFixed(2)}</p>
+              <p className="text-3xl font-extrabold tracking-tight">{costPerLeadDisplay}</p>
             </div>
           </div>
         </div>
       ) : null}
 
       {/* Pipeline Time-Series Chart */}
-      <FunnelChart />
+      <PipelineTimeSeriesChart icpProfileId={icpFilter} />
 
       {/* Feedback Summary */}
       {feedback.data ? (
         <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
           <h2 className="mb-4 text-base font-bold tracking-tight">Feedback Summary</h2>
-          <div className="grid grid-cols-3 gap-4 sm:grid-cols-6">
+          <div className="grid grid-cols-3 gap-4 sm:grid-cols-5">
             {[
               { label: 'Replied', value: feedback.data.repliedCount },
               { label: 'Meetings', value: feedback.data.meetingBookedCount },
               { label: 'Deals Won', value: feedback.data.dealWonCount },
               { label: 'Deals Lost', value: feedback.data.dealLostCount },
-              { label: 'Unsubscribed', value: feedback.data.unsubscribedCount },
               { label: 'Bounced', value: feedback.data.bouncedCount },
             ].map((item) => (
               <div key={item.label}>

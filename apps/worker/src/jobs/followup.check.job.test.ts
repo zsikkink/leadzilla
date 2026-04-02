@@ -10,6 +10,9 @@ const { dbMock, pipelineSettingsMock } = vi.hoisted(() => ({
         findMany: vi.fn(),
         updateMany: vi.fn(),
       },
+      feedbackEvent: {
+        findMany: vi.fn(),
+      },
       messageDraft: {
         findMany: vi.fn(),
       },
@@ -55,6 +58,7 @@ describe('handleFollowupCheckJob', () => {
     vi.setSystemTime(new Date('2026-03-22T14:30:00.000Z'));
 
     pipelineSettingsMock.getFollowUpMaxCount.mockResolvedValue(3);
+    dbMock.prisma.feedbackEvent.findMany.mockResolvedValue([]);
     dbMock.prisma.messageDraft.findMany.mockResolvedValue([
       {
         leadId: 'lead_1',
@@ -79,7 +83,6 @@ describe('handleFollowupCheckJob', () => {
           channel: 'EMAIL',
           lead: {
             id: 'lead_1',
-            feedbackEvents: [],
           },
           messageDraft: {
             icpProfileId: 'icp_1',
@@ -127,11 +130,6 @@ describe('handleFollowupCheckJob', () => {
         lead: {
           deletedAt: null,
           status: { in: ['messaged', 'replied'] },
-          feedbackEvents: {
-            none: {
-              eventType: { in: ['UNSUBSCRIBED', 'MEETING_BOOKED', 'DEAL_WON', 'BOUNCED'] },
-            },
-          },
         },
       },
       data: { nextFollowUpAfter: null },
@@ -148,7 +146,6 @@ describe('handleFollowupCheckJob', () => {
           channel: 'EMAIL',
           lead: {
             id: 'lead_1',
-            feedbackEvents: [],
           },
           messageDraft: {
             icpProfileId: 'icp_1',
@@ -183,7 +180,6 @@ describe('handleFollowupCheckJob', () => {
           channel: 'EMAIL',
           lead: {
             id: 'lead_1',
-            feedbackEvents: [{ id: 'feedback_1' }],
           },
           messageDraft: {
             icpProfileId: 'icp_1',
@@ -191,6 +187,9 @@ describe('handleFollowupCheckJob', () => {
         },
       ])
       .mockResolvedValueOnce([]);
+    dbMock.prisma.feedbackEvent.findMany.mockResolvedValueOnce([
+      { leadId: 'lead_1', eventType: 'UNSUBSCRIBED' },
+    ]);
     const boss = {
       send: vi.fn().mockResolvedValue(undefined),
     };
@@ -208,13 +207,6 @@ describe('handleFollowupCheckJob', () => {
       where: {
         id: 'send_1',
         nextFollowUpAfter: { not: null },
-        lead: {
-          feedbackEvents: {
-            some: {
-              eventType: { in: ['UNSUBSCRIBED', 'MEETING_BOOKED', 'DEAL_WON', 'BOUNCED'] },
-            },
-          },
-        },
       },
       data: { nextFollowUpAfter: null },
     });
@@ -251,11 +243,6 @@ describe('handleFollowupCheckJob', () => {
         lead: {
           deletedAt: null,
           status: 'messaged',
-          feedbackEvents: {
-            none: {
-              eventType: { in: ['UNSUBSCRIBED', 'MEETING_BOOKED', 'DEAL_WON', 'BOUNCED'] },
-            },
-          },
         },
         followUpDrafts: {
           none: {},
