@@ -6,6 +6,7 @@ import type { Job, SendOptions } from 'pg-boss';
 
 import { RetryableError, classifyError } from '../errors.js';
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
+import { recordPipelineEvent } from '../utils/pipeline-events.js';
 import {
   getMessagingRole,
   getMessagingSystemPrompt,
@@ -21,7 +22,6 @@ import {
   checkNegativeKeywords,
   buildNegativeKeywordPromptSuffix,
 } from '../messaging/validate-message.js';
-import { getFallbackForChannel, type MessageContext } from '../messaging/fallback-templates.js';
 import { MESSAGE_SEND_JOB_NAME, MESSAGE_SEND_RETRY_OPTIONS, type MessageSendJobPayload } from './message.send.job.js';
 
 export const MESSAGE_GENERATE_JOB_NAME = 'message.generate';
@@ -43,7 +43,7 @@ export const MESSAGE_GENERATE_RETRY_OPTIONS: Pick<
 export interface MessageGenerateJobPayload
   extends Pick<
     GenerateMessageDraftRequest,
-    'leadId' | 'icpProfileId' | 'knowledgeEntryIds' | 'promptVersion'
+    'leadId' | 'icpProfileId' | 'knowledgeEntryIds' | 'promptVersion' | 'forceRegenerate'
   >,
     Partial<Pick<GenerateMessageDraftRequest, 'channel'>> {
   runId: string;
@@ -62,6 +62,13 @@ export interface MessageGenerateLogger {
 export interface MessageGenerateJobDependencies {
   openAiAdapter: OpenAiAdapter;
   boss?: Pick<PgBoss, 'send'> | undefined;
+}
+
+interface MessageContext {
+  companyInsight: string | null;
+  socialPresence: string | null;
+  techGap: string | null;
+  teamSignal: string | null;
 }
 
 /**
@@ -236,6 +243,42 @@ function buildMessageContext(
   }
 
   return { companyInsight, socialPresence, techGap, teamSignal };
+}
+
+function buildDraftGenerationFailureMessage(
+  reason: string,
+  forceRegenerate: boolean,
+): string {
+  return `${reason} ${forceRegenerate ? 'Your existing draft was kept.' : 'No draft was created.'}`;
+}
+
+async function setLeadDraftGenerationError(
+  leadId: string,
+  message: string,
+  metadata?: Record<string, unknown> | undefined,
+): Promise<void> {
+  await Promise.allSettled([
+    prisma.lead.updateMany({
+      where: { id: leadId },
+      data: { error: message },
+    }),
+    recordPipelineEvent({
+      leadId,
+      stage: 'message.generate',
+      status: 'FAILED',
+      metadata: {
+        message,
+        ...(metadata ?? {}),
+      },
+    }),
+  ]);
+}
+
+async function clearLeadDraftGenerationError(leadId: string): Promise<void> {
+  await prisma.lead.updateMany({
+    where: { id: leadId },
+    data: { error: null },
+  });
 }
 
 export async function handleMessageGenerateJob(
@@ -459,36 +502,61 @@ export async function handleMessageGenerateJob(
     }
 
     const existingDraftForRetry = await prisma.messageDraft.findFirst({
-      where: { leadId, icpProfileId, followUpNumber },
+      where: {
+        leadId,
+        icpProfileId,
+        followUpNumber,
+        approvalStatus: { in: ['PENDING', 'APPROVED', 'AUTO_APPROVED'] },
+      },
       include: { variants: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
 
     if (existingDraftForRetry) {
-      if (followUpNumber === 0 && lead.status === 'qualified') {
-        await prisma.lead.updateMany({
+      if (job.data.forceRegenerate) {
+        const existingBlockingSend = await prisma.messageSend.findFirst({
           where: {
-            id: leadId,
-            status: 'qualified',
+            messageDraftId: existingDraftForRetry.id,
+            followUpNumber: 0,
+            status: { in: ['QUEUED', 'SENDING', 'UNRESOLVED', 'SENT', 'DELIVERED', 'REPLIED', 'BOUNCED'] },
           },
-          data: { status: 'drafted' },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         });
+
+        if (existingBlockingSend) {
+          logger.info(
+            { jobId: job.id, leadId, draftId: existingDraftForRetry.id, sendId: existingBlockingSend.id },
+            'Existing initial send blocks regeneration, skipping',
+          );
+          await tryFinalizeDiscoveryRun(runId, logger);
+          return;
+        }
+      } else {
+        if (followUpNumber === 0 && lead.status === 'qualified') {
+          await prisma.lead.updateMany({
+            where: {
+              id: leadId,
+              status: 'qualified',
+            },
+            data: { status: 'drafted' },
+          });
+        }
+
+        await maybeEnqueueSendForAutoApprovedDraft(existingDraftForRetry);
+
+        logger.info(
+          {
+            jobId: job.id,
+            leadId,
+            draftId: existingDraftForRetry.id,
+            followUpNumber,
+            approvalStatus: existingDraftForRetry.approvalStatus,
+          },
+          'Existing message draft already present, skipping regeneration',
+        );
+        await tryFinalizeDiscoveryRun(runId, logger);
+        return;
       }
-
-      await maybeEnqueueSendForAutoApprovedDraft(existingDraftForRetry);
-
-      logger.info(
-        {
-          jobId: job.id,
-          leadId,
-          draftId: existingDraftForRetry.id,
-          followUpNumber,
-          approvalStatus: existingDraftForRetry.approvalStatus,
-        },
-        'Existing message draft already present, skipping regeneration',
-      );
-      await tryFinalizeDiscoveryRun(runId, logger);
-      return;
     }
 
     const icpProfile = await prisma.icpProfile.findUnique({
@@ -695,189 +763,265 @@ export async function handleMessageGenerateJob(
 
     // Build generateContext outside the if-block so NK retry can reference it
     let generateContext = groundingContext;
+    if (!deps?.openAiAdapter?.isConfigured) {
+      const failureMessage = buildDraftGenerationFailureMessage(
+        'Draft generation failed because AI message generation is not configured.',
+        Boolean(job.data.forceRegenerate),
+      );
+      logger.warn({ jobId: job.id, leadId }, 'OpenAI not configured for message generation');
+      await setLeadDraftGenerationError(leadId, failureMessage, {
+        failureType: 'provider_not_configured',
+      });
+      await tryFinalizeDiscoveryRun(runId, logger);
+      return;
+    }
 
-    if (deps?.openAiAdapter?.isConfigured) {
-      let systemPromptOverride: string | undefined;
+    let systemPromptOverride: string | undefined;
 
-      if (followUpNumber > 0 && pitchedFeature) {
-        systemPromptOverride = [
-          'You are an expert B2B sales copywriter for Zbooni, a UAE fintech company.',
-          `This is follow-up message #${followUpNumber} to a lead who has not replied.`,
-          `Pitch this specific Zbooni feature: ${pitchedFeature}`,
-          previouslyPitchedFeatures.length > 0
-            ? `Previous messages pitched: ${previouslyPitchedFeatures.join(', ')}. Do NOT repeat these.`
-            : '',
-          'Write a natural, conversational follow-up. Do not mention this is automated.',
-          'Reference the previous outreach naturally ("I wanted to follow up..." / "One more thing I thought might interest you...").',
-          'Generate a single message with: subject (null for WhatsApp), bodyText, bodyHtml (null ok), ctaText (null ok).',
-        ].filter(Boolean).join(' ');
+    if (followUpNumber > 0 && pitchedFeature) {
+      systemPromptOverride = [
+        'You are an expert B2B sales copywriter for Zbooni, a UAE fintech company.',
+        `This is follow-up message #${followUpNumber} to a lead who has not replied.`,
+        `Pitch this specific Zbooni feature: ${pitchedFeature}`,
+        previouslyPitchedFeatures.length > 0
+          ? `Previous messages pitched: ${previouslyPitchedFeatures.join(', ')}. Do NOT repeat these.`
+          : '',
+        'Write a natural, conversational follow-up. Do not mention this is automated.',
+        'Reference the previous outreach naturally ("I wanted to follow up..." / "One more thing I thought might interest you...").',
+        'Generate a single message with: subject (null for WhatsApp), bodyText, bodyHtml (null ok), ctaText (null ok).',
+      ].filter(Boolean).join(' ');
+    }
+
+    generateContext = systemPromptOverride
+      ? { ...groundingContext, icpDescription: systemPromptOverride }
+      : groundingContext;
+
+    const result = await deps.openAiAdapter.generateMessageVariants(generateContext);
+
+    if (result.status !== 'success') {
+      const failureMessage = buildDraftGenerationFailureMessage(
+        result.status === 'retryable_error'
+          ? 'Draft generation failed because the AI provider was temporarily unavailable.'
+          : 'Draft generation failed because the AI provider returned an invalid response.',
+        Boolean(job.data.forceRegenerate),
+      );
+
+      logger.warn(
+        {
+          jobId: job.id,
+          leadId,
+          status: result.status,
+          providerMessage: result.failure.message,
+          statusCode: result.failure.statusCode,
+        },
+        'OpenAI message generation failed without creating a draft',
+      );
+
+      await setLeadDraftGenerationError(leadId, failureMessage, {
+        failureType: result.status,
+        providerMessage: result.failure.message,
+        statusCode: result.failure.statusCode,
+      });
+
+      if (result.status === 'retryable_error') {
+        throw new RetryableError(failureMessage, result.failure);
       }
 
-      generateContext = systemPromptOverride
-        ? { ...groundingContext, icpDescription: systemPromptOverride }
-        : groundingContext;
+      await tryFinalizeDiscoveryRun(runId, logger);
+      return;
+    }
 
-      // First attempt
-      const result = await deps.openAiAdapter.generateMessageVariants(generateContext);
+    generatedByModel = result.data.model;
+    messageContent = result.data.message;
 
-      if (result.status === 'success') {
-        generatedByModel = result.data.model;
-        messageContent = result.data.message;
+    logger.info(
+      { jobId: job.id, leadId, model: result.data.model },
+      'OpenAI message generation succeeded',
+    );
 
-        logger.info(
-          { jobId: job.id, leadId, model: result.data.model },
-          'OpenAI message generation succeeded',
-        );
-      } else {
-        logger.warn(
-          { jobId: job.id, leadId, status: result.status },
-          'OpenAI message generation failed — using fallback templates',
-        );
-      }
+    const validation = validateMessageVariant(resolvedChannel, messageContent);
 
-      // Validate the message
-      const validation = validateMessageVariant(resolvedChannel, messageContent);
+    if (validation.reasons.length > 0) {
+      logger.info(
+        { jobId: job.id, leadId, reasons: validation.reasons },
+        'Message validation findings',
+      );
+    }
 
-      if (validation.reasons.length > 0) {
-        logger.info(
-          { jobId: job.id, leadId, reasons: validation.reasons },
-          'Message validation findings',
-        );
-      }
+    if (validation.hardReject) {
+      logger.warn(
+        { jobId: job.id, leadId, reasons: validation.reasons },
+        'Hard rejection detected, retrying with stricter prompt',
+      );
 
-      // If hard rejection, retry once with stricter prompt
-      if (validation.hardReject) {
-        logger.warn(
-          { jobId: job.id, leadId },
-          'Hard rejection detected, retrying with stricter prompt',
-        );
+      const stricterSuffix = buildStricterPromptSuffix(resolvedChannel);
+      const retryContext = {
+        ...generateContext,
+        icpDescription: `${generateContext.icpDescription}\n\n${stricterSuffix}`,
+      };
 
-        const stricterSuffix = buildStricterPromptSuffix(resolvedChannel);
-        const retryContext = {
-          ...generateContext,
-          icpDescription: `${generateContext.icpDescription}\n\n${stricterSuffix}`,
-        };
+      const retryResult = await deps.openAiAdapter.generateMessageVariants(retryContext);
 
-        const retryResult = await deps.openAiAdapter.generateMessageVariants(retryContext);
+      if (retryResult.status === 'success') {
+        generatedByModel = retryResult.data.model;
+        const retryValidation = validateMessageVariant(resolvedChannel, retryResult.data.message);
 
-        if (retryResult.status === 'success') {
-          generatedByModel = retryResult.data.model;
-          const retryValidation = validateMessageVariant(resolvedChannel, retryResult.data.message);
-
-          if (!retryValidation.hardReject) {
-            messageContent = retryValidation.cleaned;
-          } else {
-            // Still hard rejecting after retry — use fallback
-            logger.warn(
-              { jobId: job.id, leadId },
-              'Retry still has hard rejection, using fallback template',
-            );
-            messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
-            generatedByModel = 'fallback-template';
-          }
-        } else {
-          // Retry OpenAI call itself failed — use fallback
-          logger.warn({ jobId: job.id, leadId }, 'Retry OpenAI failed, using fallback template');
-          messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
-          generatedByModel = 'fallback-template';
+        if (retryValidation.hardReject) {
+          const failureMessage = buildDraftGenerationFailureMessage(
+            'Draft generation failed because the AI response did not pass message quality checks.',
+            Boolean(job.data.forceRegenerate),
+          );
+          await setLeadDraftGenerationError(leadId, failureMessage, {
+            failureType: 'validation_failed',
+            reasons: retryValidation.reasons,
+          });
+          await tryFinalizeDiscoveryRun(runId, logger);
+          return;
         }
+
+        messageContent = retryValidation.cleaned;
       } else {
-        // No hard rejection — apply soft cleaning
-        messageContent = validation.cleaned;
+        const failureMessage = buildDraftGenerationFailureMessage(
+          'Draft generation failed because the AI response did not pass message quality checks.',
+          Boolean(job.data.forceRegenerate),
+        );
+        await setLeadDraftGenerationError(leadId, failureMessage, {
+          failureType: 'validation_retry_failed',
+          providerStatus: retryResult.status,
+          providerMessage: retryResult.failure.message,
+          statusCode: retryResult.failure.statusCode,
+        });
+        await tryFinalizeDiscoveryRun(runId, logger);
+        return;
       }
     } else {
-      // OpenAI not configured — use fallback
-      logger.warn({ jobId: job.id, leadId }, 'OpenAI not configured, using fallback template');
-      messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
-      generatedByModel = 'fallback-template';
+      messageContent = validation.cleaned;
     }
 
     // -----------------------------------------------------------------------
     // Negative keyword filter — catch Zbooni ICP disqualification signals
     // Runs after validation/cleaning, before persisting to DB.
     // -----------------------------------------------------------------------
-    if (deps?.openAiAdapter?.isConfigured && generatedByModel !== 'fallback-template') {
-      const nkCheck = checkNegativeKeywords(messageContent.bodyText);
+    const nkCheck = checkNegativeKeywords(messageContent.bodyText);
 
-      if (nkCheck.found) {
-        logger.warn(
-          { jobId: job.id, leadId, keywords: nkCheck.matches },
-          'Negative keywords detected in generated message, attempting regeneration',
-        );
+    if (nkCheck.found) {
+      logger.warn(
+        { jobId: job.id, leadId, keywords: nkCheck.matches },
+        'Negative keywords detected in generated message, attempting regeneration',
+      );
 
-        const nkPromptSuffix = buildNegativeKeywordPromptSuffix(nkCheck.matches);
-        const nkRetryContext = {
-          ...generateContext,
-          icpDescription: `${generateContext.icpDescription}\n\n${nkPromptSuffix}`,
-        };
+      const nkPromptSuffix = buildNegativeKeywordPromptSuffix(nkCheck.matches);
+      const nkRetryContext = {
+        ...generateContext,
+        icpDescription: `${generateContext.icpDescription}\n\n${nkPromptSuffix}`,
+      };
 
-        const nkRetryResult = await deps.openAiAdapter.generateMessageVariants(nkRetryContext);
+      const nkRetryResult = await deps.openAiAdapter.generateMessageVariants(nkRetryContext);
 
-        if (nkRetryResult.status === 'success') {
-          generatedByModel = nkRetryResult.data.model;
-          const nkRecheck = checkNegativeKeywords(nkRetryResult.data.message.bodyText);
+      if (nkRetryResult.status === 'success') {
+        generatedByModel = nkRetryResult.data.model;
+        const nkValidation = validateMessageVariant(resolvedChannel, nkRetryResult.data.message);
+        const nkRecheck = checkNegativeKeywords(nkValidation.cleaned.bodyText);
 
-          if (!nkRecheck.found) {
-            messageContent = nkRetryResult.data.message;
-          } else {
-            logger.warn(
-              { jobId: job.id, leadId, keywords: nkRecheck.matches },
-              'Message still contains negative keywords after regeneration, proceeding anyway',
-            );
-          }
-        } else {
-          logger.warn(
-            { jobId: job.id, leadId, status: nkRetryResult.status },
-            'Negative keyword regeneration failed, proceeding with original message',
+        if (nkValidation.hardReject || nkRecheck.found) {
+          const failureMessage = buildDraftGenerationFailureMessage(
+            'Draft generation failed because the AI response violated message safety rules.',
+            Boolean(job.data.forceRegenerate),
           );
+          await setLeadDraftGenerationError(leadId, failureMessage, {
+            failureType: 'negative_keywords',
+            keywords: nkRecheck.matches,
+            reasons: nkValidation.reasons,
+          });
+          await tryFinalizeDiscoveryRun(runId, logger);
+          return;
         }
+
+        messageContent = nkValidation.cleaned;
+      } else {
+        const failureMessage = buildDraftGenerationFailureMessage(
+          'Draft generation failed because the AI response violated message safety rules.',
+          Boolean(job.data.forceRegenerate),
+        );
+        await setLeadDraftGenerationError(leadId, failureMessage, {
+          failureType: 'negative_keyword_retry_failed',
+          keywords: nkCheck.matches,
+          providerStatus: nkRetryResult.status,
+          providerMessage: nkRetryResult.failure.message,
+          statusCode: nkRetryResult.failure.statusCode,
+        });
+        await tryFinalizeDiscoveryRun(runId, logger);
+        return;
       }
     }
 
-    // Guard: if body looks like raw JSON or leaked JSON fragment, replace with fallback
+    // Guard: if body looks like raw JSON or leaked JSON fragment, fail honestly.
     if (
       /^\s*\{[\s\S]*\}\s*$/.test(messageContent.bodyText.trim()) ||
       messageContent.bodyText.includes('{"insights"') ||
       messageContent.bodyText.includes('{"message"') ||
       /```json/i.test(messageContent.bodyText)
     ) {
+      const failureMessage = buildDraftGenerationFailureMessage(
+        'Draft generation failed because the AI returned invalid structured output instead of a usable message.',
+        Boolean(job.data.forceRegenerate),
+      );
       logger.warn(
         { jobId: job.id, leadId },
-        'Message body contains raw JSON, replacing with fallback template',
+        'Message body contains raw JSON, failing without creating a draft',
       );
-      messageContent = getFallbackForChannel(resolvedChannel, lead.firstName, companyName, messageContext);
-      generatedByModel = 'fallback-template';
+      await setLeadDraftGenerationError(leadId, failureMessage, {
+        failureType: 'raw_json_output',
+      });
+      await tryFinalizeDiscoveryRun(runId, logger);
+      return;
     }
 
-    const draft = await prisma.messageDraft.create({
-      data: {
-        leadId,
-        icpProfileId,
-        scorePredictionId: latestScore.id,
-        promptVersion: promptVersion ?? 'v1',
-        generatedByModel,
-        groundingKnowledgeIds: knowledgeEntryIds ?? [],
-        groundingContextJson: toInputJson(groundingContext),
-        approvalStatus: autoApprove ? 'AUTO_APPROVED' : 'PENDING',
-        followUpNumber,
-        pitchedFeature,
-        parentMessageSendId: job.data.parentMessageSendId ?? null,
-        variants: {
-          create: [
-            {
-              variantKey: 'variant_a',
-              channel: resolvedChannel,
-              subject: messageContent.subject,
-              bodyText: messageContent.bodyText,
-              bodyHtml: messageContent.bodyHtml,
-              ctaText: messageContent.ctaText,
-              isSelected: autoApprove,
-            },
-          ],
+    const draft = await prisma.$transaction(async (tx) => {
+      if (job.data.forceRegenerate && existingDraftForRetry) {
+        await tx.messageDraft.update({
+          where: { id: existingDraftForRetry.id },
+          data: {
+            approvalStatus: 'REJECTED',
+            rejectedReason: 'Superseded by regenerated draft',
+            approvedByUserId: null,
+            approvedAt: null,
+          },
+        });
+      }
+
+      return tx.messageDraft.create({
+        data: {
+          leadId,
+          icpProfileId,
+          scorePredictionId: latestScore.id,
+          promptVersion: promptVersion ?? 'v1',
+          generatedByModel,
+          groundingKnowledgeIds: knowledgeEntryIds ?? [],
+          groundingContextJson: toInputJson(groundingContext),
+          approvalStatus: autoApprove ? 'AUTO_APPROVED' : 'PENDING',
+          followUpNumber,
+          pitchedFeature,
+          parentMessageSendId: job.data.parentMessageSendId ?? null,
+          variants: {
+            create: [
+              {
+                variantKey: 'variant_a',
+                channel: resolvedChannel,
+                subject: messageContent.subject,
+                bodyText: messageContent.bodyText,
+                bodyHtml: messageContent.bodyHtml,
+                ctaText: messageContent.ctaText,
+                isSelected: autoApprove,
+              },
+            ],
+          },
         },
-      },
-      include: { variants: true },
+        include: { variants: true },
+      });
     });
+
+    await clearLeadDraftGenerationError(leadId);
 
     // If a retry reuses an existing initial draft after draft creation already
     // succeeded, restore the canonical drafted state without downgrading later

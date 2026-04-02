@@ -4,14 +4,18 @@ import type {
 } from '@lead-flood/contracts';
 
 export function getNextSelectedIcpId(
-  currentSelectedIcpId: string | null,
+  currentSelectedIcpIds: string[],
   clickedIcpId: string,
-): string | null {
-  return currentSelectedIcpId === clickedIcpId ? null : clickedIcpId;
+): string[] {
+  if (currentSelectedIcpIds.includes(clickedIcpId)) {
+    return currentSelectedIcpIds.filter((id) => id !== clickedIcpId);
+  }
+
+  return [...currentSelectedIcpIds, clickedIcpId];
 }
 
-export function buildSingleIcpDiscoveryRequest(input: {
-  selectedIcpId: string | null;
+export function buildDiscoveryRequest(input: {
+  selectedIcpIds: string[];
   countries: DiscoveryCountryCodeContract[];
   cities: string[];
   includeWebsiteAnalysis: boolean;
@@ -19,12 +23,12 @@ export function buildSingleIcpDiscoveryRequest(input: {
   limit: number;
   requestedByUserId?: string | undefined;
 }): CreateDiscoveryRunRequest | null {
-  if (!input.selectedIcpId || input.countries.length === 0) {
+  if (input.selectedIcpIds.length === 0 || input.countries.length === 0) {
     return null;
   }
 
   return {
-    icpProfileIds: [input.selectedIcpId],
+    icpProfileIds: input.selectedIcpIds,
     countries: input.countries,
     ...(input.cities.length > 0 ? { cities: input.cities } : {}),
     includeWebsiteAnalysis: input.includeWebsiteAnalysis,

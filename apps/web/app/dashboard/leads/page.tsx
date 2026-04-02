@@ -1,7 +1,7 @@
 'use client';
 
 import type { LeadScoreBand, LeadStatus } from '@lead-flood/contracts';
-import { AlertTriangle, Loader2, MessageSquare, Undo2, X } from 'lucide-react';
+import { AlertTriangle, Loader2, MessageSquare, RefreshCw, Undo2, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -167,6 +167,14 @@ export default function LeadsPage() {
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [pendingReject, setPendingReject] = useState<{ leadId: string; firstName: string; lastName: string } | null>(null);
   const { shouldSkip: shouldSkipRejectConfirm } = useConfirmModal('confirm-reject-lead');
+  const [regenerateModalOpen, setRegenerateModalOpen] = useState(false);
+  const [pendingRegenerate, setPendingRegenerate] = useState<{
+    leadId: string;
+    icpProfileId: string;
+    firstName: string;
+    scorePredictionId: string | null;
+  } | null>(null);
+  const { shouldSkip: shouldSkipRegenerateConfirm } = useConfirmModal('confirm-regenerate-message-draft');
 
   useEffect(() => {
     const tab = searchParams.get('tab');
@@ -321,7 +329,13 @@ export default function LeadsPage() {
     }
   };
 
-  const handleGenerateMessage = async (leadId: string, icpProfileId: string, firstName: string, scorePredictionId: string | null) => {
+  const handleGenerateMessage = async (
+    leadId: string,
+    icpProfileId: string,
+    firstName: string,
+    scorePredictionId: string | null,
+    forceRegenerate = false,
+  ) => {
     if (isQualificationThresholdLoading) {
       toast.error('Draft generation is disabled while pipeline settings are still loading.');
       return;
@@ -339,6 +353,7 @@ export default function LeadsPage() {
         icpProfileId,
         ...(scorePredictionId ? { scorePredictionId } : {}),
         promptVersion: 'v2',
+        ...(forceRegenerate ? { forceRegenerate: true } : {}),
       });
 
       const leadDisplayName = firstName.trim().length > 0 ? firstName.trim() : 'this lead';
@@ -346,21 +361,27 @@ export default function LeadsPage() {
       switch (result.status) {
         case 'QUEUED': {
           toast.success(
-            `Draft generation queued for ${leadDisplayName}. Opening Message Queue for this lead.`,
+            forceRegenerate
+              ? `Draft regeneration queued for ${leadDisplayName}. Opening Message Queue for this lead.`
+              : `Draft generation queued for ${leadDisplayName}. Opening Message Queue for this lead.`,
           );
           router.push(buildMessageQueueHref(leadId));
           break;
         }
         case 'CREATED': {
           toast.success(
-            `Draft created for ${leadDisplayName}. Opening Message Queue to review it.`,
+            forceRegenerate
+              ? `New draft created for ${leadDisplayName}. Opening Message Queue to review it.`
+              : `Draft created for ${leadDisplayName}. Opening Message Queue to review it.`,
           );
           router.push(buildMessageQueueHref(leadId, result.draftId));
           break;
         }
         case 'EXISTS': {
           toast.info(
-            `An initial draft already exists for ${leadDisplayName}. Opening Message Queue to review it.`,
+            forceRegenerate
+              ? `A current draft still exists for ${leadDisplayName}. Opening Message Queue to review it.`
+              : `An initial draft already exists for ${leadDisplayName}. Opening Message Queue to review it.`,
           );
           router.push(buildMessageQueueHref(leadId, result.draftId));
           break;
@@ -371,6 +392,26 @@ export default function LeadsPage() {
     } finally {
       setGeneratingForLead(null);
     }
+  };
+
+  const requestRegenerateDraft = (
+    leadId: string,
+    icpProfileId: string,
+    firstName: string,
+    scorePredictionId: string | null,
+  ) => {
+    if (shouldSkipRegenerateConfirm()) {
+      void handleGenerateMessage(leadId, icpProfileId, firstName, scorePredictionId, true);
+      return;
+    }
+
+    setPendingRegenerate({
+      leadId,
+      icpProfileId,
+      firstName,
+      scorePredictionId,
+    });
+    setRegenerateModalOpen(true);
   };
 
   return (
@@ -580,6 +621,28 @@ export default function LeadsPage() {
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                 ) : (
                                   <MessageSquare className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                            )}
+                            {lead.status === 'drafted' && lead.latestIcpProfileId && (
+                              <button
+                                type="button"
+                                title="Regenerate the current unsent draft using the latest messaging settings"
+                                disabled={generatingForLead === lead.id}
+                                className="rounded-md p-1.5 text-amber-300 transition-colors hover:bg-amber-400/15 disabled:opacity-50"
+                                onClick={() => {
+                                  requestRegenerateDraft(
+                                    lead.id,
+                                    lead.latestIcpProfileId!,
+                                    lead.firstName ?? '',
+                                    lead.latestScorePredictionId ?? null,
+                                  );
+                                }}
+                              >
+                                {generatingForLead === lead.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-3.5 w-3.5" />
                                 )}
                               </button>
                             )}
@@ -809,6 +872,39 @@ export default function LeadsPage() {
         }}
         showDontAsk
         dontAskKey="confirm-reject-lead"
+      />
+
+      <ConfirmModal
+        isOpen={regenerateModalOpen}
+        title="Regenerate Draft"
+        message={
+          pendingRegenerate
+            ? `Replace the current unsent initial draft for ${pendingRegenerate.firstName || 'this lead'} with a new one using the latest AI prompt and ICP settings? If a message has already been queued or sent, regeneration will be blocked.`
+            : ''
+        }
+        confirmLabel="Regenerate"
+        variant="info"
+        onConfirm={() => {
+          const current = pendingRegenerate;
+          setRegenerateModalOpen(false);
+          setPendingRegenerate(null);
+          if (!current) {
+            return;
+          }
+          void handleGenerateMessage(
+            current.leadId,
+            current.icpProfileId,
+            current.firstName,
+            current.scorePredictionId,
+            true,
+          );
+        }}
+        onCancel={() => {
+          setRegenerateModalOpen(false);
+          setPendingRegenerate(null);
+        }}
+        showDontAsk
+        dontAskKey="confirm-regenerate-message-draft"
       />
     </div>
   );

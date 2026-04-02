@@ -88,6 +88,7 @@ function buildRepositoryMock(): MessagingRepository {
       draftId: 'draft_1',
       variantIds: ['variant_1'],
     })),
+    clearLeadDraftGenerationError: vi.fn(async () => undefined),
     getDraftGenerationEligibilityContext: vi.fn(async () => ({
       leadId: 'lead_1',
       leadStatus: 'qualified',
@@ -95,6 +96,7 @@ function buildRepositoryMock(): MessagingRepository {
     })),
     markLeadDraftedIfQualified: vi.fn(async () => undefined),
     getExistingInitialDraft: vi.fn(async () => null),
+    supersedeInitialDraft: vi.fn(async () => undefined),
     getExistingInitialSendForDraft: vi.fn(async () => null),
     listMessageDrafts: vi.fn(),
     getMessageDraft: vi.fn(async () => buildDraftResponse()),
@@ -302,6 +304,77 @@ describe('buildMessagingService generateMessageDraft', () => {
     expect(dbMock.getPipelineSetting).not.toHaveBeenCalled();
   });
 
+  it('queues regeneration for an existing unsent initial draft without deleting it first', async () => {
+    const repository = buildRepositoryMock();
+    vi.mocked(repository.getExistingInitialDraft).mockResolvedValue({
+      draftId: 'draft_existing',
+      variantIds: ['variant_existing'],
+    });
+    vi.mocked(repository.getExistingInitialSendForDraft).mockResolvedValue(null);
+    const enqueueMessageGenerate = vi.fn(async () => undefined);
+    const service = buildMessagingService(repository, {
+      enqueueMessageSend: vi.fn(async () => undefined),
+      enqueueMessageGenerate,
+    });
+
+    const result = await service.generateMessageDraft({
+      leadId: 'lead_1',
+      icpProfileId: 'icp_1',
+      scorePredictionId: 'score_1',
+      promptVersion: 'v2',
+      knowledgeEntryIds: ['knowledge_1'],
+      channel: 'EMAIL',
+      forceRegenerate: true,
+    });
+
+    expect(result).toEqual({
+      status: 'QUEUED',
+      draftId: null,
+      variantIds: [],
+    });
+    expect(repository.clearLeadDraftGenerationError).toHaveBeenCalledWith('lead_1');
+    expect(repository.supersedeInitialDraft).not.toHaveBeenCalled();
+    expect(enqueueMessageGenerate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        promptVersion: 'v2',
+        forceRegenerate: true,
+      }),
+    );
+  });
+
+  it('blocks regeneration when an initial send already exists', async () => {
+    const repository = buildRepositoryMock();
+    vi.mocked(repository.getExistingInitialDraft).mockResolvedValue({
+      draftId: 'draft_existing',
+      variantIds: ['variant_existing'],
+    });
+    vi.mocked(repository.getExistingInitialSendForDraft).mockResolvedValue(buildSendResponse());
+    const enqueueMessageGenerate = vi.fn(async () => undefined);
+    const service = buildMessagingService(repository, {
+      enqueueMessageSend: vi.fn(async () => undefined),
+      enqueueMessageGenerate,
+    });
+
+    await expect(
+      service.generateMessageDraft({
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        scorePredictionId: 'score_1',
+        promptVersion: 'v2',
+        knowledgeEntryIds: ['knowledge_1'],
+        channel: 'EMAIL',
+        forceRegenerate: true,
+      }),
+    ).rejects.toThrow(MessagingDraftGenerationIneligibleError);
+
+    expect(repository.clearLeadDraftGenerationError).not.toHaveBeenCalled();
+    expect(repository.supersedeInitialDraft).not.toHaveBeenCalled();
+    expect(enqueueMessageGenerate).not.toHaveBeenCalled();
+    expect(repository.generateMessageDraft).not.toHaveBeenCalled();
+  });
+
   it('preserves the requested scorePredictionId when using direct repository generation', async () => {
     const repository = buildRepositoryMock();
     const service = buildMessagingService(repository, {
@@ -324,6 +397,7 @@ describe('buildMessagingService generateMessageDraft', () => {
         scorePredictionId: 'score_1',
       }),
     );
+    expect(repository.clearLeadDraftGenerationError).toHaveBeenCalledWith('lead_1');
   });
 });
 

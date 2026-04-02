@@ -55,6 +55,7 @@ export const GenerateMessageDraftRequestSchema = z
     knowledgeEntryIds: z.array(z.string().min(1)).default([]),
     channel: MessageChannelSchema.default('EMAIL'),
     promptVersion: z.string().min(1),
+    forceRegenerate: z.boolean().optional(),
   })
   .strict();
 

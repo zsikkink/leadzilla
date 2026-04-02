@@ -287,6 +287,7 @@ export class ApiClient {
     scorePredictionId?: string | undefined;
     channel?: string | undefined;
     promptVersion: string;
+    forceRegenerate?: boolean | undefined;
   }): Promise<GenerateMessageDraftResponse> {
     return this.request('/v1/messaging/drafts/generate', {
       method: 'POST',

@@ -146,7 +146,7 @@ export default function MessagesPage() {
   }, [drafts.data?.items]);
 
   // Fetch lead details for display names
-  const [leadDataMap, setLeadDataMap] = useState<Record<string, { name: string; company: string }>>({});
+  const [leadDataMap, setLeadDataMap] = useState<Record<string, { name: string; company: string; error: string | null }>>({});
 
   const leadIds = useMemo(() => {
     if (!sortedItems.length) return [];
@@ -167,7 +167,7 @@ export default function MessagesPage() {
     ).then((results) => {
       if (cancelled) return;
 
-      const dataMap: Record<string, { name: string; company: string }> = {};
+      const dataMap: Record<string, { name: string; company: string; error: string | null }> = {};
       for (let i = 0; i < results.length; i++) {
         const result = results[i];
         const leadId = leadIds[i];
@@ -180,7 +180,7 @@ export default function MessagesPage() {
           const companyName = (enrichment?.companyName as string) ?? '';
           const emailLocal = lead.email?.split('@')[0] ?? '';
           const displayName = fullName || companyName || emailLocal || `Lead ${leadId.slice(0, 8)}`;
-          dataMap[leadId] = { name: displayName, company: companyName };
+          dataMap[leadId] = { name: displayName, company: companyName, error: lead.error };
         }
       }
 
@@ -606,6 +606,9 @@ export default function MessagesPage() {
   const filteredLeadLabel = leadIdFilter
     ? leadDataMap[leadIdFilter]?.name ?? `Lead ${leadIdFilter.slice(0, 8)}`
     : null;
+  const filteredLeadError = leadIdFilter
+    ? leadDataMap[leadIdFilter]?.error ?? null
+    : null;
 
   return (
     <div className="space-y-5 pb-24">
@@ -645,6 +648,20 @@ export default function MessagesPage() {
         </div>
         <p className="mt-2 text-sm text-muted-foreground">{approvalModeSummary.body}</p>
       </div>
+
+      {filteredLeadError ? (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/[0.07] px-4 py-3">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />
+            <div>
+              <p className="text-sm font-semibold text-red-200">
+                {drafts.data?.total ? 'Latest draft generation attempt failed' : 'No draft was created'}
+              </p>
+              <p className="mt-1 text-sm text-red-100/90">{filteredLeadError}</p>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Bounced / Failed sends summary */}
       {(() => {

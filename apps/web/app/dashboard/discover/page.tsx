@@ -27,7 +27,7 @@ import { useAuth } from '../../../src/hooks/use-auth.js';
 import { countryName, toDiscoveryCountryCodes } from '../../../src/lib/countries.js';
 import { cn } from '../../../src/lib/utils.js';
 import {
-  buildSingleIcpDiscoveryRequest,
+  buildDiscoveryRequest,
   getNextSelectedIcpId,
 } from './page.helpers.js';
 
@@ -168,7 +168,7 @@ function IcpOption({
     <button
       type="button"
       onClick={() => onSelect(icp.id)}
-      role="radio"
+      role="checkbox"
       aria-checked={selected}
       className={cn(
         'flex items-start gap-3 rounded-xl border p-3 text-left transition-all duration-150',
@@ -179,14 +179,16 @@ function IcpOption({
     >
       <div
         className={cn(
-          'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors duration-150',
+          'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 transition-colors duration-150',
           selected
             ? 'border-zbooni-teal bg-zbooni-teal text-zbooni-dark'
             : 'border-border/50 bg-transparent',
         )}
       >
         {selected ? (
-          <div className="h-2 w-2 rounded-full bg-zbooni-dark" />
+          <svg className="h-3 w-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={2.5}>
+            <path d="M2 6l3 3 5-5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
         ) : null}
       </div>
 
@@ -341,7 +343,7 @@ function toCountryCodeFromIcpTarget(
 export default function DiscoverPage() {
   const { apiClient, user } = useAuth();
 
-  const [selectedIcpId, setSelectedIcpId] = useState<string | null>(null);
+  const [selectedIcpIds, setSelectedIcpIds] = useState<string[]>([]);
   const [selectedCities, setSelectedCities] = useState<Set<string>>(new Set());
   const [includeWebsiteAnalysis, setIncludeWebsiteAnalysis] = useState(true);
   const [includeSocialMediaAnalysis, setIncludeSocialMediaAnalysis] = useState(true);
@@ -430,23 +432,26 @@ export default function DiscoverPage() {
     [discoveryRuns.data, icps.data],
   );
 
-  // Derive country codes from the selected ICP
+  // Derive country codes from the selected ICPs
   const selectedIcpCountryCodes = useMemo<DiscoveryCountryCodeContract[]>(() => {
-    if (!icps.data || !selectedIcpId) return [];
-
-    const icp = icps.data.items.find((item) => item.id === selectedIcpId);
-    if (!icp) return [];
+    if (!icps.data || selectedIcpIds.length === 0) return [];
 
     const countryCodes = new Set<DiscoveryCountryCodeContract>();
-    for (const countryNameValue of icp.targetCountries) {
-      const countryCode = toCountryCodeFromIcpTarget(countryNameValue);
-      if (countryCode) {
-        countryCodes.add(countryCode);
+    for (const selectedIcpId of selectedIcpIds) {
+      const icp = icps.data.items.find((item) => item.id === selectedIcpId);
+      if (!icp) {
+        continue;
+      }
+      for (const countryNameValue of icp.targetCountries) {
+        const countryCode = toCountryCodeFromIcpTarget(countryNameValue);
+        if (countryCode) {
+          countryCodes.add(countryCode);
+        }
       }
     }
 
     return Array.from(countryCodes).sort((a, b) => a.localeCompare(b));
-  }, [selectedIcpId, icps.data]);
+  }, [selectedIcpIds, icps.data]);
 
   const countriesForCityPicker = useMemo<DiscoveryCountryCodeContract[]>(
     () => selectedIcpCountryCodes,
@@ -484,12 +489,12 @@ export default function DiscoverPage() {
   };
 
   const selectIcp = (id: string) => {
-    setSelectedIcpId((currentSelectedIcpId) => getNextSelectedIcpId(currentSelectedIcpId, id));
+    setSelectedIcpIds((currentSelectedIcpIds) => getNextSelectedIcpId(currentSelectedIcpIds, id));
   };
 
   const handleStartDiscovery = async () => {
-    const request = buildSingleIcpDiscoveryRequest({
-      selectedIcpId,
+    const request = buildDiscoveryRequest({
+      selectedIcpIds,
       countries: selectedIcpCountryCodes,
       cities: Array.from(selectedCities),
       includeWebsiteAnalysis,
@@ -546,30 +551,30 @@ export default function DiscoverPage() {
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zbooni-teal/10 text-xs font-bold text-zbooni-teal">
                 1
               </span>
-              <label className="text-sm font-semibold">Select ICP Profile</label>
+              <label className="text-sm font-semibold">Select ICP Profiles</label>
             </div>
             <p className="mb-3 text-xs text-muted-foreground/70">
-              Choose exactly one ICP for each discovery run.
+              Choose one or more ICPs for the discovery run.
             </p>
 
-            {selectedIcpId ? (
+            {selectedIcpIds.length > 0 ? (
               <div className="mb-3 inline-flex items-center rounded-full bg-zbooni-teal/10 px-2.5 py-1 text-[11px] font-semibold text-zbooni-teal">
-                1 profile selected
+                {selectedIcpIds.length} {selectedIcpIds.length === 1 ? 'profile' : 'profiles'} selected
               </div>
             ) : null}
 
-            {!selectedIcpId && !icps.isLoading && !icps.error ? (
+            {selectedIcpIds.length === 0 && !icps.isLoading && !icps.error ? (
               <p className="mb-3 text-xs text-muted-foreground/60">
-                Search countries and cities will load after you choose a profile.
+                Search countries and cities will load after you choose at least one profile.
               </p>
             ) : null}
-            {selectedIcpId && selectedIcpCountryCodes.length === 0 ? (
+            {selectedIcpIds.length > 0 && selectedIcpCountryCodes.length === 0 ? (
               <p className="mb-3 text-xs text-amber-300/80">
-                This ICP does not map to any supported discovery countries yet.
+                The selected ICPs do not map to any supported discovery countries yet.
               </p>
             ) : null}
 
-            <div role="radiogroup" aria-label="ICP profile selection">
+            <div role="group" aria-label="ICP profile selection">
               {icps.isLoading ? (
                 <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
                   <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
@@ -597,7 +602,7 @@ export default function DiscoverPage() {
                     <IcpOption
                       key={icp.id}
                       icp={icp}
-                      selected={selectedIcpId === icp.id}
+                      selected={selectedIcpIds.includes(icp.id)}
                       onSelect={selectIcp}
                     />
                   ))}
@@ -636,9 +641,9 @@ export default function DiscoverPage() {
                   </div>
                 ) : (
                   <p className="text-xs text-muted-foreground/50">
-                    {selectedIcpId
-                      ? 'No mapped target countries found for the selected ICP profile.'
-                      : 'Select an ICP profile to load target countries.'}
+                    {selectedIcpIds.length > 0
+                      ? 'No mapped target countries found for the selected ICP profiles.'
+                      : 'Select at least one ICP profile to load target countries.'}
                   </p>
                 )}
               </div>
@@ -727,17 +732,25 @@ export default function DiscoverPage() {
           </div>
 
           {/* Cost Estimate */}
-          {selectedIcpId && parseInt(limit, 10) > 0 ? (() => {
+          {selectedIcpIds.length > 0 && parseInt(limit, 10) > 0 ? (() => {
             const desiredLeads = parseInt(limit, 10);
-            const yieldRate = yieldRates.get(selectedIcpId);
-            const convRate = conversionRates.get(selectedIcpId);
-            const selectedLeadRate = yieldRate !== undefined && convRate !== undefined
-              ? yieldRate * convRate
-              : yieldRate !== undefined
-                ? yieldRate * 0.10
-                : undefined;
-            const avgLeadRate = selectedLeadRate ?? 0.015;
-            const hasHistoricalData = selectedLeadRate !== undefined;
+            const selectedLeadRates = selectedIcpIds
+              .map((selectedIcpId) => {
+                const yieldRate = yieldRates.get(selectedIcpId);
+                const convRate = conversionRates.get(selectedIcpId);
+                if (yieldRate !== undefined && convRate !== undefined) {
+                  return yieldRate * convRate;
+                }
+                if (yieldRate !== undefined) {
+                  return yieldRate * 0.10;
+                }
+                return undefined;
+              })
+              .filter((rate): rate is number => rate !== undefined);
+            const avgLeadRate = selectedLeadRates.length > 0
+              ? selectedLeadRates.reduce((sum, rate) => sum + rate, 0) / selectedLeadRates.length
+              : 0.015;
+            const hasHistoricalData = selectedLeadRates.length > 0;
             const searchBudget = Math.ceil(desiredLeads / avgLeadRate * 1.5);
             const hunterLookups = Math.ceil(searchBudget * 0.5);
             const estLeads = desiredLeads;
@@ -787,7 +800,7 @@ export default function DiscoverPage() {
           <button
             type="button"
             onClick={handleStartDiscovery}
-            disabled={!selectedIcpId || selectedIcpCountryCodes.length === 0 || isSubmitting || !!isRunning}
+            disabled={selectedIcpIds.length === 0 || selectedIcpCountryCodes.length === 0 || isSubmitting || !!isRunning}
             className="inline-flex w-full items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-zbooni-green to-zbooni-teal px-6 py-3 text-sm font-bold text-zbooni-dark shadow-lg shadow-zbooni-green/20 transition-all hover:shadow-xl hover:shadow-zbooni-green/30 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
           >
             {isSubmitting ? (
@@ -799,7 +812,9 @@ export default function DiscoverPage() {
               ? 'Starting...'
               : isRunning
                 ? 'Discovery Running...'
-                : 'Start Discovery'}
+                : selectedIcpIds.length > 1
+                  ? `Start Discovery (${selectedIcpIds.length} ICPs)`
+                  : 'Start Discovery'}
           </button>
         </div>
       </div>

@@ -56,6 +56,7 @@ export interface ApproveMessageDraftResult {
 
 export interface MessagingRepository {
   generateMessageDraft(input: GenerateMessageDraftRequest): Promise<GenerateMessageDraftResponse>;
+  clearLeadDraftGenerationError(leadId: string): Promise<void>;
   getDraftGenerationEligibilityContext(
     input: Pick<GenerateMessageDraftRequest, 'leadId' | 'icpProfileId'>,
   ): Promise<DraftGenerationEligibilityContext | null>;
@@ -63,6 +64,7 @@ export interface MessagingRepository {
   getExistingInitialDraft(
     input: Pick<GenerateMessageDraftRequest, 'leadId' | 'icpProfileId'>,
   ): Promise<ExistingInitialDraft | null>;
+  supersedeInitialDraft(draftId: string): Promise<void>;
   getExistingInitialSendForDraft(draftId: string): Promise<MessageSendResponse | null>;
   listMessageDrafts(query: ListMessageDraftsQuery): Promise<ListMessageDraftsResponse>;
   getMessageDraft(draftId: string): Promise<MessageDraftResponse>;
@@ -81,6 +83,10 @@ export class StubMessagingRepository implements MessagingRepository {
     throw new MessagingNotImplementedError('TODO: generate message draft persistence');
   }
 
+  async clearLeadDraftGenerationError(_leadId: string): Promise<void> {
+    throw new MessagingNotImplementedError('TODO: clear lead draft generation error');
+  }
+
   async getDraftGenerationEligibilityContext(
     _input: Pick<GenerateMessageDraftRequest, 'leadId' | 'icpProfileId'>,
   ): Promise<DraftGenerationEligibilityContext | null> {
@@ -95,6 +101,10 @@ export class StubMessagingRepository implements MessagingRepository {
     _input: Pick<GenerateMessageDraftRequest, 'leadId' | 'icpProfileId'>,
   ): Promise<ExistingInitialDraft | null> {
     throw new MessagingNotImplementedError('TODO: load existing initial draft');
+  }
+
+  async supersedeInitialDraft(_draftId: string): Promise<void> {
+    throw new MessagingNotImplementedError('TODO: supersede existing initial draft');
   }
 
   async getExistingInitialSendForDraft(_draftId: string): Promise<MessageSendResponse | null> {
@@ -466,6 +476,13 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
     };
   }
 
+  override async clearLeadDraftGenerationError(leadId: string): Promise<void> {
+    await prisma.lead.updateMany({
+      where: { id: leadId },
+      data: { error: null },
+    });
+  }
+
   override async markLeadDraftedIfQualified(leadId: string): Promise<void> {
     await prisma.lead.updateMany({
       where: {
@@ -486,6 +503,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
         leadId: input.leadId,
         icpProfileId: input.icpProfileId,
         followUpNumber: 0,
+        approvalStatus: { in: ['PENDING', 'APPROVED', 'AUTO_APPROVED'] },
       },
       include: variantsInclude(),
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -499,6 +517,18 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
       draftId: draft.id,
       variantIds: draft.variants.map((variant) => variant.id),
     };
+  }
+
+  override async supersedeInitialDraft(draftId: string): Promise<void> {
+    await prisma.messageDraft.update({
+      where: { id: draftId },
+      data: {
+        approvalStatus: 'REJECTED',
+        rejectedReason: 'Superseded by regenerated draft',
+        approvedByUserId: null,
+        approvedAt: null,
+      },
+    });
   }
 
   override async getExistingInitialSendForDraft(draftId: string): Promise<MessageSendResponse | null> {
