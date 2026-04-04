@@ -29,6 +29,8 @@ export interface AnalyticsRollupLogger {
   error: (object: Record<string, unknown>, message: string) => void;
 }
 
+const BOUNCED_EVENT_TYPES = new Set(['BOUNCED', 'NOT_INTERESTED', 'UNSUBSCRIBED']);
+
 function parseDayRange(day: string): { dayStart: Date; dayEnd: Date } {
   const dayStart = new Date(`${day}T00:00:00.000Z`);
   const dayEnd = new Date(dayStart.getTime() + 86_400_000);
@@ -227,12 +229,13 @@ export async function handleAnalyticsRollupJob(
         },
       });
 
-      const bouncedCount = await prisma.feedbackEvent.count({
+      const dailyFeedbackEvents = await prisma.feedbackEvent.findMany({
         where: {
-          eventType: { in: ['BOUNCED', 'UNSUBSCRIBED'] },
           createdAt: { gte: dayStart, lt: dayEnd },
         },
+        select: { eventType: true },
       });
+      const bouncedCount = dailyFeedbackEvents.filter((event) => BOUNCED_EVENT_TYPES.has(event.eventType)).length;
 
       await prisma.analyticsDailyRollup.upsert({
         where: {

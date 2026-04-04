@@ -6,7 +6,6 @@ export const ReplyClassificationSchema = z.enum([
   'INTERESTED',
   'NOT_INTERESTED',
   'OUT_OF_OFFICE',
-  'UNSUBSCRIBE',
 ]);
 export type ReplyClassification = z.infer<typeof ReplyClassificationSchema>;
 

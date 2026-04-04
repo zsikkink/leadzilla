@@ -1,21 +1,21 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildSingleIcpDiscoveryRequest,
+  buildDiscoveryRequest,
   getNextSelectedIcpId,
 } from './page.helpers.js';
 
 describe('discover page helpers', () => {
-  it('keeps ICP selection single-choice', () => {
-    expect(getNextSelectedIcpId(null, 'icp_1')).toBe('icp_1');
-    expect(getNextSelectedIcpId('icp_1', 'icp_2')).toBe('icp_2');
-    expect(getNextSelectedIcpId('icp_2', 'icp_2')).toBeNull();
+  it('toggles ICP selection for multi-select', () => {
+    expect(getNextSelectedIcpId([], 'icp_1')).toEqual(['icp_1']);
+    expect(getNextSelectedIcpId(['icp_1'], 'icp_2')).toEqual(['icp_1', 'icp_2']);
+    expect(getNextSelectedIcpId(['icp_1', 'icp_2'], 'icp_2')).toEqual(['icp_1']);
   });
 
-  it('builds a single-ICP discovery request payload', () => {
+  it('builds a multi-ICP discovery request payload', () => {
     expect(
-      buildSingleIcpDiscoveryRequest({
-        selectedIcpId: 'icp_1',
+      buildDiscoveryRequest({
+        selectedIcpIds: ['icp_1', 'icp_2'],
         countries: ['AE'],
         cities: ['Dubai'],
         includeWebsiteAnalysis: true,
@@ -24,7 +24,7 @@ describe('discover page helpers', () => {
         requestedByUserId: 'user_1',
       }),
     ).toEqual({
-      icpProfileIds: ['icp_1'],
+      icpProfileIds: ['icp_1', 'icp_2'],
       countries: ['AE'],
       cities: ['Dubai'],
       includeWebsiteAnalysis: true,
@@ -34,10 +34,10 @@ describe('discover page helpers', () => {
     });
   });
 
-  it('refuses to build a request without exactly one selectable ICP and country set', () => {
+  it('refuses to build a request without ICPs and country set', () => {
     expect(
-      buildSingleIcpDiscoveryRequest({
-        selectedIcpId: null,
+      buildDiscoveryRequest({
+        selectedIcpIds: [],
         countries: ['AE'],
         cities: [],
         includeWebsiteAnalysis: true,
@@ -47,8 +47,8 @@ describe('discover page helpers', () => {
     ).toBeNull();
 
     expect(
-      buildSingleIcpDiscoveryRequest({
-        selectedIcpId: 'icp_1',
+      buildDiscoveryRequest({
+        selectedIcpIds: ['icp_1'],
         countries: [],
         cities: [],
         includeWebsiteAnalysis: true,

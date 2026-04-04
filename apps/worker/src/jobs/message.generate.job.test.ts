@@ -3,9 +3,10 @@ import { randomUUID } from 'node:crypto';
 import type { Job } from 'pg-boss';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { dbMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => ({
+const { dbMock, pipelineSettingsMock, trackerMock, pipelineEventsMock } = vi.hoisted(() => ({
   dbMock: {
     prisma: {
+      $transaction: vi.fn(),
       lead: {
         findUnique: vi.fn(),
         update: vi.fn(),
@@ -13,6 +14,7 @@ const { dbMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => ({
       },
       messageDraft: {
         findFirst: vi.fn(),
+        update: vi.fn(),
         create: vi.fn(),
       },
       messageSend: {
@@ -51,6 +53,9 @@ const { dbMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => ({
   trackerMock: {
     tryFinalizeDiscoveryRun: vi.fn(),
   },
+  pipelineEventsMock: {
+    recordPipelineEvent: vi.fn(),
+  },
 }));
 
 vi.mock('@lead-flood/db', () => ({
@@ -70,6 +75,10 @@ vi.mock('../utils/pipeline-settings.js', () => ({
 
 vi.mock('../utils/discovery-run-tracker.js', () => ({
   tryFinalizeDiscoveryRun: trackerMock.tryFinalizeDiscoveryRun,
+}));
+
+vi.mock('../utils/pipeline-events.js', () => ({
+  recordPipelineEvent: pipelineEventsMock.recordPipelineEvent,
 }));
 
 import { RetryableError } from '../errors.js';
@@ -92,9 +101,29 @@ const logger = {
   error: vi.fn(),
 };
 
+function buildSuccessfulOpenAiAdapter() {
+  return {
+    isConfigured: true,
+    generateMessageVariants: vi.fn(async () => ({
+      status: 'success' as const,
+      data: {
+        model: 'gpt-4o',
+        message: {
+          subject: 'Worth a look?',
+          bodyText:
+            'I noticed Ada handles trust-heavy conversations where payment certainty matters and manual follow-up slows things down. Zbooni helps teams confirm payments inside the conversation and reduce chasing without changing the way they already sell today. Would it be useful if I showed a simple example?',
+          bodyHtml: null,
+          ctaText: 'Would it be useful if I showed a simple example?',
+        },
+      },
+    })),
+  };
+}
+
 describe('handleMessageGenerateJob eligibility and approval enforcement', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    dbMock.prisma.$transaction.mockImplementation(async (callback: (tx: typeof dbMock.prisma) => Promise<unknown>) => callback(dbMock.prisma));
 
     dbMock.prisma.lead.findUnique.mockResolvedValue({
       id: 'lead_1',
@@ -109,6 +138,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
     });
     dbMock.prisma.lead.updateMany.mockResolvedValue({ count: 1 });
     dbMock.prisma.messageDraft.findFirst.mockResolvedValue(null);
+    dbMock.prisma.messageDraft.update.mockResolvedValue({});
     dbMock.prisma.messageSend.findFirst.mockResolvedValue(null);
     pipelineSettingsMock.loadVerifiedScoreQualificationThreshold.mockResolvedValue(0.6);
     trackerMock.tryFinalizeDiscoveryRun.mockResolvedValue(undefined);
@@ -232,6 +262,8 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
     });
     pipelineSettingsMock.shouldAutoApprove.mockReturnValue(false);
 
+    const openAiAdapter = buildSuccessfulOpenAiAdapter();
+
     await handleMessageGenerateJob(
       logger,
       makeJob({
@@ -241,6 +273,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
         knowledgeEntryIds: [],
         promptVersion: 'v2',
       }),
+      { openAiAdapter: openAiAdapter as never },
     );
 
     expect(pipelineSettingsMock.loadAutoApproveConfig).toHaveBeenCalledTimes(1);
@@ -283,6 +316,8 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
     });
     pipelineSettingsMock.shouldAutoApprove.mockReturnValue(true);
 
+    const openAiAdapter = buildSuccessfulOpenAiAdapter();
+
     await handleMessageGenerateJob(
       logger,
       makeJob({
@@ -292,6 +327,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
         knowledgeEntryIds: [],
         promptVersion: 'v2',
       }),
+      { openAiAdapter: openAiAdapter as never },
     );
 
     expect(pipelineSettingsMock.loadAutoApproveConfig).toHaveBeenCalledTimes(1);
@@ -333,6 +369,8 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
     pipelineSettingsMock.shouldAutoApprove.mockReturnValue(true);
     pipelineSettingsMock.isManualApprovalOnlyEnabled.mockResolvedValue(true);
 
+    const openAiAdapter = buildSuccessfulOpenAiAdapter();
+
     await handleMessageGenerateJob(
       logger,
       makeJob({
@@ -342,6 +380,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
         knowledgeEntryIds: [],
         promptVersion: 'v2',
       }),
+      { openAiAdapter: openAiAdapter as never },
     );
 
     expect(dbMock.prisma.messageDraft.create).toHaveBeenCalledWith(
@@ -358,6 +397,161 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
         }),
       }),
     );
+  });
+
+  it('stores a visible lead error instead of creating a fallback draft when OpenAI returns a terminal error', async () => {
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
+      id: 'score_current',
+      scoreBand: 'HIGH',
+      blendedScore: 0.72,
+    });
+
+    const openAiAdapter = {
+      isConfigured: true,
+      generateMessageVariants: vi.fn(async () => ({
+        status: 'terminal_error' as const,
+        failure: {
+          classification: 'terminal' as const,
+          statusCode: 401,
+          message: 'invalid_api_key',
+          raw: null,
+        },
+      })),
+    };
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+      }),
+      { openAiAdapter: openAiAdapter as never },
+    );
+
+    expect(dbMock.prisma.messageDraft.create).not.toHaveBeenCalled();
+    expect(dbMock.prisma.lead.updateMany).toHaveBeenCalledWith({
+      where: { id: 'lead_1' },
+      data: {
+        error: 'Draft generation failed because the AI provider returned an invalid response. No draft was created.',
+      },
+    });
+    expect(pipelineEventsMock.recordPipelineEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        leadId: 'lead_1',
+        stage: 'message.generate',
+        status: 'FAILED',
+      }),
+    );
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
+  });
+
+  it('keeps the existing draft when regeneration fails', async () => {
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
+      id: 'score_current',
+      scoreBand: 'HIGH',
+      blendedScore: 0.72,
+    });
+    dbMock.prisma.messageDraft.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'draft_existing',
+        approvalStatus: 'PENDING',
+        variants: [
+          {
+            id: 'variant_existing',
+            channel: 'EMAIL',
+            variantKey: 'variant_a',
+            isSelected: false,
+          },
+        ],
+      });
+
+    const openAiAdapter = {
+      isConfigured: true,
+      generateMessageVariants: vi.fn(async () => ({
+        status: 'terminal_error' as const,
+        failure: {
+          classification: 'terminal' as const,
+          statusCode: 400,
+          message: 'invalid_response',
+          raw: null,
+        },
+      })),
+    };
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+        forceRegenerate: true,
+      }),
+      { openAiAdapter: openAiAdapter as never },
+    );
+
+    expect(dbMock.prisma.messageDraft.update).not.toHaveBeenCalled();
+    expect(dbMock.prisma.messageDraft.create).not.toHaveBeenCalled();
+    expect(dbMock.prisma.lead.updateMany).toHaveBeenCalledWith({
+      where: { id: 'lead_1' },
+      data: {
+        error: 'Draft generation failed because the AI provider returned an invalid response. Your existing draft was kept.',
+      },
+    });
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
+  });
+
+  it('supersedes the old draft only after a regenerated replacement succeeds', async () => {
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
+      id: 'score_current',
+      scoreBand: 'HIGH',
+      blendedScore: 0.72,
+    });
+    dbMock.prisma.messageDraft.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'draft_existing',
+        approvalStatus: 'PENDING',
+        variants: [
+          {
+            id: 'variant_existing',
+            channel: 'EMAIL',
+            variantKey: 'variant_a',
+            isSelected: false,
+          },
+        ],
+      });
+
+    const openAiAdapter = buildSuccessfulOpenAiAdapter();
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+        forceRegenerate: true,
+      }),
+      { openAiAdapter: openAiAdapter as never },
+    );
+
+    expect(dbMock.prisma.messageDraft.update).toHaveBeenCalledWith({
+      where: { id: 'draft_existing' },
+      data: {
+        approvalStatus: 'REJECTED',
+        rejectedReason: 'Superseded by regenerated draft',
+        approvedByUserId: null,
+        approvedAt: null,
+      },
+    });
+    expect(dbMock.prisma.messageDraft.create).toHaveBeenCalled();
   });
 
   it('skips stale follow-up generation when the lead is no longer in a follow-up-eligible state', async () => {

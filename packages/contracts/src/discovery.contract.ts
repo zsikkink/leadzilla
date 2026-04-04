@@ -285,6 +285,7 @@ export const DiscoveryRunSummarySchema = z
     icpProfileIds: z.array(z.string()).optional(),
     countries: z.array(z.string()),
     limit: z.number().int().min(0),
+    converted: z.number().int().min(0).optional(),
     errorMessage: z.string().nullable(),
     currentStage: z.string().nullable().optional(),
   })

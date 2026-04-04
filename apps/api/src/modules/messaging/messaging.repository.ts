@@ -14,6 +14,7 @@ import type {
   MessageVariantResponse,
   RejectMessageDraftRequest,
   SendMessageRequest,
+  UpdateMessageVariantRequest,
 } from '@lead-flood/contracts';
 import { PrismaRuntime, prisma, toInputJson, type Prisma } from '@lead-flood/db';
 
@@ -55,6 +56,7 @@ export interface ApproveMessageDraftResult {
 
 export interface MessagingRepository {
   generateMessageDraft(input: GenerateMessageDraftRequest): Promise<GenerateMessageDraftResponse>;
+  clearLeadDraftGenerationError(leadId: string): Promise<void>;
   getDraftGenerationEligibilityContext(
     input: Pick<GenerateMessageDraftRequest, 'leadId' | 'icpProfileId'>,
   ): Promise<DraftGenerationEligibilityContext | null>;
@@ -62,6 +64,7 @@ export interface MessagingRepository {
   getExistingInitialDraft(
     input: Pick<GenerateMessageDraftRequest, 'leadId' | 'icpProfileId'>,
   ): Promise<ExistingInitialDraft | null>;
+  supersedeInitialDraft(draftId: string): Promise<void>;
   getExistingInitialSendForDraft(draftId: string): Promise<MessageSendResponse | null>;
   listMessageDrafts(query: ListMessageDraftsQuery): Promise<ListMessageDraftsResponse>;
   getMessageDraft(draftId: string): Promise<MessageDraftResponse>;
@@ -72,11 +75,16 @@ export interface MessagingRepository {
   getMessageSend(sendId: string): Promise<MessageSendResponse>;
   getConversation(leadId: string): Promise<ConversationResponse>;
   createMessageSendForApproval(input: CreateMessageSendForApprovalInput): Promise<MessageSendResponse>;
+  updateMessageVariant(variantId: string, input: UpdateMessageVariantRequest): Promise<MessageVariantResponse>;
 }
 
 export class StubMessagingRepository implements MessagingRepository {
   async generateMessageDraft(_input: GenerateMessageDraftRequest): Promise<GenerateMessageDraftResponse> {
     throw new MessagingNotImplementedError('TODO: generate message draft persistence');
+  }
+
+  async clearLeadDraftGenerationError(_leadId: string): Promise<void> {
+    throw new MessagingNotImplementedError('TODO: clear lead draft generation error');
   }
 
   async getDraftGenerationEligibilityContext(
@@ -93,6 +101,10 @@ export class StubMessagingRepository implements MessagingRepository {
     _input: Pick<GenerateMessageDraftRequest, 'leadId' | 'icpProfileId'>,
   ): Promise<ExistingInitialDraft | null> {
     throw new MessagingNotImplementedError('TODO: load existing initial draft');
+  }
+
+  async supersedeInitialDraft(_draftId: string): Promise<void> {
+    throw new MessagingNotImplementedError('TODO: supersede existing initial draft');
   }
 
   async getExistingInitialSendForDraft(_draftId: string): Promise<MessageSendResponse | null> {
@@ -139,6 +151,10 @@ export class StubMessagingRepository implements MessagingRepository {
 
   async createMessageSendForApproval(_input: CreateMessageSendForApprovalInput): Promise<MessageSendResponse> {
     throw new MessagingNotImplementedError('TODO: create message send for approval persistence');
+  }
+
+  async updateMessageVariant(_variantId: string, _input: UpdateMessageVariantRequest): Promise<MessageVariantResponse> {
+    throw new MessagingNotImplementedError('TODO: update message variant persistence');
   }
 }
 
@@ -198,6 +214,13 @@ type PrismaMessageSend = {
   createdAt: Date;
   updatedAt: Date;
 };
+
+function normalizeReplyClassification(value: string | null): string | null {
+  if (value === 'UNSUBSCRIBE') {
+    return 'NOT_INTERESTED';
+  }
+  return value;
+}
 
 function mapVariantToResponse(variant: PrismaMessageVariant): MessageVariantResponse {
   return {
@@ -453,6 +476,13 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
     };
   }
 
+  override async clearLeadDraftGenerationError(leadId: string): Promise<void> {
+    await prisma.lead.updateMany({
+      where: { id: leadId },
+      data: { error: null },
+    });
+  }
+
   override async markLeadDraftedIfQualified(leadId: string): Promise<void> {
     await prisma.lead.updateMany({
       where: {
@@ -473,6 +503,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
         leadId: input.leadId,
         icpProfileId: input.icpProfileId,
         followUpNumber: 0,
+        approvalStatus: { in: ['PENDING', 'APPROVED', 'AUTO_APPROVED'] },
       },
       include: variantsInclude(),
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -486,6 +517,18 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
       draftId: draft.id,
       variantIds: draft.variants.map((variant) => variant.id),
     };
+  }
+
+  override async supersedeInitialDraft(draftId: string): Promise<void> {
+    await prisma.messageDraft.update({
+      where: { id: draftId },
+      data: {
+        approvalStatus: 'REJECTED',
+        rejectedReason: 'Superseded by regenerated draft',
+        approvedByUserId: null,
+        approvedAt: null,
+      },
+    });
   }
 
   override async getExistingInitialSendForDraft(draftId: string): Promise<MessageSendResponse | null> {
@@ -819,7 +862,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
         bodyText: reply.replyText ?? '(no text)',
         bodyHtml: null,
         subject: null,
-        replyClassification: reply.replyClassification,
+        replyClassification: normalizeReplyClassification(reply.replyClassification),
         status: null,
         followUpNumber: null,
       });
@@ -829,6 +872,27 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
     entries.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
     return { leadId, entries };
+  }
+
+  override async updateMessageVariant(
+    variantId: string,
+    input: UpdateMessageVariantRequest,
+  ): Promise<MessageVariantResponse> {
+    try {
+      const variant = await prisma.messageVariant.update({
+        where: { id: variantId },
+        data: {
+          bodyText: input.bodyText,
+          ...(input.subject !== undefined ? { subject: input.subject } : {}),
+        },
+      });
+      return mapVariantToResponse(variant);
+    } catch (error: unknown) {
+      if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2025') {
+        throw new MessagingNotFoundError('Message variant not found');
+      }
+      throw error;
+    }
   }
 
   override async createMessageSendForApproval(

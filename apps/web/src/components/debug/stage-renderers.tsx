@@ -179,7 +179,13 @@ export function ConversionStageDetails({ data }: { data: BusinessConversionData 
 
   return (
     <div className="space-y-4">
-      {data.method && <DataRow label="Conversion Method" value={data.method} />}
+      {data.contactSource && <DataRow label="Contact Source" value={data.contactSource} />}
+      {data.foundCsuiteDecisionMaker && (
+        <div className="flex items-center gap-2">
+          <span className="rounded-md bg-zbooni-green/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zbooni-green">C-Suite Found</span>
+          {data.ceoMatch && <span className="text-xs text-foreground/70">{data.ceoMatch.name}{data.ceoMatch.title ? ` — ${data.ceoMatch.title}` : ''}</span>}
+        </div>
+      )}
 
       {data.apolloContacts.length > 0 && (
         <Collapsible title={`Apollo Contacts (${data.apolloContacts.length})`} defaultOpen>
@@ -256,15 +262,124 @@ export function ConversionStageDetails({ data }: { data: BusinessConversionData 
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  C3b: Brave Search — CEO/founder web search results
+// ══════════════════════════════════════════════════════════════════════════════
+
+export function BraveSearchStageDetails({ data }: { data: BusinessConversionData | null }) {
+  if (!data || data.braveSearchResults.length === 0) {
+    return <EmptyState text="No Brave Search results available" />;
+  }
+
+  return (
+    <div className="space-y-3">
+      <DataRow label="Results Found" value={String(data.braveSearchResults.length)} />
+      <Collapsible title={`Search Results (${data.braveSearchResults.length})`} defaultOpen>
+        <div className="space-y-2">
+          {data.braveSearchResults.map((result, i) => {
+            const isLinkedIn = result.link.includes('linkedin.com');
+            return (
+              <div key={`brave-${i}`} className={cn('rounded-lg border px-3 py-2', isLinkedIn ? 'border-blue-500/30 bg-blue-500/[0.03]' : 'border-border/10')}>
+                <a href={result.link} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-xs font-medium text-zbooni-teal hover:underline">
+                  {result.title}
+                  <ExternalLink className="h-2.5 w-2.5" />
+                </a>
+                {result.snippet && <p className="mt-0.5 text-[10px] text-muted-foreground/60">{result.snippet.length > 200 ? result.snippet.slice(0, 200) + '...' : result.snippet}</p>}
+                {isLinkedIn && <span className="mt-1 inline-block rounded bg-blue-500/10 px-1.5 py-0.5 text-[9px] font-bold text-blue-400">LinkedIn Profile</span>}
+              </div>
+            );
+          })}
+        </div>
+      </Collapsible>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  C3c: LLM CEO Validation — matched person details
+// ══════════════════════════════════════════════════════════════════════════════
+
+export function LlmCeoValidationDetails({ data }: { data: BusinessConversionData | null }) {
+  if (!data) {
+    return <EmptyState text="No LLM validation data available" />;
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">C-Suite Found</span>
+        {data.foundCsuiteDecisionMaker ? (
+          <span className="rounded-md bg-zbooni-green/15 px-2 py-0.5 text-[10px] font-bold text-zbooni-green">Yes</span>
+        ) : (
+          <span className="rounded-md bg-red-400/15 px-2 py-0.5 text-[10px] font-bold text-red-400">No</span>
+        )}
+      </div>
+      {data.ceoMatch && (
+        <div className="space-y-1.5">
+          <SectionTitle title="Matched Person" />
+          <DataRow label="Name" value={data.ceoMatch.name ?? 'Unknown'} />
+          {data.ceoMatch.title && <DataRow label="Title" value={data.ceoMatch.title} />}
+          {data.ceoMatch.linkedinUrl && (
+            <div className="flex items-start gap-3 text-sm">
+              <span className="w-44 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-400">LinkedIn</span>
+              <a href={data.ceoMatch.linkedinUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-zbooni-teal hover:underline">
+                {data.ceoMatch.linkedinUrl}
+                <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+            </div>
+          )}
+        </div>
+      )}
+      {!data.ceoMatch && !data.foundCsuiteDecisionMaker && (
+        <EmptyState text="No C-suite decision maker identified from search results" />
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  C3d: Apollo Org Enrichment — organization-level data
+// ══════════════════════════════════════════════════════════════════════════════
+
+export function ApolloOrgEnrichmentDetails({ data }: { data: BusinessConversionData | null }) {
+  if (!data?.apolloOrgEnrichment) {
+    return <EmptyState text="No Apollo organization enrichment data available" />;
+  }
+
+  const org = data.apolloOrgEnrichment;
+
+  return (
+    <div className="space-y-1.5">
+      {org.name != null && <DataRow label="Organization" value={String(org.name)} />}
+      {org.industry != null && <DataRow label="Industry" value={String(org.industry)} />}
+      {org.estimatedEmployees != null && <DataRow label="Employees" value={Number(org.estimatedEmployees).toLocaleString()} />}
+      {org.foundedYear != null && <DataRow label="Founded" value={String(org.foundedYear)} />}
+      {org.annualRevenue != null && <DataRow label="Revenue" value={String(org.annualRevenue)} />}
+      {org.city != null && <DataRow label="City" value={String(org.city)} />}
+      {org.country != null && <DataRow label="Country" value={String(org.country)} />}
+      {org.linkedinUrl != null && (
+        <div className="flex items-start gap-3 text-sm">
+          <span className="w-44 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-400">LinkedIn</span>
+          <a href={String(org.linkedinUrl)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-zbooni-teal hover:underline">
+            {String(org.linkedinUrl)}
+            <ExternalLink className="h-2.5 w-2.5" />
+          </a>
+        </div>
+      )}
+      {org.primaryPhone != null && <DataRow label="Phone" value={String(org.primaryPhone)} mono />}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  C4: Feature computation — full 43-feature snapshot
 // ══════════════════════════════════════════════════════════════════════════════
 
 const FEATURE_GROUPS: Record<string, string[]> = {
-  'Sales Motion Fit': ['has_whatsapp', 'custom_order_signals', 'variable_pricing_detected', 'upsell_signals', 'high_ticket_signals'],
+  'Sales Motion Fit': ['has_whatsapp', 'custom_order_signals', 'high_ticket_signals'],
   'Payment Complexity': ['accepts_online_payments', 'shopify_detected', 'pure_self_serve_ecom', 'subscription_billing_detected', 'apify_has_shopify', 'apify_has_pricing_tiers', 'apify_has_product_catalog', 'apify_payment_widget_count'],
   'Risk / Urgency': ['recent_activity', 'follower_growth_signal', 'instagram_days_since_last_post'],
   'Social Presence': ['has_instagram', 'follower_count', 'follower_count_tier', 'instagram_follower_count', 'instagram_engagement_rate', 'instagram_is_business_account', 'instagram_has_bio_link', 'high_engagement_signal', 'social_link_count', 'has_linkedin'],
-  'Contact Quality': ['decision_maker_count', 'has_decision_maker_phone', 'apollo_has_direct_phone', 'website_email_count', 'website_phone_count', 'has_booking_or_contact_form', 'apify_has_booking_form'],
+  'Contact Quality': ['decision_maker_count', 'has_decision_maker_phone', 'apollo_has_direct_phone', 'found_csuite_decision_maker', 'website_email_count', 'website_phone_count', 'has_booking_or_contact_form', 'apify_has_booking_form'],
   'Business Profile': ['review_count', 'review_count_tier', 'physical_address_present', 'multi_staff_detected', 'estimated_employees', 'tech_stack_size', 'international_customer_signals'],
   'ICP Match': ['industry_match', 'geo_match', 'icp_segment_priority'],
 };
@@ -691,7 +806,7 @@ export function FeedbackStageDetails({ events }: { events: FeedbackEventData[] }
     MEETING_BOOKED: 'Meeting Booked',
     DEAL_WON: 'Deal Won',
     DEAL_LOST: 'Deal Lost',
-    UNSUBSCRIBED: 'Unsubscribed',
+    NOT_INTERESTED: 'Not Interested',
     BOUNCED: 'Bounced',
   };
 
@@ -700,7 +815,7 @@ export function FeedbackStageDetails({ events }: { events: FeedbackEventData[] }
     MEETING_BOOKED: 'text-zbooni-green bg-zbooni-green/10',
     DEAL_WON: 'text-zbooni-green bg-zbooni-green/10',
     DEAL_LOST: 'text-red-400 bg-red-400/10',
-    UNSUBSCRIBED: 'text-orange-400 bg-orange-400/10',
+    NOT_INTERESTED: 'text-orange-400 bg-orange-400/10',
     BOUNCED: 'text-red-400 bg-red-400/10',
   };
 
@@ -750,6 +865,12 @@ export function EnrichedStageContent({
       return <EnrichmentStageDetails websiteScrape={data.websiteScrape} instagramScrape={data.instagramScrape} />;
     case 'conversion':
       return <ConversionStageDetails data={data.businessConversion} />;
+    case 'brave-search':
+      return <BraveSearchStageDetails data={data.businessConversion} />;
+    case 'llm-ceo-validation':
+      return <LlmCeoValidationDetails data={data.businessConversion} />;
+    case 'apollo-org-enrichment':
+      return <ApolloOrgEnrichmentDetails data={data.businessConversion} />;
     case 'features':
       return <FeatureStageDetails data={data.featureSnapshot} />;
     case 'scoring':

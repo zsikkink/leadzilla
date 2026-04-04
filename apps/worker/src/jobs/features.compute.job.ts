@@ -157,6 +157,8 @@ export const FEATURE_KEYS = [
   'instagram_has_business_email',
   // ── v3 features (data alignment) ──
   'data_alignment_score',
+  // ── v4 features (C-suite decision maker) ──
+  'found_csuite_decision_maker',
 ] as const;
 
 function normalizeString(value: unknown): string | null {
@@ -407,6 +409,8 @@ function buildFeaturePayload(input: {
   instagramHasBusinessEmail: boolean;
   // v3 features (data alignment)
   dataAlignmentScore: number;
+  // v4 features (C-suite decision maker)
+  foundCsuiteDecisionMaker: boolean;
 }): Record<(typeof FEATURE_KEYS)[number], unknown> {
   return {
     source_provider: input.sourceProvider,
@@ -478,6 +482,8 @@ function buildFeaturePayload(input: {
     instagram_has_business_email: input.instagramHasBusinessEmail,
     // v3 features (data alignment)
     data_alignment_score: input.dataAlignmentScore,
+    // v4 features (C-suite decision maker)
+    found_csuite_decision_maker: input.foundCsuiteDecisionMaker ? 1 : 0,
   };
 }
 
@@ -951,6 +957,9 @@ export async function handleFeaturesComputeJob(
     const instagramHasBusinessEmail = typeof apifyInstagram?.businessEmail === 'string'
       && (apifyInstagram.businessEmail as string).length > 0;
 
+    // ── found_csuite_decision_maker — from Google CSE LinkedIn search ──
+    const foundCsuiteDecisionMaker = conversionMetadata?.foundCsuiteDecisionMaker === true;
+
     // ── Cross-source data alignment score ──
     const websiteTitle = typeof apifyWebsite?.pageTitle === 'string' ? apifyWebsite.pageTitle : null;
     const websiteDetectedCountry = typeof apifyWebsite?.detectedCountry === 'string'
@@ -1217,6 +1226,8 @@ export async function handleFeaturesComputeJob(
       instagramHasBusinessEmail,
       // v3 features (data alignment)
       dataAlignmentScore,
+      // v4 features (C-suite decision maker)
+      foundCsuiteDecisionMaker,
     });
 
     const deterministicPreview = evaluateDeterministicScore(asDeterministicRules(rules), {

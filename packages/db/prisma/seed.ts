@@ -34,7 +34,7 @@ const UNIVERSAL_RULES: QualificationRuleDef[] = [
   { name: 'Data alignment score above threshold', fieldKey: 'data_alignment_score', operator: 'GTE', expectedValue: 0.3, isRequired: true, weight: 0, orderIndex: 3 },
   { name: 'Pure self-serve ecom (disqualify)', fieldKey: 'pure_self_serve_ecom', operator: 'NEQ', expectedValue: true, isRequired: true, weight: 0, orderIndex: 4 },
   { name: 'Subscription or recurring billing (disqualify)', fieldKey: 'subscription_billing_detected', operator: 'NEQ', expectedValue: true, isRequired: true, weight: 0, orderIndex: 5 },
-  // Positive rules (11, total weight = 19)
+  // Positive rules (12, total weight = 21)
   // Removed dead features (0% detection): industry_supported (w3), deposit_milestone_signals (w2), bank_transfer_reliance (w2), instagram_has_business_email (w1)
   { name: 'Has WhatsApp presence', fieldKey: 'has_whatsapp', operator: 'EQ', expectedValue: true, isRequired: false, weight: 3, orderIndex: 6 },
   { name: 'Has Instagram presence', fieldKey: 'has_instagram', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 7 },
@@ -47,6 +47,7 @@ const UNIVERSAL_RULES: QualificationRuleDef[] = [
   { name: 'Multiple social profiles', fieldKey: 'social_link_count', operator: 'GT', expectedValue: 2, isRequired: false, weight: 1, orderIndex: 14 },
   { name: 'High-ticket signals', fieldKey: 'high_ticket_signals', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 15 },
   { name: 'P1 priority segment', fieldKey: 'icp_segment_priority', operator: 'GTE', expectedValue: 2, isRequired: false, weight: 2, orderIndex: 16 },
+  { name: 'C-suite decision maker found', fieldKey: 'found_csuite_decision_maker', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 17 },
 ];
 
 // ── 8 ICP Segments from Zbooni Sales Onboarding Deck ──────────

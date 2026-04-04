@@ -20,6 +20,10 @@ const RICH_PAGE_HTML = richHtml(`
   <a href="tel:+971501234567">Phone</a>
   <a href="https://instagram.com/testbiz">Instagram</a>
   <a href="https://wa.me/971501234567">WhatsApp</a>
+  <div class="team-member">
+    <h3 class="name">Ahmed Khan</h3>
+    <span class="title">CEO</span>
+  </div>
 `);
 
 const EMPTY_SPA_HTML = richHtml('<div id="root"></div>');
@@ -286,16 +290,29 @@ describe('WebsiteScraperAdapter', () => {
       // This test verifies Playwright fallback is attempted on low-quality content.
       // Since playwright-core may not have a real browser binary in CI, the fallback
       // will fail gracefully and return the fetch results.
-      const mockFetch = createMockFetch(EMPTY_SPA_HTML);
-      const adapter = new WebsiteScraperAdapter({
-        fetchImpl: mockFetch,
-        enablePlaywright: true,
-        maxPages: 1,
-      });
+      vi.doMock('playwright-core', () => ({
+        chromium: {
+          launch: vi.fn(async () => {
+            throw new Error('Missing browser binary');
+          }),
+        },
+      }));
 
-      const result = await adapter.scrapeWebsite('example.com');
-      // Regardless of Playwright availability, should return success with fetch data
-      expect(result.status).toBe('success');
+      try {
+        const mockFetch = createMockFetch(EMPTY_SPA_HTML);
+        const adapter = new WebsiteScraperAdapter({
+          fetchImpl: mockFetch,
+          enablePlaywright: true,
+          maxPages: 1,
+          playwrightTimeoutMs: 50,
+        });
+
+        const result = await adapter.scrapeWebsite('example.com');
+        // Regardless of Playwright availability, should return success with fetch data
+        expect(result.status).toBe('success');
+      } finally {
+        vi.doUnmock('playwright-core');
+      }
     });
 
     it('skips Playwright when fetch produces rich content', async () => {

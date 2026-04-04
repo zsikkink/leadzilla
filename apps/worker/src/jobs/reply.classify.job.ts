@@ -191,25 +191,22 @@ export async function handleReplyClassifyJob(
         break;
       }
 
-      case 'NOT_INTERESTED':
-      case 'UNSUBSCRIBE': {
+      case 'NOT_INTERESTED': {
         await prisma.lead.update({ where: { id: leadId }, data: { status: 'cold' } });
         await cancelFollowUps(leadId);
 
-        // Write suppression record so message.send blocks future sends
-        if (classification === 'UNSUBSCRIBE') {
-          await prisma.feedbackEvent.create({
-            data: {
-              leadId,
-              messageSendId: messageSendId ?? null,
-              eventType: 'UNSUBSCRIBED',
-              source: 'MANUAL',
-              replyClassification: 'UNSUBSCRIBE',
-              dedupeKey: `unsubscribe:${feedbackEventId}`,
-              occurredAt: new Date(),
-            },
-          });
-        }
+        // Write suppression record so message.send blocks future sends.
+        await prisma.feedbackEvent.create({
+          data: {
+            leadId,
+            messageSendId: messageSendId ?? null,
+            eventType: 'NOT_INTERESTED',
+            source: 'MANUAL',
+            replyClassification: 'NOT_INTERESTED',
+            dedupeKey: `not_interested:${feedbackEventId}`,
+            occurredAt: new Date(),
+          },
+        });
         break;
       }
 

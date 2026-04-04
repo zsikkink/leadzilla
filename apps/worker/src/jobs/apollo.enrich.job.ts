@@ -1,4 +1,4 @@
-import { prisma } from '@lead-flood/db';
+import { PrismaRuntime, prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
 import { isPrismaUniqueConstraintError } from '../errors.js';
@@ -316,19 +316,31 @@ export async function handleApolloEnrichJob(
     });
   };
 
-  // Call Apollo to reveal contact data (1 export credit)
-  const apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
-
-  // Track Apollo cost event — ~$0.02/call based on Apollo pricing audit
-  await prisma.discoveryCostEvent.create({
-    data: {
-      discoveryRunId: runId,
-      provider: 'APOLLO',
-      costCents: 2,
-      apiCallType: 'post_score_enrich',
-      leadId,
+  // ── Cross-run Apollo cache — reuse prior results for same domain ──
+  let apolloCacheHit = false;
+  const cachedConversion = await prisma.businessConversion.findFirst({
+    where: {
+      business: { websiteDomain: domain },
+      apolloContactJson: { not: PrismaRuntime.JsonNull },
     },
+    select: { apolloContactJson: true },
+    orderBy: { createdAt: 'desc' },
   });
+
+  let apolloResult: ApolloContactSearchResult;
+  if (cachedConversion?.apolloContactJson) {
+    const cached = cachedConversion.apolloContactJson as unknown as ApolloContact[];
+    apolloResult = { status: 'success' as const, contacts: Array.isArray(cached) ? cached : [] };
+    apolloCacheHit = true;
+    logger.info(
+      { ...logCtx, domain, cachedContactCount: apolloResult.contacts.length },
+      'Apollo reveal cache hit — reusing prior conversion data for same domain',
+    );
+  } else {
+    // searchContactsByDomain hits Apollo's mixed_people/search endpoint which is FREE
+    // (no export credit consumed). No cost event recorded.
+    apolloResult = await deps.apolloAdapter.searchContactsByDomain(domain);
+  }
 
   if (apolloResult.status !== 'success' || apolloResult.contacts.length === 0) {
     await markAttemptCompleted();
@@ -397,5 +409,5 @@ export async function handleApolloEnrichJob(
   }
 
   await tryFinalizeDiscoveryRun(runId, logger);
-  logger.info(logCtx, 'Completed apollo.enrich job');
+  logger.info({ ...logCtx, apolloCacheHit }, 'Completed apollo.enrich job');
 }

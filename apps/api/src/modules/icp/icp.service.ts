@@ -14,7 +14,10 @@ import type {
   UpdateQualificationRuleRequest,
 } from '@lead-flood/contracts';
 
+import { prisma } from '@lead-flood/db';
+
 import type { IcpRepository } from './icp.repository.js';
+import { IcpHasActiveDataError } from './icp.errors.js';
 
 export interface IcpService {
   createIcpProfile(input: CreateIcpProfileRequest): Promise<IcpProfileResponse>;
@@ -57,7 +60,50 @@ export function buildIcpService(repository: IcpRepository): IcpService {
       return repository.updateIcpProfile(icpId, input);
     },
     async deleteIcpProfile(icpId) {
-      // TODO: add safe-delete checks.
+      // Safe-delete: block if ICP has active leads, active discovery jobs,
+      // active score predictions, or pending message drafts
+      const [leadCount, activeJobCount, activeLeadCount, pendingDraftCount] = await Promise.all([
+        prisma.leadDiscoveryRecord.count({ where: { icpProfileId: icpId } }),
+        prisma.jobExecution.count({
+          where: {
+            type: { startsWith: 'discovery' },
+            status: { in: ['queued', 'running'] },
+            payload: { path: ['icpProfileId'], equals: icpId },
+          },
+        }),
+        prisma.leadScorePrediction.count({
+          where: {
+            icpProfileId: icpId,
+            lead: { deletedAt: null, status: { notIn: ['rejected'] } },
+          },
+        }),
+        prisma.messageDraft.count({
+          where: {
+            icpProfileId: icpId,
+            approvalStatus: { in: ['PENDING', 'APPROVED', 'AUTO_APPROVED'] },
+          },
+        }),
+      ]);
+
+      const reasons: string[] = [];
+      if (leadCount > 0) {
+        reasons.push(`${leadCount} lead${leadCount > 1 ? 's' : ''} linked to this ICP`);
+      }
+      if (activeJobCount > 0) {
+        reasons.push(`${activeJobCount} active discovery job${activeJobCount > 1 ? 's' : ''}`);
+      }
+      if (activeLeadCount > 0) {
+        reasons.push(`${activeLeadCount} active lead score${activeLeadCount !== 1 ? 's' : ''}`);
+      }
+      if (pendingDraftCount > 0) {
+        reasons.push(`${pendingDraftCount} pending message draft${pendingDraftCount !== 1 ? 's' : ''}`);
+      }
+      if (reasons.length > 0) {
+        throw new IcpHasActiveDataError(
+          `Cannot delete ICP: ${reasons.join(', ')}. Remove or reassign them first.`,
+        );
+      }
+
       await repository.deleteIcpProfile(icpId);
     },
     async createQualificationRule(icpId, input) {

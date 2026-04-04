@@ -141,6 +141,86 @@ export const AdminLeadDetailResponseSchema = z
   })
   .strict();
 
+export const AdminBusinessIdParamsSchema = z
+  .object({
+    id: z.string().min(1),
+  })
+  .strict();
+
+export const AdminListBusinessesQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(30),
+    q: z.string().max(200).optional(),
+  })
+  .strict();
+
+export const AdminBusinessContactSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    title: z.string().nullable(),
+    email: z.string().email().nullable(),
+    phone: z.string().nullable(),
+    linkedinUrl: z.string().url().nullable(),
+    seniority: z.string(),
+    positionRank: z.number().int(),
+    source: z.string(),
+  })
+  .strict();
+
+export const AdminBusinessRowSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    countryCode: z.string(),
+    country: z.string().nullable(),
+    city: z.string().nullable(),
+    category: z.string().nullable(),
+    rating: z.number().nullable(),
+    reviewCount: z.number().int().nullable(),
+    followerCount: z.number().int().nullable(),
+    deterministicScore: z.number().min(0).max(1),
+    scoreBand: z.enum(['LOW', 'MEDIUM', 'HIGH']).nullable(),
+    hasWhatsapp: z.boolean(),
+    hasInstagram: z.boolean(),
+    acceptsOnlinePayments: z.boolean(),
+    recentActivity: z.boolean(),
+    websiteDomain: z.string().nullable(),
+    phoneE164: z.string().nullable(),
+    instagramHandle: z.string().nullable(),
+    preQualified: z.boolean().nullable(),
+    disqualificationReason: z.string().nullable(),
+    apifyWebsiteScrapeJson: z.unknown().nullable(),
+    apifyInstagramScrapeJson: z.unknown().nullable(),
+    websiteScrapedAt: z.string().datetime().nullable(),
+    instagramScrapedAt: z.string().datetime().nullable(),
+    manualReviewStatus: z.enum(['OPEN', 'APPROVED', 'REJECTED']).nullable().optional(),
+    manualReviewReason: z.string().nullable().optional(),
+    manualReviewUpdatedAt: z.string().datetime().nullable().optional(),
+    leadBlendedScore: z.number().nullable().optional(),
+    leadId: z.string().nullable().optional(),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+  })
+  .strict();
+
+export const AdminListBusinessesResponseSchema = z
+  .object({
+    items: z.array(AdminBusinessRowSchema),
+    page: z.number().int().min(1),
+    pageSize: z.number().int().min(1),
+    total: z.number().int().min(0),
+  })
+  .strict();
+
+export const AdminBusinessDetailResponseSchema = z
+  .object({
+    business: AdminBusinessRowSchema,
+    selectedContacts: z.array(AdminBusinessContactSchema),
+  })
+  .strict();
+
 export const AdminListSearchTasksQuerySchema = z
   .object({
     page: z.coerce.number().int().min(1).default(1),
@@ -305,6 +385,12 @@ export type AdminListLeadsQuery = z.infer<typeof AdminListLeadsQuerySchema>;
 export type AdminLeadRow = z.infer<typeof AdminLeadRowSchema>;
 export type AdminListLeadsResponse = z.infer<typeof AdminListLeadsResponseSchema>;
 export type AdminLeadDetailResponse = z.infer<typeof AdminLeadDetailResponseSchema>;
+export type AdminBusinessIdParams = z.infer<typeof AdminBusinessIdParamsSchema>;
+export type AdminListBusinessesQuery = z.infer<typeof AdminListBusinessesQuerySchema>;
+export type AdminBusinessContact = z.infer<typeof AdminBusinessContactSchema>;
+export type AdminBusinessRow = z.infer<typeof AdminBusinessRowSchema>;
+export type AdminListBusinessesResponse = z.infer<typeof AdminListBusinessesResponseSchema>;
+export type AdminBusinessDetailResponse = z.infer<typeof AdminBusinessDetailResponseSchema>;
 export type AdminListSearchTasksQuery = z.infer<typeof AdminListSearchTasksQuerySchema>;
 export type AdminSearchTaskRow = z.infer<typeof AdminSearchTaskRowSchema>;
 export type AdminListSearchTasksResponse = z.infer<typeof AdminListSearchTasksResponseSchema>;

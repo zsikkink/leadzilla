@@ -20,7 +20,7 @@ import {
 } from '@lead-flood/contracts';
 
 import { requireAppAdminAccess } from '../../auth/guard.js';
-import { IcpNotFoundError, IcpNotImplementedError } from './icp.errors.js';
+import { IcpBadRequestError, IcpHasActiveDataError, IcpNotFoundError, IcpNotImplementedError } from './icp.errors.js';
 import { PrismaIcpRepository } from './icp.repository.js';
 import { buildIcpService } from './icp.service.js';
 
@@ -49,6 +49,26 @@ function handleModuleError(error: unknown, request: FastifyRequest, reply: Fasti
 
   if (error instanceof IcpNotFoundError) {
     reply.status(404).send(
+      ErrorResponseSchema.parse({
+        error: error.message,
+        requestId: request.id,
+      }),
+    );
+    return true;
+  }
+
+  if (error instanceof IcpHasActiveDataError) {
+    reply.status(409).send(
+      ErrorResponseSchema.parse({
+        error: error.message,
+        requestId: request.id,
+      }),
+    );
+    return true;
+  }
+
+  if (error instanceof IcpBadRequestError) {
+    reply.status(400).send(
       ErrorResponseSchema.parse({
         error: error.message,
         requestId: request.id,
@@ -150,8 +170,8 @@ export function registerIcpRoutes(app: FastifyInstance, _dependencies?: IcpRoute
 
     try {
       await service.deleteIcpProfile(parsedParams.data.icpId);
-      reply.status(204);
-      return;
+      reply.status(200);
+      return { success: true, icpId: parsedParams.data.icpId };
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;

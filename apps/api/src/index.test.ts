@@ -13,8 +13,6 @@ const {
   outboxEventUpdateMock,
   prismaDisconnectMock,
   processOnMock,
-  serverCloseMock,
-  serverListenMock,
 } = vi.hoisted(() => {
   const bossCreateQueueMock = vi.fn(async (_name: string, _options?: unknown) => undefined);
   const bossSendMock = vi.fn(
@@ -54,8 +52,6 @@ const {
     outboxEventUpdateMock,
     prismaDisconnectMock,
     processOnMock,
-    serverCloseMock,
-    serverListenMock,
   };
 });
 

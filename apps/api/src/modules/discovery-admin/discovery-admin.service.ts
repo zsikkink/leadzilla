@@ -1,4 +1,7 @@
 import type {
+  AdminBusinessDetailResponse,
+  AdminListBusinessesQuery,
+  AdminListBusinessesResponse,
   AdminLeadDetailResponse,
   AdminListLeadsQuery,
   AdminListLeadsResponse,
@@ -33,6 +36,8 @@ export interface DiscoveryAdminServiceDependencies {
 }
 
 export interface DiscoveryAdminService {
+  listBusinesses(query: AdminListBusinessesQuery): Promise<AdminListBusinessesResponse>;
+  getBusinessById(id: string): Promise<AdminBusinessDetailResponse>;
   listLeads(query: AdminListLeadsQuery): Promise<AdminListLeadsResponse>;
   getLeadById(id: string): Promise<AdminLeadDetailResponse>;
   listSearchTasks(query: AdminListSearchTasksQuery): Promise<AdminListSearchTasksResponse>;
@@ -57,6 +62,10 @@ export interface DiscoveryAdminService {
     id: string,
     requestedByUserId?: string | undefined,
   ): Promise<CancelDiscoveryRunResult>;
+  approveContactRecoveryItem(
+    id: string,
+    approvedByUserId: string,
+  ): Promise<{ leadId: string; businessName: string }>;
   getDiscoveryRunDetail(id: string): Promise<Awaited<ReturnType<DiscoveryAdminRepository['getDiscoveryRunDetail']>>>;
 }
 
@@ -65,6 +74,12 @@ export function buildDiscoveryAdminService(
   dependencies: DiscoveryAdminServiceDependencies,
 ): DiscoveryAdminService {
   return {
+    async listBusinesses(query) {
+      return repository.listBusinesses(query);
+    },
+    async getBusinessById(id) {
+      return repository.getBusinessById(id);
+    },
     async listLeads(query) {
       return repository.listLeads(query);
     },
@@ -112,6 +127,9 @@ export function buildDiscoveryAdminService(
     },
     async cancelDiscoveryRun(id, requestedByUserId) {
       return repository.cancelDiscoveryRun(id, requestedByUserId);
+    },
+    async approveContactRecoveryItem(id, approvedByUserId) {
+      return repository.approveContactRecoveryItem(id, approvedByUserId);
     },
     async getDiscoveryRunDetail(id) {
       return repository.getDiscoveryRunDetail(id);

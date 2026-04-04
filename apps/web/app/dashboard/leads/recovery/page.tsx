@@ -1,8 +1,9 @@
 'use client';
 
-import type { ContactRecoveryCandidate, ContactRecoveryItem, ContactRecoveryStatus } from '@lead-flood/contracts';
+import type { ContactRecoveryCandidate, ContactRecoveryItem } from '@lead-flood/contracts';
 import {
   Building2,
+  CheckCircle2,
   ExternalLink,
   Globe,
   Instagram,
@@ -19,16 +20,19 @@ import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
 import { AboutBusinessCard } from '@/components/about-business-card.js';
+import { ConfirmModal, useConfirmModal } from '@/components/confirm-modal.js';
 import { CustomSelect } from '@/components/custom-select.js';
 import { LeadsNav } from '@/components/leads-nav.js';
 import { useApiQuery } from '@/hooks/use-api-query.js';
 import { useAuth } from '@/hooks/use-auth.js';
 import { cn } from '@/lib/utils.js';
 import { countryName } from '@/lib/countries.js';
+import { fetchAdminBusinessDetail } from '@/lib/discovery-admin.js';
+import { getWebEnv } from '@/lib/env.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const STATUS_OPTIONS = [
+const _STATUS_OPTIONS = [
   { value: 'OPEN', label: 'Open queue' },
   { value: 'REJECTED', label: 'Rejected items' },
 ];
@@ -266,10 +270,16 @@ function RecoveryDetailPanel({
   item,
   onReject,
   rejecting,
+  onApprove,
+  approving,
+  enrichment,
 }: {
   item: ContactRecoveryItem;
   onReject: () => void;
   rejecting: boolean;
+  onApprove: () => void;
+  approving: boolean;
+  enrichment: RecoveryBusinessEnrichment | null;
 }) {
   const metaDescription = extractMetaDescription(item.snapshot.websiteIntelligence);
   const igBio = extractInstagramBio(item.snapshot.instagramIntelligence);
@@ -296,20 +306,34 @@ function RecoveryDetailPanel({
         <div className="flex items-center gap-3">
           <ScoreBadge score={item.business.deterministicScore} band={item.business.scoreBand} />
           {item.status === 'OPEN' ? (
-            <button
-              type="button"
-              onClick={onReject}
-              disabled={rejecting}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-1.5 text-xs font-semibold text-red-300 transition-colors hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {rejecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldX className="h-3.5 w-3.5" />}
-              Reject
-            </button>
-          ) : (
-            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-[10px] text-red-300">
-              Rejected {item.rejectedAt ? new Date(item.rejectedAt).toLocaleDateString() : ''}
+            <>
+              <button
+                type="button"
+                onClick={onApprove}
+                disabled={approving || rejecting}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-zbooni-green/40 bg-zbooni-green/10 px-2.5 py-1.5 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/15 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {approving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                Approve
+              </button>
+              <button
+                type="button"
+                onClick={onReject}
+                disabled={rejecting || approving}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-1.5 text-xs font-semibold text-red-300 transition-colors hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {rejecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldX className="h-3.5 w-3.5" />}
+                Reject
+              </button>
+            </>
+          ) : null}
+          {item.status === 'REJECTED' ? (
+            <div className="flex items-center gap-2">
+              <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-[10px] text-red-300">
+                Rejected {item.rejectedAt ? new Date(item.rejectedAt).toLocaleDateString() : ''}
+              </div>
             </div>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -321,13 +345,13 @@ function RecoveryDetailPanel({
           instagramBio={igBio}
           countryCode={item.business.countryCode}
           city={item.business.city}
-          rating={null}
-          reviewCount={null}
+          rating={enrichment?.rating ?? null}
+          reviewCount={enrichment?.reviewCount ?? null}
         />
       </div>
 
       {/* Quick stats */}
-      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Contacts Found</p>
           <p className="mt-0.5 text-sm font-bold">{item.candidateCount}</p>
@@ -338,6 +362,18 @@ function RecoveryDetailPanel({
             {hasSendable ? 'Available' : item.candidateCount > 0 ? 'No sendable email' : 'None'}
           </p>
         </div>
+        {enrichment?.rating != null ? (
+          <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Google Rating</p>
+            <p className="mt-0.5 text-sm font-bold">{enrichment.rating}/5</p>
+          </div>
+        ) : null}
+        {enrichment?.reviewCount != null ? (
+          <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Reviews</p>
+            <p className="mt-0.5 text-sm font-bold">{enrichment.reviewCount}</p>
+          </div>
+        ) : null}
         <div className="rounded-lg border border-border/20 bg-slate-800 p-3">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Terminal Reason</p>
           <p className="mt-0.5 text-xs font-semibold">{formatTerminalReason(item.snapshot.terminalReason)}</p>
@@ -462,6 +498,60 @@ function RecoveryDetailPanel({
           </div>
         ) : null}
 
+        {/* A8: Business Contacts from DB (additional contacts beyond pipeline candidates) */}
+        {enrichment && enrichment.contacts.length > 0 ? (
+          <div className="rounded-xl border border-border/30 bg-zbooni-dark/20">
+            <div className="flex w-full items-center gap-2 px-4 py-3">
+              <UserRound className="h-4 w-4 text-blue-400" />
+              <span className="flex-1 text-sm font-bold tracking-tight">Additional Business Contacts</span>
+              <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">
+                {enrichment.contacts.length}
+              </span>
+            </div>
+            <div className="border-t border-border/20 px-4 py-3">
+              <div className="space-y-2">
+                {enrichment.contacts.map((contact) => (
+                  <div key={contact.id} className="flex items-center gap-3 rounded-lg border border-border/20 bg-slate-800 px-3 py-2">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-500/10 text-[11px] font-bold text-blue-400">
+                      {contact.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <p className="truncate text-sm font-semibold">{contact.name}</p>
+                        <span className="shrink-0 rounded-full bg-muted/20 px-1.5 py-0.5 text-[9px] font-bold text-muted-foreground/60">
+                          {formatSeniority(contact.seniority)}
+                        </span>
+                      </div>
+                      {contact.title ? (
+                        <p className="truncate text-[11px] text-muted-foreground/50">{contact.title}</p>
+                      ) : null}
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      {contact.email ? (
+                        <a
+                          href={`mailto:${contact.email}`}
+                          title={contact.email}
+                          className="flex items-center gap-1 text-[11px] text-zbooni-teal transition-colors hover:text-zbooni-green"
+                        >
+                          <Mail className="h-3 w-3" />
+                          <span className="hidden max-w-[140px] truncate sm:inline">{contact.email}</span>
+                        </a>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground/40">No email</span>
+                      )}
+                      {contact.phone ? (
+                        <a href={`tel:${contact.phone}`} title={contact.phone} className="text-muted-foreground/40 transition-colors hover:text-zbooni-teal">
+                          <Phone className="h-3 w-3" />
+                        </a>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {/* Scraped timestamps */}
         <div className="flex gap-4 text-[10px] text-muted-foreground/30">
           <span>Run {item.discoveryRunId.slice(0, 8)}</span>
@@ -472,19 +562,66 @@ function RecoveryDetailPanel({
   );
 }
 
+// ── A8: Enriched business data from Supabase ──────────────────────────────────
+
+interface RecoveryBusinessContact {
+  id: string;
+  name: string;
+  title: string | null;
+  email: string | null;
+  phone: string | null;
+  seniority: string;
+}
+
+interface RecoveryBusinessEnrichment {
+  rating: number | null;
+  reviewCount: number | null;
+  contacts: RecoveryBusinessContact[];
+}
+
+async function fetchRecoveryBusinessEnrichment(businessId: string): Promise<RecoveryBusinessEnrichment> {
+  const empty: RecoveryBusinessEnrichment = { rating: null, reviewCount: null, contacts: [] };
+  try {
+    const detail = await fetchAdminBusinessDetail(businessId);
+
+    return {
+      rating: detail.business.rating,
+      reviewCount: detail.business.reviewCount,
+      contacts: detail.selectedContacts.map((contact) => ({
+        id: contact.id,
+        name: contact.name,
+        title: contact.title,
+        email: contact.email,
+        phone: contact.phone,
+        seniority: contact.seniority,
+      })),
+    };
+  } catch {
+    return empty;
+  }
+}
+
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function ContactRecoveryPage() {
-  const { apiClient } = useAuth();
+  const { apiClient, token } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [status, setStatus] = useState<ContactRecoveryStatus>('OPEN');
   const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('selected'));
   const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [businessEnrichment, setBusinessEnrichment] = useState<RecoveryBusinessEnrichment | null>(null);
+
+  // Confirmation modal state
+  const [rejectModalOpen, setRejectModalOpen] = useState(false);
+  const [approveModalOpen, setApproveModalOpen] = useState(false);
+  const [pendingActionItem, setPendingActionItem] = useState<ContactRecoveryItem | null>(null);
+  const { shouldSkip: shouldSkipRejectConfirm } = useConfirmModal('confirm-reject-recovery');
+  const { shouldSkip: shouldSkipApproveConfirm } = useConfirmModal('confirm-approve-recovery');
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query.trim()), 250);
@@ -497,12 +634,12 @@ export default function ContactRecoveryPage() {
         apiClient.listContactRecoveryItems({
           page,
           pageSize,
-          status,
+          status: 'OPEN',
           ...(debouncedQuery ? { q: debouncedQuery } : {}),
         }),
-      [apiClient, debouncedQuery, page, pageSize, status],
+      [apiClient, debouncedQuery, page, pageSize],
     ),
-    [debouncedQuery, page, pageSize, status],
+    [debouncedQuery, page, pageSize],
   );
 
   useEffect(() => {
@@ -526,13 +663,31 @@ export default function ContactRecoveryPage() {
     ? recovery.data?.items.find((item) => item.id === selectedId) ?? null
     : null;
 
-  const totalPages = recovery.data ? Math.max(1, Math.ceil(recovery.data.total / recovery.data.pageSize)) : 1;
-
-  async function handleReject(item: ContactRecoveryItem): Promise<void> {
-    if (!window.confirm(`Reject "${item.business.name}" from the contact recovery queue?`)) {
+  // A8: Fetch enriched business data (rating, review count, contacts) for selected item
+  useEffect(() => {
+    if (!selected) {
+      setBusinessEnrichment(null);
       return;
     }
+    let cancelled = false;
+    void fetchRecoveryBusinessEnrichment(selected.businessId).then((data) => {
+      if (!cancelled) setBusinessEnrichment(data);
+    });
+    return () => { cancelled = true; };
+  }, [selected?.businessId, selected]);
 
+  const totalPages = recovery.data ? Math.max(1, Math.ceil(recovery.data.total / recovery.data.pageSize)) : 1;
+
+  function requestReject(item: ContactRecoveryItem): void {
+    if (shouldSkipRejectConfirm()) {
+      void executeReject(item);
+      return;
+    }
+    setPendingActionItem(item);
+    setRejectModalOpen(true);
+  }
+
+  async function executeReject(item: ContactRecoveryItem): Promise<void> {
     setRejectingId(item.id);
     try {
       await apiClient.rejectContactRecoveryItem(item.id);
@@ -543,6 +698,40 @@ export default function ContactRecoveryPage() {
       toast.error(error instanceof Error ? error.message : 'Failed to reject contact recovery item');
     } finally {
       setRejectingId(null);
+    }
+  }
+
+  function requestApprove(item: ContactRecoveryItem): void {
+    if (shouldSkipApproveConfirm()) {
+      void executeApprove(item);
+      return;
+    }
+    setPendingActionItem(item);
+    setApproveModalOpen(true);
+  }
+
+  async function executeApprove(item: ContactRecoveryItem): Promise<void> {
+    setApprovingId(item.id);
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers.authorization = `Bearer ${token}`;
+      const res = await fetch(
+        `${getWebEnv().NEXT_PUBLIC_API_BASE_URL}/v1/discovery-admin/recovery/${item.id}/approve`,
+        { method: 'POST', headers },
+      );
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { error?: string } | null;
+        throw new Error(body?.error ?? `Approve failed (${res.status})`);
+      }
+
+      const result = await res.json() as { leadId: string; businessName: string };
+      toast.success(`Lead created from ${result.businessName}`);
+      recovery.refetch();
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : 'Failed to approve recovery item');
+    } finally {
+      setApprovingId(null);
     }
   }
 
@@ -577,30 +766,19 @@ export default function ContactRecoveryPage() {
             />
             <span className="text-[11px] text-muted-foreground/40">{recovery.data?.items.length ?? 0} shown</span>
           </div>
-          <div className="flex gap-2">
-            <CustomSelect
-              value={status}
-              onChange={(value) => {
-                setStatus(value as ContactRecoveryStatus);
-                setPage(1);
-              }}
-              options={STATUS_OPTIONS}
-              placeholder="Open queue"
-            />
-            <CustomSelect
-              value={String(pageSize)}
-              onChange={(value) => {
-                setPageSize(parseInt(value, 10) || 20);
-                setPage(1);
-              }}
-              options={[
-                { value: '10', label: '10 per page' },
-                { value: '20', label: '20 per page' },
-                { value: '40', label: '40 per page' },
-              ]}
-              placeholder="20 per page"
-            />
-          </div>
+          <CustomSelect
+            value={String(pageSize)}
+            onChange={(value) => {
+              setPageSize(parseInt(value, 10) || 20);
+              setPage(1);
+            }}
+            options={[
+              { value: '10', label: '10 per page' },
+              { value: '20', label: '20 per page' },
+              { value: '40', label: '40 per page' },
+            ]}
+            placeholder="20 per page"
+          />
         </div>
       </div>
 
@@ -671,7 +849,10 @@ export default function ContactRecoveryPage() {
             <RecoveryDetailPanel
               item={selected}
               rejecting={rejectingId === selected.id}
-              onReject={() => void handleReject(selected)}
+              onReject={() => requestReject(selected)}
+              approving={approvingId === selected.id}
+              onApprove={() => requestApprove(selected)}
+              enrichment={businessEnrichment}
             />
           </div>
         ) : (
@@ -686,6 +867,46 @@ export default function ContactRecoveryPage() {
           </div>
         )}
       </div>
+
+      {/* Reject recovery confirmation modal */}
+      <ConfirmModal
+        isOpen={rejectModalOpen}
+        title="Reject Recovery Item"
+        message={pendingActionItem ? `Reject "${pendingActionItem.business.name}" from the contact recovery queue?` : ''}
+        confirmLabel="Reject"
+        variant="danger"
+        onConfirm={() => {
+          setRejectModalOpen(false);
+          if (pendingActionItem) void executeReject(pendingActionItem);
+          setPendingActionItem(null);
+        }}
+        onCancel={() => {
+          setRejectModalOpen(false);
+          setPendingActionItem(null);
+        }}
+        showDontAsk
+        dontAskKey="confirm-reject-recovery"
+      />
+
+      {/* Approve recovery confirmation modal */}
+      <ConfirmModal
+        isOpen={approveModalOpen}
+        title="Create Lead"
+        message={pendingActionItem ? `Create a lead from "${pendingActionItem.business.name}" using the best available contact?` : ''}
+        confirmLabel="Create Lead"
+        variant="info"
+        onConfirm={() => {
+          setApproveModalOpen(false);
+          if (pendingActionItem) void executeApprove(pendingActionItem);
+          setPendingActionItem(null);
+        }}
+        onCancel={() => {
+          setApproveModalOpen(false);
+          setPendingActionItem(null);
+        }}
+        showDontAsk
+        dontAskKey="confirm-approve-recovery"
+      />
     </div>
   );
 }

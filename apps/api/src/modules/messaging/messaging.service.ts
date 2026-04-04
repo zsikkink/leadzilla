@@ -9,8 +9,10 @@ import type {
   ListMessageSendsResponse,
   MessageDraftResponse,
   MessageSendResponse,
+  MessageVariantResponse,
   RejectMessageDraftRequest,
   SendMessageRequest,
+  UpdateMessageVariantRequest,
 } from '@lead-flood/contracts';
 import { getPipelineSetting } from '@lead-flood/db';
 
@@ -42,6 +44,7 @@ export interface MessageGenerateJobPayload {
   knowledgeEntryIds?: string[] | undefined;
   channel?: string | undefined;
   promptVersion?: string | undefined;
+  forceRegenerate?: boolean | undefined;
   correlationId?: string | undefined;
 }
 
@@ -65,6 +68,7 @@ export interface MessagingService {
   listMessageSends(query: ListMessageSendsQuery): Promise<ListMessageSendsResponse>;
   getMessageSend(sendId: string): Promise<MessageSendResponse>;
   getConversation(leadId: string): Promise<ConversationResponse>;
+  updateMessageVariant(variantId: string, input: UpdateMessageVariantRequest): Promise<MessageVariantResponse>;
 }
 
 const SCORE_QUALIFICATION_THRESHOLD_KEY = 'scoreQualificationThreshold';
@@ -142,15 +146,24 @@ export function buildMessagingService(
       });
 
       if (existingDraft) {
-        if (eligibilityContext.leadStatus === 'qualified') {
-          await repository.markLeadDraftedIfQualified(input.leadId);
-        }
+        if (input.forceRegenerate) {
+          const existingInitialSend = await repository.getExistingInitialSendForDraft(existingDraft.draftId);
+          if (existingInitialSend) {
+            throw new MessagingDraftGenerationIneligibleError(
+              'Draft cannot be regenerated because the initial message has already been queued or sent. Review it in Message Queue instead.',
+            );
+          }
+        } else {
+          if (eligibilityContext.leadStatus === 'qualified') {
+            await repository.markLeadDraftedIfQualified(input.leadId);
+          }
 
-        return {
-          status: 'EXISTS',
-          draftId: existingDraft.draftId,
-          variantIds: existingDraft.variantIds,
-        };
+          return {
+            status: 'EXISTS',
+            draftId: existingDraft.draftId,
+            variantIds: existingDraft.variantIds,
+          };
+        }
       }
 
       if (eligibilityContext.blendedScore === null) {
@@ -166,6 +179,8 @@ export function buildMessagingService(
         );
       }
 
+      await repository.clearLeadDraftGenerationError(input.leadId);
+
       if (dependencies.enqueueMessageGenerate) {
         const runId = `gen-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         await dependencies.enqueueMessageGenerate({
@@ -175,6 +190,7 @@ export function buildMessagingService(
           knowledgeEntryIds: input.knowledgeEntryIds,
           channel: input.channel,
           promptVersion: input.promptVersion,
+          forceRegenerate: input.forceRegenerate,
         });
         return {
           status: 'QUEUED',
@@ -238,6 +254,9 @@ export function buildMessagingService(
     },
     async getConversation(leadId) {
       return repository.getConversation(leadId);
+    },
+    async updateMessageVariant(variantId, input) {
+      return repository.updateMessageVariant(variantId, input);
     },
   };
 }
