@@ -403,7 +403,10 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
       prisma.modelVersion.findFirst({
         where: { ...modelTypeWhere, stage: 'ACTIVE' },
         select: { id: true },
-        orderBy: [{ activatedAt: 'desc' }, { createdAt: 'desc' }],
+        orderBy: [
+          { activatedAt: { sort: 'desc', nulls: 'last' } },
+          { createdAt: 'desc' },
+        ],
       }),
       prisma.trainingRun.findFirst({
         where: {
@@ -888,7 +891,7 @@ export class HybridAnalyticsRepository extends PrismaAnalyticsRepository {
           from public."ModelVersion"
           where "stage" = 'ACTIVE'
             ${modelTypeFilter}
-          order by "activatedAt" desc, "createdAt" desc
+          order by "activatedAt" desc nulls last, "createdAt" desc
           limit 1
         `,
         modelTypeValues,

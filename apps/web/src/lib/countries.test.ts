@@ -14,8 +14,8 @@ describe('countries lib', () => {
   });
 
   it('resolves display names for codes and aliases', () => {
-    expect(countryName('AE')).toBe('UAE');
-    expect(countryName('UAE')).toBe('UAE');
-    expect(countryName('Saudi Arabia')).toBe('KSA');
+    expect(countryName('AE')).toBe('United Arab Emirates');
+    expect(countryName('UAE')).toBe('United Arab Emirates');
+    expect(countryName('Saudi Arabia')).toBe('Saudi Arabia');
   });
 });

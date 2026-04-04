@@ -1,6 +1,6 @@
 import { prisma } from '@lead-flood/db';
 
-const SUPPORTED_COUNTRIES = ['UAE', 'KSA', 'Jordan', 'Egypt'] as const;
+const SUPPORTED_COUNTRIES = ['AE', 'SA', 'JO', 'EG'] as const;
 
 interface ZbooniRuleDefinition {
   name: string;

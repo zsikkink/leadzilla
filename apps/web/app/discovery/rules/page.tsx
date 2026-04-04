@@ -28,6 +28,7 @@ import { getWebEnv } from '@/lib/env.js';
 import { useAuth } from '@/hooks/use-auth.js';
 import { useApiQuery } from '@/hooks/use-api-query.js';
 import { KNOWN_SCORING_FIELD_KEYS } from '@/lib/discovery-admin.js';
+import { toDiscoveryCountryCode } from '@/lib/countries.js';
 import { toScoreTier, parseTierBands, DEFAULT_TIER_BANDS, type TierBands } from '@/lib/score-tier-utils.js';
 
 import type {
@@ -260,12 +261,25 @@ function evaluateRule(rule: QualificationRuleResponse, form: SimFormState): bool
 
   const formValue = getter(form);
   const expected = rule.valueJson;
+  const normalizedFieldKey = rule.fieldKey.trim().toLowerCase();
+  const isCountryRule =
+    normalizedFieldKey === 'country' ||
+    normalizedFieldKey.endsWith('_country') ||
+    normalizedFieldKey.endsWith('.country') ||
+    normalizedFieldKey.includes('country_code');
+
+  const normalizeComparable = (value: unknown): string => {
+    if (isCountryRule && typeof value === 'string') {
+      return toDiscoveryCountryCode(value) ?? value.trim().toLowerCase();
+    }
+    return String(value).trim().toLowerCase();
+  };
 
   switch (rule.operator) {
     case 'EQ':
-      return String(formValue) === String(expected);
+      return normalizeComparable(formValue) === normalizeComparable(expected);
     case 'NEQ':
-      return String(formValue) !== String(expected);
+      return normalizeComparable(formValue) !== normalizeComparable(expected);
     case 'GTE':
       return Number(formValue) >= Number(expected);
     case 'GT':
@@ -276,20 +290,20 @@ function evaluateRule(rule: QualificationRuleResponse, form: SimFormState): bool
       return Number(formValue) < Number(expected);
     case 'IN': {
       const allowed = Array.isArray(expected)
-        ? expected.map((v) => String(v).trim().toLowerCase())
-        : String(expected).split(',').map((s) => s.trim().toLowerCase());
-      const val = String(formValue).toLowerCase();
+        ? expected.map((v) => normalizeComparable(v))
+        : String(expected).split(',').map((s) => normalizeComparable(s));
+      const val = normalizeComparable(formValue);
       return allowed.some((a) => val.includes(a) || a.includes(val));
     }
     case 'NOT_IN': {
       const blocked = Array.isArray(expected)
-        ? expected.map((v) => String(v).trim().toLowerCase())
-        : String(expected).split(',').map((s) => s.trim().toLowerCase());
-      const val2 = String(formValue).toLowerCase();
+        ? expected.map((v) => normalizeComparable(v))
+        : String(expected).split(',').map((s) => normalizeComparable(s));
+      const val2 = normalizeComparable(formValue);
       return !blocked.some((b) => val2.includes(b) || b.includes(val2));
     }
     case 'CONTAINS': {
-      return String(formValue).toLowerCase().includes(String(expected).toLowerCase());
+      return normalizeComparable(formValue).includes(normalizeComparable(expected));
     }
     default:
       return false;

@@ -5,6 +5,7 @@ import {
   listPipelineSettings,
   upsertPipelineSetting,
 } from '@lead-flood/db';
+import { normalizeCountryCitiesMap } from '@lead-flood/contracts';
 
 import { requireAppAdminAccess } from '../../auth/guard.js';
 
@@ -27,6 +28,14 @@ const UpdatePipelineSettingBodySchema = z.object({
   value: z.unknown(),
 });
 
+function normalizePipelineSettingValue(key: string, value: unknown): unknown {
+  if (key === 'countryCities') {
+    return normalizeCountryCitiesMap(value);
+  }
+
+  return value;
+}
+
 export function registerSettingsRoutes(app: FastifyInstance) {
   const requireAppAdmin = async (request: FastifyRequest, reply: FastifyReply) => {
     if (!(await requireAppAdminAccess(request, reply))) {
@@ -42,7 +51,7 @@ export function registerSettingsRoutes(app: FastifyInstance) {
       return PipelineSettingsListResponseSchema.parse({
         items: settings.map((s: { key: string; valueJson: unknown; updatedAt: Date }) => ({
           key: s.key,
-          value: s.valueJson,
+          value: normalizePipelineSettingValue(s.key, s.valueJson),
           updatedAt: s.updatedAt.toISOString(),
         })),
       });
@@ -73,7 +82,7 @@ export function registerSettingsRoutes(app: FastifyInstance) {
 
       return PipelineSettingResponseSchema.parse({
         key: setting.key,
-        value: setting.valueJson,
+        value: normalizePipelineSettingValue(setting.key, setting.valueJson),
         updatedAt: setting.updatedAt.toISOString(),
       });
     } catch (error) {
@@ -153,11 +162,12 @@ export function registerSettingsRoutes(app: FastifyInstance) {
     }
 
     try {
-      const setting = await upsertPipelineSetting(key, parseResult.data.value);
+      const normalizedValue = normalizePipelineSettingValue(key, parseResult.data.value);
+      const setting = await upsertPipelineSetting(key, normalizedValue);
 
       return PipelineSettingResponseSchema.parse({
         key: setting.key,
-        value: setting.valueJson,
+        value: normalizePipelineSettingValue(setting.key, setting.valueJson),
         updatedAt: setting.updatedAt.toISOString(),
       });
     } catch (error) {

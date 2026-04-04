@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { getPipelineSetting } from '@lead-flood/db';
 import type {
   CreateDiscoveryRunRequest,
   CreateDiscoveryRunResponse,
@@ -9,8 +10,14 @@ import type {
   ListDiscoveryRunsResponse,
   PipelineRunStatus,
 } from '@lead-flood/contracts';
+import {
+  buildCountryCitiesMap,
+  countryDisplayName,
+  findCountriesMissingCities,
+} from '@lead-flood/contracts';
 
 import type { DiscoveryRepository } from './discovery.repository.js';
+import { DiscoveryInvalidRequestError } from './discovery.errors.js';
 
 export interface DiscoveryRunJobPayload {
   runId: string;
@@ -56,6 +63,26 @@ export interface DiscoveryService {
     query: ListDiscoveryRunsQuery,
     requestedByUserId?: string | undefined,
   ): Promise<ListDiscoveryRunsResponse>;
+}
+
+async function assertCountryCityCoverage(input: CreateDiscoveryRunRequest): Promise<void> {
+  if (input.cities && input.cities.length > 0) {
+    return;
+  }
+
+  const setting = await getPipelineSetting('countryCities');
+  const countryCities = buildCountryCitiesMap(setting?.valueJson, {
+    includeCuratedDefaults: true,
+  });
+  const missingCountries = findCountriesMissingCities(input.countries, countryCities);
+
+  if (missingCountries.length === 0) {
+    return;
+  }
+
+  throw new DiscoveryInvalidRequestError(
+    `Add at least one city in Controls & Settings for ${missingCountries.map((country) => countryDisplayName(country)).join(', ')} before starting discovery.`,
+  );
 }
 
 /**
@@ -129,6 +156,7 @@ export function buildDiscoveryService(
   return {
     async createDiscoveryRun(input) {
       await repository.assertDiscoveryWorkerAvailable();
+      await assertCountryCityCoverage(input);
 
       const runId = randomUUID();
       const icpProfileIds = resolveIcpProfileIds(input);

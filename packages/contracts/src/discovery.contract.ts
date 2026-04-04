@@ -1,48 +1,17 @@
 import { z } from 'zod';
+import {
+  SupportedCountryCodeSchema,
+  normalizeCountryCodeOrAlias,
+  normalizeCountryCodes,
+} from './country.contract.js';
 
-/** All valid MENA country codes for discovery runs. */
-export const DiscoveryCountryCodeSchema = z.enum([
-  'JO', 'SA', 'AE', 'EG',
-  'QA', 'BH', 'KW', 'OM', 'LB',
-  'IQ', 'MA', 'TN', 'DZ', 'LY',
-  'YE', 'SY', 'PS', 'SD',
-]);
+/** All valid ISO 3166-1 alpha-2 country codes for discovery runs. */
+export const DiscoveryCountryCodeSchema = SupportedCountryCodeSchema;
 
 export type DiscoveryCountryCodeContract = z.infer<typeof DiscoveryCountryCodeSchema>;
 export const DiscoveryCountryCodes = DiscoveryCountryCodeSchema.options;
 
 const DISCOVERY_COUNTRY_CODE_SET = new Set<DiscoveryCountryCodeContract>(DiscoveryCountryCodes);
-
-const DISCOVERY_COUNTRY_ALIAS_TO_CODE: Record<string, DiscoveryCountryCodeContract> = {
-  // Common aliases
-  uae: 'AE',
-  ksa: 'SA',
-  // Canonical names
-  jordan: 'JO',
-  'saudi arabia': 'SA',
-  'united arab emirates': 'AE',
-  egypt: 'EG',
-  qatar: 'QA',
-  bahrain: 'BH',
-  kuwait: 'KW',
-  oman: 'OM',
-  lebanon: 'LB',
-  iraq: 'IQ',
-  morocco: 'MA',
-  tunisia: 'TN',
-  algeria: 'DZ',
-  libya: 'LY',
-  yemen: 'YE',
-  syria: 'SY',
-  palestine: 'PS',
-  sudan: 'SD',
-  // Common alternates
-  'palestinian territories': 'PS',
-};
-
-function normalizeCountryAliasKey(value: string): string {
-  return value.trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
-}
 
 export function normalizeDiscoveryCountryCode(
   value: string | null | undefined,
@@ -56,26 +25,13 @@ export function normalizeDiscoveryCountryCode(
     return upper as DiscoveryCountryCodeContract;
   }
 
-  return DISCOVERY_COUNTRY_ALIAS_TO_CODE[normalizeCountryAliasKey(value)] ?? null;
+  return normalizeCountryCodeOrAlias(value);
 }
 
 export function normalizeDiscoveryCountryCodes(
   values: readonly (string | null | undefined)[],
 ): DiscoveryCountryCodeContract[] {
-  const result: DiscoveryCountryCodeContract[] = [];
-  const seen = new Set<DiscoveryCountryCodeContract>();
-
-  for (const value of values) {
-    const normalized = normalizeDiscoveryCountryCode(value);
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-
-    seen.add(normalized);
-    result.push(normalized);
-  }
-
-  return result;
+  return normalizeCountryCodes(values);
 }
 
 export const DiscoveryProviderSchema = z.enum([
@@ -132,7 +88,7 @@ export const CreateDiscoveryRunRequestSchema = z
     countries: z.preprocess((value) => {
       if (!Array.isArray(value)) return value;
       return value.map((entry) => (typeof entry === 'string' ? normalizeDiscoveryCountryCode(entry) ?? entry : entry));
-    }, z.array(DiscoveryCountryCodeSchema).min(1)),
+    }, z.array(SupportedCountryCodeSchema).min(1)),
     cities: z.array(z.string().min(1)).optional(),
     includeWebsiteAnalysis: z.boolean().default(true),
     includeSocialMediaAnalysis: z.boolean().default(true),

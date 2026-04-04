@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { toast } from 'sonner';
 
 import { ApiError } from '../../../src/lib/api-client.js';
-import { MENA_COUNTRIES } from '../../../src/lib/countries.js';
+import { MENA_COUNTRIES, countryName, toDiscoveryCountryCodes } from '../../../src/lib/countries.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 
@@ -68,7 +68,7 @@ export default function IcpsPage() {
   useEffect(() => {
     const trimmed = targetCountries.trim();
     if (trimmed.toUpperCase() === 'MENA') {
-      setTargetCountries(MENA_COUNTRIES.join(', '));
+      setTargetCountries(MENA_COUNTRIES.map((country) => countryName(country)).join(', '));
     }
   }, [targetCountries]);
 
@@ -132,7 +132,7 @@ export default function IcpsPage() {
       }
 
       const parsedTargetIndustries = parseCommaSeparated(targetIndustries);
-      const parsedTargetCountries = parseCommaSeparated(targetCountries);
+      const parsedTargetCountries = toDiscoveryCountryCodes(parseCommaSeparated(targetCountries) ?? []);
       const parsedRequiredTechnologies = parseCommaSeparated(requiredTechnologies);
       const parsedExcludedDomains = parseCommaSeparated(excludedDomains);
       const normalizedQualificationLogic = qualificationLogic.trim().toUpperCase();
@@ -150,7 +150,7 @@ export default function IcpsPage() {
         name: name.trim(),
         ...(description.trim() ? { description: description.trim() } : {}),
         ...(parsedTargetIndustries ? { targetIndustries: parsedTargetIndustries } : {}),
-        ...(parsedTargetCountries ? { targetCountries: parsedTargetCountries } : {}),
+        ...(parsedTargetCountries.length > 0 ? { targetCountries: parsedTargetCountries } : {}),
         ...(Object.keys(metadataJson).length > 0 ? { metadataJson } : {}),
         ...(parsedMinCompanySize !== undefined ? { minCompanySize: parsedMinCompanySize } : {}),
         ...(parsedMaxCompanySize !== undefined ? { maxCompanySize: parsedMaxCompanySize } : {}),
@@ -246,7 +246,7 @@ export default function IcpsPage() {
                   key={country}
                   className="rounded-full bg-zbooni-teal/10 px-2 py-0.5 text-xs text-zbooni-teal"
                 >
-                  {country}
+                  {countryName(country)}
                 </span>
               ))}
             </div>
@@ -362,9 +362,11 @@ export default function IcpsPage() {
                   value={targetCountries}
                   onChange={(e) => setTargetCountries(e.target.value)}
                   className="flex h-11 w-full rounded-xl border border-input bg-background px-4 text-sm transition-colors placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  placeholder="Type MENA to auto-fill all MENA countries"
+                  placeholder="United Arab Emirates, Germany, US"
                 />
-                <p className="text-xs text-muted-foreground/60">Comma-separated list. Type &quot;MENA&quot; to auto-fill all 18 MENA countries.</p>
+                <p className="text-xs text-muted-foreground/60">
+                  Comma-separated list. Country names, aliases, and ISO codes all work. Type &quot;MENA&quot; to auto-fill the current MENA defaults.
+                </p>
               </div>
 
               {/* Sales Hook */}

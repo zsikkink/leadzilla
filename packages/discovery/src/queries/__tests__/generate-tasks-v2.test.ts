@@ -31,16 +31,13 @@ describe('generateTasksV2', () => {
 
     const tasks = generateTasksV2(input, { now: fixedDate });
 
-    // QA has 1 default city (Doha)
-    // 1 country × 1 city × 1 category × 1 template × 1 page × 1 taskType = 1
+    // QA uses the curated defaults from the shared global registry.
     const defaultCities = defaultCitiesByCountry['QA']!;
-    expect(defaultCities).toEqual(['Doha']);
+    expect(defaultCities).toEqual(['Doha', 'Al Wakrah', 'Al Khor', 'Lusail']);
     expect(tasks.length).toBe(defaultCities.length * 1 * queryTemplatesV2EN.length * 1 * 1);
 
-    // All tasks should reference Doha
-    for (const task of tasks) {
-      expect(task.city).toBe('Doha');
-    }
+    const taskCities = new Set(tasks.map((task) => task.city));
+    expect(taskCities).toEqual(new Set(defaultCities));
   });
 
   it('expands "All" to default cities for each country', () => {
@@ -52,9 +49,9 @@ describe('generateTasksV2', () => {
 
     const tasks = generateTasksV2(input, { now: fixedDate });
 
-    // AE has 4 default cities
+    // AE uses the full curated default set from the shared global registry.
     const aeCities = defaultCitiesByCountry['AE']!;
-    expect(aeCities.length).toBe(4);
+    expect(aeCities.length).toBe(8);
 
     const expectedCount =
       aeCities.length * 1 * queryTemplatesV2EN.length * 1 * 1;
@@ -145,7 +142,7 @@ describe('generateTasksV2', () => {
     expect(firstTask.queryText).toContain('bakery');
   });
 
-  it('does not include unknown country code in query text', () => {
+  it('does not generate tasks for invalid countries', () => {
     const input: GenerateTasksV2Input = {
       categories: ['bakery'],
       countries: ['XX'],
@@ -153,10 +150,7 @@ describe('generateTasksV2', () => {
     };
 
     const tasks = generateTasksV2(input, { now: fixedDate });
-
-    const firstTask = tasks[0]!;
-    expect(firstTask.queryText).not.toContain('XX');
-    expect(firstTask.queryText).toContain('TestCity');
+    expect(tasks).toHaveLength(0);
   });
 
   it('includes v2 in the timeBucket', () => {

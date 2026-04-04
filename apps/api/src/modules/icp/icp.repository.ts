@@ -13,6 +13,11 @@ import type {
   UpdateIcpProfileRequest,
   UpdateQualificationRuleRequest,
 } from '@lead-flood/contracts';
+import {
+  countryDisplayName,
+  normalizeCountryCodeOrAlias,
+  normalizeCountryCodes,
+} from '@lead-flood/contracts';
 import { PrismaRuntime, prisma, toInputJson } from '@lead-flood/db';
 
 import { IcpHasActiveDataError, IcpNotFoundError, IcpNotImplementedError } from './icp.errors.js';
@@ -68,7 +73,24 @@ function extractStringValues(value: unknown): string[] {
   return [];
 }
 
-function normalizeComparable(value: unknown): unknown {
+function isCountryFieldKey(fieldKey: string | null | undefined): boolean {
+  const normalized = normalizeString(fieldKey)?.toLowerCase() ?? '';
+  return (
+    normalized === 'country' ||
+    normalized.endsWith('_country') ||
+    normalized.endsWith('.country') ||
+    normalized.includes('country_code')
+  );
+}
+
+function normalizeComparable(value: unknown, fieldKey?: string | undefined): unknown {
+  if (fieldKey && isCountryFieldKey(fieldKey)) {
+    const normalizedString = normalizeString(value);
+    if (normalizedString !== null) {
+      return normalizeCountryCodeOrAlias(normalizedString) ?? normalizedString.toLowerCase();
+    }
+  }
+
   const normalizedString = normalizeString(value);
   if (normalizedString !== null) {
     return normalizedString.toLowerCase();
@@ -83,12 +105,17 @@ function normalizeComparable(value: unknown): unknown {
   return value;
 }
 
-function evaluateRule(operator: string, featureValue: unknown, ruleValue: unknown): boolean {
+function evaluateRule(
+  operator: string,
+  featureValue: unknown,
+  ruleValue: unknown,
+  fieldKey?: string | undefined,
+): boolean {
   switch (operator) {
     case 'EQ':
-      return normalizeComparable(featureValue) === normalizeComparable(ruleValue);
+      return normalizeComparable(featureValue, fieldKey) === normalizeComparable(ruleValue, fieldKey);
     case 'NEQ':
-      return normalizeComparable(featureValue) !== normalizeComparable(ruleValue);
+      return normalizeComparable(featureValue, fieldKey) !== normalizeComparable(ruleValue, fieldKey);
     case 'GT': {
       const left = normalizeNumber(featureValue);
       const right = normalizeNumber(ruleValue);
@@ -111,18 +138,18 @@ function evaluateRule(operator: string, featureValue: unknown, ruleValue: unknow
     }
     case 'IN': {
       const values = Array.isArray(ruleValue) ? ruleValue : [];
-      const normalized = normalizeComparable(featureValue);
-      return values.map((value) => normalizeComparable(value)).includes(normalized);
+      const normalized = normalizeComparable(featureValue, fieldKey);
+      return values.map((value) => normalizeComparable(value, fieldKey)).includes(normalized);
     }
     case 'NOT_IN': {
       const values = Array.isArray(ruleValue) ? ruleValue : [];
-      const normalized = normalizeComparable(featureValue);
-      return !values.map((value) => normalizeComparable(value)).includes(normalized);
+      const normalized = normalizeComparable(featureValue, fieldKey);
+      return !values.map((value) => normalizeComparable(value, fieldKey)).includes(normalized);
     }
     case 'CONTAINS': {
-      const normalizedRule = normalizeString(ruleValue)?.toLowerCase();
-      const normalizedFeature = normalizeString(featureValue)?.toLowerCase();
-      if (!normalizedRule || !normalizedFeature) {
+      const normalizedRule = normalizeComparable(ruleValue, fieldKey);
+      const normalizedFeature = normalizeComparable(featureValue, fieldKey);
+      if (typeof normalizedRule !== 'string' || typeof normalizedFeature !== 'string') {
         return false;
       }
       return normalizedFeature.includes(normalizedRule);
@@ -147,6 +174,14 @@ function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.map((entry) => entry.trim().toLowerCase()).filter(Boolean)));
 }
 
+function uniqueCountrySearchTerms(values: string[]): string[] {
+  const normalized = normalizeCountryCodes(values);
+  if (normalized.length === 0) {
+    return [];
+  }
+  return Array.from(new Set(normalized.map((code) => countryDisplayName(code).toLowerCase())));
+}
+
 function buildFilterContext(input: {
   targetIndustries: string[];
   targetCountries: string[];
@@ -163,7 +198,7 @@ function buildFilterContext(input: {
 }): DiscoveryFilterContext {
   const context: DiscoveryFilterContext = {
     industries: [...input.targetIndustries],
-    countries: [...input.targetCountries],
+    countries: uniqueCountrySearchTerms(input.targetCountries),
     requiredTechnologies: [...input.requiredTechnologies],
     excludedDomains: [...input.excludedDomains],
     minCompanySize: input.minCompanySize,
@@ -184,7 +219,7 @@ function buildFilterContext(input: {
       continue;
     }
     if (fieldKey.includes('country') || fieldKey.includes('geo')) {
-      context.countries = uniqueStrings([...context.countries, ...values]);
+      context.countries = uniqueCountrySearchTerms([...context.countries, ...values]);
       continue;
     }
     if (fieldKey.includes('technology')) {
@@ -218,7 +253,7 @@ function buildFilterContext(input: {
   return {
     ...context,
     industries: uniqueStrings(context.industries),
-    countries: uniqueStrings(context.countries),
+    countries: uniqueCountrySearchTerms(context.countries),
     requiredTechnologies: uniqueStrings(context.requiredTechnologies),
     excludedDomains: uniqueStrings(context.excludedDomains),
     includeTerms: uniqueStrings(context.includeTerms),
@@ -315,6 +350,7 @@ function buildFeatureCandidate(input: {
   const companyName = normalizeString(input.normalizedPayload?.companyName);
   const industry = normalizeString(input.normalizedPayload?.industry);
   const country = normalizeString(input.normalizedPayload?.country);
+  const countryCode = normalizeCountryCodeOrAlias(country ?? undefined);
 
   return {
     email,
@@ -322,7 +358,7 @@ function buildFeatureCandidate(input: {
     companyName,
     industry,
     employeeCount: normalizeNumber(input.normalizedPayload?.employeeCount),
-    country,
+    country: countryCode ?? country,
     city: normalizeString(input.normalizedPayload?.city),
     linkedinUrl: normalizeString(input.normalizedPayload?.linkedinUrl),
     website: normalizeString(input.normalizedPayload?.website),
@@ -334,7 +370,7 @@ function buildFeatureCandidate(input: {
       (industry ? input.icpTargetIndustries.map((entry) => entry.toLowerCase()).includes(industry.toLowerCase()) : false),
     geo_match:
       input.icpTargetCountries.length === 0 ||
-      (country ? input.icpTargetCountries.map((entry) => entry.toLowerCase()).includes(country.toLowerCase()) : false),
+      (countryCode ? normalizeCountryCodes(input.icpTargetCountries).includes(countryCode) : false),
   };
 }
 
@@ -420,7 +456,7 @@ function mapIcpProfileToResponse(
         ? (icp.metadataJson as Record<string, unknown>)
         : null,
     targetIndustries: icp.targetIndustries,
-    targetCountries: icp.targetCountries,
+    targetCountries: normalizeCountryCodes(icp.targetCountries),
     minCompanySize: icp.minCompanySize,
     maxCompanySize: icp.maxCompanySize,
     requiredTechnologies: icp.requiredTechnologies,
@@ -509,7 +545,7 @@ export class PrismaIcpRepository extends StubIcpRepository {
             ? toInputJson(input.metadataJson)
             : PrismaRuntime.JsonNull,
         targetIndustries: input.targetIndustries ?? [],
-        targetCountries: input.targetCountries ?? [],
+        targetCountries: normalizeCountryCodes(input.targetCountries ?? []),
         minCompanySize: input.minCompanySize ?? null,
         maxCompanySize: input.maxCompanySize ?? null,
         requiredTechnologies: input.requiredTechnologies ?? [],
@@ -606,7 +642,7 @@ export class PrismaIcpRepository extends StubIcpRepository {
             ? { targetIndustries: input.targetIndustries }
             : {}),
           ...(input.targetCountries !== undefined
-            ? { targetCountries: input.targetCountries }
+            ? { targetCountries: normalizeCountryCodes(input.targetCountries) }
             : {}),
           ...(input.minCompanySize !== undefined
             ? { minCompanySize: input.minCompanySize ?? null }
@@ -1019,7 +1055,7 @@ export class PrismaIcpRepository extends StubIcpRepository {
             ruleId: rule.id,
             fieldKey: rule.fieldKey,
             operator: rule.operator,
-            matched: evaluateRule(rule.operator, featureCandidate[rule.fieldKey], rule.valueJson),
+            matched: evaluateRule(rule.operator, featureCandidate[rule.fieldKey], rule.valueJson, rule.fieldKey),
           })),
         };
       }),

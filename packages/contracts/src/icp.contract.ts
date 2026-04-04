@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import {
+  SupportedCountryCodeSchema,
+  normalizeCountryCodeOrAlias,
+} from './country.contract.js';
 
 export const QualificationRuleTypeSchema = z.enum(['WEIGHTED', 'HARD_FILTER']);
 export const QualificationLogicSchema = z.enum(['WEIGHTED']);
@@ -47,7 +51,12 @@ export const CreateIcpProfileRequestSchema = z
     qualificationLogic: QualificationLogicSchema.optional(),
     metadataJson: z.record(z.unknown()).optional(),
     targetIndustries: z.array(z.string().min(1)).optional(),
-    targetCountries: z.array(z.string().min(1)).optional(),
+    targetCountries: z.preprocess((value) => {
+      if (!Array.isArray(value)) return value;
+      return value.map((entry) =>
+        typeof entry === 'string' ? normalizeCountryCodeOrAlias(entry) ?? entry : entry,
+      );
+    }, z.array(SupportedCountryCodeSchema).optional()),
     minCompanySize: z.number().int().positive().optional(),
     maxCompanySize: z.number().int().positive().optional(),
     requiredTechnologies: z.array(z.string().min(1)).optional(),
@@ -74,7 +83,12 @@ export const UpdateIcpProfileRequestSchema = z
     qualificationLogic: QualificationLogicSchema.optional(),
     metadataJson: z.record(z.unknown()).nullable().optional(),
     targetIndustries: z.array(z.string().min(1)).optional(),
-    targetCountries: z.array(z.string().min(1)).optional(),
+    targetCountries: z.preprocess((value) => {
+      if (!Array.isArray(value)) return value;
+      return value.map((entry) =>
+        typeof entry === 'string' ? normalizeCountryCodeOrAlias(entry) ?? entry : entry,
+      );
+    }, z.array(SupportedCountryCodeSchema).optional()),
     minCompanySize: z.number().int().positive().nullable().optional(),
     maxCompanySize: z.number().int().positive().nullable().optional(),
     requiredTechnologies: z.array(z.string().min(1)).optional(),
@@ -168,7 +182,7 @@ export const IcpProfileResponseSchema = z
     qualificationLogic: QualificationLogicSchema,
     metadataJson: z.record(z.unknown()).nullable(),
     targetIndustries: z.array(z.string()),
-    targetCountries: z.array(z.string()),
+    targetCountries: z.array(SupportedCountryCodeSchema),
     minCompanySize: z.number().int().nullable(),
     maxCompanySize: z.number().int().nullable(),
     requiredTechnologies: z.array(z.string()),

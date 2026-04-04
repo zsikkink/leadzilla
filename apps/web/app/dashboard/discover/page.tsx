@@ -24,57 +24,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
-import { countryName, toDiscoveryCountryCodes } from '../../../src/lib/countries.js';
+import {
+  buildDiscoveryCountryCities,
+  countryName,
+  toDiscoveryCountryCode,
+} from '../../../src/lib/countries.js';
 import { cn } from '../../../src/lib/utils.js';
 import {
   buildDiscoveryRequest,
   getNextSelectedIcpId,
 } from './page.helpers.js';
-
-// ── City mapping by country ──────────────────────────────
-const COUNTRY_CITIES: Record<DiscoveryCountryCodeContract, string[]> = {
-  AE: ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Ras Al Khaimah', 'Fujairah', 'Umm Al Quwain', 'Al Ain'],
-  SA: ['Riyadh', 'Jeddah', 'Dammam', 'Mecca', 'Medina', 'Khobar', 'Tabuk', 'Abha'],
-  BH: ['Manama', 'Muharraq', 'Riffa', 'Hamad Town'],
-  KW: ['Kuwait City', 'Hawalli', 'Salmiya', 'Jahra'],
-  QA: ['Doha', 'Al Wakrah', 'Al Khor', 'Lusail'],
-  OM: ['Muscat', 'Salalah', 'Sohar', 'Nizwa'],
-  EG: ['Cairo', 'Alexandria', 'Giza', 'Sharm El Sheikh'],
-  JO: ['Amman', 'Irbid', 'Zarqa', 'Aqaba'],
-  LB: ['Beirut', 'Tripoli', 'Sidon', 'Jounieh'],
-  IQ: ['Baghdad', 'Erbil', 'Basra', 'Sulaymaniyah'],
-  MA: ['Casablanca', 'Rabat', 'Marrakech', 'Fez', 'Tangier'],
-  TN: ['Tunis', 'Sfax', 'Sousse', 'Kairouan'],
-  DZ: ['Algiers', 'Oran', 'Constantine', 'Annaba'],
-  LY: ['Tripoli', 'Benghazi', 'Misrata', 'Sabha'],
-  YE: ['Sanaa', 'Aden', 'Taiz', 'Hodeidah'],
-  SY: ['Damascus', 'Aleppo', 'Homs', 'Latakia'],
-  PS: ['Ramallah', 'Gaza', 'Nablus', 'Hebron', 'Bethlehem'],
-  SD: ['Khartoum', 'Omdurman', 'Port Sudan', 'Kassala'],
-};
-
-const ICP_COUNTRY_NAME_TO_CODE: Record<string, DiscoveryCountryCodeContract> = {
-  'united arab emirates': 'AE',
-  'saudi arabia': 'SA',
-  egypt: 'EG',
-  jordan: 'JO',
-  bahrain: 'BH',
-  kuwait: 'KW',
-  qatar: 'QA',
-  oman: 'OM',
-  lebanon: 'LB',
-  iraq: 'IQ',
-  morocco: 'MA',
-  tunisia: 'TN',
-  algeria: 'DZ',
-  libya: 'LY',
-  yemen: 'YE',
-  syria: 'SY',
-  palestine: 'PS',
-  sudan: 'SD',
-  uae: 'AE',
-  ksa: 'SA',
-};
 
 const LIMIT_OPTIONS = [
   { value: '5', label: '5' },
@@ -319,23 +278,7 @@ function buildBatch(
 function toCountryCodeFromIcpTarget(
   value: string | null | undefined,
 ): DiscoveryCountryCodeContract | null {
-  if (!value) return null;
-
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const normalized = trimmed.toLowerCase();
-  const directMapped = ICP_COUNTRY_NAME_TO_CODE[normalized];
-  if (directMapped) {
-    return directMapped;
-  }
-
-  const upper = trimmed.toUpperCase();
-  if (upper in COUNTRY_CITIES) {
-    return upper as DiscoveryCountryCodeContract;
-  }
-
-  return toDiscoveryCountryCodes([trimmed])[0] ?? null;
+  return toDiscoveryCountryCode(value);
 }
 
 // ── Main page ──────────────────────────────────────
@@ -351,38 +294,36 @@ export default function DiscoverPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Discovery rates for cost estimate: yield rate (businesses/task) + conversion rate (leads/business)
-  const [yieldRates, setYieldRates] = useState<Map<string, number>>(new Map());
-  const [conversionRates, setConversionRates] = useState<Map<string, number>>(new Map());
-  useEffect(() => {
-    let cancelled = false;
-    async function fetchDiscoveryRates() {
-      try {
-        const { items } = await apiClient.listPipelineSettings();
-        if (cancelled) return;
-        const yieldMap = new Map<string, number>();
-        const convMap = new Map<string, number>();
-        for (const item of items) {
-          const key = item.key;
-          const rate = typeof item.value === 'number' ? item.value : Number(item.value);
-          if (isNaN(rate) || rate <= 0) continue;
-          if (key.startsWith('discovery_yield_rate:')) {
-            const icpId = key.replace('discovery_yield_rate:', '');
-            yieldMap.set(icpId, rate);
-          } else if (key.startsWith('discovery_conversion_rate:')) {
-            const icpId = key.replace('discovery_conversion_rate:', '');
-            convMap.set(icpId, rate);
-          }
-        }
-        setYieldRates(yieldMap);
-        setConversionRates(convMap);
-      } catch {
-        // Non-critical
+  const pipelineSettings = useApiQuery(
+    useCallback(() => apiClient.listPipelineSettings(), [apiClient]),
+  );
+
+  const { yieldRates, conversionRates, countryCities } = useMemo(() => {
+    const yieldMap = new Map<string, number>();
+    const conversionMap = new Map<string, number>();
+    const countryCitiesSetting = pipelineSettings.data?.items.find((item) => item.key === 'countryCities');
+
+    for (const item of pipelineSettings.data?.items ?? []) {
+      const key = item.key;
+      const rate = typeof item.value === 'number' ? item.value : Number(item.value);
+      if (isNaN(rate) || rate <= 0) {
+        continue;
+      }
+      if (key.startsWith('discovery_yield_rate:')) {
+        yieldMap.set(key.replace('discovery_yield_rate:', ''), rate);
+      } else if (key.startsWith('discovery_conversion_rate:')) {
+        conversionMap.set(key.replace('discovery_conversion_rate:', ''), rate);
       }
     }
-    void fetchDiscoveryRates();
-    return () => { cancelled = true; };
-  }, [apiClient]);
+
+    return {
+      yieldRates: yieldMap,
+      conversionRates: conversionMap,
+      countryCities: buildDiscoveryCountryCities(countryCitiesSetting?.value, {
+        includeCuratedDefaults: true,
+      }),
+    };
+  }, [pipelineSettings.data]);
 
   // Run tracking — multi-run via API
   const [runsRefreshKey, setRunsRefreshKey] = useState(0);
@@ -461,11 +402,17 @@ export default function DiscoverPage() {
   const availableCities = useMemo(() => {
     const cities = new Set<string>();
     for (const country of countriesForCityPicker) {
-      const mapped = COUNTRY_CITIES[country];
+      const mapped = countryCities[country];
       if (mapped) for (const c of mapped) cities.add(c);
     }
     return Array.from(cities).sort();
-  }, [countriesForCityPicker]);
+  }, [countriesForCityPicker, countryCities]);
+
+  const missingCityCountries = useMemo(
+    () =>
+      countriesForCityPicker.filter((country) => (countryCities[country] ?? []).length === 0),
+    [countriesForCityPicker, countryCities],
+  );
 
   // Reset city selection when countries change
   useEffect(() => {
@@ -493,6 +440,13 @@ export default function DiscoverPage() {
   };
 
   const handleStartDiscovery = async () => {
+    if (missingCityCountries.length > 0) {
+      setSubmitError(
+        `Add at least one city for ${missingCityCountries.map((country) => countryName(country)).join(', ')} in Controls & Settings before starting discovery.`,
+      );
+      return;
+    }
+
     const request = buildDiscoveryRequest({
       selectedIcpIds,
       countries: selectedIcpCountryCodes,
@@ -571,6 +525,11 @@ export default function DiscoverPage() {
             {selectedIcpIds.length > 0 && selectedIcpCountryCodes.length === 0 ? (
               <p className="mb-3 text-xs text-amber-300/80">
                 The selected ICPs do not map to any supported discovery countries yet.
+              </p>
+            ) : null}
+            {missingCityCountries.length > 0 ? (
+              <p className="mb-3 text-xs text-amber-300/80">
+                Add cities in Controls &amp; Settings for {missingCityCountries.map((country) => countryName(country)).join(', ')} before starting discovery.
               </p>
             ) : null}
 
@@ -800,7 +759,13 @@ export default function DiscoverPage() {
           <button
             type="button"
             onClick={handleStartDiscovery}
-            disabled={selectedIcpIds.length === 0 || selectedIcpCountryCodes.length === 0 || isSubmitting || !!isRunning}
+            disabled={
+              selectedIcpIds.length === 0 ||
+              selectedIcpCountryCodes.length === 0 ||
+              missingCityCountries.length > 0 ||
+              isSubmitting ||
+              !!isRunning
+            }
             className="inline-flex w-full items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-zbooni-green to-zbooni-teal px-6 py-3 text-sm font-bold text-zbooni-dark shadow-lg shadow-zbooni-green/20 transition-all hover:shadow-xl hover:shadow-zbooni-green/30 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
           >
             {isSubmitting ? (

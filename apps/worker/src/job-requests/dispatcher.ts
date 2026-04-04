@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 
+import { normalizeCountryCodes } from '@lead-flood/contracts';
 import {
   runSearchTask,
   seedSearchTasks,
@@ -12,7 +13,6 @@ import {
 } from '@lead-flood/discovery';
 import { prisma, toInputJson, type Prisma } from '@lead-flood/db';
 
-const COUNTRY_SET = new Set<DiscoveryCountryCode>(['JO', 'SA', 'AE', 'EG']);
 const LANGUAGE_SET = new Set<DiscoveryLanguageCode>(['en', 'ar']);
 const TASK_TYPE_SET = new Set<SearchTaskType>([
   'SERP_GOOGLE',
@@ -115,9 +115,7 @@ function normalizeStringArray(value: unknown): string[] {
 }
 
 function normalizeCountries(value: unknown, fallback: DiscoveryCountryCode[]): DiscoveryCountryCode[] {
-  const parsed = normalizeStringArray(value)
-    .map((entry) => entry.toUpperCase())
-    .filter((entry): entry is DiscoveryCountryCode => COUNTRY_SET.has(entry as DiscoveryCountryCode));
+  const parsed = normalizeCountryCodes(normalizeStringArray(value));
 
   return parsed.length > 0 ? Array.from(new Set(parsed)) : fallback;
 }

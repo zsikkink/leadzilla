@@ -156,4 +156,48 @@ describe('settings.routes validation', () => {
     const body = response.json() as { error: string };
     expect(body.error).toBe('auto_approve_score_max must be a number');
   });
+
+  it('normalizes countryCities keys to canonical ISO codes on write', async () => {
+    currentUserId = ADMIN_USER_ID;
+    prismaMock.query.mockResolvedValue({
+      rows: [{ isAdmin: true }],
+    });
+    prismaMock.upsertPipelineSetting.mockResolvedValue({
+      key: 'countryCities',
+      valueJson: {
+        AE: ['Dubai', 'Abu Dhabi'],
+        DE: ['Berlin'],
+      },
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/v1/settings/pipeline/countryCities',
+      payload: {
+        value: {
+          UAE: ['Dubai'],
+          Germany: ['Berlin'],
+          AE: ['Abu Dhabi'],
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(prismaMock.upsertPipelineSetting).toHaveBeenCalledWith(
+      'countryCities',
+      {
+        AE: ['Dubai', 'Abu Dhabi'],
+        DE: ['Berlin'],
+      },
+    );
+    expect(response.json()).toEqual({
+      key: 'countryCities',
+      value: {
+        AE: ['Dubai', 'Abu Dhabi'],
+        DE: ['Berlin'],
+      },
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+  });
 });

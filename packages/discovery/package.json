@@ -24,6 +24,7 @@
     "seed": "node --import tsx src/cli/seed.ts"
   },
   "dependencies": {
+    "@lead-flood/contracts": "workspace:*",
     "@lead-flood/db": "workspace:*"
   },
   "devDependencies": {

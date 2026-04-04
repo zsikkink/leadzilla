@@ -16,6 +16,7 @@ import {
 import { z } from 'zod';
 
 import {
+  DiscoveryInvalidRequestError,
   DiscoveryNotImplementedError,
   DiscoveryRunNotFoundError,
   DiscoveryWorkerUnavailableError,
@@ -204,6 +205,16 @@ function handleModuleError(error: unknown, request: FastifyRequest, reply: Fasti
 
   if (error instanceof DiscoveryWorkerUnavailableError) {
     reply.status(503).send(
+      ErrorResponseSchema.parse({
+        error: error.message,
+        requestId: request.id,
+      }),
+    );
+    return true;
+  }
+
+  if (error instanceof DiscoveryInvalidRequestError) {
+    reply.status(400).send(
       ErrorResponseSchema.parse({
         error: error.message,
         requestId: request.id,

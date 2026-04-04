@@ -20,3 +20,10 @@ export class DiscoveryWorkerUnavailableError extends Error {
     this.name = 'DiscoveryWorkerUnavailableError';
   }
 }
+
+export class DiscoveryInvalidRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DiscoveryInvalidRequestError';
+  }
+}

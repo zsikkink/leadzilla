@@ -1,4 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import {
+  countryDisplayName,
+  normalizeCountryCodeOrAlias,
+} from '@lead-flood/contracts';
 
 import type { DiscoverySeedConfig } from '../config.js';
 import { normalizeCity, normalizeQuery } from '../dedupe/normalize.js';
@@ -9,51 +13,9 @@ import type {
   SearchTaskType,
 } from '../providers/types.js';
 import {
-  COUNTRY_NAMES,
   defaultCitiesByCountry,
   queryTemplatesV2EN,
 } from './seeds.js';
-
-/**
- * Normalise country names/abbreviations from ICP profiles to ISO 3166-1 alpha-2.
- * Handles common variants: "UAE" → "AE", "KSA" → "SA", "Egypt" → "EG", etc.
- */
-const COUNTRY_NAME_TO_ISO: Record<string, string> = {
-  uae: 'AE',
-  'united arab emirates': 'AE',
-  ksa: 'SA',
-  'saudi arabia': 'SA',
-  egypt: 'EG',
-  jordan: 'JO',
-  qatar: 'QA',
-  bahrain: 'BH',
-  kuwait: 'KW',
-  oman: 'OM',
-  lebanon: 'LB',
-  iraq: 'IQ',
-  morocco: 'MA',
-  tunisia: 'TN',
-  algeria: 'DZ',
-  libya: 'LY',
-  yemen: 'YE',
-  syria: 'SY',
-  palestine: 'PS',
-  sudan: 'SD',
-  'united states': 'US',
-  'united kingdom': 'GB',
-};
-
-function normalizeCountryCode(input: string): string {
-  // Already a 2-letter ISO code?
-  if (input.length === 2 && input === input.toUpperCase()) {
-    return input;
-  }
-  return COUNTRY_NAME_TO_ISO[input.toLowerCase().trim()] ?? input;
-}
-
-function toCountrySearchName(countryCode: DiscoveryCountryCode): string {
-  return COUNTRY_NAMES[countryCode] ?? countryCode;
-}
 
 function renderTemplate(
   template: string,
@@ -82,7 +44,7 @@ function buildSerpParams(
     q: queryText,
     gl: countryCode.toLowerCase(),
     hl: language,
-    location: `${city}, ${toCountrySearchName(countryCode)}`,
+    location: `${city}, ${countryDisplayName(countryCode)}`,
     start,
   };
 
@@ -206,7 +168,8 @@ export interface GenerateTasksV2Input {
  * - If `cities` includes the literal string "All" (case-insensitive), expand
  *   to all default cities for every country.
  * - If `cities` is omitted, look up `defaultCitiesByCountry` and fall back to
- *   the country code itself (so queries still run even without city data).
+ *   an empty list. Upstream validation should already block country-only runs
+ *   without configured cities.
  */
 function resolveCitiesForCountry(
   countryCode: string,
@@ -215,7 +178,7 @@ function resolveCitiesForCountry(
   if (explicitCities && explicitCities.length > 0) {
     const hasAll = explicitCities.some((c) => c.toLowerCase() === 'all');
     if (hasAll) {
-      return defaultCitiesByCountry[countryCode] ?? [countryCode];
+      return defaultCitiesByCountry[countryCode] ?? [];
     }
 
     // Filter explicit cities to only those belonging to this country.
@@ -227,17 +190,16 @@ function resolveCitiesForCountry(
       if (filtered.length > 0) {
         return filtered;
       }
-      // None of the explicit cities belong to this country — skip it entirely
-      // by returning an empty array (the caller's loop will produce no tasks).
-      return [];
-    }
+    // None of the explicit cities belong to this country — skip it entirely
+    // by returning an empty array (the caller's loop will produce no tasks).
+    return [];
+  }
 
-    // No known cities for this country — pass explicit cities through as-is
-    // (custom/unknown country, user knows best).
+    // No curated city list for this country — pass explicit cities through as-is.
     return explicitCities;
   }
 
-  return defaultCitiesByCountry[countryCode] ?? [countryCode];
+  return defaultCitiesByCountry[countryCode] ?? [];
 }
 
 export function generateTasksV2(
@@ -267,8 +229,11 @@ export function generateTasksV2(
   const tasks: GeneratedSearchTask[] = [];
 
   for (const rawCountry of input.countries) {
-    const countryCode = normalizeCountryCode(rawCountry);
-    const countryName = COUNTRY_NAMES[countryCode] ?? countryCode;
+    const countryCode = normalizeCountryCodeOrAlias(rawCountry);
+    if (!countryCode) {
+      continue;
+    }
+    const countryName = countryDisplayName(countryCode);
     const cities = resolveCitiesForCountry(countryCode, input.cities);
 
     for (const cityRaw of cities) {

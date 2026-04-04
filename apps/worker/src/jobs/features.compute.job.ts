@@ -1,5 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { FEATURES_COMPUTE_IDEMPOTENCY_KEY_PATTERN as FEATURES_COMPUTE_QUEUE_KEY_PATTERN } from '@lead-flood/contracts';
+import {
+  FEATURES_COMPUTE_IDEMPOTENCY_KEY_PATTERN as FEATURES_COMPUTE_QUEUE_KEY_PATTERN,
+  countryDisplayName,
+  normalizeCountryCodeOrAlias,
+} from '@lead-flood/contracts';
 import { prisma, toInputJson } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
@@ -165,34 +169,16 @@ function normalizeString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
-function normalizeCountry(value: unknown): string | null {
-  const normalized = normalizeString(value)?.toLowerCase();
-  if (!normalized) {
-    return null;
+function normalizeCountryCode(value: unknown): string | null {
+  return typeof value === 'string' ? normalizeCountryCodeOrAlias(value) : null;
+}
+
+function normalizeCountryLabel(value: unknown): string | null {
+  const countryCode = normalizeCountryCode(value);
+  if (countryCode) {
+    return countryDisplayName(countryCode);
   }
-
-  const COUNTRY_MAP: Record<string, string> = {
-    uae: 'UAE', ae: 'UAE', 'united arab emirates': 'UAE',
-    ksa: 'KSA', 'saudi arabia': 'KSA', sa: 'KSA',
-    jordan: 'Jordan', jo: 'Jordan',
-    egypt: 'Egypt', eg: 'Egypt',
-    bahrain: 'Bahrain', bh: 'Bahrain',
-    kuwait: 'Kuwait', kw: 'Kuwait',
-    oman: 'Oman', om: 'Oman',
-    qatar: 'Qatar', qa: 'Qatar',
-    lebanon: 'Lebanon', lb: 'Lebanon',
-    iraq: 'Iraq', iq: 'Iraq',
-    morocco: 'Morocco', ma: 'Morocco',
-    tunisia: 'Tunisia', tn: 'Tunisia',
-    algeria: 'Algeria', dz: 'Algeria',
-    libya: 'Libya', ly: 'Libya',
-    yemen: 'Yemen', ye: 'Yemen',
-    syria: 'Syria', sy: 'Syria',
-    palestine: 'Palestine', ps: 'Palestine',
-    sudan: 'Sudan', sd: 'Sudan',
-  };
-
-  return COUNTRY_MAP[normalized] ?? normalized.toUpperCase();
+  return normalizeString(value);
 }
 
 function asNumber(value: unknown): number | null {
@@ -825,13 +811,23 @@ export async function handleFeaturesComputeJob(
       normalizeString(normalizedPayload?.industry) ??
       normalizeString(findValueByKey(enrichmentRawPayload, 'industry')) ??
       normalizeString(findValueByKey(discoveryRawPayload, 'industry'));
-    const country = normalizeCountry(
+    const countryCode = normalizeCountryCode(
       normalizedPayload?.country ??
         normalizedPayload?.locationCountry ??
         findValueByKey(enrichmentRawPayload, 'country') ??
         findValueByKey(discoveryRawPayload, 'country') ??
         business?.countryCode,
     );
+    const country =
+      countryCode !== null
+        ? countryDisplayName(countryCode)
+        : normalizeCountryLabel(
+            normalizedPayload?.country ??
+              normalizedPayload?.locationCountry ??
+              findValueByKey(enrichmentRawPayload, 'country') ??
+              findValueByKey(discoveryRawPayload, 'country') ??
+              business?.countryCode,
+          );
     const companySize =
       extractNumberFromSources(featureSources, [
         'employeeCount',
@@ -970,8 +966,8 @@ export async function handleFeaturesComputeJob(
       websiteTitle,
       websiteDomain: business?.websiteDomain ? extractDomain(business.websiteDomain) : (domain ? domain : null),
       instagramUsername: business?.instagramHandle ?? null,
-      serpApiCountry: country,
-      websiteCountry: normalizeCountry(websiteDetectedCountry) ?? null,
+      serpApiCountry: countryCode,
+      websiteCountry: normalizeCountryCode(websiteDetectedCountry) ?? null,
       leadEmailDomain: domain,
     });
     const dataAlignmentScore = alignmentResult.score;
@@ -1127,12 +1123,11 @@ export async function handleFeaturesComputeJob(
     const targetIndustries = new Set(icp.targetIndustries.map((entry) => entry.toLowerCase()));
     const targetCountries = new Set(
       icp.targetCountries
-        .map((entry) => normalizeCountry(entry))
+        .map((entry) => normalizeCountryCode(entry))
         .filter((entry): entry is string => entry !== null)
-        .map((entry) => entry.toLowerCase()),
     );
     const normalizedIndustry = industry?.toLowerCase() ?? null;
-    const normalizedCountry = country?.toLowerCase() ?? null;
+    const normalizedCountry = countryCode;
 
     const industryMatch =
       targetIndustries.size === 0 ||

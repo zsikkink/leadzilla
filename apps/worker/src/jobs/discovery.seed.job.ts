@@ -5,6 +5,7 @@ import type {
   DiscoveryLanguageCode,
   SearchTaskType,
 } from '@lead-flood/discovery';
+import { normalizeCountryCodes } from '@lead-flood/contracts';
 import { loadConversionRate, loadSearchEfficiency } from '../utils/pipeline-settings.js';
 import { prisma, toInputJson } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
@@ -64,10 +65,6 @@ export interface DiscoverySeedDependencies {
   config: DiscoveryRuntimeConfig;
 }
 
-const ALLOWED_COUNTRIES = new Set<DiscoveryCountryCode>([
-  'JO', 'SA', 'AE', 'EG', 'QA', 'BH', 'KW', 'OM', 'LB',
-  'IQ', 'MA', 'TN', 'DZ', 'LY', 'YE', 'SY', 'PS', 'SD',
-]);
 const ALLOWED_LANGUAGES = new Set<DiscoveryLanguageCode>(['en', 'ar']);
 const ALLOWED_TASK_TYPES = new Set<SearchTaskType>([
   'SERP_GOOGLE',
@@ -125,7 +122,7 @@ function withSeedOverrides(
 > {
   const countries =
     payload.countries && payload.countries.length > 0
-      ? Array.from(new Set(payload.countries.filter((value) => ALLOWED_COUNTRIES.has(value))))
+      ? normalizeCountryCodes(payload.countries)
       : config.countries;
   const languages =
     payload.languages && payload.languages.length > 0

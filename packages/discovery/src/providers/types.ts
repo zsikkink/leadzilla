@@ -1,8 +1,6 @@
-export type DiscoveryCountryCode =
-  | 'JO' | 'SA' | 'AE' | 'EG'
-  | 'QA' | 'BH' | 'KW' | 'OM' | 'LB'
-  | 'IQ' | 'MA' | 'TN' | 'DZ' | 'LY'
-  | 'YE' | 'SY' | 'PS' | 'SD';
+import type { SupportedCountryCode } from '@lead-flood/contracts';
+
+export type DiscoveryCountryCode = SupportedCountryCode;
 export type DiscoveryLanguageCode = 'en' | 'ar';
 export type SearchTaskType = 'SERP_GOOGLE' | 'SERP_GOOGLE_LOCAL' | 'SERP_MAPS_LOCAL';
 export type SearchRefreshBucket = 'daily' | 'weekly';

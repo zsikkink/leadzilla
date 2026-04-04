@@ -1,10 +1,10 @@
+import { normalizeCountryCodes } from '@lead-flood/contracts';
 import { prisma } from '@lead-flood/db';
 
 import type { DiscoverySeedConfig } from './config.js';
 import { generateTasksV2 } from './queries/generate_tasks.js';
 import type { GenerateTasksV2Input, GeneratedSearchTask } from './queries/generate_tasks.js';
 import { mapIcpIndustriesWithOverrides } from './queries/icp-category-map.js';
-import { COUNTRY_NAME_TO_ISO } from './queries/seeds.js';
 
 export interface SeedTasksResult {
   generated: number;
@@ -26,23 +26,6 @@ export interface IcpSeedConfig {
 }
 
 /**
- * Normalize country names/abbreviations (e.g. "UAE", "KSA", "Egypt") to ISO alpha-2 codes.
- * Passes through values that are already ISO codes. Deduplicates results.
- */
-function normalizeCountriesToIso(countries: string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const c of countries) {
-    const iso = COUNTRY_NAME_TO_ISO[c.toLowerCase()] ?? c;
-    if (!seen.has(iso)) {
-      seen.add(iso);
-      result.push(iso);
-    }
-  }
-  return result;
-}
-
-/**
  * Resolve countries for task generation.
  * Priority: ICP targetCountries wins (user-configured per ICP profile).
  * Config countries (from env var DISCOVERY_COUNTRIES) are only a fallback
@@ -50,7 +33,7 @@ function normalizeCountriesToIso(countries: string[]): string[] {
  */
 function resolveCountries(configCountries: string[], icpTargetCountries: string[]): string[] {
   // ICP target countries take priority — they're user-configured per profile
-  const normalized = normalizeCountriesToIso(icpTargetCountries);
+  const normalized = normalizeCountryCodes(icpTargetCountries);
   if (normalized.length > 0) {
     return normalized;
   }

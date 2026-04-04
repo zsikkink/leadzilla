@@ -32,6 +32,7 @@ import { toast } from 'sonner';
 import { CustomSelect } from '../../../../src/components/custom-select.js';
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
+import { countryName } from '../../../../src/lib/countries.js';
 
 interface EditableFieldProps {
   label: string;
@@ -246,7 +247,9 @@ function CountrySelector({
   }, [editing, countries]);
 
   // Countries come from pipeline_settings (Controls & Settings page) — the single source of truth
-  const available = pipelineCountries.filter((c) => !draft.includes(c)).sort();
+  const available = pipelineCountries
+    .filter((c) => !draft.includes(c))
+    .sort((left, right) => countryName(left).localeCompare(countryName(right)));
 
   const remove = (country: string) => setDraft(draft.filter((c) => c !== country));
 
@@ -285,7 +288,7 @@ function CountrySelector({
       <div className="mt-1.5 flex flex-wrap gap-1">
         {(editing ? draft : countries).map((c) => (
           <span key={c} className="rounded-full bg-zbooni-teal/10 px-2 py-0.5 text-xs text-zbooni-teal">
-            {c}
+            {countryName(c)}
             {editing ? (
               <button type="button" onClick={() => remove(c)} className="ml-1 hover:text-red-400">
                 <X className="inline h-2.5 w-2.5" />
@@ -303,7 +306,7 @@ function CountrySelector({
             <CustomSelect
               value=""
               onChange={(val) => { if (val) add(val); }}
-              options={available.map((c) => ({ value: c, label: c }))}
+              options={available.map((c) => ({ value: c, label: countryName(c) }))}
               placeholder="Add country..."
               className="w-48"
             />

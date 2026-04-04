@@ -4,17 +4,12 @@ import type {
   SearchTaskType,
   SearchRefreshBucket,
 } from './providers/types.js';
+import {
+  SupportedCountryCodeValues,
+  normalizeCountryCodeOrAlias,
+} from '@lead-flood/contracts';
 
-/**
- * All valid MENA country codes — must match DiscoveryCountryCode exactly.
- * `satisfies` ensures compile error if the type changes but this array doesn't.
- */
-const ALL_COUNTRY_CODES = [
-  'JO', 'SA', 'AE', 'EG',
-  'QA', 'BH', 'KW', 'OM', 'LB',
-  'IQ', 'MA', 'TN', 'DZ', 'LY',
-  'YE', 'SY', 'PS', 'SD',
-] as const satisfies readonly DiscoveryCountryCode[];
+const ALL_COUNTRY_CODES = SupportedCountryCodeValues satisfies readonly DiscoveryCountryCode[];
 
 const COUNTRY_SET = new Set<DiscoveryCountryCode>(ALL_COUNTRY_CODES);
 
@@ -99,17 +94,8 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 }
 
 function normalizeCountryCode(value: string): DiscoveryCountryCode | null {
-  const normalized = value.trim().toUpperCase();
-  if (normalized === 'KSA' || normalized === 'SAUDI ARABIA') {
-    return 'SA';
-  }
-  if (normalized === 'UAE' || normalized === 'UNITED ARAB EMIRATES') {
-    return 'AE';
-  }
-  if (COUNTRY_SET.has(normalized as DiscoveryCountryCode)) {
-    return normalized as DiscoveryCountryCode;
-  }
-  return null;
+  const normalized = normalizeCountryCodeOrAlias(value);
+  return normalized && COUNTRY_SET.has(normalized) ? normalized : null;
 }
 
 function normalizeLanguage(value: string): DiscoveryLanguageCode | null {

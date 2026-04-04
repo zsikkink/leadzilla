@@ -4,14 +4,14 @@ const { PrismaClient } = prismaClientPkg;
 
 const prisma = new PrismaClient();
 
-// All MENA countries as default target (friendly names matching QualificationRule valueJson)
+// All MENA countries as default target (canonical ISO alpha-2 codes)
 const MENA_COUNTRIES = [
-  'UAE', 'KSA', 'Egypt', 'Jordan', 'Bahrain', 'Kuwait', 'Oman', 'Qatar',
-  'Lebanon', 'Iraq', 'Morocco', 'Tunisia', 'Algeria', 'Libya', 'Yemen',
-  'Syria', 'Palestine', 'Sudan',
+  'AE', 'SA', 'EG', 'JO', 'BH', 'KW', 'OM', 'QA',
+  'LB', 'IQ', 'MA', 'TN', 'DZ', 'LY', 'YE',
+  'SY', 'PS', 'SD',
 ];
 
-// Supported countries for qualification HARD_FILTER rules (friendly names)
+// Supported countries for qualification HARD_FILTER rules (canonical ISO codes)
 const SUPPORTED_COUNTRIES = [...MENA_COUNTRIES];
 
 // ── Qualification Rule Definition ──────────────────────────────

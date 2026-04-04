@@ -200,4 +200,29 @@ describe('deterministic scoring', () => {
     expect(toScoreBand(0.5)).toBe('MEDIUM');
     expect(toScoreBand(0.9)).toBe('HIGH');
   });
+
+  it('matches canonical ISO country values against legacy country aliases in rules', () => {
+    const result = evaluateDeterministicScore(
+      [
+        {
+          id: 'rule-country-hard',
+          name: 'Country must match',
+          ruleType: 'HARD_FILTER',
+          fieldKey: 'country',
+          operator: 'IN',
+          valueJson: ['UAE', 'KSA', 'Jordan', 'Egypt'],
+          weight: null,
+          isActive: true,
+          orderIndex: 1,
+          priority: 1,
+        },
+      ],
+      {
+        country: 'AE',
+      },
+    );
+
+    expect(result.hardFilterPassed).toBe(true);
+    expect(result.reasonCodes).toContain('HARD_FILTER_PASSED');
+  });
 });

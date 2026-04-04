@@ -11,6 +11,7 @@ const { prismaMock } = vi.hoisted(() => ({
       findMany: vi.fn(),
       findFirst: vi.fn(),
     },
+    getPipelineSetting: vi.fn(),
     outboxEvent: {
       create: vi.fn(),
     },
@@ -33,6 +34,7 @@ const { prismaMock } = vi.hoisted(() => ({
 }));
 
 vi.mock('@lead-flood/db', () => ({
+  getPipelineSetting: prismaMock.getPipelineSetting,
   prisma: prismaMock,
   toInputJson: <T>(value: T) => value,
 }));
@@ -94,6 +96,12 @@ describe('discovery.routes ownership scoping', () => {
       callback(prismaMock),
     );
     prismaMock.$queryRawUnsafe.mockResolvedValue([{ active: true }]);
+    prismaMock.getPipelineSetting.mockResolvedValue({
+      key: 'countryCities',
+      valueJson: {
+        AE: ['Dubai'],
+      },
+    });
     prismaMock.jobExecution.count.mockResolvedValue(0);
     prismaMock.jobExecution.create.mockResolvedValue(undefined);
     prismaMock.outboxEvent.create.mockResolvedValue(undefined);

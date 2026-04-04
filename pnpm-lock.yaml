@@ -203,6 +203,9 @@ importers:
 
   packages/discovery:
     dependencies:
+      '@lead-flood/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@lead-flood/db':
         specifier: workspace:*
         version: link:../db

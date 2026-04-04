@@ -1,3 +1,5 @@
+import { normalizeCountryCodeOrAlias } from '@lead-flood/contracts';
+
 export const DETERMINISTIC_REASON_CODES = {
   hardFilterFailed: 'HARD_FILTER_FAILED',
   hardFilterPassed: 'HARD_FILTER_PASSED',
@@ -139,7 +141,24 @@ function asNumber(value: unknown): number | null {
   return null;
 }
 
-function normalizeComparable(value: unknown): unknown {
+function isCountryFieldKey(fieldKey: string): boolean {
+  const normalized = fieldKey.trim().toLowerCase();
+  return (
+    normalized === 'country' ||
+    normalized.endsWith('_country') ||
+    normalized.endsWith('.country') ||
+    normalized.includes('country_code')
+  );
+}
+
+function normalizeComparable(value: unknown, fieldKey?: string | undefined): unknown {
+  if (fieldKey && isCountryFieldKey(fieldKey)) {
+    const asString = normalizeString(value);
+    if (asString !== null) {
+      return normalizeCountryCodeOrAlias(asString) ?? asString.toLowerCase();
+    }
+  }
+
   const asString = normalizeString(value);
   if (asString !== null) {
     return asString.toLowerCase();
@@ -186,9 +205,9 @@ export function evaluateRuleMatch(rule: DeterministicRule, featureValue: unknown
 
   switch (rule.operator) {
     case 'EQ':
-      return normalizeComparable(featureValue) === normalizeComparable(ruleValue);
+      return normalizeComparable(featureValue, rule.fieldKey) === normalizeComparable(ruleValue, rule.fieldKey);
     case 'NEQ':
-      return normalizeComparable(featureValue) !== normalizeComparable(ruleValue);
+      return normalizeComparable(featureValue, rule.fieldKey) !== normalizeComparable(ruleValue, rule.fieldKey);
     case 'GT': {
       const left = asNumber(featureValue);
       const right = asNumber(ruleValue);
@@ -213,28 +232,28 @@ export function evaluateRuleMatch(rule: DeterministicRule, featureValue: unknown
       if (!Array.isArray(ruleValue)) {
         return false;
       }
-      const normalizedFeature = normalizeComparable(featureValue);
-      const normalizedSet = ruleValue.map((value) => normalizeComparable(value));
+      const normalizedFeature = normalizeComparable(featureValue, rule.fieldKey);
+      const normalizedSet = ruleValue.map((value) => normalizeComparable(value, rule.fieldKey));
       return normalizedSet.includes(normalizedFeature);
     }
     case 'NOT_IN': {
       if (!Array.isArray(ruleValue)) {
         return false;
       }
-      const normalizedFeature = normalizeComparable(featureValue);
-      const normalizedSet = ruleValue.map((value) => normalizeComparable(value));
+      const normalizedFeature = normalizeComparable(featureValue, rule.fieldKey);
+      const normalizedSet = ruleValue.map((value) => normalizeComparable(value, rule.fieldKey));
       return !normalizedSet.includes(normalizedFeature);
     }
     case 'CONTAINS': {
-      const normalizedRule = normalizeComparable(ruleValue);
+      const normalizedRule = normalizeComparable(ruleValue, rule.fieldKey);
       if (Array.isArray(featureValue)) {
-        return featureValue.map((value) => normalizeComparable(value)).includes(normalizedRule);
+        return featureValue.map((value) => normalizeComparable(value, rule.fieldKey)).includes(normalizedRule);
       }
-      const normalizedFeature = normalizeString(featureValue);
-      if (normalizedFeature === null || typeof normalizedRule !== 'string') {
+      const normalizedFeature = normalizeComparable(featureValue, rule.fieldKey);
+      if (typeof normalizedFeature !== 'string' || typeof normalizedRule !== 'string') {
         return false;
       }
-      return normalizedFeature.toLowerCase().includes(normalizedRule);
+      return normalizedFeature.includes(normalizedRule);
     }
     default:
       return false;

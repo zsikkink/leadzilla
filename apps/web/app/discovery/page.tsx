@@ -25,12 +25,18 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { useApiQuery } from '../../src/hooks/use-api-query.js';
 import { useAuth } from '../../src/hooks/use-auth.js';
-import { MENA_CITIES } from '../../src/lib/countries.js';
+import {
+  SupportedCountryPickerOptions,
+  buildDiscoveryCountryCities,
+  countryName,
+  toDiscoveryCountryCode,
+  toDiscoveryCountryCodes,
+} from '../../src/lib/countries.js';
 import {
   DEFAULT_MESSAGING_ROLE,
   DEFAULT_MESSAGING_SYSTEM_PROMPT,
@@ -532,6 +538,17 @@ interface CountryCityData {
   [country: string]: string[];
 }
 
+function normalizeCountrySearchInput(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function CountriesCitiesManager({
   apiClient,
 }: {
@@ -546,6 +563,7 @@ function CountriesCitiesManager({
   const [expandedCountry, setExpandedCountry] = useState<string | null>(null);
   const [newCountry, setNewCountry] = useState('');
   const [showCountryInput, setShowCountryInput] = useState(false);
+  const [countryInputError, setCountryInputError] = useState<string | null>(null);
   const [newCityInputs, setNewCityInputs] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
@@ -560,36 +578,13 @@ function CountriesCitiesManager({
 
         if (cancelled) return;
 
-        // 1. Start with MENA_CITIES as baseline (deep-copy arrays)
-        const merged: CountryCityData = {};
-        for (const [country, cities] of Object.entries(MENA_CITIES)) {
-          merged[country] = [...cities];
-        }
-
-        // 2. Merge existing pipeline_settings countryCities on top (user additions override baseline)
         const setting = settingsRes.items.find((i) => i.key === 'countryCities');
-        const existing: CountryCityData =
-          setting?.value && typeof setting.value === 'object'
-            ? (setting.value as CountryCityData)
-            : {};
-
-        for (const [country, cities] of Object.entries(existing)) {
-          if (country in merged) {
-            // Merge: keep baseline cities, add any user-added cities not in baseline
-            const baseSet = new Set(merged[country]);
-            for (const city of cities) {
-              if (!baseSet.has(city)) {
-                merged[country] = [...(merged[country] ?? []), city];
-              }
-            }
-          } else {
-            merged[country] = [...cities];
-          }
-        }
-
-        // 3. Merge ICP targetCountries on top (add any ICP-only countries with empty cities)
+        const existing = buildDiscoveryCountryCities(setting?.value, {
+          includeCuratedDefaults: true,
+        });
+        const merged: CountryCityData = { ...existing };
         const icpCountries = new Set(
-          icpsRes.items.flatMap((icp) => icp.targetCountries),
+          toDiscoveryCountryCodes(icpsRes.items.flatMap((icp) => icp.targetCountries)),
         );
 
         for (const country of icpCountries) {
@@ -600,7 +595,7 @@ function CountriesCitiesManager({
 
         setCountryCities(merged);
 
-        // Persist the merged result so MENA baseline + ICP countries stick in pipeline_settings
+        // Persist the merged result so curated defaults + ICP countries stay canonical.
         const existingJson = JSON.stringify(existing);
         const mergedJson = JSON.stringify(merged);
         if (existingJson !== mergedJson) {
@@ -629,13 +624,38 @@ function CountriesCitiesManager({
     }
   };
 
-  const addCountry = () => {
-    const name = newCountry.trim();
-    if (!name || name in countryCities) return;
-    const updated = { ...countryCities, [name]: [] };
+  const matchingCountryOptions = useMemo(() => {
+    const query = normalizeCountrySearchInput(newCountry);
+    const existingCountries = new Set(Object.keys(countryCities));
+
+    return SupportedCountryPickerOptions.filter((option) => {
+      if (existingCountries.has(option.code)) {
+        return false;
+      }
+
+      if (query.length === 0) {
+        return true;
+      }
+
+      return option.searchText.includes(query);
+    }).slice(0, 8);
+  }, [countryCities, newCountry]);
+
+  const addCountry = (countryCode?: string) => {
+    const resolvedCode = countryCode ?? toDiscoveryCountryCode(newCountry);
+    if (!resolvedCode) {
+      setCountryInputError('Country not recognized. Please select a valid country from the list.');
+      return;
+    }
+    if (resolvedCode in countryCities) {
+      setCountryInputError('Country already added.');
+      return;
+    }
+    const updated = { ...countryCities, [resolvedCode]: [] };
     setNewCountry('');
     setShowCountryInput(false);
-    setExpandedCountry(name);
+    setCountryInputError(null);
+    setExpandedCountry(resolvedCode);
     void save(updated);
   };
 
@@ -662,7 +682,9 @@ function CountriesCitiesManager({
     void save(updated);
   };
 
-  const countries = Object.keys(countryCities).sort();
+  const countries = Object.keys(countryCities).sort((left, right) =>
+    countryName(left).localeCompare(countryName(right)),
+  );
 
   return (
     <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
@@ -707,7 +729,7 @@ function CountriesCitiesManager({
                         )}
                       >
                         <Globe className="h-3 w-3 mr-1.5 shrink-0" />
-                        <span className="truncate">{country}</span>
+                        <span className="truncate">{countryName(country)}</span>
                         <span className="ml-1.5 shrink-0 font-mono text-[10px] text-muted-foreground/50">({cities.length})</span>
                       </button>
                       <button
@@ -730,38 +752,75 @@ function CountriesCitiesManager({
             {/* Add country — pinned below scrollable grid */}
             <div className="flex items-center gap-2">
               {showCountryInput ? (
-                <div className="flex items-center gap-1.5">
-                  <input
-                    value={newCountry}
-                    onChange={(e) => setNewCountry(e.target.value)}
-                    placeholder="Country name..."
-                    className="h-8 w-40 rounded-full border border-border/50 bg-zbooni-dark/60 px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                    autoFocus
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') addCountry();
-                      if (e.key === 'Escape') { setShowCountryInput(false); setNewCountry(''); }
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={addCountry}
-                    disabled={!newCountry.trim()}
-                    className="rounded-full bg-zbooni-teal/15 p-1.5 text-zbooni-teal transition-colors hover:bg-zbooni-teal/25 disabled:opacity-40"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setShowCountryInput(false); setNewCountry(''); }}
-                    className="rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-accent/50"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
+                <div className="relative flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      value={newCountry}
+                      onChange={(e) => {
+                        setNewCountry(e.target.value);
+                        setCountryInputError(null);
+                      }}
+                      placeholder="Search countries..."
+                      className="h-8 w-48 rounded-full border border-border/50 bg-zbooni-dark/60 px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          addCountry(matchingCountryOptions[0]?.code);
+                        }
+                        if (e.key === 'Escape') {
+                          setShowCountryInput(false);
+                          setNewCountry('');
+                          setCountryInputError(null);
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => addCountry(matchingCountryOptions[0]?.code)}
+                      disabled={!newCountry.trim()}
+                      className="rounded-full bg-zbooni-teal/15 p-1.5 text-zbooni-teal transition-colors hover:bg-zbooni-teal/25 disabled:opacity-40"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowCountryInput(false);
+                        setNewCountry('');
+                        setCountryInputError(null);
+                      }}
+                      className="rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-accent/50"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  {countryInputError ? (
+                    <p className="mt-1 text-[10px] text-red-400">{countryInputError}</p>
+                  ) : null}
+                  {matchingCountryOptions.length > 0 ? (
+                    <div className="absolute left-0 top-full z-20 mt-1 max-h-56 w-64 overflow-y-auto rounded-xl border border-border/50 bg-card p-1 shadow-xl shadow-black/20">
+                      {matchingCountryOptions.map((option) => (
+                        <button
+                          key={option.code}
+                          type="button"
+                          onClick={() => addCountry(option.code)}
+                          className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent/50"
+                        >
+                          <span>{option.label}</span>
+                          <span className="text-[10px] font-mono text-muted-foreground/50">{option.code}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <button
                   type="button"
-                  onClick={() => setShowCountryInput(true)}
+                  onClick={() => {
+                    setShowCountryInput(true);
+                    setCountryInputError(null);
+                  }}
                   className="inline-flex items-center gap-1.5 rounded-full bg-zbooni-teal/10 px-3 py-1.5 text-xs font-medium text-zbooni-teal transition-colors hover:bg-zbooni-teal/20"
                 >
                   <Plus className="h-3.5 w-3.5" />
@@ -777,7 +836,7 @@ function CountriesCitiesManager({
               <div className="space-y-3 rounded-xl border border-border/30 bg-zbooni-dark/20 p-4">
                 <div className="flex items-center gap-2">
                   <Globe className="h-4 w-4 text-zbooni-teal" />
-                  <h3 className="text-sm font-semibold text-foreground">{expandedCountry}</h3>
+                  <h3 className="text-sm font-semibold text-foreground">{countryName(expandedCountry)}</h3>
                   <span className="font-mono text-[10px] text-muted-foreground/50">
                     {(countryCities[expandedCountry] ?? []).length} cities
                   </span>

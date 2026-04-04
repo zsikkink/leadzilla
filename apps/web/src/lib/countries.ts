@@ -1,90 +1,65 @@
 import {
-  normalizeDiscoveryCountryCode,
-  normalizeDiscoveryCountryCodes,
-  type DiscoveryCountryCodeContract,
+  CuratedCountryCitiesByCode,
+  SupportedCountryOptions,
+  buildCountryCitiesMap,
+  countryDisplayName,
+  normalizeCountryCodeOrAlias,
+  normalizeCountryCodes,
+  type CountryCitiesMap,
+  type SupportedCountryCode,
 } from '@lead-flood/contracts';
 
-/** ISO 3166-1 alpha-2 → full country name for MENA region + common codes */
-const COUNTRY_NAMES: Record<string, string> = {
-  // MENA core (18 countries)
-  AE: 'UAE',
-  SA: 'KSA',
-  BH: 'Bahrain',
-  KW: 'Kuwait',
-  QA: 'Qatar',
-  OM: 'Oman',
-  EG: 'Egypt',
-  JO: 'Jordan',
-  LB: 'Lebanon',
-  IQ: 'Iraq',
-  SY: 'Syria',
-  YE: 'Yemen',
-  PS: 'Palestine',
-  SD: 'Sudan',
-  LY: 'Libya',
-  TN: 'Tunisia',
-  DZ: 'Algeria',
-  MA: 'Morocco',
-  // Non-MENA
-  US: 'United States',
-  GB: 'United Kingdom',
-  DE: 'Germany',
-  FR: 'France',
-  IN: 'India',
-  PK: 'Pakistan',
-  TR: 'Turkey',
-  IR: 'Iran',
-};
+export type DiscoveryCountryCodeContract = SupportedCountryCode;
 
-/**
- * Convert a country code to its full name.
- * Returns the original code if no mapping is found.
- */
 export function countryName(code: string | null | undefined): string {
   if (!code) return '';
-  const normalizedCode = normalizeDiscoveryCountryCode(code);
+  const normalizedCode = normalizeCountryCodeOrAlias(code);
   if (normalizedCode) {
-    return COUNTRY_NAMES[normalizedCode] ?? normalizedCode;
+    return countryDisplayName(normalizedCode);
   }
-  return COUNTRY_NAMES[code.toUpperCase()] ?? code;
+  return code;
 }
 
 export function toDiscoveryCountryCode(
   value: string | null | undefined,
 ): DiscoveryCountryCodeContract | null {
-  return normalizeDiscoveryCountryCode(value);
+  return normalizeCountryCodeOrAlias(value);
 }
 
 export function toDiscoveryCountryCodes(
   values: readonly (string | null | undefined)[],
 ): DiscoveryCountryCodeContract[] {
-  return normalizeDiscoveryCountryCodes(values);
+  return normalizeCountryCodes(values);
 }
 
+export const SupportedCountryPickerOptions = SupportedCountryOptions;
+
+export const CuratedCountryCities = CuratedCountryCitiesByCode;
+
 export const MENA_COUNTRIES = [
-  'UAE', 'KSA', 'Egypt', 'Jordan', 'Bahrain', 'Kuwait', 'Oman', 'Qatar',
-  'Lebanon', 'Iraq', 'Morocco', 'Tunisia', 'Algeria', 'Libya', 'Yemen',
-  'Syria', 'Palestine', 'Sudan',
+  'AE',
+  'SA',
+  'EG',
+  'JO',
+  'BH',
+  'KW',
+  'OM',
+  'QA',
+  'LB',
+  'IQ',
+  'MA',
+  'TN',
+  'DZ',
+  'LY',
+  'YE',
+  'SY',
+  'PS',
+  'SD',
 ] as const;
 
-/** Comprehensive cities for all 18 MENA countries — used as baseline seed for CountriesCitiesManager */
-export const MENA_CITIES: Record<string, string[]> = {
-  UAE: ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Ras Al Khaimah', 'Fujairah', 'Umm Al Quwain', 'Al Ain'],
-  KSA: ['Riyadh', 'Jeddah', 'Mecca', 'Medina', 'Dammam', 'Khobar', 'Tabuk', 'Abha'],
-  Egypt: ['Cairo', 'Alexandria', 'Giza', 'Sharm El Sheikh'],
-  Jordan: ['Amman', 'Irbid', 'Zarqa', 'Aqaba'],
-  Bahrain: ['Manama', 'Riffa', 'Muharraq', 'Hamad Town'],
-  Kuwait: ['Kuwait City', 'Hawalli', 'Salmiya', 'Jahra'],
-  Oman: ['Muscat', 'Salalah', 'Nizwa', 'Sohar'],
-  Qatar: ['Doha', 'Al Wakrah', 'Al Khor', 'Lusail'],
-  Lebanon: ['Beirut', 'Tripoli', 'Sidon', 'Jounieh'],
-  Iraq: ['Baghdad', 'Basra', 'Erbil', 'Sulaymaniyah'],
-  Morocco: ['Casablanca', 'Rabat', 'Marrakech', 'Fez', 'Tangier'],
-  Tunisia: ['Tunis', 'Sfax', 'Sousse', 'Kairouan'],
-  Algeria: ['Algiers', 'Oran', 'Constantine', 'Annaba'],
-  Libya: ['Tripoli', 'Benghazi', 'Misrata', 'Sabha'],
-  Yemen: ['Sanaa', 'Aden', 'Taiz', 'Hodeidah'],
-  Syria: ['Damascus', 'Aleppo', 'Homs', 'Latakia'],
-  Palestine: ['Ramallah', 'Gaza', 'Hebron', 'Bethlehem', 'Nablus'],
-  Sudan: ['Khartoum', 'Omdurman', 'Port Sudan', 'Kassala'],
-};
+export function buildDiscoveryCountryCities(
+  value: unknown,
+  options?: { includeCuratedDefaults?: boolean | undefined },
+): CountryCitiesMap {
+  return buildCountryCitiesMap(value, options);
+}
