@@ -64,6 +64,7 @@ const INTERNAL_TABLES_REQUIRING_BROWSER_ROLE_REVOKES = [
   'business_conversions',
   'business_evidence',
   'contact_recovery_items',
+  'discovery_attribution_assignments',
   'discovery_cost_events',
   'job_runs',
   'lead_pipeline_events',

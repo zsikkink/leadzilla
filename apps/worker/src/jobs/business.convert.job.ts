@@ -9,6 +9,10 @@ import type {
 import type { Job, SendOptions } from 'pg-boss';
 
 import { RetryableError } from '../errors.js';
+import {
+  DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES,
+  recordDiscoveryAttributionPrimaryOutcome,
+} from '../utils/discovery-attribution.js';
 import { tryFinalizeDiscoveryRun, checkLeadTargetReached } from '../utils/discovery-run-tracker.js';
 import { isProviderWithinBudget, getScoreQualificationThreshold } from '../utils/pipeline-settings.js';
 import {
@@ -932,6 +936,13 @@ async function upsertContactRecoveryItem(input: {
       rejectedBy: null,
       rejectedAt: null,
     },
+  });
+
+  await recordDiscoveryAttributionPrimaryOutcome({
+    businessId: input.businessId,
+    discoveryRunId: input.discoveryRunId,
+    icpProfileId: input.icpProfileId,
+    primaryOutcomeCode: DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES.RECOVERY_OPENED,
   });
 }
 
@@ -2395,6 +2406,25 @@ export async function handleBusinessConvertJob(
         : {}),
     };
   });
+
+  const shouldRecordLeadCreatedOutcome =
+    txResult.isNew || (!isCurrentRunExistingBusiness && txResult.reusedPrimaryBusiness === true);
+  const shouldRecordExistingSameBusinessLeadReusedOutcome =
+    isCurrentRunExistingBusiness && txResult.reusedPrimaryBusiness === true;
+  const primaryOutcomeCode = shouldRecordLeadCreatedOutcome
+    ? DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES.LEAD_CREATED
+    : shouldRecordExistingSameBusinessLeadReusedOutcome
+      ? DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES.EXISTING_SAME_BUSINESS_LEAD_REUSED
+      : null;
+
+  if (primaryOutcomeCode) {
+    await recordDiscoveryAttributionPrimaryOutcome({
+      businessId,
+      discoveryRunId,
+      icpProfileId,
+      primaryOutcomeCode,
+    });
+  }
 
   await prisma.contactRecoveryItem.deleteMany({
     where: {

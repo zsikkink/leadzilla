@@ -14,6 +14,45 @@ function createQueryable(...rowsByQuery: Array<Array<Record<string, unknown>>>):
 }
 
 describe('checkPipelineSchemaHealth', () => {
+  it('includes discovery_attribution_assignments in the explicit browser-role revoke audit set', async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({
+        rows: [
+          { table_name: 'contact_recovery_items' },
+          { table_name: 'job_runs' },
+          { table_name: 'search_tasks' },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          { enum_name: 'ContactRecoveryReason', enum_value: 'DECISION_MAKER_IDENTIFIED' },
+          { enum_name: 'CostEventProvider', enum_value: 'GOOGLE_CUSTOM_SEARCH' },
+          { enum_name: 'MessageSendStatus', enum_value: 'SENDING' },
+          { enum_name: 'MessageSendStatus', enum_value: 'UNRESOLVED' },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await expect(checkWorkerSchemaHealth({ query } as SqlQueryable)).resolves.toEqual({
+      status: 'ok',
+      missingTables: [],
+      missingEnumValues: [],
+      unexpectedTablePrivileges: [],
+      unexpectedDefaultPrivileges: [],
+    });
+
+    expect(query).toHaveBeenNthCalledWith(
+      3,
+      expect.any(String),
+      [
+        expect.arrayContaining(['discovery_attribution_assignments']),
+        ['anon', 'authenticated'],
+        ['DELETE', 'INSERT', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE'],
+      ],
+    );
+  });
+
   it('returns ok for the api scope when the required tables, enum values, and privilege posture match', async () => {
     const db = createQueryable(
       [

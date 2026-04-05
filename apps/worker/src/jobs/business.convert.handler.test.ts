@@ -26,7 +26,12 @@ const { dbMock, txMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => (
       businessConversion: {
         findFirst: vi.fn(),
       },
+      discoveryAttributionAssignment: {
+        updateMany: vi.fn(),
+      },
       contactRecoveryItem: {
+        findUnique: vi.fn(),
+        upsert: vi.fn(),
         deleteMany: vi.fn(),
       },
       leadDiscoveryRecord: {
@@ -266,6 +271,9 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
         },
       },
     });
+    dbMock.prisma.discoveryAttributionAssignment.updateMany.mockResolvedValue({ count: 1 });
+    dbMock.prisma.contactRecoveryItem.findUnique.mockResolvedValue(null);
+    dbMock.prisma.contactRecoveryItem.upsert.mockResolvedValue({ id: 'recovery_1' });
     dbMock.prisma.contactRecoveryItem.deleteMany.mockResolvedValue({ count: 1 });
     dbMock.prisma.leadEnrichmentRecord.upsert.mockResolvedValue({ id: 'enrichment_record_1' });
     dbMock.prisma.messageDraft.findFirst.mockResolvedValue(null);
@@ -339,6 +347,18 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
       },
       select: { id: true },
     });
+    expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).toHaveBeenCalledWith({
+      where: {
+        businessId: 'business_1',
+        discoveryRunId: 'run_old',
+        icpProfileId: 'icp_1',
+        primaryOutcomeCode: null,
+      },
+      data: {
+        primaryOutcomeCode: 'LEAD_CREATED',
+        primaryOutcomeAt: expect.any(Date),
+      },
+    });
     expect(enqueueFeaturesCompute).not.toHaveBeenCalled();
     expect(trackerMock.checkLeadTargetReached).toHaveBeenCalledWith('run_old', logger);
     expect(trackerMock.tryFinalizeDiscoveryRun).not.toHaveBeenCalled();
@@ -357,6 +377,9 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
 
   it('does not create a second durable handoff when business.convert replays the same new-lead outcome', async () => {
     const enqueueFeaturesCompute = vi.fn();
+    dbMock.prisma.discoveryAttributionAssignment.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
     txMock.lead.findFirst
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({
@@ -377,6 +400,31 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
 
     expect(txMock.jobExecution.create).toHaveBeenCalledTimes(1);
     expect(txMock.outboxEvent.create).toHaveBeenCalledTimes(1);
+    expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).toHaveBeenCalledTimes(2);
+    expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        businessId: 'business_1',
+        discoveryRunId: 'run_old',
+        icpProfileId: 'icp_1',
+        primaryOutcomeCode: null,
+      },
+      data: {
+        primaryOutcomeCode: 'LEAD_CREATED',
+        primaryOutcomeAt: expect.any(Date),
+      },
+    });
+    expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).toHaveBeenNthCalledWith(2, {
+      where: {
+        businessId: 'business_1',
+        discoveryRunId: 'run_old',
+        icpProfileId: 'icp_1',
+        primaryOutcomeCode: null,
+      },
+      data: {
+        primaryOutcomeCode: 'LEAD_CREATED',
+        primaryOutcomeAt: expect.any(Date),
+      },
+    });
     expect(enqueueFeaturesCompute).toHaveBeenCalledTimes(1);
     expect(enqueueFeaturesCompute).toHaveBeenCalledWith({
       runId: 'run_old',
@@ -385,6 +433,96 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
       snapshotVersion: 1,
       correlationId: 'corr_1',
     });
+  });
+
+  it('writes RECOVERY_OPENED to the attribution row when convert opens contact recovery', async () => {
+    dbMock.prisma.business.findUnique.mockResolvedValueOnce({
+      id: 'business_1',
+      name: 'Acme Dental',
+      websiteDomain: 'acme.example',
+      instagramHandle: null,
+      phoneE164: null,
+      reviewCount: 42,
+      address: '123 Main St',
+      city: 'New York',
+      countryCode: 'US',
+      category: 'Dental Clinic',
+      apifyWebsiteScrapeJson: {
+        paymentWidgets: [],
+        hasShopify: false,
+        platform: null,
+        hasBookingForm: false,
+        hasPricingTiers: false,
+        hasProductCatalog: false,
+        hasWhatsApp: false,
+        detectedPlatforms: [],
+        decisionMakers: [],
+        contactInfo: {
+          emails: [],
+          phones: [],
+          addresses: [],
+        },
+        socialLinks: [],
+        technologies: {
+          analytics: [],
+          crm: [],
+          liveChat: [],
+          emailMarketing: [],
+          ecommerce: [],
+          payments: [],
+          cssFrameworks: [],
+          hosting: [],
+        },
+        businessSignals: {
+          estimatedEmployeeCount: 12,
+          certifications: [],
+          hasClientLogos: false,
+          hasTestimonials: false,
+          hasCaseStudies: false,
+        },
+        aboutPageText: 'Acme Dental serves New York.',
+        pagesCrawled: 2,
+        crawlDurationMs: 120,
+      },
+      apifyInstagramScrapeJson: null,
+      websiteScrapedAt: new Date(),
+      instagramScrapedAt: null,
+      deterministicScore: 0.82,
+      scoreBand: 'HIGH',
+      discoveryRunId: 'run_old',
+      preQualified: true,
+    });
+
+    await handleBusinessConvertJob(
+      logger,
+      makeJob({
+        businessId: 'business_1',
+        discoveryRunId: 'run_old',
+        icpProfileId: 'icp_1',
+      }),
+      {
+        ...makeDeps(),
+        hunterAdapter: {
+          isConfigured: false,
+          searchDomainContacts: vi.fn(),
+        },
+      },
+    );
+
+    expect(dbMock.prisma.contactRecoveryItem.upsert).toHaveBeenCalledTimes(1);
+    expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).toHaveBeenCalledWith({
+      where: {
+        businessId: 'business_1',
+        discoveryRunId: 'run_old',
+        icpProfileId: 'icp_1',
+        primaryOutcomeCode: null,
+      },
+      data: {
+        primaryOutcomeCode: 'RECOVERY_OPENED',
+        primaryOutcomeAt: expect.any(Date),
+      },
+    });
+    expect(txMock.lead.create).not.toHaveBeenCalled();
   });
 
   it('restores current ICP lineage and re-enters features when a reused lead lacks a current ICP score', async () => {
@@ -420,6 +558,18 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
     });
     expect(dbMock.prisma.leadDiscoveryRecord.upsert).not.toHaveBeenCalled();
     expect(dbMock.prisma.leadEnrichmentRecord.upsert).not.toHaveBeenCalled();
+    expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).toHaveBeenCalledWith({
+      where: {
+        businessId: 'business_1',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+        primaryOutcomeCode: null,
+      },
+      data: {
+        primaryOutcomeCode: 'EXISTING_SAME_BUSINESS_LEAD_REUSED',
+        primaryOutcomeAt: expect.any(Date),
+      },
+    });
     expect(enqueueFeaturesCompute).toHaveBeenCalledWith({
       runId: 'run_1',
       leadId: 'lead_existing_1',
@@ -499,6 +649,7 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
 
     expect(txMock.businessConversion.create).not.toHaveBeenCalled();
     expect(txMock.lead.create).not.toHaveBeenCalled();
+    expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).not.toHaveBeenCalled();
     expect(enqueueFeaturesCompute).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({
