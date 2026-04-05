@@ -570,6 +570,18 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
         primaryOutcomeAt: expect.any(Date),
       },
     });
+    expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).not.toHaveBeenCalledWith({
+      where: {
+        businessId: 'business_1',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+        primaryOutcomeCode: null,
+      },
+      data: {
+        primaryOutcomeCode: 'EXISTING_BUSINESS_NO_UNIQUE_ACTIVE_SAME_BUSINESS_LEAD',
+        primaryOutcomeAt: expect.any(Date),
+      },
+    });
     expect(enqueueFeaturesCompute).toHaveBeenCalledWith({
       runId: 'run_1',
       leadId: 'lead_existing_1',
@@ -630,7 +642,52 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
     );
   });
 
-  it('treats multi-lead existing businesses as terminal unsupported no-ops for rediscovery', async () => {
+  it('writes the no-unique-same-business outcome when existing-business rediscovery finds zero active same-business leads', async () => {
+    const enqueueFeaturesCompute = vi.fn();
+    txMock.lead.findMany.mockResolvedValueOnce([]);
+
+    await handleBusinessConvertJob(
+      logger,
+      makeJob({
+        businessId: 'business_1',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+      }),
+      makeDeps(enqueueFeaturesCompute),
+    );
+
+    expect(txMock.businessConversion.create).not.toHaveBeenCalled();
+    expect(txMock.lead.create).not.toHaveBeenCalled();
+    expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).toHaveBeenCalledWith({
+      where: {
+        businessId: 'business_1',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+        primaryOutcomeCode: null,
+      },
+      data: {
+        primaryOutcomeCode: 'EXISTING_BUSINESS_NO_UNIQUE_ACTIVE_SAME_BUSINESS_LEAD',
+        primaryOutcomeAt: expect.any(Date),
+      },
+    });
+    expect(enqueueFeaturesCompute).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: 'business_1',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+        sameBusinessLeadCount: 0,
+      }),
+      'Existing business rediscovery is terminal because it does not map to exactly one active same-business lead',
+    );
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith(
+      'run_1',
+      logger,
+      expect.objectContaining({ excludeActiveJobId: expect.any(String) }),
+    );
+  });
+
+  it('writes the no-unique-same-business outcome when existing-business rediscovery finds multiple active same-business leads', async () => {
     const enqueueFeaturesCompute = vi.fn();
     txMock.lead.findMany.mockResolvedValueOnce([
       { id: 'lead_existing_1', businessId: 'business_1' },
@@ -649,7 +706,18 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
 
     expect(txMock.businessConversion.create).not.toHaveBeenCalled();
     expect(txMock.lead.create).not.toHaveBeenCalled();
-    expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).not.toHaveBeenCalled();
+    expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).toHaveBeenCalledWith({
+      where: {
+        businessId: 'business_1',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+        primaryOutcomeCode: null,
+      },
+      data: {
+        primaryOutcomeCode: 'EXISTING_BUSINESS_NO_UNIQUE_ACTIVE_SAME_BUSINESS_LEAD',
+        primaryOutcomeAt: expect.any(Date),
+      },
+    });
     expect(enqueueFeaturesCompute).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -753,6 +821,7 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
         icpProfileId: 'icp_1',
       },
     });
+    expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).not.toHaveBeenCalled();
     expect(dbMock.prisma.leadDiscoveryRecord.upsert).not.toHaveBeenCalled();
     expect(dbMock.prisma.leadEnrichmentRecord.upsert).not.toHaveBeenCalled();
     expect(enqueueFeaturesCompute).not.toHaveBeenCalled();

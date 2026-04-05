@@ -13,6 +13,18 @@ function createQueryable(...rowsByQuery: Array<Array<Record<string, unknown>>>):
   return { query } as SqlQueryable;
 }
 
+const PRIMARY_OUTCOME_CONSTRAINT_ROWS = [
+  {
+    allowed_primary_outcome_codes: [
+      'PREQUALIFY_DISQUALIFIED',
+      'RECOVERY_OPENED',
+      'LEAD_CREATED',
+      'EXISTING_SAME_BUSINESS_LEAD_REUSED',
+      'EXISTING_BUSINESS_NO_UNIQUE_ACTIVE_SAME_BUSINESS_LEAD',
+    ],
+  },
+] satisfies Array<Record<string, unknown>>;
+
 describe('checkPipelineSchemaHealth', () => {
   it('includes discovery_attribution_assignments in the explicit browser-role revoke audit set', async () => {
     const query = vi.fn()
@@ -32,12 +44,14 @@ describe('checkPipelineSchemaHealth', () => {
         ],
       })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: PRIMARY_OUTCOME_CONSTRAINT_ROWS });
 
     await expect(checkWorkerSchemaHealth({ query } as SqlQueryable)).resolves.toEqual({
       status: 'ok',
       missingTables: [],
       missingEnumValues: [],
+      missingCheckConstraints: [],
       unexpectedTablePrivileges: [],
       unexpectedDefaultPrivileges: [],
     });
@@ -69,12 +83,14 @@ describe('checkPipelineSchemaHealth', () => {
       ],
       [],
       [],
+      PRIMARY_OUTCOME_CONSTRAINT_ROWS,
     );
 
     await expect(checkPipelineSchemaHealth(db)).resolves.toEqual({
       status: 'ok',
       missingTables: [],
       missingEnumValues: [],
+      missingCheckConstraints: [],
       unexpectedTablePrivileges: [],
       unexpectedDefaultPrivileges: [],
     });
@@ -95,12 +111,54 @@ describe('checkPipelineSchemaHealth', () => {
       ],
       [],
       [],
+      PRIMARY_OUTCOME_CONSTRAINT_ROWS,
     );
 
     await expect(checkPipelineSchemaHealth(db)).resolves.toEqual({
       status: 'fail',
       missingTables: [],
       missingEnumValues: ['MessageSendStatus:UNRESOLVED'],
+      missingCheckConstraints: [],
+      unexpectedTablePrivileges: [],
+      unexpectedDefaultPrivileges: [],
+    });
+  });
+
+  it('reports missing discovery attribution primary outcome values when the SQL check constraint is stale', async () => {
+    const db = createQueryable(
+      [
+        { table_name: 'contact_recovery_items' },
+        { table_name: 'job_requests' },
+        { table_name: 'job_runs' },
+        { table_name: 'search_tasks' },
+      ],
+      [
+        { enum_name: 'ContactRecoveryReason', enum_value: 'DECISION_MAKER_IDENTIFIED' },
+        { enum_name: 'CostEventProvider', enum_value: 'GOOGLE_CUSTOM_SEARCH' },
+        { enum_name: 'MessageSendStatus', enum_value: 'SENDING' },
+        { enum_name: 'MessageSendStatus', enum_value: 'UNRESOLVED' },
+      ],
+      [],
+      [],
+      [
+        {
+          allowed_primary_outcome_codes: [
+            'PREQUALIFY_DISQUALIFIED',
+            'RECOVERY_OPENED',
+            'LEAD_CREATED',
+            'EXISTING_SAME_BUSINESS_LEAD_REUSED',
+          ],
+        },
+      ],
+    );
+
+    await expect(checkPipelineSchemaHealth(db)).resolves.toEqual({
+      status: 'fail',
+      missingTables: [],
+      missingEnumValues: [],
+      missingCheckConstraints: [
+        'public.discovery_attribution_assignments_primary_outcome_chk:EXISTING_BUSINESS_NO_UNIQUE_ACTIVE_SAME_BUSINESS_LEAD',
+      ],
       unexpectedTablePrivileges: [],
       unexpectedDefaultPrivileges: [],
     });
@@ -128,12 +186,14 @@ describe('checkPipelineSchemaHealth', () => {
         },
       ],
       [],
+      PRIMARY_OUTCOME_CONSTRAINT_ROWS,
     );
 
     await expect(checkPipelineSchemaHealth(db)).resolves.toEqual({
       status: 'fail',
       missingTables: [],
       missingEnumValues: [],
+      missingCheckConstraints: [],
       unexpectedTablePrivileges: [
         'public.MessageSend:authenticated:SELECT,UPDATE',
       ],
@@ -163,12 +223,14 @@ describe('checkPipelineSchemaHealth', () => {
           privileges: ['INSERT', 'SELECT'],
         },
       ],
+      PRIMARY_OUTCOME_CONSTRAINT_ROWS,
     );
 
     await expect(checkPipelineSchemaHealth(db)).resolves.toEqual({
       status: 'fail',
       missingTables: [],
       missingEnumValues: [],
+      missingCheckConstraints: [],
       unexpectedTablePrivileges: [],
       unexpectedDefaultPrivileges: [
         'postgres:public:TABLES:anon:INSERT,SELECT',
@@ -191,12 +253,14 @@ describe('checkPipelineSchemaHealth', () => {
       ],
       [],
       [],
+      PRIMARY_OUTCOME_CONSTRAINT_ROWS,
     );
 
     await expect(checkWorkerSchemaHealth(db)).resolves.toEqual({
       status: 'ok',
       missingTables: [],
       missingEnumValues: [],
+      missingCheckConstraints: [],
       unexpectedTablePrivileges: [],
       unexpectedDefaultPrivileges: [],
     });

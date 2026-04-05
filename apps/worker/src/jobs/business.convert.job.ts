@@ -1998,7 +1998,8 @@ export async function handleBusinessConvertJob(
 
         return {
           isNew: false,
-          unsupportedExistingBusinessLeadCount: sameBusinessLeads.length,
+          existingBusinessNoUniqueActiveSameBusinessLead: true as const,
+          nonUniqueActiveSameBusinessLeadCount: sameBusinessLeads.length,
         };
       }
 
@@ -2411,11 +2412,16 @@ export async function handleBusinessConvertJob(
     txResult.isNew || (!isCurrentRunExistingBusiness && txResult.reusedPrimaryBusiness === true);
   const shouldRecordExistingSameBusinessLeadReusedOutcome =
     isCurrentRunExistingBusiness && txResult.reusedPrimaryBusiness === true;
+  const shouldRecordExistingBusinessNoUniqueActiveSameBusinessLeadOutcome =
+    isCurrentRunExistingBusiness
+    && txResult.existingBusinessNoUniqueActiveSameBusinessLead === true;
   const primaryOutcomeCode = shouldRecordLeadCreatedOutcome
     ? DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES.LEAD_CREATED
     : shouldRecordExistingSameBusinessLeadReusedOutcome
       ? DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES.EXISTING_SAME_BUSINESS_LEAD_REUSED
-      : null;
+      : shouldRecordExistingBusinessNoUniqueActiveSameBusinessLeadOutcome
+        ? DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES.EXISTING_BUSINESS_NO_UNIQUE_ACTIVE_SAME_BUSINESS_LEAD
+        : null;
 
   if (primaryOutcomeCode) {
     await recordDiscoveryAttributionPrimaryOutcome({
@@ -2598,13 +2604,13 @@ export async function handleBusinessConvertJob(
           'Existing business rediscovery found a single active same-business lead but did not enqueue features.compute',
         );
       }
-    } else if (txResult.unsupportedExistingBusinessLeadCount !== undefined) {
+    } else if (txResult.nonUniqueActiveSameBusinessLeadCount !== undefined) {
       existingLeadAlreadyKnownNoop = true;
       gateStats.outcome = 'existing_unsupported';
       logger.info(
         {
           ...logCtx,
-          sameBusinessLeadCount: txResult.unsupportedExistingBusinessLeadCount,
+          sameBusinessLeadCount: txResult.nonUniqueActiveSameBusinessLeadCount,
         },
         'Existing business rediscovery is terminal because it does not map to exactly one active same-business lead',
       );

@@ -36,6 +36,14 @@ const REQUIRED_ENUM_VALUES = [
   { enumName: 'MessageSendStatus', value: 'UNRESOLVED' },
 ] as const;
 
+const REQUIRED_DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES = [
+  'PREQUALIFY_DISQUALIFIED',
+  'RECOVERY_OPENED',
+  'LEAD_CREATED',
+  'EXISTING_SAME_BUSINESS_LEAD_REUSED',
+  'EXISTING_BUSINESS_NO_UNIQUE_ACTIVE_SAME_BUSINESS_LEAD',
+] as const;
+
 // These browser-role revokes are the committed backend-boundary contract from
 // the 2026-03-21 Supabase migrations. Keep the list explicit rather than
 // broadening this guard into a general privilege audit.
@@ -92,6 +100,7 @@ export interface PipelineSchemaHealth {
   status: 'ok' | 'fail';
   missingTables: string[];
   missingEnumValues: string[];
+  missingCheckConstraints: string[];
   unexpectedTablePrivileges: string[];
   unexpectedDefaultPrivileges: string[];
 }
@@ -200,6 +209,37 @@ async function checkSchemaHealthForScope(
     ],
   );
 
+  const primaryOutcomeConstraintRows = await db.query<{
+    allowed_primary_outcome_codes: string[];
+  }>(
+    `
+      select
+        coalesce(
+          array_agg(distinct matched.value order by matched.value),
+          '{}'::text[]
+        ) as allowed_primary_outcome_codes
+      from pg_constraint as constraint_record
+      join pg_class as table_record
+        on table_record.oid = constraint_record.conrelid
+      join pg_namespace as schema_record
+        on schema_record.oid = table_record.relnamespace
+      left join lateral (
+        select matches[1] as value
+        from regexp_matches(
+          pg_get_constraintdef(constraint_record.oid),
+          '''([^'']+)''',
+          'g'
+        ) as matches
+      ) as matched
+        on true
+      where schema_record.nspname = 'public'
+        and table_record.relname = 'discovery_attribution_assignments'
+        and constraint_record.conname = 'discovery_attribution_assignments_primary_outcome_chk'
+        and constraint_record.contype = 'c'
+      group by constraint_record.oid
+    `,
+  );
+
   const presentTables = new Set(
     tableRows.rows.map((row: { table_name: string }) => row.table_name),
   );
@@ -214,6 +254,15 @@ async function checkSchemaHealthForScope(
   const missingEnumValues = REQUIRED_ENUM_VALUES
     .map((value) => `${value.enumName}:${value.value}`)
     .filter((value) => !presentEnumValues.has(value));
+  const presentPrimaryOutcomeCodes = new Set(
+    primaryOutcomeConstraintRows.rows[0]?.allowed_primary_outcome_codes ?? [],
+  );
+  const missingCheckConstraints = REQUIRED_DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES
+    .filter((value) => !presentPrimaryOutcomeCodes.has(value))
+    .map(
+      (value) =>
+        `public.discovery_attribution_assignments_primary_outcome_chk:${value}`,
+    );
   const unexpectedTablePrivileges = tablePrivilegeRows.rows.map(
     (row) => `public.${row.table_name}:${row.role_name}:${row.privileges.join(',')}`,
   );
@@ -237,12 +286,14 @@ async function checkSchemaHealthForScope(
     status:
       missingTables.length === 0
       && missingEnumValues.length === 0
+      && missingCheckConstraints.length === 0
       && unexpectedTablePrivileges.length === 0
       && unexpectedDefaultPrivileges.length === 0
         ? 'ok'
         : 'fail',
     missingTables,
     missingEnumValues,
+    missingCheckConstraints,
     unexpectedTablePrivileges,
     unexpectedDefaultPrivileges,
   };
