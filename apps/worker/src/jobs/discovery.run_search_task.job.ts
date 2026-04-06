@@ -65,6 +65,7 @@ export interface DiscoveryRunSearchTaskDependencies {
     businessId: string;
     discoveryRunId: string;
     icpProfileId: string;
+    existingBusinessRediscovery?: boolean | undefined;
     includeWebsiteAnalysis?: boolean | undefined;
     includeSocialMediaAnalysis?: boolean | undefined;
     minReviewCount?: number | undefined;
@@ -207,6 +208,29 @@ export async function persistDiscoveryAttributionAssignments(
     insertedCount: result.count,
     businessIds,
   };
+}
+
+async function getExistingBusinessRediscoveryIds(
+  businessIds: string[],
+  discoveryRunId: string,
+): Promise<Set<string>> {
+  if (businessIds.length === 0) {
+    return new Set();
+  }
+
+  const businesses = await prisma.business.findMany({
+    where: { id: { in: businessIds } },
+    select: {
+      id: true,
+      discoveryRunId: true,
+    },
+  });
+
+  return new Set(
+    businesses
+      .filter((business) => business.discoveryRunId !== discoveryRunId)
+      .map((business) => business.id),
+  );
 }
 
 function getRunState(runKey: string): RunState {
@@ -559,6 +583,10 @@ export async function handleDiscoveryRunSearchTaskJob(
     const existingObservedBusinessIds = observedBusinessIds.filter(
       (businessId: string) => !newBusinessIds.has(businessId),
     );
+    const existingBusinessRediscoveryIds = await getExistingBusinessRediscoveryIds(
+      existingObservedBusinessIds,
+      job.data.discoveryRunId,
+    );
 
     let enqueuedCount = 0;
 
@@ -567,6 +595,9 @@ export async function handleDiscoveryRunSearchTaskJob(
         businessId,
         discoveryRunId: job.data.discoveryRunId,
         icpProfileId: job.data.icpProfileId,
+        ...(existingBusinessRediscoveryIds.has(businessId)
+          ? { existingBusinessRediscovery: true }
+          : {}),
         ...(job.data.includeWebsiteAnalysis !== undefined
           ? { includeWebsiteAnalysis: job.data.includeWebsiteAnalysis }
           : {}),

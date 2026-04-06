@@ -51,6 +51,7 @@ export interface BusinessPrequalifyJobPayload {
   businessId: string;
   discoveryRunId: string;
   icpProfileId: string;
+  existingBusinessRediscovery?: boolean | undefined;
   minReviewCount?: number | undefined;
   includeWebsiteAnalysis?: boolean | undefined;
   includeSocialMediaAnalysis?: boolean | undefined;
@@ -64,6 +65,7 @@ export interface BusinessPrequalifyJobDependencies {
     businessId: string;
     discoveryRunId: string;
     icpProfileId: string;
+    existingBusinessRediscovery?: boolean | undefined;
     includeWebsiteAnalysis?: boolean | undefined;
     includeSocialMediaAnalysis?: boolean | undefined;
     correlationId?: string | undefined;
@@ -161,6 +163,7 @@ export async function handleBusinessPrequalifyJob(
     businessId,
     discoveryRunId,
     icpProfileId,
+    existingBusinessRediscovery: payloadExistingBusinessRediscovery,
     minReviewCount,
     includeWebsiteAnalysis,
     includeSocialMediaAnalysis,
@@ -296,10 +299,14 @@ export async function handleBusinessPrequalifyJob(
 
     // ── Enqueue business.convert if dependency provided ────────────────
     if (deps?.enqueueBusinessConvert) {
+      const existingBusinessRediscovery =
+        payloadExistingBusinessRediscovery ?? (business.discoveryRunId !== discoveryRunId);
+
       await deps.enqueueBusinessConvert({
         businessId,
         discoveryRunId,
         icpProfileId,
+        ...(existingBusinessRediscovery ? { existingBusinessRediscovery: true } : {}),
         includeWebsiteAnalysis,
         includeSocialMediaAnalysis,
         correlationId: effectiveCorrelationId,

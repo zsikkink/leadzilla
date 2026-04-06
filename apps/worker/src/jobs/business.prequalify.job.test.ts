@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Job } from 'pg-boss';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { dbMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => ({
+const { dbMock, dnsMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => ({
   dbMock: {
     prisma: {
       jobExecution: {
@@ -21,6 +21,10 @@ const { dbMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => ({
       },
     },
   },
+  dnsMock: {
+    resolve4: vi.fn(),
+    resolve6: vi.fn(),
+  },
   pipelineSettingsMock: {
     getMinReviewCount: vi.fn(),
   },
@@ -31,6 +35,13 @@ const { dbMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => ({
 
 vi.mock('@lead-flood/db', () => ({
   prisma: dbMock.prisma,
+}));
+
+vi.mock('node:dns', () => ({
+  promises: {
+    resolve4: dnsMock.resolve4,
+    resolve6: dnsMock.resolve6,
+  },
 }));
 
 vi.mock('../utils/pipeline-settings.js', () => ({
@@ -61,6 +72,10 @@ const logger = {
 };
 
 describe('handleBusinessPrequalifyJob attribution outcomes', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
 
@@ -75,6 +90,12 @@ describe('handleBusinessPrequalifyJob attribution outcomes', () => {
     dbMock.prisma.discoveryAttributionAssignment.updateMany.mockResolvedValue({ count: 1 });
     trackerMock.tryFinalizeDiscoveryRun.mockResolvedValue(undefined);
     pipelineSettingsMock.getMinReviewCount.mockResolvedValue(15);
+    dnsMock.resolve4.mockResolvedValue(['127.0.0.1']);
+    dnsMock.resolve6.mockResolvedValue([]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      url: 'https://acme.example',
+      text: vi.fn().mockResolvedValue('<html><body>Acme Dental</body></html>'),
+    }));
   });
 
   it('writes PREQUALIFY_DISQUALIFIED to the attribution row when prequalification disqualifies directly', async () => {
@@ -99,6 +120,48 @@ describe('handleBusinessPrequalifyJob attribution outcomes', () => {
         primaryOutcomeCode: 'PREQUALIFY_DISQUALIFIED',
         primaryOutcomeAt: expect.any(Date),
       },
+    });
+  });
+
+  it('preserves existing-business rediscovery in the convert payload after prequalify overwrites the business run id', async () => {
+    const enqueueBusinessConvert = vi.fn();
+    dbMock.prisma.business.findUnique.mockResolvedValueOnce({
+      id: 'business_1',
+      websiteDomain: 'acme.example',
+      reviewCount: 42,
+      discoveryRunId: 'run_old',
+    });
+
+    await handleBusinessPrequalifyJob(
+      logger,
+      makeJob({
+        businessId: 'business_1',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+        existingBusinessRediscovery: true,
+        minReviewCount: 15,
+      }),
+      {
+        enqueueBusinessConvert,
+      },
+    );
+
+    expect(dbMock.prisma.business.update).toHaveBeenCalledWith({
+      where: { id: 'business_1' },
+      data: {
+        preQualified: true,
+        disqualificationReason: null,
+        discoveryRunId: 'run_1',
+      },
+    });
+    expect(enqueueBusinessConvert).toHaveBeenCalledWith({
+      businessId: 'business_1',
+      discoveryRunId: 'run_1',
+      icpProfileId: 'icp_1',
+      existingBusinessRediscovery: true,
+      includeWebsiteAnalysis: undefined,
+      includeSocialMediaAnalysis: undefined,
+      correlationId: expect.any(String),
     });
   });
 });

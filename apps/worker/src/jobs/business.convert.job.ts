@@ -59,6 +59,7 @@ export interface BusinessConvertJobPayload {
   businessId: string;
   discoveryRunId: string;
   icpProfileId: string;
+  existingBusinessRediscovery?: boolean | undefined;
   includeWebsiteAnalysis?: boolean | undefined;
   includeSocialMediaAnalysis?: boolean | undefined;
   correlationId?: string | undefined;
@@ -956,6 +957,7 @@ export async function handleBusinessConvertJob(
     businessId,
     discoveryRunId,
     icpProfileId,
+    existingBusinessRediscovery: payloadExistingBusinessRediscovery,
     includeWebsiteAnalysis,
     includeSocialMediaAnalysis,
     correlationId,
@@ -1030,21 +1032,25 @@ export async function handleBusinessConvertJob(
   }
 
   const domain = business.websiteDomain;
+  const isExistingBusinessRediscovery =
+    payloadExistingBusinessRediscovery ?? (business.discoveryRunId !== discoveryRunId);
 
   // ── 2b. Cross-run domain dedup (F4) ───────────────────────────────────
   // If this business's domain was already processed in a PREVIOUS discovery
   // run AND that run created a lead (converted or rejected), skip entirely.
   // Only dedup across DIFFERENT runs, not within the same run.
-  const priorDomainLead = await prisma.lead.findFirst({
-    where: {
-      business: {
-        websiteDomain: domain,
-        discoveryRunId: { not: discoveryRunId },
-      },
-      deletedAt: null,
-    },
-    select: { id: true, status: true },
-  });
+  const priorDomainLead = isExistingBusinessRediscovery
+    ? null
+    : await prisma.lead.findFirst({
+        where: {
+          business: {
+            websiteDomain: domain,
+            discoveryRunId: { not: discoveryRunId },
+          },
+          deletedAt: null,
+        },
+        select: { id: true, status: true },
+      });
   if (priorDomainLead) {
     logger.info(
       {
@@ -1900,7 +1906,6 @@ export async function handleBusinessConvertJob(
   }
 
   const leadEmail = contactEmail;
-  const isCurrentRunExistingBusiness = business.discoveryRunId !== discoveryRunId;
 
   const hasRealDecisionMaker = resolvedContact !== null && isValidPersonName(resolvedContact.name, business.name);
   const contactStatus: ContactResolutionStatus = hasRealDecisionMaker
@@ -1965,7 +1970,7 @@ export async function handleBusinessConvertJob(
   const resolvedName = resolvedContact ? parseName(resolvedContact.name) : { firstName: 'Unknown', lastName: 'Contact' };
 
   const txResult = await prisma.$transaction(async (tx) => {
-    if (isCurrentRunExistingBusiness) {
+    if (isExistingBusinessRediscovery) {
       const sameBusinessLeads = await tx.lead.findMany({
         where: {
           businessId: business.id,
@@ -2409,11 +2414,11 @@ export async function handleBusinessConvertJob(
   });
 
   const shouldRecordLeadCreatedOutcome =
-    txResult.isNew || (!isCurrentRunExistingBusiness && txResult.reusedPrimaryBusiness === true);
+    txResult.isNew || (!isExistingBusinessRediscovery && txResult.reusedPrimaryBusiness === true);
   const shouldRecordExistingSameBusinessLeadReusedOutcome =
-    isCurrentRunExistingBusiness && txResult.reusedPrimaryBusiness === true;
+    isExistingBusinessRediscovery && txResult.reusedPrimaryBusiness === true;
   const shouldRecordExistingBusinessNoUniqueActiveSameBusinessLeadOutcome =
-    isCurrentRunExistingBusiness
+    isExistingBusinessRediscovery
     && txResult.existingBusinessNoUniqueActiveSameBusinessLead === true;
   const primaryOutcomeCode = shouldRecordLeadCreatedOutcome
     ? DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES.LEAD_CREATED
