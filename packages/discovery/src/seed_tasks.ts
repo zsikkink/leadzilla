@@ -49,68 +49,91 @@ function extractCategory(queryText: string): string {
   return match?.[1]?.trim().toLowerCase() ?? queryText.toLowerCase();
 }
 
+interface IndexedGeneratedSearchTask {
+  task: GeneratedSearchTask;
+  originalIndex: number;
+}
+
+function compareStrings(left: string, right: string): number {
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
+}
+
+function compareNullableStrings(left: string | null, right: string | null): number {
+  return compareStrings(left ?? '', right ?? '');
+}
+
+function compareIndexedTasks(
+  left: IndexedGeneratedSearchTask,
+  right: IndexedGeneratedSearchTask,
+): number {
+  return (
+    compareStrings(left.task.queryHash, right.task.queryHash) ||
+    compareStrings(left.task.normalizedQueryKey, right.task.normalizedQueryKey) ||
+    compareStrings(left.task.queryText, right.task.queryText) ||
+    compareStrings(left.task.taskType, right.task.taskType) ||
+    compareStrings(left.task.countryCode, right.task.countryCode) ||
+    compareNullableStrings(left.task.city, right.task.city) ||
+    compareStrings(left.task.language, right.task.language) ||
+    left.task.page - right.task.page ||
+    compareStrings(left.task.timeBucket, right.task.timeBucket) ||
+    left.originalIndex - right.originalIndex
+  );
+}
+
 /**
  * Stratified sample: guarantee at least 1 task per (category, city) stratum,
- * then distribute remaining budget randomly. Final shuffle for FIFO fairness.
+ * then distribute remaining budget deterministically.
  */
 function stratifiedSample(
   tasks: GeneratedSearchTask[],
   maxTasks: number,
 ): GeneratedSearchTask[] {
+  const indexedTasks = tasks.map((task, originalIndex) => ({ task, originalIndex }));
+
   // Group by (category, city) — the meaningful diversity dimensions
-  const strata = new Map<string, GeneratedSearchTask[]>();
-  for (const task of tasks) {
+  const strata = new Map<string, IndexedGeneratedSearchTask[]>();
+  for (const indexedTask of indexedTasks) {
+    const { task } = indexedTask;
     const cat = extractCategory(task.queryText);
     const city = (task.city ?? 'unknown').toLowerCase();
     const key = `${city}::${cat}`;
     const group = strata.get(key) ?? [];
-    group.push(task);
+    group.push(indexedTask);
     strata.set(key, group);
   }
 
-  const result: GeneratedSearchTask[] = [];
-  const strataList = [...strata.values()];
+  const result: IndexedGeneratedSearchTask[] = [];
+  const strataList = [...strata.values()].map((group) => [...group].sort(compareIndexedTasks));
 
-  // If we can't even fit 1 per stratum, fall back to pure random
+  // If we can't even fit 1 per stratum, use the stable global ordering.
   if (maxTasks < strataList.length) {
-    const shuffled = [...tasks];
-    for (let i = shuffled.length - 1; i > 0; i -= 1) {
-      const j = Math.floor(Math.random() * (i + 1));
-      const tmp = shuffled[i]!;
-      shuffled[i] = shuffled[j]!;
-      shuffled[j] = tmp;
-    }
-    return shuffled.slice(0, maxTasks);
+    return [...indexedTasks]
+      .sort(compareIndexedTasks)
+      .slice(0, maxTasks)
+      .map(({ task }) => task);
   }
 
-  // Round 1: 1 random task per stratum
+  // Round 1: 1 deterministic task per stratum
   for (const group of strataList) {
-    const idx = Math.floor(Math.random() * group.length);
-    result.push(group.splice(idx, 1)[0]!);
+    result.push(group[0]!);
   }
 
-  // Round 2: Fill remaining budget randomly from leftover tasks
+  // Round 2: Fill remaining budget from the stable leftover ordering.
   if (result.length < maxTasks) {
-    const remaining = strataList.flatMap((g) => g);
-    for (let i = remaining.length - 1; i > 0; i -= 1) {
-      const j = Math.floor(Math.random() * (i + 1));
-      const tmp = remaining[i]!;
-      remaining[i] = remaining[j]!;
-      remaining[j] = tmp;
-    }
+    const remaining = strataList
+      .flatMap((group) => group.slice(1))
+      .sort(compareIndexedTasks);
     const needed = maxTasks - result.length;
     result.push(...remaining.slice(0, needed));
   }
 
-  // Final shuffle so DB insertion order is random (prevents FIFO bias)
-  for (let i = result.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const tmp = result[i]!;
-    result[i] = result[j]!;
-    result[j] = tmp;
-  }
-
-  return result.slice(0, maxTasks);
+  return result
+    .sort(compareIndexedTasks)
+    .slice(0, maxTasks)
+    .map(({ task }) => task);
 }
 
 export async function seedSearchTasks(
