@@ -44,6 +44,20 @@ const REQUIRED_DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES = [
   'EXISTING_BUSINESS_NO_UNIQUE_ACTIVE_SAME_BUSINESS_LEAD',
 ] as const;
 
+const REQUIRED_DISCOVERY_PHASE1_ASSIGNMENT_LABEL_VIEW =
+  'discovery_phase1_assignment_labels_v1' as const;
+
+const REQUIRED_DISCOVERY_PHASE1_ASSIGNMENT_LABEL_VIEW_COLUMNS = [
+  'assignment_id',
+  'discovery_run_id',
+  'icp_profile_id',
+  'business_id',
+  'search_task_id',
+  'primary_outcome_code',
+  'phase1_class',
+  'exclusion_reason',
+] as const;
+
 // These browser-role revokes are the committed backend-boundary contract from
 // the 2026-03-21 Supabase migrations. Keep the list explicit rather than
 // broadening this guard into a general privilege audit.
@@ -101,6 +115,8 @@ export interface PipelineSchemaHealth {
   missingTables: string[];
   missingEnumValues: string[];
   missingCheckConstraints: string[];
+  missingViews: string[];
+  missingViewColumns: string[];
   unexpectedTablePrivileges: string[];
   unexpectedDefaultPrivileges: string[];
 }
@@ -240,6 +256,30 @@ async function checkSchemaHealthForScope(
     `,
   );
 
+  const requiredViewRows = await db.query<{ table_name: string }>(
+    `
+      select table_name
+      from information_schema.views
+      where table_schema = 'public'
+        and table_name = $1
+    `,
+    [REQUIRED_DISCOVERY_PHASE1_ASSIGNMENT_LABEL_VIEW],
+  );
+
+  const requiredViewColumnRows = await db.query<{ column_name: string }>(
+    `
+      select column_name
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = $1
+        and column_name = any($2::text[])
+    `,
+    [
+      REQUIRED_DISCOVERY_PHASE1_ASSIGNMENT_LABEL_VIEW,
+      REQUIRED_DISCOVERY_PHASE1_ASSIGNMENT_LABEL_VIEW_COLUMNS,
+    ],
+  );
+
   const presentTables = new Set(
     tableRows.rows.map((row: { table_name: string }) => row.table_name),
   );
@@ -263,6 +303,20 @@ async function checkSchemaHealthForScope(
       (value) =>
         `public.discovery_attribution_assignments_primary_outcome_chk:${value}`,
     );
+  const missingViews = requiredViewRows.rows.length === 0
+    ? [`public.${REQUIRED_DISCOVERY_PHASE1_ASSIGNMENT_LABEL_VIEW}`]
+    : [];
+  const presentViewColumns = new Set(
+    requiredViewColumnRows.rows.map((row) => row.column_name),
+  );
+  const missingViewColumns = requiredViewRows.rows.length === 0
+    ? []
+    : REQUIRED_DISCOVERY_PHASE1_ASSIGNMENT_LABEL_VIEW_COLUMNS
+      .filter((columnName) => !presentViewColumns.has(columnName))
+      .map(
+        (columnName) =>
+          `public.${REQUIRED_DISCOVERY_PHASE1_ASSIGNMENT_LABEL_VIEW}:${columnName}`,
+      );
   const unexpectedTablePrivileges = tablePrivilegeRows.rows.map(
     (row) => `public.${row.table_name}:${row.role_name}:${row.privileges.join(',')}`,
   );
@@ -287,6 +341,8 @@ async function checkSchemaHealthForScope(
       missingTables.length === 0
       && missingEnumValues.length === 0
       && missingCheckConstraints.length === 0
+      && missingViews.length === 0
+      && missingViewColumns.length === 0
       && unexpectedTablePrivileges.length === 0
       && unexpectedDefaultPrivileges.length === 0
         ? 'ok'
@@ -294,6 +350,8 @@ async function checkSchemaHealthForScope(
     missingTables,
     missingEnumValues,
     missingCheckConstraints,
+    missingViews,
+    missingViewColumns,
     unexpectedTablePrivileges,
     unexpectedDefaultPrivileges,
   };

@@ -26,6 +26,7 @@
     "typecheck": "prisma generate --schema prisma/schema.prisma && tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run",
+    "test:sql:discovery-phase1": "bash ../../scripts/db/test-discovery-phase1-sql.sh",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
     "prisma:migrate": "bash ../../scripts/db/guard-no-prisma-migrate-prod.sh \"prisma migrate deploy\" && prisma migrate deploy --schema prisma/schema.prisma",
     "prisma:migrate:dev": "prisma migrate dev --schema prisma/schema.prisma",

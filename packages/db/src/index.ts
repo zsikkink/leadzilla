@@ -15,6 +15,39 @@ export {
 export type { PipelineSettingRecord } from './pipeline-settings.js';
 export { getPipelineStatsSnapshot } from './pipeline-stats.js';
 export type { PipelineStatsSnapshot } from './pipeline-stats.js';
+export { listDiscoveryPhase1AssignmentLabels } from './discovery-phase1-assignment-labels-query.js';
+export type { DiscoveryPhase1AssignmentLabelRow } from './discovery-phase1-assignment-labels-query.js';
+export {
+  listDiscoveryPhase1AssignmentSearchInputs,
+} from './discovery-phase1-assignment-search-inputs-query.js';
+export type {
+  DiscoveryPhase1AssignmentSearchInputRow,
+} from './discovery-phase1-assignment-search-inputs-query.js';
+export {
+  listDiscoveryPhase1SearchInputCohortSummaries,
+} from './discovery-phase1-search-input-cohort-summaries-query.js';
+export type {
+  DiscoveryPhase1SearchInputCohortSummaryRow,
+} from './discovery-phase1-search-input-cohort-summaries-query.js';
+export {
+  listDiscoveryPhase1SearchInputCohortSummariesAcrossRuns,
+} from './discovery-phase1-search-input-cohort-summaries-across-runs-query.js';
+export type {
+  DiscoveryPhase1SearchInputCohortSummariesAcrossRunsFilters,
+} from './discovery-phase1-search-input-cohort-summaries-across-runs-query.js';
+export {
+  listDiscoveryPhase1HistoricalSearchInputCohortSummaries,
+} from './discovery-phase1-search-input-historical-cohort-summaries-query.js';
+export type {
+  DiscoveryPhase1HistoricalSearchInputCohortSummaryRow,
+} from './discovery-phase1-search-input-historical-cohort-summaries-query.js';
+export {
+  listDiscoveryPhase1HistoricalSearchInputCohortAssignments,
+} from './discovery-phase1-historical-search-input-cohort-assignments-query.js';
+export type {
+  DiscoveryPhase1HistoricalSearchInputCohortAssignmentRow,
+  DiscoveryPhase1HistoricalSearchInputCohortAssignmentsFilters,
+} from './discovery-phase1-historical-search-input-cohort-assignments-query.js';
 export { toInputJson } from './prisma-json.js';
 export { assertDatabaseConnection, getPgPool, query, withTransaction } from './postgres.js';
 export type { SqlQueryable } from './postgres.js';
