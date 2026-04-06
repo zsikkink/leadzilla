@@ -1,4 +1,8 @@
-import { getTaskCapForLeadTarget, seedSearchTasks } from '@lead-flood/discovery';
+import {
+  getTaskCapForLeadTarget,
+  previewIndustryMappings,
+  seedSearchTasks,
+} from '@lead-flood/discovery';
 import type { IcpSeedConfig, DiscoveryRuntimeConfig } from '@lead-flood/discovery';
 import type {
   DiscoveryCountryCode,
@@ -43,6 +47,7 @@ export interface DiscoverySeedJobPayload {
   countries?: DiscoveryCountryCode[];
   /** User-selected cities override. When provided, only these cities are searched. */
   cities?: string[] | undefined;
+  searchCategories?: string[] | undefined;
   languages?: DiscoveryLanguageCode[];
   enqueueRunTasks?: boolean;
   /** Pipeline v2 fields — forwarded to search task workers for business.prequalify chaining. */
@@ -151,6 +156,41 @@ function withSeedOverrides(
   };
 }
 
+function normalizeRequestedSearchCategories(
+  searchCategories: string[] | undefined,
+): string[] | undefined {
+  if (!searchCategories || searchCategories.length === 0) {
+    return undefined;
+  }
+
+  return [...searchCategories];
+}
+
+function buildRequestedSearchCategoryOverrides(
+  targetIndustries: string[],
+  searchCategories: string[],
+): NonNullable<IcpSeedConfig['categoryOverrides']> {
+  const overrides: NonNullable<IcpSeedConfig['categoryOverrides']> = {};
+  const previews = previewIndustryMappings(targetIndustries);
+
+  previews.forEach((preview, index) => {
+    const key = preview.industry.toLowerCase().trim().replaceAll(' ', '_');
+    const remove = preview.categories.filter((category) => category.trim().length > 0);
+    const add = index === 0 ? [...searchCategories] : undefined;
+
+    if (remove.length === 0 && (!add || add.length === 0)) {
+      return;
+    }
+
+    overrides[key] = {
+      ...(remove.length > 0 ? { remove } : {}),
+      ...(add && add.length > 0 ? { add } : {}),
+    };
+  });
+
+  return overrides;
+}
+
 export async function handleDiscoverySeedJob(
   logger: DiscoverySeedLogger,
   job: Job<DiscoverySeedJobPayload>,
@@ -232,12 +272,21 @@ export async function handleDiscoverySeedJob(
           !Array.isArray(metadata.categoryOverrides)
           ? metadata.categoryOverrides as Record<string, { add?: string[]; remove?: string[] }>
           : undefined;
+        const requestedSearchCategories = normalizeRequestedSearchCategories(
+          job.data.searchCategories,
+        );
+        const effectiveCategoryOverrides = requestedSearchCategories
+          ? buildRequestedSearchCategoryOverrides(
+              icpProfile.targetIndustries,
+              requestedSearchCategories,
+            )
+          : categoryOverrides;
 
         icpSeedConfig = {
           targetIndustries: icpProfile.targetIndustries,
           targetCountries: effectiveCountries,
           ...(job.data.cities !== undefined ? { cities: job.data.cities } : {}),
-          ...(categoryOverrides ? { categoryOverrides } : {}),
+          ...(effectiveCategoryOverrides ? { categoryOverrides: effectiveCategoryOverrides } : {}),
         };
         logger.info(
           {
@@ -248,8 +297,11 @@ export async function handleDiscoverySeedJob(
             targetIndustries: icpProfile.targetIndustries,
             effectiveCountries,
             userCities: job.data.cities,
+            requestedSearchCategories,
           },
-          'Using ICP v2 category mapping for task generation',
+          requestedSearchCategories
+            ? 'Using request search categories for task generation'
+            : 'Using ICP v2 category mapping for task generation',
         );
       }
     }

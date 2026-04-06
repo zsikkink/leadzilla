@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { GeneratedSearchTask } from './queries/generate_tasks.js';
+import { ICP_INDUSTRY_CATEGORY_MAP } from './queries/icp-category-map.js';
 
 const { executeRawMock, generateTasksV2Mock } = vi.hoisted(() => ({
   executeRawMock: vi.fn(),
@@ -146,6 +147,38 @@ beforeEach(() => {
 });
 
 describe('seedSearchTasks', () => {
+  it('forwards explicit category overrides to generation without changing other generation knobs', async () => {
+    generateTasksV2Mock.mockReturnValue([]);
+
+    await seedSearchTasks(
+      baseConfig,
+      FIXED_NOW,
+      {
+        targetIndustries: ['food_beverage'],
+        targetCountries: ['AE'],
+        cities: ['Dubai'],
+        categoryOverrides: {
+          food_beverage: {
+            remove: ICP_INDUSTRY_CATEGORY_MAP['food_beverage'],
+            add: ['bakery', 'gym'],
+          },
+        },
+      },
+    );
+
+    expect(generateTasksV2Mock).toHaveBeenCalledWith(
+      {
+        categories: ['bakery', 'gym'],
+        countries: ['AE'],
+        cities: ['Dubai'],
+        maxPagesPerQuery: baseConfig.maxPagesPerQuery,
+        taskTypes: baseConfig.taskTypes,
+        searchProvider: undefined,
+      },
+      { now: FIXED_NOW },
+    );
+  });
+
   it('selects one task per stratum before any same-stratum leftovers when budget can fit every stratum', async () => {
     const candidates = [
       createTask('c1', 'Abu Dhabi', 'plumber in Abu Dhabi', 1),

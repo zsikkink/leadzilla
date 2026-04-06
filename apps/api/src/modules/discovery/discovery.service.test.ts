@@ -118,6 +118,179 @@ describe('buildDiscoveryService', () => {
     expect(enqueueDiscoveryRun).not.toHaveBeenCalled();
   });
 
+  it('persists non-empty request searchCategories onto the discovery run and seed shard payloads', async () => {
+    const repository = buildRepositoryMock();
+    const enqueueDiscoveryRun = vi.fn(async () => undefined);
+    getPipelineSettingMock.mockResolvedValue({
+      key: 'countryCities',
+      valueJson: {
+        AE: ['Dubai'],
+      },
+    });
+
+    const service = buildDiscoveryService(repository, {
+      enqueueDiscoveryRun,
+    });
+
+    const response = await service.createDiscoveryRun({
+      icpProfileId: 'icp_1',
+      countries: ['AE'],
+      cities: ['Dubai'],
+      includeWebsiteAnalysis: true,
+      includeSocialMediaAnalysis: true,
+      limit: 10,
+      advancedSettings: {
+        minReviewCount: 15,
+        searchCategories: ['bakery', 'gym'],
+      },
+      requestedByUserId: 'user_1',
+    });
+
+    expect(response).toEqual({
+      runId: expect.any(String),
+      status: 'QUEUED',
+    });
+
+    expect(repository.createDiscoveryRun).toHaveBeenCalledTimes(1);
+    const [, , payload, seedPayloads] = vi.mocked(repository.createDiscoveryRun).mock.calls[0]!;
+
+    expect(payload).toEqual(
+      expect.objectContaining({
+        runId: response.runId,
+        icpProfileId: 'icp_1',
+        requestedByUserId: 'user_1',
+        minReviewCount: 15,
+        searchCategories: ['bakery', 'gym'],
+      }),
+    );
+    expect(seedPayloads).toEqual([
+      expect.objectContaining({
+        discoveryRunId: response.runId,
+        icpProfileId: 'icp_1',
+        searchCategories: ['bakery', 'gym'],
+        minReviewCount: 15,
+      }),
+    ]);
+    expect(enqueueDiscoveryRun).not.toHaveBeenCalled();
+  });
+
+  it('normalizes empty request searchCategories to the same persisted payload behavior as the absent case', async () => {
+    const repository = buildRepositoryMock();
+    const enqueueDiscoveryRun = vi.fn(async () => undefined);
+    getPipelineSettingMock.mockResolvedValue({
+      key: 'countryCities',
+      valueJson: {
+        AE: ['Dubai'],
+      },
+    });
+
+    const service = buildDiscoveryService(repository, {
+      enqueueDiscoveryRun,
+    });
+
+    await service.createDiscoveryRun({
+      icpProfileIds: ['icp_1', 'icp_2'],
+      countries: ['AE'],
+      cities: ['Dubai'],
+      includeWebsiteAnalysis: true,
+      includeSocialMediaAnalysis: true,
+      limit: 2,
+      advancedSettings: {
+        minReviewCount: 15,
+      },
+      requestedByUserId: 'user_1',
+    });
+
+    await service.createDiscoveryRun({
+      icpProfileIds: ['icp_1', 'icp_2'],
+      countries: ['AE'],
+      cities: ['Dubai'],
+      includeWebsiteAnalysis: true,
+      includeSocialMediaAnalysis: true,
+      limit: 2,
+      advancedSettings: {
+        minReviewCount: 15,
+        searchCategories: [],
+      },
+      requestedByUserId: 'user_1',
+    });
+
+    expect(repository.createDiscoveryRun).toHaveBeenCalledTimes(2);
+
+    const [, , absentPayload, absentSeedPayloads] =
+      vi.mocked(repository.createDiscoveryRun).mock.calls[0]!;
+    const [, , emptyPayload, emptySeedPayloads] =
+      vi.mocked(repository.createDiscoveryRun).mock.calls[1]!;
+
+    const projectPayload = (payload: typeof absentPayload) => ({
+      icpProfileId: payload.icpProfileId,
+      countries: payload.countries,
+      cities: payload.cities,
+      includeWebsiteAnalysis: payload.includeWebsiteAnalysis,
+      includeSocialMediaAnalysis: payload.includeSocialMediaAnalysis,
+      limit: payload.limit,
+      minReviewCount: payload.minReviewCount,
+      requestedByUserId: payload.requestedByUserId,
+      searchCategories: payload.searchCategories,
+    });
+    const projectSeedPayloads = (seedPayloads: typeof absentSeedPayloads) =>
+      seedPayloads.map((seedPayload) => ({
+        icpProfileId: seedPayload.icpProfileId,
+        countries: seedPayload.countries,
+        cities: seedPayload.cities,
+        includeWebsiteAnalysis: seedPayload.includeWebsiteAnalysis,
+        includeSocialMediaAnalysis: seedPayload.includeSocialMediaAnalysis,
+        maxTasks: seedPayload.maxTasks,
+        validationMode: seedPayload.validationMode,
+        minReviewCount: seedPayload.minReviewCount,
+        enqueueRunTasks: seedPayload.enqueueRunTasks,
+        searchCategories: seedPayload.searchCategories,
+      }));
+
+    expect(projectPayload(emptyPayload)).toEqual(projectPayload(absentPayload));
+    expect(projectPayload(emptyPayload)).toEqual({
+      icpProfileId: 'icp_1',
+      countries: ['AE'],
+      cities: ['Dubai'],
+      includeWebsiteAnalysis: true,
+      includeSocialMediaAnalysis: true,
+      limit: 2,
+      minReviewCount: 15,
+      requestedByUserId: 'user_1',
+      searchCategories: undefined,
+    });
+
+    expect(projectSeedPayloads(emptySeedPayloads)).toEqual(projectSeedPayloads(absentSeedPayloads));
+    expect(projectSeedPayloads(emptySeedPayloads)).toEqual([
+      {
+        icpProfileId: 'icp_1',
+        countries: ['AE'],
+        cities: ['Dubai'],
+        includeWebsiteAnalysis: true,
+        includeSocialMediaAnalysis: true,
+        maxTasks: 1,
+        validationMode: true,
+        minReviewCount: 15,
+        enqueueRunTasks: true,
+        searchCategories: undefined,
+      },
+      {
+        icpProfileId: 'icp_2',
+        countries: ['AE'],
+        cities: ['Dubai'],
+        includeWebsiteAnalysis: true,
+        includeSocialMediaAnalysis: true,
+        maxTasks: 1,
+        validationMode: true,
+        minReviewCount: 15,
+        enqueueRunTasks: true,
+        searchCategories: undefined,
+      },
+    ]);
+
+    expect(enqueueDiscoveryRun).not.toHaveBeenCalled();
+  });
+
   it('persists only positive-budget discovery.seed shards and does not use immediate enqueue', async () => {
     const repository = buildRepositoryMock();
     const enqueueDiscoveryRun = vi.fn(async () => undefined);
@@ -163,6 +336,7 @@ describe('buildDiscoveryService', () => {
         requestedByUserId: 'user_1',
       }),
     );
+    expect(payload.searchCategories).toBeUndefined();
     expect(seedPayloads).toEqual([
       expect.objectContaining({
         reason: 'api',
@@ -186,6 +360,10 @@ describe('buildDiscoveryService', () => {
         enqueueRunTasks: true,
         jobExecutionId: expect.any(String),
       }),
+    ]);
+    expect(seedPayloads.map((seedPayload) => seedPayload.searchCategories)).toEqual([
+      undefined,
+      undefined,
     ]);
     expect(enqueueDiscoveryRun).not.toHaveBeenCalled();
   });
