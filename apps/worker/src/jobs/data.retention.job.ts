@@ -46,6 +46,9 @@ async function purgeCompletedSearchTasks(
       where: {
         status: { in: ['DONE', 'FAILED', 'SKIPPED'] },
         updatedAt: { lt: cutoff },
+        discoveryAttributionAssignments: {
+          none: {},
+        },
       },
       select: { id: true },
       take: DELETE_BATCH_SIZE,
