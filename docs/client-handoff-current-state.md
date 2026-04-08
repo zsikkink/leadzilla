@@ -2,7 +2,7 @@
 
 I took a careful look through the current Lead-Flood repo and the handoff materials, and your concern is valid: the system is not easy to move away from its current vendors today. It depends heavily on Supabase for web login and session management, API token checks, database permission rules, and the production database migration process, even though a meaningful part of the core data and business logic is still standard PostgreSQL and could be moved with real engineering work.
 
-The broader ownership issue is also bigger than Supabase alone. The system currently includes a separate web app, API, background worker, database migration process, deployment automation, webhook handling, and several optional third-party vendors. For the current live setup, the web app is running on Vercel, and the optional vendors currently enabled are Hunter, Google Places, SERPAPI, and OpenAI. The current live plans are on free tiers, based on the confirmed information provided for this handoff draft.
+The broader ownership issue is also bigger than Supabase alone. The system currently includes a separate web app, API, background worker, database migration process, deployment automation, webhook handling, and several optional third-party vendors. For the current live setup, the web app is running on Vercel, and the optional vendors currently enabled are Hunter, Google Places, SERPAPI, and OpenAI. The current live plans are on free tiers.
 
 I have also organized the handoff materials into a practical current-state summary covering infrastructure, system architecture, deployment flow, environment and secret locations, and the current development process. That should give us a clear starting point for the meeting and make it easier to separate what is running today from what would need future simplification or redesign.
 
@@ -218,13 +218,6 @@ Developers are expected to copy these templates:
 The bootstrap script also creates:
 
 - `packages/db/.env` from `packages/db/.env.example`
-
-### Practical guidance
-
-- Use the app-level `.env.local` files as the real working files
-- Treat the root `.env.example` as reference only
-- Do not commit real secrets
-- For optional values, follow the validator rules carefully; some values may need to be omitted rather than left blank
 
 ## C. Bootstrap Flow
 
