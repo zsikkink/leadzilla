@@ -1,10 +1,12 @@
 # Project Summary
 
-I took a careful look through the current Lead-Flood repo and the handoff materials, and your concern is valid: the system is not easy to move away from its current vendors today. It depends heavily on Supabase for web login and session management, API token checks, database permission rules, and the production database migration process, even though a meaningful part of the core data and business logic is still standard PostgreSQL and could be moved with real engineering work.
+I took a careful look through the current Lead-Flood repo and the handoff materials, and I think the most accurate framing is this: the system is not vendor-agnostic today, but it is also not built on a closed platform. The architecture reflects the implementation choices made during the capstone build phase; the purpose of this document is to describe the current system accurately and make handoff decisions explicit. The current implementation is materially coupled to Supabase for web login and session management, API token verification, database permission rules, and the production database migration process. At the same time, Supabase itself is open source and can be self-hosted, so the issue is less “lock-in to a closed vendor” and more the practical ownership cost of operating and maintaining that stack in-house.
+
+A meaningful part of the core data and business logic is still standard PostgreSQL and TypeScript and could be moved or reworked with engineering effort. However, self-hosting the current Supabase-based architecture would still require taking on infrastructure, security, backups, monitoring, uptime, and related operational responsibilities.
 
 The broader ownership issue is also bigger than Supabase alone. The system currently includes a separate web app, API, background worker, database migration process, deployment automation, webhook handling, and several optional third-party vendors. For the current live setup, the web app is running on Vercel, and the optional vendors currently enabled are Hunter, Google Places, SERPAPI, and OpenAI. The current live plans are on free tiers.
 
-I have also organized the handoff materials into a practical current-state summary covering infrastructure, system architecture, deployment flow, environment and secret locations, and the current development process. That should give us a clear starting point for the meeting and make it easier to separate what is running today from what would need future simplification or redesign.
+I have also organized the handoff materials into a current-state summary covering infrastructure, system architecture, deployment flow, environment and secret locations, and the current development process. That should give us a clear starting point for the meeting and make it easier to separate what is running today from what would need future simplification, replacement, or operational ownership.
 
 # Current Infrastructure and System Architecture
 
