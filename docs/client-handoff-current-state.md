@@ -1,4 +1,4 @@
-# Client Response
+# Project Summary
 
 I took a careful look through the current Lead-Flood repo and the handoff materials, and your concern is valid: the system is not easy to move away from its current vendors today. It depends heavily on Supabase for web login and session management, API token checks, database permission rules, and the production database migration process, even though a meaningful part of the core data and business logic is still standard PostgreSQL and could be moved with real engineering work.
 
