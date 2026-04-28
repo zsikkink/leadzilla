@@ -9,6 +9,7 @@ const { dbMocks, routeMocks } = vi.hoisted(() => ({
     buildDiscoveryAdminService: vi.fn(),
     PrismaDiscoveryAdminRepository: vi.fn(() => ({})),
     service: {
+      getDiscoveryPhase1IcpLocationSummary: vi.fn(),
       listJobRequests: vi.fn(),
       cancelDiscoveryRun: vi.fn(),
     },
@@ -127,6 +128,112 @@ describe('discovery-admin.routes job requests', () => {
       pageSize: 20,
       total: 1,
     });
+  });
+
+  it('returns an admin-only phase-1 ICP/location summary for the requested run ids', async () => {
+    routeMocks.service.getDiscoveryPhase1IcpLocationSummary.mockResolvedValue({
+      locationBasis: 'ASSIGNED_SEARCH_TASK_LOCATION',
+      cohorts: [
+        {
+          icpProfileId: 'icp_1',
+          countryCode: 'AE',
+          city: 'Dubai',
+          assignmentCount: 5,
+          measuredAssignmentCount: 3,
+          phase1PositiveCount: 2,
+          phase1NegativeCount: 1,
+          holdoutAmbiguousCount: 1,
+          excludeOperationalCount: 1,
+          excludeIncompleteCount: 0,
+          measurementCoverageRate: 0.6,
+          phase1PositiveRateAmongMeasuredAssignments: 2 / 3,
+        },
+      ],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/discovery/runs/phase1-summary',
+      headers: {
+        'x-admin-key': 'admin-key',
+      },
+      payload: {
+        runIds: ['run_1', 'run_2'],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(routeMocks.service.getDiscoveryPhase1IcpLocationSummary).toHaveBeenCalledWith({
+      runIds: ['run_1', 'run_2'],
+    });
+    expect(response.json()).toEqual({
+      locationBasis: 'ASSIGNED_SEARCH_TASK_LOCATION',
+      cohorts: [
+        {
+          icpProfileId: 'icp_1',
+          countryCode: 'AE',
+          city: 'Dubai',
+          assignmentCount: 5,
+          measuredAssignmentCount: 3,
+          phase1PositiveCount: 2,
+          phase1NegativeCount: 1,
+          holdoutAmbiguousCount: 1,
+          excludeOperationalCount: 1,
+          excludeIncompleteCount: 0,
+          measurementCoverageRate: 0.6,
+          phase1PositiveRateAmongMeasuredAssignments: 2 / 3,
+        },
+      ],
+    });
+  });
+
+  it('rejects an invalid phase-1 summary payload', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/discovery/runs/phase1-summary',
+      headers: {
+        'x-admin-key': 'admin-key',
+      },
+      payload: {
+        runIds: [],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: 'Invalid discovery phase-1 summary payload',
+      requestId: expect.any(String),
+    });
+    expect(routeMocks.service.getDiscoveryPhase1IcpLocationSummary).not.toHaveBeenCalled();
+  });
+
+  it('rejects phase-1 summaries for authenticated non-admin users', async () => {
+    currentUserId = '22222222-2222-4222-8222-222222222222';
+    dbMocks.query.mockResolvedValue({
+      rows: [{ isAdmin: false }],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/discovery/runs/phase1-summary',
+      headers: {
+        'x-admin-key': 'admin-key',
+      },
+      payload: {
+        runIds: ['run_1'],
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({
+      error: 'Forbidden',
+      requestId: expect.any(String),
+    });
+    expect(routeMocks.service.getDiscoveryPhase1IcpLocationSummary).not.toHaveBeenCalled();
+    expect(dbMocks.query).toHaveBeenCalledWith(
+      expect.stringContaining('from public.app_admins'),
+      ['22222222-2222-4222-8222-222222222222'],
+    );
   });
 
   it('rejects authenticated non-admin users even when they provide a valid admin key', async () => {

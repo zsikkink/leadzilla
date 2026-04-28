@@ -21,6 +21,38 @@ export const SearchTaskTypeSchema = z.enum(['SERP_GOOGLE', 'SERP_GOOGLE_LOCAL', 
 export const SearchTaskStatusSchema = z.enum(['PENDING', 'RUNNING', 'DONE', 'FAILED', 'SKIPPED']);
 export const JobRunStatusSchema = z.enum(['RUNNING', 'SUCCESS', 'FAILED', 'CANCELED']);
 
+export const AdminDiscoveryPhase1IcpLocationSummaryRequestSchema = z
+  .object({
+    runIds: z.array(z.string().min(1)).min(1).max(100),
+  })
+  .strict();
+
+export const AdminDiscoveryPhase1IcpLocationBasisSchema = z.literal('ASSIGNED_SEARCH_TASK_LOCATION');
+
+export const AdminDiscoveryPhase1IcpLocationSummaryRowSchema = z
+  .object({
+    icpProfileId: z.string().min(1),
+    countryCode: z.string().min(1),
+    city: z.string().nullable(),
+    assignmentCount: z.number().int().min(0),
+    measuredAssignmentCount: z.number().int().min(0),
+    phase1PositiveCount: z.number().int().min(0),
+    phase1NegativeCount: z.number().int().min(0),
+    holdoutAmbiguousCount: z.number().int().min(0),
+    excludeOperationalCount: z.number().int().min(0),
+    excludeIncompleteCount: z.number().int().min(0),
+    measurementCoverageRate: z.number().min(0).max(1),
+    phase1PositiveRateAmongMeasuredAssignments: z.number().min(0).max(1).nullable(),
+  })
+  .strict();
+
+export const AdminDiscoveryPhase1IcpLocationSummaryResponseSchema = z
+  .object({
+    locationBasis: AdminDiscoveryPhase1IcpLocationBasisSchema,
+    cohorts: z.array(AdminDiscoveryPhase1IcpLocationSummaryRowSchema),
+  })
+  .strict();
+
 export const AdminListLeadsQuerySchema = z
   .object({
     page: z.coerce.number().int().min(1).default(1),
@@ -381,6 +413,18 @@ export type SearchTaskSortBy = z.infer<typeof SearchTaskSortBySchema>;
 export type SearchTaskType = z.infer<typeof SearchTaskTypeSchema>;
 export type SearchTaskStatus = z.infer<typeof SearchTaskStatusSchema>;
 export type JobRunStatus = z.infer<typeof JobRunStatusSchema>;
+export type AdminDiscoveryPhase1IcpLocationSummaryRequest = z.infer<
+  typeof AdminDiscoveryPhase1IcpLocationSummaryRequestSchema
+>;
+export type AdminDiscoveryPhase1IcpLocationBasis = z.infer<
+  typeof AdminDiscoveryPhase1IcpLocationBasisSchema
+>;
+export type AdminDiscoveryPhase1IcpLocationSummaryRow = z.infer<
+  typeof AdminDiscoveryPhase1IcpLocationSummaryRowSchema
+>;
+export type AdminDiscoveryPhase1IcpLocationSummaryResponse = z.infer<
+  typeof AdminDiscoveryPhase1IcpLocationSummaryResponseSchema
+>;
 export type AdminListLeadsQuery = z.infer<typeof AdminListLeadsQuerySchema>;
 export type AdminLeadRow = z.infer<typeof AdminLeadRowSchema>;
 export type AdminListLeadsResponse = z.infer<typeof AdminListLeadsResponseSchema>;

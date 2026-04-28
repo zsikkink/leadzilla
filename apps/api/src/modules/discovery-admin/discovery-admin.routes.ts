@@ -2,6 +2,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   AdminBusinessDetailResponseSchema,
   AdminBusinessIdParamsSchema,
+  AdminDiscoveryPhase1IcpLocationSummaryRequestSchema,
+  AdminDiscoveryPhase1IcpLocationSummaryResponseSchema,
   AdminListBusinessesQuerySchema,
   AdminListBusinessesResponseSchema,
   AdminLeadDetailResponseSchema,
@@ -369,6 +371,27 @@ export function registerDiscoveryAdminRoutes(
     try {
       const result = await service.getSearchTaskById(parsedParams.data.id);
       return AdminSearchTaskDetailResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.post('/v1/admin/discovery/runs/phase1-summary', async (request, reply) => {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
+      return;
+    }
+
+    const parsedBody = AdminDiscoveryPhase1IcpLocationSummaryRequestSchema.safeParse(request.body);
+    if (!parsedBody.success) {
+      return sendValidationError(reply, request.id, 'Invalid discovery phase-1 summary payload');
+    }
+
+    try {
+      const result = await service.getDiscoveryPhase1IcpLocationSummary(parsedBody.data);
+      return AdminDiscoveryPhase1IcpLocationSummaryResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;

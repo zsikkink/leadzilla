@@ -1,5 +1,8 @@
+import { listDiscoveryPhase1AssignmentLocationSummaries } from '@lead-flood/db';
 import type {
   AdminBusinessDetailResponse,
+  AdminDiscoveryPhase1IcpLocationSummaryRequest,
+  AdminDiscoveryPhase1IcpLocationSummaryResponse,
   AdminListBusinessesQuery,
   AdminListBusinessesResponse,
   AdminLeadDetailResponse,
@@ -36,6 +39,9 @@ export interface DiscoveryAdminServiceDependencies {
 }
 
 export interface DiscoveryAdminService {
+  getDiscoveryPhase1IcpLocationSummary(
+    input: AdminDiscoveryPhase1IcpLocationSummaryRequest,
+  ): Promise<AdminDiscoveryPhase1IcpLocationSummaryResponse>;
   listBusinesses(query: AdminListBusinessesQuery): Promise<AdminListBusinessesResponse>;
   getBusinessById(id: string): Promise<AdminBusinessDetailResponse>;
   listLeads(query: AdminListLeadsQuery): Promise<AdminListLeadsResponse>;
@@ -74,6 +80,35 @@ export function buildDiscoveryAdminService(
   dependencies: DiscoveryAdminServiceDependencies,
 ): DiscoveryAdminService {
   return {
+    async getDiscoveryPhase1IcpLocationSummary(input) {
+      const rows = await listDiscoveryPhase1AssignmentLocationSummaries(input.runIds);
+
+      return {
+        locationBasis: 'ASSIGNED_SEARCH_TASK_LOCATION',
+        cohorts: rows.map((row) => {
+          const measuredAssignmentCount =
+            row.phase1_positive_count + row.phase1_negative_count;
+
+          return {
+            icpProfileId: row.icp_profile_id,
+            countryCode: row.country_code,
+            city: row.city,
+            assignmentCount: row.assignment_count,
+            measuredAssignmentCount,
+            phase1PositiveCount: row.phase1_positive_count,
+            phase1NegativeCount: row.phase1_negative_count,
+            holdoutAmbiguousCount: row.holdout_ambiguous_count,
+            excludeOperationalCount: row.exclude_operational_count,
+            excludeIncompleteCount: row.exclude_incomplete_count,
+            measurementCoverageRate: measuredAssignmentCount / row.assignment_count,
+            phase1PositiveRateAmongMeasuredAssignments:
+              measuredAssignmentCount > 0
+                ? row.phase1_positive_count / measuredAssignmentCount
+                : null,
+          };
+        }),
+      };
+    },
     async listBusinesses(query) {
       return repository.listBusinesses(query);
     },
