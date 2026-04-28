@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import type { Browser, BrowserType } from 'playwright-core';
+import type { Browser, BrowserContext, BrowserType } from 'playwright-core';
 
 // ── Config ─────────────────────────────────────────────────────────────────
 
@@ -200,6 +200,66 @@ const ABOUT_TEAM_PAGE_PATHS = ['/about', '/about-us', '/team', '/our-team', '/le
 
 type SocialPlatform = SocialLink['platform'];
 
+const INSTAGRAM_HOSTNAMES = new Set([
+  'instagram.com',
+  'www.instagram.com',
+  'instagr.am',
+  'www.instagr.am',
+  'm.instagram.com',
+]);
+
+const INSTAGRAM_RESERVED_PATH_SEGMENTS = new Set([
+  'accounts',
+  'about',
+  'api',
+  'challenge',
+  'developer',
+  'directory',
+  'email_signup',
+  'explore',
+  'login',
+  'oauth',
+  'p',
+  'press',
+  'reel',
+  'reels',
+  'stories',
+  'tv',
+]);
+
+function extractInstagramHandleFromUrl(url: string): string | null {
+  const trimmed = url.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  const urlLike = trimmed.startsWith('//') ? `https:${trimmed}` : trimmed;
+  try {
+    const parsed = new URL(urlLike);
+    if (!INSTAGRAM_HOSTNAMES.has(parsed.hostname.toLowerCase())) {
+      return null;
+    }
+
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    if (segments.length !== 1) {
+      return null;
+    }
+
+    const candidate = decodeURIComponent(segments[0] ?? '').replace(/^@/, '').trim();
+    if (candidate.length === 0) {
+      return null;
+    }
+
+    if (INSTAGRAM_RESERVED_PATH_SEGMENTS.has(candidate.toLowerCase())) {
+      return null;
+    }
+
+    return /^[a-zA-Z0-9._]{1,30}$/.test(candidate) ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
 const SOCIAL_PATTERNS: ReadonlyArray<{
   platform: SocialPlatform;
   patterns: string[];
@@ -208,12 +268,7 @@ const SOCIAL_PATTERNS: ReadonlyArray<{
   {
     platform: 'instagram',
     patterns: ['instagram.com/', 'instagr.am/'],
-    handleExtractor: (url) => {
-      const match = url.match(/(?:instagram\.com|instagr\.am)\/([a-zA-Z0-9_.]+)/);
-      return match?.[1] && !['p', 'explore', 'reel', 'stories', 'accounts'].includes(match[1])
-        ? match[1]
-        : null;
-    },
+    handleExtractor: (url) => extractInstagramHandleFromUrl(url),
   },
   {
     platform: 'linkedin',
@@ -291,49 +346,6 @@ const CERTIFICATION_PATTERNS = [
   'PCI-DSS',
   'HIPAA',
 ] as const;
-
-// ── Generic email prefixes to filter ───────────────────────────────────────
-
-const GENERIC_EMAIL_PREFIXES = new Set([
-  'noreply',
-  'no-reply',
-  'info',
-  'hello',
-  'support',
-  'admin',
-  'contact',
-  'sales',
-  'help',
-  'enquiries',
-  'enquiry',
-  'inquiry',
-  'general',
-  'team',
-  'mail',
-  'office',
-  'service',
-  'webmaster',
-  'postmaster',
-  'marketing',
-  'hr',
-  'finance',
-  'billing',
-  'accounts',
-  'reception',
-  'feedback',
-  'appointments',
-  'events',
-  'press',
-  'media',
-  'partnerships',
-  'careers',
-  'jobs',
-  'recruitment',
-  'booking',
-  'bookings',
-  'inquiries',
-  'reservations',
-]);
 
 const PLATFORM_EMAIL_DOMAINS = new Set([
   'wix.com',
@@ -430,20 +442,24 @@ function detectCountryFromPage($: cheerio.CheerioAPI): string | null {
 const DEFAULT_PER_PAGE_TIMEOUT_MS = 8_000;
 const DEFAULT_TOTAL_TIMEOUT_MS = 25_000;
 const DEFAULT_MAX_PAGES = 10;
-const DEFAULT_USER_AGENT = 'Mozilla/5.0 (compatible; LeadFlood/1.0)';
+const DEFAULT_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 function classifyStatus(statusCode: number): 'retryable' | 'terminal' {
-  if (statusCode === 429 || statusCode >= 500) {
+  // Treat upstream/site 5xx responses as terminal for this scrape attempt so
+  // downstream lead conversion can continue without stalling on repeated
+  // website retries. Transport failures still surface as retryable.
+  if (statusCode === 429) {
     return 'retryable';
   }
   return 'terminal';
 }
 
-function normaliseUrl(input: string): string {
+function normaliseUrlCandidates(input: string): string[] {
   if (input.startsWith('http://') || input.startsWith('https://')) {
-    return input;
+    return [input];
   }
-  return `https://${input}`;
+  return [`https://${input}`, `http://${input}`];
 }
 
 function matchesAny(text: string, keywords: readonly string[]): boolean {
@@ -495,12 +511,6 @@ function classifySeniority(title: string): DecisionMaker['seniority'] {
     return 'manager';
   }
   return 'other';
-}
-
-/** Check if an email prefix is generic. */
-function isGenericEmail(email: string): boolean {
-  const prefix = email.split('@')[0]?.toLowerCase() ?? '';
-  return GENERIC_EMAIL_PREFIXES.has(prefix);
 }
 
 /** Check if an email domain is a platform domain. */
@@ -561,9 +571,9 @@ function isValidDecisionMakerName(name: string, businessName?: string | undefine
 
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
-// ── Phone regex (international: +971, +966, +962, +20, and general E.164) ─
+// ── Phone regexes ──────────────────────────────────────────────────────────
 
-const PHONE_REGEX = /(?:\+|00)[1-9]\d{6,14}/g;
+const PHONE_REGEX = /(?:\+|00)?\d(?:[\s().-]*\d){7,14}/g;
 
 // ── Employee count regex ───────────────────────────────────────────────────
 
@@ -940,6 +950,31 @@ function classifyPhoneType(number: string): 'mobile' | 'landline' | 'unknown' {
   return 'unknown';
 }
 
+function normalizeExtractedPhone(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const hasSeparator = /[\s().-]/.test(trimmed);
+  if (!trimmed.startsWith('+') && !trimmed.startsWith('00') && !hasSeparator) {
+    return null;
+  }
+
+  if (trimmed.startsWith('+')) {
+    const digits = trimmed.slice(1).replace(/\D/g, '');
+    if (digits.length < 8 || digits.length > 15) return null;
+    return `+${digits}`;
+  }
+
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits.length < 8 || digits.length > 15) return null;
+
+  if (digits.startsWith('00')) {
+    return `+${digits.slice(2)}`;
+  }
+
+  return digits;
+}
+
 /** Extract phone numbers from a page. */
 function extractPhones($: cheerio.CheerioAPI, pageUrl: string): Array<{ number: string; type: 'whatsapp' | 'mobile' | 'landline' | 'unknown'; pageUrl: string }> {
   const results: Array<{ number: string; type: 'whatsapp' | 'mobile' | 'landline' | 'unknown'; pageUrl: string }> = [];
@@ -972,10 +1007,11 @@ function extractPhones($: cheerio.CheerioAPI, pageUrl: string): Array<{ number: 
   });
 
   // Regex across text
-  const text = $.text().replace(/[\s()-]/g, ' ');
+  const text = $.text();
   const phoneMatches = text.match(PHONE_REGEX) ?? [];
   for (const raw of phoneMatches) {
-    const num = raw.replace(/[\s()-]/g, '');
+    const num = normalizeExtractedPhone(raw);
+    if (!num) continue;
     if (!seen.has(num)) {
       seen.add(num);
       const type = whatsappNumbers.has(num) ? 'whatsapp' as const : classifyPhoneType(num);
@@ -1267,6 +1303,25 @@ const CLOUDFLARE_CHALLENGE_PATTERNS = [
   '_cf_chl_tk',
 ] as const;
 
+const RETRYABLE_INTERSTITIAL_PATTERNS = [
+  'just a moment',
+  'enable javascript and cookies to continue',
+  'checking if the site connection is secure',
+  'verify you are human',
+  'attention required',
+  'please stand by while we are checking your browser',
+] as const;
+
+const TERMINAL_INTERSTITIAL_PATTERNS = [
+  'potential threat detected',
+  'this site could be risky',
+  'advanced security blocked access',
+  'access denied',
+  'sorry, you have been blocked',
+  'your request has been blocked',
+  'unusual traffic from your network',
+] as const;
+
 const DEFAULT_PLAYWRIGHT_TIMEOUT_MS = 15_000;
 
 const COOKIE_CONSENT_SELECTORS = [
@@ -1318,18 +1373,64 @@ export function needsPlaywrightFallback(
   return false;
 }
 
+function interstitialFailureStatus(
+  failure: WebsiteScraperFailure,
+): 'retryable_error' | 'terminal_error' {
+  return failure.classification === 'retryable' ? 'retryable_error' : 'terminal_error';
+}
+
+function detectInterstitialFailure(
+  data: WebsiteScraperData,
+  rawHtmlSamples: string[] = [],
+): WebsiteScraperFailure | null {
+  const combined = [data.pageTitle, data.metaDescription, data.aboutPageText, ...rawHtmlSamples]
+    .filter((value): value is string => Boolean(value))
+    .join(' ')
+    .toLowerCase();
+
+  if (!combined) {
+    return null;
+  }
+
+  if (TERMINAL_INTERSTITIAL_PATTERNS.some((pattern) => combined.includes(pattern))) {
+    return {
+      classification: 'terminal',
+      statusCode: null,
+      message: 'Website scrape resolved to a browser/security interstitial instead of the business site',
+      raw: {
+        pageTitle: data.pageTitle,
+        metaDescription: data.metaDescription,
+      },
+    };
+  }
+
+  if (RETRYABLE_INTERSTITIAL_PATTERNS.some((pattern) => combined.includes(pattern))) {
+    return {
+      classification: 'terminal',
+      statusCode: null,
+      message: 'Website scrape resolved to an anti-bot or JavaScript interstitial instead of the business site',
+      raw: {
+        pageTitle: data.pageTitle,
+        metaDescription: data.metaDescription,
+      },
+    };
+  }
+
+  return null;
+}
+
 /**
  * Fetch a single page using Playwright headless Chromium.
- * Waits for networkidle + auto-accepts cookie consent dialogs.
+ * Waits for domcontentloaded + auto-accepts cookie consent dialogs.
  */
 async function fetchPageWithPlaywright(
   url: string,
-  browser: Browser,
+  context: BrowserContext,
   timeoutMs: number,
 ): Promise<string> {
-  const page = await browser.newPage();
+  const page = await context.newPage();
   try {
-    await page.goto(url, { waitUntil: 'networkidle', timeout: timeoutMs });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
 
     // Try to accept cookie consent if present
     for (const sel of COOKIE_CONSENT_SELECTORS) {
@@ -1396,88 +1497,135 @@ export class WebsiteScraperAdapter {
 
   async scrapeWebsite(domain: string, businessName?: string | undefined): Promise<WebsiteScraperResult> {
     const crawlStart = Date.now();
-    const baseUrl = normaliseUrl(domain);
+    const baseUrlCandidates = normaliseUrlCandidates(domain);
+    let lastFailure:
+      | { status: 'retryable_error'; failure: WebsiteScraperFailure }
+      | { status: 'terminal_error'; failure: WebsiteScraperFailure }
+      | null = null;
 
-    let baseOrigin: string;
-    try {
-      baseOrigin = new URL(baseUrl).origin;
-    } catch {
-      return {
-        status: 'terminal_error',
-        failure: {
-          classification: 'terminal',
-          statusCode: null,
-          message: `Invalid domain: ${domain}`,
-          raw: null,
-        },
-      };
+    for (const baseUrl of baseUrlCandidates) {
+      let baseOrigin: string;
+      try {
+        baseOrigin = new URL(baseUrl).origin;
+      } catch {
+        continue;
+      }
+
+      // Total timeout controller for the entire crawl
+      const totalController = new AbortController();
+      const totalTimeout = setTimeout(() => totalController.abort(), this.totalTimeoutMs);
+
+      try {
+        // Phase 1: Fetch homepage
+        const homepageResult = await this.fetchPage(baseUrl, totalController.signal);
+
+        if (homepageResult.status !== 'success') {
+          if (this.enablePlaywright) {
+            const playwrightData = await this.recrawlWithPlaywright(
+              baseUrl,
+              baseOrigin,
+              new Set<string>(),
+              crawlStart,
+              businessName,
+            );
+            if (playwrightData) {
+              playwrightData.socialLinks = await this.validateSocialLinks(playwrightData.socialLinks);
+              const interstitialFailure = detectInterstitialFailure(playwrightData);
+              if (interstitialFailure) {
+                return {
+                  status: interstitialFailureStatus(interstitialFailure),
+                  failure: interstitialFailure,
+                };
+              }
+              return { status: 'success', data: playwrightData };
+            }
+          }
+          lastFailure = homepageResult;
+          continue;
+        }
+
+        const pages: PageResult[] = [{ url: baseUrl, $: homepageResult.$ }];
+        const crawledUrls = new Set<string>([normalizeForDedup(baseUrl)]);
+
+        // Capture raw homepage HTML for Playwright quality check
+        const rawHomepageHtml = homepageResult.$.html();
+
+        // Phase 2: Discover URLs from homepage links + try priority paths
+        const candidateUrls = this.discoverUrls(homepageResult.$, baseOrigin, crawledUrls);
+
+        // Phase 3: Crawl additional pages up to maxPages
+        for (const candidateUrl of candidateUrls) {
+          if (pages.length >= this.maxPages) break;
+          if (totalController.signal.aborted) break;
+
+          const normalized = normalizeForDedup(candidateUrl);
+          if (crawledUrls.has(normalized)) continue;
+          crawledUrls.add(normalized);
+
+          const pageResult = await this.fetchPage(candidateUrl, totalController.signal);
+          if (pageResult.status === 'success') {
+            pages.push({ url: candidateUrl, $: pageResult.$ });
+          }
+        }
+
+        // Phase 4: Aggregate results from all pages
+        const fetchData = this.aggregateResults(pages, crawlStart, businessName);
+
+        // Phase 5: Playwright fallback (if enabled and quality check fails)
+        if (this.enablePlaywright && needsPlaywrightFallback(fetchData, rawHomepageHtml)) {
+          const playwrightData = await this.recrawlWithPlaywright(
+            baseUrl,
+            baseOrigin,
+            crawledUrls,
+            crawlStart,
+            businessName,
+          );
+          if (playwrightData) {
+            // C8: Validate social links
+            playwrightData.socialLinks = await this.validateSocialLinks(playwrightData.socialLinks);
+            const interstitialFailure = detectInterstitialFailure(playwrightData);
+            if (interstitialFailure) {
+              return {
+                status: interstitialFailureStatus(interstitialFailure),
+                failure: interstitialFailure,
+              };
+            }
+            return { status: 'success', data: playwrightData };
+          }
+        }
+
+        // C8: Validate social links
+        fetchData.socialLinks = await this.validateSocialLinks(fetchData.socialLinks);
+        const interstitialFailure = detectInterstitialFailure(fetchData, [rawHomepageHtml]);
+        if (interstitialFailure) {
+          return {
+            status: interstitialFailureStatus(interstitialFailure),
+            failure: interstitialFailure,
+          };
+        }
+
+        return {
+          status: 'success',
+          data: fetchData,
+        };
+      } finally {
+        clearTimeout(totalTimeout);
+      }
     }
 
-    // Total timeout controller for the entire crawl
-    const totalController = new AbortController();
-    const totalTimeout = setTimeout(() => totalController.abort(), this.totalTimeoutMs);
-
-    try {
-      // Phase 1: Fetch homepage
-      const homepageResult = await this.fetchPage(baseUrl, totalController.signal);
-
-      if (homepageResult.status !== 'success') {
-        return homepageResult;
-      }
-
-      const pages: PageResult[] = [{ url: baseUrl, $: homepageResult.$ }];
-      const crawledUrls = new Set<string>([normalizeForDedup(baseUrl)]);
-
-      // Capture raw homepage HTML for Playwright quality check
-      const rawHomepageHtml = homepageResult.$.html();
-
-      // Phase 2: Discover URLs from homepage links + try priority paths
-      const candidateUrls = this.discoverUrls(homepageResult.$, baseOrigin, crawledUrls);
-
-      // Phase 3: Crawl additional pages up to maxPages
-      for (const candidateUrl of candidateUrls) {
-        if (pages.length >= this.maxPages) break;
-        if (totalController.signal.aborted) break;
-
-        const normalized = normalizeForDedup(candidateUrl);
-        if (crawledUrls.has(normalized)) continue;
-        crawledUrls.add(normalized);
-
-        const pageResult = await this.fetchPage(candidateUrl, totalController.signal);
-        if (pageResult.status === 'success') {
-          pages.push({ url: candidateUrl, $: pageResult.$ });
-        }
-      }
-
-      // Phase 4: Aggregate results from all pages
-      const fetchData = this.aggregateResults(pages, crawlStart, businessName);
-
-      // Phase 5: Playwright fallback (if enabled and quality check fails)
-      if (this.enablePlaywright && needsPlaywrightFallback(fetchData, rawHomepageHtml)) {
-        const playwrightData = await this.recrawlWithPlaywright(
-          baseUrl,
-          baseOrigin,
-          crawledUrls,
-          crawlStart,
-          businessName,
-        );
-        if (playwrightData) {
-          // C8: Validate social links
-          playwrightData.socialLinks = await this.validateSocialLinks(playwrightData.socialLinks);
-          return { status: 'success', data: playwrightData };
-        }
-      }
-
-      // C8: Validate social links
-      fetchData.socialLinks = await this.validateSocialLinks(fetchData.socialLinks);
-
-      return {
-        status: 'success',
-        data: fetchData,
-      };
-    } finally {
-      clearTimeout(totalTimeout);
+    if (lastFailure) {
+      return lastFailure;
     }
+
+    return {
+      status: 'terminal_error',
+      failure: {
+        classification: 'terminal',
+        statusCode: null,
+        message: `Invalid domain: ${domain}`,
+        raw: null,
+      },
+    };
   }
 
   /**
@@ -1501,10 +1649,15 @@ export class WebsiteScraperAdapter {
     }
 
     let browser: Browser | null = null;
+    let context: BrowserContext | null = null;
     try {
       browser = await chromium.launch({
         headless: true,
         ...(this.chromiumPath ? { executablePath: this.chromiumPath } : {}),
+      });
+      context = await browser.newContext({
+        ignoreHTTPSErrors: true,
+        userAgent: this.userAgent,
       });
 
       const pages: PageResult[] = [];
@@ -1525,7 +1678,7 @@ export class WebsiteScraperAdapter {
 
           const html = await fetchPageWithPlaywright(
             url,
-            browser,
+            context,
             this.playwrightTimeoutMs,
           );
           pages.push({ url, $: cheerio.load(html) });
@@ -1541,6 +1694,9 @@ export class WebsiteScraperAdapter {
       // Browser launch failure — skip fallback
       return null;
     } finally {
+      if (context) {
+        await context.close().catch(() => {});
+      }
       if (browser) {
         await browser.close().catch(() => {});
       }
@@ -1970,10 +2126,9 @@ export class WebsiteScraperAdapter {
       hosting: [...techSets.hosting],
     };
 
-    // Filter emails: remove generic prefixes and platform domains
-    const filteredEmails = allEmails.filter(
-      (e) => !isGenericEmail(e.email) && !isPlatformEmail(e.email),
-    );
+    // Keep generic business inboxes; business.convert decides whether they are
+    // usable primary contacts or fallback company emails.
+    const filteredEmails = allEmails.filter((e) => !isPlatformEmail(e.email));
 
     return {
       // Existing signals
