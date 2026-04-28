@@ -15,8 +15,14 @@ export {
 export type { PipelineSettingRecord } from './pipeline-settings.js';
 export { getPipelineStatsSnapshot } from './pipeline-stats.js';
 export type { PipelineStatsSnapshot } from './pipeline-stats.js';
-export { listDiscoveryPhase1AssignmentLabels } from './discovery-phase1-assignment-labels-query.js';
-export type { DiscoveryPhase1AssignmentLabelRow } from './discovery-phase1-assignment-labels-query.js';
+export {
+  listDiscoveryPhase1AssignmentLabels,
+  listDiscoveryPhase1AssignmentLocationSummaries,
+} from './discovery-phase1-assignment-labels-query.js';
+export type {
+  DiscoveryPhase1AssignmentLabelRow,
+  DiscoveryPhase1AssignmentLocationSummaryRow,
+} from './discovery-phase1-assignment-labels-query.js';
 export {
   listDiscoveryPhase1AssignmentSearchInputs,
 } from './discovery-phase1-assignment-search-inputs-query.js';
