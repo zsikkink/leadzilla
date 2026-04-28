@@ -7,8 +7,13 @@ const { dbMocks, routeMocks } = vi.hoisted(() => ({
   },
   routeMocks: {
     buildDiscoveryAdminService: vi.fn(),
+    buildDiscoveryService: vi.fn(() => ({
+      createDiscoveryRun: vi.fn(),
+    })),
     PrismaDiscoveryAdminRepository: vi.fn(() => ({})),
+    PrismaDiscoveryRepository: vi.fn(() => ({})),
     service: {
+      createBulkDiscoveryRuns: vi.fn(),
       getDiscoveryPhase1IcpLocationSummary: vi.fn(),
       getDiscoveryPhase1HistoricalSearchInputCohortAssignments: vi.fn(),
       getDiscoveryPhase1HistoricalSearchInputCohortSummaries: vi.fn(),
@@ -28,6 +33,14 @@ vi.mock('./discovery-admin.service.js', () => ({
 
 vi.mock('./discovery-admin.repository.js', () => ({
   PrismaDiscoveryAdminRepository: routeMocks.PrismaDiscoveryAdminRepository,
+}));
+
+vi.mock('../discovery/discovery.service.js', () => ({
+  buildDiscoveryService: routeMocks.buildDiscoveryService,
+}));
+
+vi.mock('../discovery/discovery.repository.js', () => ({
+  PrismaDiscoveryRepository: routeMocks.PrismaDiscoveryRepository,
 }));
 
 import { registerDiscoveryAdminRoutes } from './discovery-admin.routes.js';
@@ -130,6 +143,182 @@ describe('discovery-admin.routes job requests', () => {
       pageSize: 20,
       total: 1,
     });
+  });
+
+  it('creates bulk scoped discovery runs through the admin route with per-item results', async () => {
+    routeMocks.service.createBulkDiscoveryRuns.mockResolvedValue({
+      results: [
+        {
+          index: 0,
+          success: true,
+          runId: 'run_1',
+          status: 'QUEUED',
+        },
+        {
+          index: 1,
+          success: false,
+          error: 'Either icpProfileIds or icpProfileId is required',
+        },
+      ],
+      createdCount: 1,
+      failedCount: 1,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/discovery/runs/bulk',
+      headers: {
+        'x-admin-key': 'admin-key',
+      },
+      payload: {
+        items: [
+          {
+            icpProfileId: 'icp_1',
+            countries: ['AE'],
+            cities: ['Dubai'],
+            includeWebsiteAnalysis: true,
+            includeSocialMediaAnalysis: true,
+            limit: 10,
+          },
+          {
+            countries: ['DE'],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(routeMocks.PrismaDiscoveryRepository).toHaveBeenCalledTimes(1);
+    expect(routeMocks.buildDiscoveryService).toHaveBeenCalledWith(
+      {},
+      {
+        enqueueDiscoveryRun: expect.any(Function),
+      },
+    );
+    expect(routeMocks.buildDiscoveryAdminService).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        createDiscoveryRun: expect.any(Function),
+      }),
+    );
+    expect(routeMocks.service.createBulkDiscoveryRuns).toHaveBeenCalledWith(
+      {
+        items: [
+          {
+            icpProfileId: 'icp_1',
+            countries: ['AE'],
+            cities: ['Dubai'],
+            includeWebsiteAnalysis: true,
+            includeSocialMediaAnalysis: true,
+            limit: 10,
+          },
+          {
+            countries: ['DE'],
+          },
+        ],
+      },
+      '11111111-1111-4111-8111-111111111111',
+    );
+    expect(response.json()).toEqual({
+      results: [
+        {
+          index: 0,
+          success: true,
+          runId: 'run_1',
+          status: 'QUEUED',
+        },
+        {
+          index: 1,
+          success: false,
+          error: 'Either icpProfileIds or icpProfileId is required',
+        },
+      ],
+      createdCount: 1,
+      failedCount: 1,
+    });
+  });
+
+  it('rejects invalid bulk discovery run payloads', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/discovery/runs/bulk',
+      headers: {
+        'x-admin-key': 'admin-key',
+      },
+      payload: {
+        items: [],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: 'Invalid bulk discovery run payload',
+      requestId: expect.any(String),
+    });
+    expect(routeMocks.service.createBulkDiscoveryRuns).not.toHaveBeenCalled();
+  });
+
+  it('rejects bulk discovery runs for authenticated non-admin users', async () => {
+    currentUserId = '22222222-2222-4222-8222-222222222222';
+    dbMocks.query.mockResolvedValue({
+      rows: [{ isAdmin: false }],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/discovery/runs/bulk',
+      headers: {
+        'x-admin-key': 'admin-key',
+      },
+      payload: {
+        items: [
+          {
+            icpProfileId: 'icp_1',
+            countries: ['AE'],
+            cities: ['Dubai'],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({
+      error: 'Forbidden',
+      requestId: expect.any(String),
+    });
+    expect(routeMocks.service.createBulkDiscoveryRuns).not.toHaveBeenCalled();
+    expect(dbMocks.query).toHaveBeenCalledWith(
+      expect.stringContaining('from public.app_admins'),
+      ['22222222-2222-4222-8222-222222222222'],
+    );
+  });
+
+  it('requires an authenticated user id for bulk discovery runs', async () => {
+    currentUserId = '';
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/discovery/runs/bulk',
+      headers: {
+        'x-admin-key': 'admin-key',
+      },
+      payload: {
+        items: [
+          {
+            icpProfileId: 'icp_1',
+            countries: ['AE'],
+            cities: ['Dubai'],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({
+      error: 'Authentication required',
+      requestId: expect.any(String),
+    });
+    expect(routeMocks.service.createBulkDiscoveryRuns).not.toHaveBeenCalled();
   });
 
   it('returns an admin-only phase-1 ICP/location summary for the requested run ids', async () => {

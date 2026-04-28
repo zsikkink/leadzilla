@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { DiscoveryPipelineRunStatusSchema } from './discovery.contract.js';
+
 const CsvStringListSchema = z.preprocess((value) => {
   if (typeof value === 'string') {
     return value
@@ -20,6 +22,38 @@ export const SearchTaskSortBySchema = z.enum(['updated_desc', 'run_after_asc', '
 export const SearchTaskTypeSchema = z.enum(['SERP_GOOGLE', 'SERP_GOOGLE_LOCAL', 'SERP_MAPS_LOCAL']);
 export const SearchTaskStatusSchema = z.enum(['PENDING', 'RUNNING', 'DONE', 'FAILED', 'SKIPPED']);
 export const JobRunStatusSchema = z.enum(['RUNNING', 'SUCCESS', 'FAILED', 'CANCELED']);
+
+export const AdminBulkCreateDiscoveryRunsRequestSchema = z
+  .object({
+    items: z.array(z.unknown()).min(1),
+  })
+  .strict();
+
+export const AdminBulkCreateDiscoveryRunsResultSchema = z.discriminatedUnion('success', [
+  z
+    .object({
+      index: z.number().int().min(0),
+      success: z.literal(true),
+      runId: z.string().min(1),
+      status: DiscoveryPipelineRunStatusSchema,
+    })
+    .strict(),
+  z
+    .object({
+      index: z.number().int().min(0),
+      success: z.literal(false),
+      error: z.string().min(1),
+    })
+    .strict(),
+]);
+
+export const AdminBulkCreateDiscoveryRunsResponseSchema = z
+  .object({
+    results: z.array(AdminBulkCreateDiscoveryRunsResultSchema),
+    createdCount: z.number().int().min(0),
+    failedCount: z.number().int().min(0),
+  })
+  .strict();
 
 export const AdminDiscoveryPhase1IcpLocationSummaryRequestSchema = z
   .object({
@@ -512,6 +546,9 @@ export type SearchTaskSortBy = z.infer<typeof SearchTaskSortBySchema>;
 export type SearchTaskType = z.infer<typeof SearchTaskTypeSchema>;
 export type SearchTaskStatus = z.infer<typeof SearchTaskStatusSchema>;
 export type JobRunStatus = z.infer<typeof JobRunStatusSchema>;
+export type AdminBulkCreateDiscoveryRunsRequest = z.infer<typeof AdminBulkCreateDiscoveryRunsRequestSchema>;
+export type AdminBulkCreateDiscoveryRunsResult = z.infer<typeof AdminBulkCreateDiscoveryRunsResultSchema>;
+export type AdminBulkCreateDiscoveryRunsResponse = z.infer<typeof AdminBulkCreateDiscoveryRunsResponseSchema>;
 export type AdminDiscoveryPhase1IcpLocationSummaryRequest = z.infer<
   typeof AdminDiscoveryPhase1IcpLocationSummaryRequestSchema
 >;

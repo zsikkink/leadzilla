@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
+  AdminBulkCreateDiscoveryRunsRequestSchema,
+  AdminBulkCreateDiscoveryRunsResponseSchema,
   AdminBusinessDetailResponseSchema,
   AdminBusinessIdParamsSchema,
   AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsRequestSchema,
@@ -41,6 +43,8 @@ import {
 import { requireDiscoveryAdminAccess } from './discovery-admin.auth.js';
 import { PrismaDiscoveryAdminRepository } from './discovery-admin.repository.js';
 import { buildDiscoveryAdminService } from './discovery-admin.service.js';
+import { PrismaDiscoveryRepository } from '../discovery/discovery.repository.js';
+import { buildDiscoveryService } from '../discovery/discovery.service.js';
 
 export interface DiscoveryAdminRouteDependencies {
   adminApiKey?: string;
@@ -248,7 +252,11 @@ export function registerDiscoveryAdminRoutes(
   dependencies: DiscoveryAdminRouteDependencies = {},
 ): void {
   const repository = new PrismaDiscoveryAdminRepository();
+  const discoveryService = buildDiscoveryService(new PrismaDiscoveryRepository(), {
+    enqueueDiscoveryRun: async () => undefined,
+  });
   const service = buildDiscoveryAdminService(repository, {
+    createDiscoveryRun: discoveryService.createDiscoveryRun,
     ...(dependencies.triggerDiscoverySeedJob
       ? { triggerDiscoverySeedJob: dependencies.triggerDiscoverySeedJob }
       : {}),
@@ -375,6 +383,32 @@ export function registerDiscoveryAdminRoutes(
     try {
       const result = await service.getSearchTaskById(parsedParams.data.id);
       return AdminSearchTaskDetailResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.post('/v1/admin/discovery/runs/bulk', async (request, reply) => {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
+      return;
+    }
+
+    const userId = requireAuthenticatedUserId(request, reply);
+    if (!userId) {
+      return;
+    }
+
+    const parsedBody = AdminBulkCreateDiscoveryRunsRequestSchema.safeParse(request.body);
+    if (!parsedBody.success) {
+      return sendValidationError(reply, request.id, 'Invalid bulk discovery run payload');
+    }
+
+    try {
+      const result = await service.createBulkDiscoveryRuns(parsedBody.data, userId);
+      return AdminBulkCreateDiscoveryRunsResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;

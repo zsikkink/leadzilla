@@ -3,7 +3,10 @@ import {
   listDiscoveryPhase1HistoricalSearchInputCohortAssignments,
   listDiscoveryPhase1HistoricalSearchInputCohortSummaries,
 } from '@lead-flood/db';
+import { CreateDiscoveryRunRequestSchema } from '@lead-flood/contracts';
 import type {
+  AdminBulkCreateDiscoveryRunsRequest,
+  AdminBulkCreateDiscoveryRunsResponse,
   AdminBusinessDetailResponse,
   AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsRequest,
   AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsResponse,
@@ -19,6 +22,8 @@ import type {
   AdminListSearchTasksQuery,
   AdminListSearchTasksResponse,
   AdminSearchTaskDetailResponse,
+  CreateDiscoveryRunRequest,
+  CreateDiscoveryRunResponse,
   JobRunDetailResponse,
   JobRunListQuery,
   ListJobRunsResponse,
@@ -43,11 +48,16 @@ import type {
 } from './discovery-admin.repository.js';
 
 export interface DiscoveryAdminServiceDependencies {
+  createDiscoveryRun?: (input: CreateDiscoveryRunRequest) => Promise<CreateDiscoveryRunResponse>;
   triggerDiscoverySeedJob?: (input: RunDiscoverySeedRequest) => Promise<TriggerJobRunResponse>;
   triggerDiscoveryTaskRun?: (input: RunDiscoveryTasksRequest) => Promise<TriggerJobRunResponse>;
 }
 
 export interface DiscoveryAdminService {
+  createBulkDiscoveryRuns(
+    input: AdminBulkCreateDiscoveryRunsRequest,
+    requestedByUserId: string,
+  ): Promise<AdminBulkCreateDiscoveryRunsResponse>;
   getDiscoveryPhase1IcpLocationSummary(
     input: AdminDiscoveryPhase1IcpLocationSummaryRequest,
   ): Promise<AdminDiscoveryPhase1IcpLocationSummaryResponse>;
@@ -90,11 +100,74 @@ export interface DiscoveryAdminService {
   getDiscoveryRunDetail(id: string): Promise<Awaited<ReturnType<DiscoveryAdminRepository['getDiscoveryRunDetail']>>>;
 }
 
+function formatValidationIssues(issues: ReadonlyArray<{ path: (string | number)[]; message: string }>): string {
+  return issues
+    .map((issue) => {
+      const path = issue.path.join('.');
+      return path.length > 0 ? `${path}: ${issue.message}` : issue.message;
+    })
+    .join('; ');
+}
+
+function toFailureMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+
+  return 'Failed to create discovery run';
+}
+
 export function buildDiscoveryAdminService(
   repository: DiscoveryAdminRepository,
   dependencies: DiscoveryAdminServiceDependencies,
 ): DiscoveryAdminService {
   return {
+    async createBulkDiscoveryRuns(input, requestedByUserId) {
+      if (!dependencies.createDiscoveryRun) {
+        throw new DiscoveryAdminNotImplementedError('Bulk discovery run creation is not configured');
+      }
+
+      const results: AdminBulkCreateDiscoveryRunsResponse['results'] = [];
+      let createdCount = 0;
+
+      for (const [index, item] of input.items.entries()) {
+        const parsedItem = CreateDiscoveryRunRequestSchema.safeParse(item);
+        if (!parsedItem.success) {
+          results.push({
+            index,
+            success: false,
+            error: formatValidationIssues(parsedItem.error.issues),
+          });
+          continue;
+        }
+
+        try {
+          const result = await dependencies.createDiscoveryRun({
+            ...parsedItem.data,
+            requestedByUserId,
+          });
+          results.push({
+            index,
+            success: true,
+            runId: result.runId,
+            status: result.status,
+          });
+          createdCount += 1;
+        } catch (error: unknown) {
+          results.push({
+            index,
+            success: false,
+            error: toFailureMessage(error),
+          });
+        }
+      }
+
+      return {
+        results,
+        createdCount,
+        failedCount: results.length - createdCount,
+      };
+    },
     async getDiscoveryPhase1IcpLocationSummary(input) {
       const rows = await listDiscoveryPhase1AssignmentLocationSummaries(input.runIds);
 
