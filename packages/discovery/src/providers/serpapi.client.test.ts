@@ -2,14 +2,17 @@ import { describe, expect, it } from 'vitest';
 
 import { SerpApiDiscoveryProvider } from './serpapi.client.js';
 
-function createProvider(payload: unknown): SerpApiDiscoveryProvider {
-  const fetchImpl: typeof fetch = async () =>
+function createProvider(
+  payload: unknown,
+  fetchImplOverride?: typeof fetch,
+): SerpApiDiscoveryProvider {
+  const fetchImpl: typeof fetch = fetchImplOverride ?? (async () =>
     new Response(JSON.stringify(payload), {
       status: 200,
       headers: {
         'content-type': 'application/json',
       },
-    });
+    }));
 
   return new SerpApiDiscoveryProvider({
     apiKey: 'test-key',
@@ -80,5 +83,29 @@ describe('SerpApiDiscoveryProvider local parsing', () => {
     expect(result.localBusinesses).toHaveLength(1);
     expect(result.localBusinesses[0]?.websiteUrl).toBe('https://dehyabeauty.com/');
     expect(result.localBusinesses[0]?.instagramHandle).toBe('dehyasalon');
+  });
+
+  it('uses 20-result pagination offsets for local engines', async () => {
+    let requestUrl = '';
+    const fetchImpl: typeof fetch = async (input) => {
+      requestUrl = String(input);
+      return new Response(JSON.stringify({ local_results: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+
+    const provider = createProvider({}, fetchImpl);
+
+    await provider.searchMapsLocal({
+      query: 'beauty salon cairo',
+      countryCode: 'EG',
+      language: 'ar',
+      city: 'Cairo',
+      page: 3,
+    });
+
+    const url = new URL(requestUrl);
+    expect(url.searchParams.get('start')).toBe('40');
   });
 });
