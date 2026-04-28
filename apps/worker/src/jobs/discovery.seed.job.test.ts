@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as DiscoveryModule from '@lead-flood/discovery';
+
 const {
   getTaskCapForLeadTargetMock,
   loadConversionRateMock,
@@ -37,7 +39,7 @@ vi.mock('../utils/pipeline-settings.js', () => ({
 }));
 
 vi.mock('@lead-flood/discovery', async () => {
-  const actual = await vi.importActual<typeof import('@lead-flood/discovery')>(
+  const actual = await vi.importActual<typeof DiscoveryModule>(
     '@lead-flood/discovery',
   );
 
