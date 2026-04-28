@@ -499,7 +499,7 @@ describe('dispatchPendingOutboxEvents', () => {
           scheduledAt: scheduledAt.toISOString(),
         },
         status: 'failed',
-        nextAttemptAt: new Date(Date.now() - 1_000),
+        nextAttemptAt: new Date(0),
       },
     });
     createdOutboxIds.push(event.id);
