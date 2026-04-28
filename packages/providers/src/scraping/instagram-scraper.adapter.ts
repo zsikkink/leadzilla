@@ -80,6 +80,32 @@ const EMPTY_DATA: InstagramScraperData = {
 };
 
 const MEDIA_FETCH_TIMEOUT_MS = 10_000;
+const INSTAGRAM_HANDLE_PATTERN = /^[a-zA-Z0-9._]{1,30}$/;
+const INSTAGRAM_RESERVED_PATH_SEGMENTS = new Set([
+  'accounts',
+  'about',
+  'api',
+  'challenge',
+  'developer',
+  'directory',
+  'email_signup',
+  'explore',
+  'login',
+  'oauth',
+  'p',
+  'press',
+  'reel',
+  'reels',
+  'stories',
+  'tv',
+]);
+const INSTAGRAM_LOGIN_WALL_PATTERNS = [
+  '<title>login',
+  '<title>log in',
+  '/accounts/login/',
+  'instagram.com/accounts/login',
+  'login and see photos and videos from friends',
+] as const;
 
 function safeNumber(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -98,6 +124,55 @@ function firstValidString(...values: unknown[]): string | undefined {
     if (normalized) return normalized;
   }
   return undefined;
+}
+
+function normalizeInstagramHandle(input: string): string | null {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  let candidate = trimmed;
+
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('//')) {
+    const urlLike = trimmed.startsWith('//') ? `https:${trimmed}` : trimmed;
+    try {
+      const parsed = new URL(urlLike);
+      const hostname = parsed.hostname.toLowerCase();
+      if (!['instagram.com', 'www.instagram.com', 'instagr.am', 'www.instagr.am'].includes(hostname)) {
+        return null;
+      }
+
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      if (segments.length !== 1) {
+        return null;
+      }
+
+      candidate = decodeURIComponent(segments[0] ?? '').trim();
+    } catch {
+      return null;
+    }
+  }
+
+  const normalized = candidate
+    .replace(/^@/, '')
+    .split(/[/?#]/)[0]
+    ?.trim();
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (INSTAGRAM_RESERVED_PATH_SEGMENTS.has(normalized.toLowerCase())) {
+    return null;
+  }
+
+  return INSTAGRAM_HANDLE_PATTERN.test(normalized) ? normalized : null;
+}
+
+function isInstagramLoginWallHtml(html: string): boolean {
+  const normalized = html.toLowerCase();
+  return INSTAGRAM_LOGIN_WALL_PATTERNS.some((pattern) => normalized.includes(pattern));
 }
 
 function extractProfilePostThumbnail(node: Record<string, unknown>): string | undefined {
@@ -555,6 +630,10 @@ export class InstagramScraperAdapter {
 
   private get hasPreAuthCookies(): boolean {
     return this.preAuthCookies !== null;
+  }
+
+  private get hasAuthConfiguration(): boolean {
+    return this.hasPreAuthCookies || this.hasCredentials;
   }
 
   private get hasValidSession(): boolean {
@@ -1103,11 +1182,13 @@ export class InstagramScraperAdapter {
     // 302 redirect typically means Instagram is requiring login
     if (response.status >= 300 && response.status < 400) {
       return {
-        status: 'retryable_error',
+        status: 'terminal_error',
         failure: {
-          classification: 'retryable',
+          classification: 'terminal',
           statusCode: response.status,
-          message: `Instagram redirected (${response.status}) — likely requires login`,
+          message: this.hasAuthConfiguration
+            ? `Instagram redirected (${response.status}) to a login wall — refresh INSTAGRAM_COOKIES or account credentials`
+            : `Instagram redirected (${response.status}) to a login wall — an authenticated Instagram session is required`,
           raw: null,
         },
       };
@@ -1169,6 +1250,20 @@ export class InstagramScraperAdapter {
       };
     }
 
+    if (isInstagramLoginWallHtml(html)) {
+      return {
+        status: 'terminal_error',
+        failure: {
+          classification: 'terminal',
+          statusCode: 200,
+          message: this.hasAuthConfiguration
+            ? 'Instagram returned a login wall — refresh INSTAGRAM_COOKIES or account credentials'
+            : 'Instagram returned a login wall — an authenticated Instagram session is required',
+          raw: null,
+        },
+      };
+    }
+
     // Try extraction strategies in order of richness
     const fromSharedData = extractFromSharedData(html);
     const fromLdJson = extractFromLdJson(html);
@@ -1185,16 +1280,15 @@ export class InstagramScraperAdapter {
   }
 
   async scrapeProfile(handle: string): Promise<InstagramScraperResult> {
-    // Strip leading @ if present
-    const cleanHandle = handle.startsWith('@') ? handle.slice(1) : handle;
+    const cleanHandle = normalizeInstagramHandle(handle);
 
-    if (!cleanHandle || cleanHandle.length === 0) {
+    if (!cleanHandle) {
       return {
         status: 'terminal_error',
         failure: {
           classification: 'terminal',
           statusCode: null,
-          message: 'Instagram handle is empty',
+          message: 'Instagram handle is invalid or does not point to a profile',
           raw: null,
         },
       };
