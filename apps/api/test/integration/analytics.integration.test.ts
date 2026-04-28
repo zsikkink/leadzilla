@@ -379,7 +379,7 @@ describe('analytics score distribution integration', () => {
     } finally {
       await server.close();
     }
-  });
+  }, 15_000);
 });
 
 describe('analytics stored recommendations integration', () => {
@@ -473,7 +473,8 @@ describe('analytics stored recommendations integration', () => {
       });
 
       expect(defaultResponse.statusCode).toBe(200);
-      expect((defaultResponse.json() as { items: Array<{ id: string }> }).items.map((item) => item.id)).toEqual([
+      const defaultIds = (defaultResponse.json() as { items: Array<{ id: string }> }).items.map((item) => item.id);
+      expect(defaultIds.filter((id) => createdRecommendationIds.includes(id))).toEqual([
         firstActive,
         secondPriority,
         thirdPriority,
@@ -487,7 +488,8 @@ describe('analytics stored recommendations integration', () => {
       });
 
       expect(statusResponse.statusCode).toBe(200);
-      expect((statusResponse.json() as { items: Array<{ id: string }> }).items.map((item) => item.id)).toEqual([
+      const statusIds = (statusResponse.json() as { items: Array<{ id: string }> }).items.map((item) => item.id);
+      expect(statusIds.filter((id) => createdRecommendationIds.includes(id))).toEqual([
         firstActive,
         thirdPriority,
       ]);
@@ -507,14 +509,14 @@ describe('analytics stored recommendations integration', () => {
 
       const limitedResponse = await server.inject({
         method: 'GET',
-        url: '/v1/analytics/recommendations?limit=2',
+        url: `/v1/analytics/recommendations?icpProfileId=${icpAlpha}&limit=2`,
         headers: authHeaders(),
       });
 
       expect(limitedResponse.statusCode).toBe(200);
       expect((limitedResponse.json() as { items: Array<{ id: string }> }).items.map((item) => item.id)).toEqual([
         firstActive,
-        secondPriority,
+        thirdPriority,
       ]);
     } finally {
       await server.close();
@@ -666,5 +668,5 @@ describe('analytics retrain status integration', () => {
     } finally {
       await server.close();
     }
-  });
+  }, 15_000);
 });

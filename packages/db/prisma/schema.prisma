@@ -102,7 +102,9 @@ enum DiscoveryRecordStatus {
 enum EnrichmentProvider {
   HUNTER
   CLEARBIT
+  OTHER_FREE
   PEOPLE_DATA_LABS
+  APOLLO
 }
 
 enum EnrichmentStatus {
@@ -338,6 +340,7 @@ model IcpProfile {
   analyticsDailyRollups AnalyticsDailyRollup[]
   messageDrafts        MessageDraft[]
   contactRecoveryItems ContactRecoveryItem[]
+  discoveryAttributionAssignments DiscoveryAttributionAssignment[]
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
 
@@ -744,6 +747,7 @@ model SearchTask {
 
   discoveredSources  Source[]
   businessEvidence   BusinessEvidence[]
+  discoveryAttributionAssignments DiscoveryAttributionAssignment[]
 
   @@unique([taskType, queryHash, discoveryRunId])
   @@index([status, runAfter])
@@ -809,6 +813,7 @@ model Business {
   costEvents               DiscoveryCostEvent[]
   contacts                 BusinessContact[]    @relation("businessContacts")
   contactRecoveryItems     ContactRecoveryItem[]
+  discoveryAttributionAssignments DiscoveryAttributionAssignment[]
 
   @@index([countryCode, city])
   @@index([websiteDomain])
@@ -841,6 +846,27 @@ model ContactRecoveryItem {
   @@index([discoveryRunId])
   @@index([icpProfileId, status])
   @@map("contact_recovery_items")
+}
+
+model DiscoveryAttributionAssignment {
+  id             String     @id @default(uuid())
+  discoveryRunId String     @map("discovery_run_id")
+  icpProfileId   String     @map("icp_profile_id")
+  icpProfile     IcpProfile @relation(fields: [icpProfileId], references: [id], onDelete: Cascade)
+  businessId     String     @map("business_id")
+  business       Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  searchTaskId   String     @map("search_task_id")
+  searchTask     SearchTask @relation(fields: [searchTaskId], references: [id], onDelete: Cascade)
+  assignmentMode String     @map("assignment_mode")
+  assignedAt     DateTime   @default(now()) @map("assigned_at")
+  primaryOutcomeCode String?   @map("primary_outcome_code")
+  primaryOutcomeAt   DateTime? @map("primary_outcome_at")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+
+  @@unique([discoveryRunId, icpProfileId, businessId])
+  @@index([searchTaskId])
+  @@map("discovery_attribution_assignments")
 }
 
 model BusinessEvidence {

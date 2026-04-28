@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { getMetricSnapshot, logDiscoveryEvent, runSearchTask } from '@lead-flood/discovery';
 import type {
   DiscoveryProvider as SerpDiscoveryProvider,
@@ -17,6 +19,8 @@ import {
 export const DISCOVERY_RUN_SEARCH_TASK_JOB_NAME = 'discovery.run_search_task';
 export const DISCOVERY_RUN_SEARCH_TASK_IDEMPOTENCY_KEY_PATTERN =
   'discovery.run_search_task:${slot}';
+export const DISCOVERY_ATTRIBUTION_ASSIGNMENT_MODE_SEARCH_TASK_FIRST_TOUCH =
+  'SEARCH_TASK_FIRST_TOUCH';
 
 export const DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS: Pick<
   SendOptions,
@@ -61,6 +65,7 @@ export interface DiscoveryRunSearchTaskDependencies {
     businessId: string;
     discoveryRunId: string;
     icpProfileId: string;
+    existingBusinessRediscovery?: boolean | undefined;
     includeWebsiteAnalysis?: boolean | undefined;
     includeSocialMediaAnalysis?: boolean | undefined;
     minReviewCount?: number | undefined;
@@ -80,6 +85,26 @@ interface RunState {
   finalized: boolean;
   /** Number of concurrent slots actively using this state. */
   activeSlots: number;
+}
+
+interface DiscoveryAttributionAssignmentBusinessIds {
+  newBusinessIds: string[];
+  observedBusinessIds?: string[] | undefined;
+}
+
+interface DiscoveryAttributionAssignmentCreateManyDelegate {
+  createMany: (args: {
+    data: Array<{
+      id: string;
+      discoveryRunId: string;
+      icpProfileId: string;
+      businessId: string;
+      searchTaskId: string;
+      assignmentMode: string;
+      assignedAt: Date;
+    }>;
+    skipDuplicates?: boolean;
+  }) => Promise<{ count: number }>;
 }
 
 export function shouldFinalizeAfterEmptyPoll(state: Pick<RunState, 'activeSlots'>): boolean {
@@ -121,6 +146,91 @@ function toNonNegativeCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : 0;
+}
+
+function getObservedBusinessIds(
+  runResult: DiscoveryAttributionAssignmentBusinessIds,
+): string[] {
+  return Array.isArray(runResult.observedBusinessIds)
+    ? runResult.observedBusinessIds ?? []
+    : runResult.newBusinessIds;
+}
+
+function getAssignedBusinessIds(
+  runResult: DiscoveryAttributionAssignmentBusinessIds,
+): string[] {
+  return [...new Set([
+    ...runResult.newBusinessIds,
+    ...getObservedBusinessIds(runResult),
+  ])].filter((businessId) => businessId.length > 0);
+}
+
+export async function persistDiscoveryAttributionAssignments(
+  delegate: DiscoveryAttributionAssignmentCreateManyDelegate,
+  params: {
+    discoveryRunId: string;
+    icpProfileId: string;
+    searchTaskId: string;
+    newBusinessIds: string[];
+    observedBusinessIds?: string[] | undefined;
+    assignedAt?: Date | undefined;
+  },
+): Promise<{
+  attemptedCount: number;
+  insertedCount: number;
+  businessIds: string[];
+}> {
+  const businessIds = getAssignedBusinessIds(params);
+  if (businessIds.length === 0) {
+    return {
+      attemptedCount: 0,
+      insertedCount: 0,
+      businessIds,
+    };
+  }
+
+  const assignedAt = params.assignedAt ?? new Date();
+  const result = await delegate.createMany({
+    data: businessIds.map((businessId) => ({
+      id: randomUUID(),
+      discoveryRunId: params.discoveryRunId,
+      icpProfileId: params.icpProfileId,
+      businessId,
+      searchTaskId: params.searchTaskId,
+      assignmentMode: DISCOVERY_ATTRIBUTION_ASSIGNMENT_MODE_SEARCH_TASK_FIRST_TOUCH,
+      assignedAt,
+    })),
+    skipDuplicates: true,
+  });
+
+  return {
+    attemptedCount: businessIds.length,
+    insertedCount: result.count,
+    businessIds,
+  };
+}
+
+async function getExistingBusinessRediscoveryIds(
+  businessIds: string[],
+  discoveryRunId: string,
+): Promise<Set<string>> {
+  if (businessIds.length === 0) {
+    return new Set();
+  }
+
+  const businesses = await prisma.business.findMany({
+    where: { id: { in: businessIds } },
+    select: {
+      id: true,
+      discoveryRunId: true,
+    },
+  });
+
+  return new Set(
+    businesses
+      .filter((business) => business.discoveryRunId !== discoveryRunId)
+      .map((business) => business.id),
+  );
 }
 
 function getRunState(runKey: string): RunState {
@@ -395,6 +505,21 @@ export async function handleDiscoveryRunSearchTaskJob(
     },
   );
 
+  const observedBusinessIds = getObservedBusinessIds(runResult);
+
+  if (job.data.discoveryRunId && job.data.icpProfileId && runResult.taskId) {
+    await persistDiscoveryAttributionAssignments(
+      prisma.discoveryAttributionAssignment,
+      {
+        discoveryRunId: job.data.discoveryRunId,
+        icpProfileId: job.data.icpProfileId,
+        searchTaskId: runResult.taskId,
+        newBusinessIds: runResult.newBusinessIds,
+        observedBusinessIds,
+      },
+    );
+  }
+
   // ── Enqueue business.prequalify for each newly created business ──
   // B8: Cross-ICP dedup — skip businesses that already have leads from other ICPs
   if (
@@ -448,12 +573,6 @@ export async function handleDiscoveryRunSearchTaskJob(
     );
   }
 
-  const observedBusinessIds = Array.isArray(
-    (runResult as { observedBusinessIds?: string[] }).observedBusinessIds,
-  )
-    ? (runResult as { observedBusinessIds?: string[] }).observedBusinessIds ?? []
-    : runResult.newBusinessIds;
-
   if (
     observedBusinessIds.length > 0 &&
     dependencies.enqueueBusinessPrequalify &&
@@ -464,6 +583,10 @@ export async function handleDiscoveryRunSearchTaskJob(
     const existingObservedBusinessIds = observedBusinessIds.filter(
       (businessId: string) => !newBusinessIds.has(businessId),
     );
+    const existingBusinessRediscoveryIds = await getExistingBusinessRediscoveryIds(
+      existingObservedBusinessIds,
+      job.data.discoveryRunId,
+    );
 
     let enqueuedCount = 0;
 
@@ -472,6 +595,9 @@ export async function handleDiscoveryRunSearchTaskJob(
         businessId,
         discoveryRunId: job.data.discoveryRunId,
         icpProfileId: job.data.icpProfileId,
+        ...(existingBusinessRediscoveryIds.has(businessId)
+          ? { existingBusinessRediscovery: true }
+          : {}),
         ...(job.data.includeWebsiteAnalysis !== undefined
           ? { includeWebsiteAnalysis: job.data.includeWebsiteAnalysis }
           : {}),

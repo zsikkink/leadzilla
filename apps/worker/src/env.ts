@@ -76,6 +76,7 @@ function findLegacyGoogleCseEnvKeys(source: NodeJS.ProcessEnv): string[] {
 const WorkerEnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   APP_ENV: z.string().min(1).default('local'),
+  ALLOW_LOCAL_DATABASE_URL: envBoolean.default(false),
   DATABASE_URL: z.string().min(1),
   PG_BOSS_SCHEMA: z.string().min(1).default('pgboss'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
@@ -167,7 +168,11 @@ const WorkerEnvSchema = z.object({
   GOOGLE_CUSTOM_SEARCH_ENGINE_ID: optionalNonEmptyString(),
 });
 
-export type WorkerEnv = z.infer<typeof WorkerEnvSchema>;
+type WorkerEnvSchemaOutput = z.infer<typeof WorkerEnvSchema>;
+
+export type WorkerEnv = Omit<WorkerEnvSchemaOutput, 'ALLOW_LOCAL_DATABASE_URL'> & {
+  ALLOW_LOCAL_DATABASE_URL?: boolean;
+};
 
 export function loadWorkerEnv(source: NodeJS.ProcessEnv): WorkerEnv {
   const legacyGoogleCseKeys = findLegacyGoogleCseEnvKeys(source);

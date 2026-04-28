@@ -9,6 +9,10 @@ import type {
 import type { Job, SendOptions } from 'pg-boss';
 
 import { RetryableError } from '../errors.js';
+import {
+  DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES,
+  recordDiscoveryAttributionPrimaryOutcome,
+} from '../utils/discovery-attribution.js';
 import { tryFinalizeDiscoveryRun, checkLeadTargetReached } from '../utils/discovery-run-tracker.js';
 import { isProviderWithinBudget, getScoreQualificationThreshold } from '../utils/pipeline-settings.js';
 import {
@@ -55,6 +59,7 @@ export interface BusinessConvertJobPayload {
   businessId: string;
   discoveryRunId: string;
   icpProfileId: string;
+  existingBusinessRediscovery?: boolean | undefined;
   includeWebsiteAnalysis?: boolean | undefined;
   includeSocialMediaAnalysis?: boolean | undefined;
   correlationId?: string | undefined;
@@ -933,6 +938,13 @@ async function upsertContactRecoveryItem(input: {
       rejectedAt: null,
     },
   });
+
+  await recordDiscoveryAttributionPrimaryOutcome({
+    businessId: input.businessId,
+    discoveryRunId: input.discoveryRunId,
+    icpProfileId: input.icpProfileId,
+    primaryOutcomeCode: DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES.RECOVERY_OPENED,
+  });
 }
 
 // ── Handler ─────────────────────────────────────────────────────────────
@@ -945,6 +957,7 @@ export async function handleBusinessConvertJob(
     businessId,
     discoveryRunId,
     icpProfileId,
+    existingBusinessRediscovery: payloadExistingBusinessRediscovery,
     includeWebsiteAnalysis,
     includeSocialMediaAnalysis,
     correlationId,
@@ -1019,21 +1032,25 @@ export async function handleBusinessConvertJob(
   }
 
   const domain = business.websiteDomain;
+  const isExistingBusinessRediscovery =
+    payloadExistingBusinessRediscovery ?? (business.discoveryRunId !== discoveryRunId);
 
   // ── 2b. Cross-run domain dedup (F4) ───────────────────────────────────
   // If this business's domain was already processed in a PREVIOUS discovery
   // run AND that run created a lead (converted or rejected), skip entirely.
   // Only dedup across DIFFERENT runs, not within the same run.
-  const priorDomainLead = await prisma.lead.findFirst({
-    where: {
-      business: {
-        websiteDomain: domain,
-        discoveryRunId: { not: discoveryRunId },
-      },
-      deletedAt: null,
-    },
-    select: { id: true, status: true },
-  });
+  const priorDomainLead = isExistingBusinessRediscovery
+    ? null
+    : await prisma.lead.findFirst({
+        where: {
+          business: {
+            websiteDomain: domain,
+            discoveryRunId: { not: discoveryRunId },
+          },
+          deletedAt: null,
+        },
+        select: { id: true, status: true },
+      });
   if (priorDomainLead) {
     logger.info(
       {
@@ -1889,7 +1906,6 @@ export async function handleBusinessConvertJob(
   }
 
   const leadEmail = contactEmail;
-  const isCurrentRunExistingBusiness = business.discoveryRunId !== discoveryRunId;
 
   const hasRealDecisionMaker = resolvedContact !== null && isValidPersonName(resolvedContact.name, business.name);
   const contactStatus: ContactResolutionStatus = hasRealDecisionMaker
@@ -1954,7 +1970,7 @@ export async function handleBusinessConvertJob(
   const resolvedName = resolvedContact ? parseName(resolvedContact.name) : { firstName: 'Unknown', lastName: 'Contact' };
 
   const txResult = await prisma.$transaction(async (tx) => {
-    if (isCurrentRunExistingBusiness) {
+    if (isExistingBusinessRediscovery) {
       const sameBusinessLeads = await tx.lead.findMany({
         where: {
           businessId: business.id,
@@ -1987,7 +2003,8 @@ export async function handleBusinessConvertJob(
 
         return {
           isNew: false,
-          unsupportedExistingBusinessLeadCount: sameBusinessLeads.length,
+          existingBusinessNoUniqueActiveSameBusinessLead: true as const,
+          nonUniqueActiveSameBusinessLeadCount: sameBusinessLeads.length,
         };
       }
 
@@ -2396,6 +2413,30 @@ export async function handleBusinessConvertJob(
     };
   });
 
+  const shouldRecordLeadCreatedOutcome =
+    txResult.isNew || (!isExistingBusinessRediscovery && txResult.reusedPrimaryBusiness === true);
+  const shouldRecordExistingSameBusinessLeadReusedOutcome =
+    isExistingBusinessRediscovery && txResult.reusedPrimaryBusiness === true;
+  const shouldRecordExistingBusinessNoUniqueActiveSameBusinessLeadOutcome =
+    isExistingBusinessRediscovery
+    && txResult.existingBusinessNoUniqueActiveSameBusinessLead === true;
+  const primaryOutcomeCode = shouldRecordLeadCreatedOutcome
+    ? DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES.LEAD_CREATED
+    : shouldRecordExistingSameBusinessLeadReusedOutcome
+      ? DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES.EXISTING_SAME_BUSINESS_LEAD_REUSED
+      : shouldRecordExistingBusinessNoUniqueActiveSameBusinessLeadOutcome
+        ? DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES.EXISTING_BUSINESS_NO_UNIQUE_ACTIVE_SAME_BUSINESS_LEAD
+        : null;
+
+  if (primaryOutcomeCode) {
+    await recordDiscoveryAttributionPrimaryOutcome({
+      businessId,
+      discoveryRunId,
+      icpProfileId,
+      primaryOutcomeCode,
+    });
+  }
+
   await prisma.contactRecoveryItem.deleteMany({
     where: {
       businessId: business.id,
@@ -2568,13 +2609,13 @@ export async function handleBusinessConvertJob(
           'Existing business rediscovery found a single active same-business lead but did not enqueue features.compute',
         );
       }
-    } else if (txResult.unsupportedExistingBusinessLeadCount !== undefined) {
+    } else if (txResult.nonUniqueActiveSameBusinessLeadCount !== undefined) {
       existingLeadAlreadyKnownNoop = true;
       gateStats.outcome = 'existing_unsupported';
       logger.info(
         {
           ...logCtx,
-          sameBusinessLeadCount: txResult.unsupportedExistingBusinessLeadCount,
+          sameBusinessLeadCount: txResult.nonUniqueActiveSameBusinessLeadCount,
         },
         'Existing business rediscovery is terminal because it does not map to exactly one active same-business lead',
       );

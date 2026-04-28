@@ -1,7 +1,15 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
+  AdminBulkCreateDiscoveryRunsRequestSchema,
+  AdminBulkCreateDiscoveryRunsResponseSchema,
   AdminBusinessDetailResponseSchema,
   AdminBusinessIdParamsSchema,
+  AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsRequestSchema,
+  AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsResponseSchema,
+  AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesRequestSchema,
+  AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesResponseSchema,
+  AdminDiscoveryPhase1IcpLocationSummaryRequestSchema,
+  AdminDiscoveryPhase1IcpLocationSummaryResponseSchema,
   AdminListBusinessesQuerySchema,
   AdminListBusinessesResponseSchema,
   AdminLeadDetailResponseSchema,
@@ -35,6 +43,8 @@ import {
 import { requireDiscoveryAdminAccess } from './discovery-admin.auth.js';
 import { PrismaDiscoveryAdminRepository } from './discovery-admin.repository.js';
 import { buildDiscoveryAdminService } from './discovery-admin.service.js';
+import { PrismaDiscoveryRepository } from '../discovery/discovery.repository.js';
+import { buildDiscoveryService } from '../discovery/discovery.service.js';
 
 export interface DiscoveryAdminRouteDependencies {
   adminApiKey?: string;
@@ -242,7 +252,11 @@ export function registerDiscoveryAdminRoutes(
   dependencies: DiscoveryAdminRouteDependencies = {},
 ): void {
   const repository = new PrismaDiscoveryAdminRepository();
+  const discoveryService = buildDiscoveryService(new PrismaDiscoveryRepository(), {
+    enqueueDiscoveryRun: async () => undefined,
+  });
   const service = buildDiscoveryAdminService(repository, {
+    createDiscoveryRun: discoveryService.createDiscoveryRun,
     ...(dependencies.triggerDiscoverySeedJob
       ? { triggerDiscoverySeedJob: dependencies.triggerDiscoverySeedJob }
       : {}),
@@ -369,6 +383,113 @@ export function registerDiscoveryAdminRoutes(
     try {
       const result = await service.getSearchTaskById(parsedParams.data.id);
       return AdminSearchTaskDetailResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.post('/v1/admin/discovery/runs/bulk', async (request, reply) => {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
+      return;
+    }
+
+    const userId = requireAuthenticatedUserId(request, reply);
+    if (!userId) {
+      return;
+    }
+
+    const parsedBody = AdminBulkCreateDiscoveryRunsRequestSchema.safeParse(request.body);
+    if (!parsedBody.success) {
+      return sendValidationError(reply, request.id, 'Invalid bulk discovery run payload');
+    }
+
+    try {
+      const result = await service.createBulkDiscoveryRuns(parsedBody.data, userId);
+      return AdminBulkCreateDiscoveryRunsResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.post('/v1/admin/discovery/runs/phase1-summary', async (request, reply) => {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
+      return;
+    }
+
+    const parsedBody = AdminDiscoveryPhase1IcpLocationSummaryRequestSchema.safeParse(request.body);
+    if (!parsedBody.success) {
+      return sendValidationError(reply, request.id, 'Invalid discovery phase-1 summary payload');
+    }
+
+    try {
+      const result = await service.getDiscoveryPhase1IcpLocationSummary(parsedBody.data);
+      return AdminDiscoveryPhase1IcpLocationSummaryResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.post('/v1/admin/discovery/runs/phase1-search-input-historical-cohort-summaries', async (request, reply) => {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
+      return;
+    }
+
+    const parsedBody =
+      AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesRequestSchema.safeParse(request.body);
+    if (!parsedBody.success) {
+      return sendValidationError(
+        reply,
+        request.id,
+        'Invalid discovery phase-1 historical search-input cohort summary payload',
+      );
+    }
+
+    try {
+      const result = await service.getDiscoveryPhase1HistoricalSearchInputCohortSummaries(
+        parsedBody.data,
+      );
+      return AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.post('/v1/admin/discovery/runs/phase1-search-input-historical-cohort-assignments', async (request, reply) => {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
+      return;
+    }
+
+    const parsedBody =
+      AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsRequestSchema.safeParse(
+        request.body,
+      );
+    if (!parsedBody.success) {
+      return sendValidationError(
+        reply,
+        request.id,
+        'Invalid discovery phase-1 historical search-input cohort assignment payload',
+      );
+    }
+
+    try {
+      const result = await service.getDiscoveryPhase1HistoricalSearchInputCohortAssignments(
+        parsedBody.data,
+      );
+      return AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsResponseSchema.parse(
+        result,
+      );
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;

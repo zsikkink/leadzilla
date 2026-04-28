@@ -24,6 +24,7 @@
     "db:validate:sql-bootstrap": "bash scripts/db/validate-sql-bootstrap.sh",
     "db:validate:sql-bootstrap:api": "SQL_BOOTSTRAP_VALIDATE_SCOPE=api bash scripts/db/validate-sql-bootstrap.sh",
     "db:validate:sql-bootstrap:worker": "SQL_BOOTSTRAP_VALIDATE_SCOPE=worker bash scripts/db/validate-sql-bootstrap.sh",
+    "db:validate:prisma-bootstrap:enrichment-provider": "bash scripts/db/validate-prisma-bootstrap-enrichment-provider.sh",
     "db:validate:runtime-services": "bash scripts/db/validate-runtime-services.sh",
     "db:validate:runtime-services:api": "RUNTIME_VALIDATE_SCOPE=api bash scripts/db/validate-runtime-services.sh",
     "db:validate:runtime-services:worker": "RUNTIME_VALIDATE_SCOPE=worker bash scripts/db/validate-runtime-services.sh",

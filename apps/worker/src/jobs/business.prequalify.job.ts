@@ -3,6 +3,10 @@ import { promises as dns } from 'node:dns';
 import type { Job, SendOptions } from 'pg-boss';
 
 import { classifyError } from '../errors.js';
+import {
+  DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES,
+  recordDiscoveryAttributionPrimaryOutcome,
+} from '../utils/discovery-attribution.js';
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
 import { getMinReviewCount } from '../utils/pipeline-settings.js';
 
@@ -47,6 +51,7 @@ export interface BusinessPrequalifyJobPayload {
   businessId: string;
   discoveryRunId: string;
   icpProfileId: string;
+  existingBusinessRediscovery?: boolean | undefined;
   minReviewCount?: number | undefined;
   includeWebsiteAnalysis?: boolean | undefined;
   includeSocialMediaAnalysis?: boolean | undefined;
@@ -60,6 +65,7 @@ export interface BusinessPrequalifyJobDependencies {
     businessId: string;
     discoveryRunId: string;
     icpProfileId: string;
+    existingBusinessRediscovery?: boolean | undefined;
     includeWebsiteAnalysis?: boolean | undefined;
     includeSocialMediaAnalysis?: boolean | undefined;
     correlationId?: string | undefined;
@@ -157,6 +163,7 @@ export async function handleBusinessPrequalifyJob(
     businessId,
     discoveryRunId,
     icpProfileId,
+    existingBusinessRediscovery: payloadExistingBusinessRediscovery,
     minReviewCount,
     includeWebsiteAnalysis,
     includeSocialMediaAnalysis,
@@ -205,7 +212,17 @@ export async function handleBusinessPrequalifyJob(
 
     // ── Check: website domain ──────────────────────────────────────────
     if (!business.websiteDomain) {
-      await disqualify(businessId, discoveryRunId, 'NO_WEBSITE_DOMAIN', logCtx, logger, undefined, providerUsed, job.id);
+      await disqualify(
+        businessId,
+        discoveryRunId,
+        icpProfileId,
+        'NO_WEBSITE_DOMAIN',
+        logCtx,
+        logger,
+        undefined,
+        providerUsed,
+        job.id,
+      );
       return;
     }
 
@@ -213,28 +230,58 @@ export async function handleBusinessPrequalifyJob(
     // If reviewCount is null/undefined (Google Places didn't return it), skip the check.
     // Only reject when the count is explicitly below the threshold.
     if (business.reviewCount != null && business.reviewCount < effectiveMinReviewCount) {
-      await disqualify(businessId, discoveryRunId, 'INSUFFICIENT_REVIEWS', logCtx, logger, {
-        reviewCount: business.reviewCount,
-        minReviewCount: effectiveMinReviewCount,
-      }, providerUsed, job.id);
+      await disqualify(
+        businessId,
+        discoveryRunId,
+        icpProfileId,
+        'INSUFFICIENT_REVIEWS',
+        logCtx,
+        logger,
+        {
+          reviewCount: business.reviewCount,
+          minReviewCount: effectiveMinReviewCount,
+        },
+        providerUsed,
+        job.id,
+      );
       return;
     }
 
     // ── Check: DNS resolution ──────────────────────────────────────────
     const resolves = await domainResolves(business.websiteDomain);
     if (!resolves) {
-      await disqualify(businessId, discoveryRunId, 'DOMAIN_NOT_RESOLVING', logCtx, logger, {
-        domain: business.websiteDomain,
-      }, providerUsed, job.id);
+      await disqualify(
+        businessId,
+        discoveryRunId,
+        icpProfileId,
+        'DOMAIN_NOT_RESOLVING',
+        logCtx,
+        logger,
+        {
+          domain: business.websiteDomain,
+        },
+        providerUsed,
+        job.id,
+      );
       return;
     }
 
     // ── Check: parked domain ───────────────────────────────────────────
     const parked = await isParkedDomain(business.websiteDomain);
     if (parked) {
-      await disqualify(businessId, discoveryRunId, 'PARKED_DOMAIN', logCtx, logger, {
-        domain: business.websiteDomain,
-      }, providerUsed, job.id);
+      await disqualify(
+        businessId,
+        discoveryRunId,
+        icpProfileId,
+        'PARKED_DOMAIN',
+        logCtx,
+        logger,
+        {
+          domain: business.websiteDomain,
+        },
+        providerUsed,
+        job.id,
+      );
       return;
     }
 
@@ -252,10 +299,14 @@ export async function handleBusinessPrequalifyJob(
 
     // ── Enqueue business.convert if dependency provided ────────────────
     if (deps?.enqueueBusinessConvert) {
+      const existingBusinessRediscovery =
+        payloadExistingBusinessRediscovery ?? (business.discoveryRunId !== discoveryRunId);
+
       await deps.enqueueBusinessConvert({
         businessId,
         discoveryRunId,
         icpProfileId,
+        ...(existingBusinessRediscovery ? { existingBusinessRediscovery: true } : {}),
         includeWebsiteAnalysis,
         includeSocialMediaAnalysis,
         correlationId: effectiveCorrelationId,
@@ -279,6 +330,7 @@ export async function handleBusinessPrequalifyJob(
 async function disqualify(
   businessId: string,
   discoveryRunId: string,
+  icpProfileId: string,
   reason: string,
   logCtx: Record<string, unknown>,
   logger: BusinessPrequalifyLogger,
@@ -295,6 +347,12 @@ async function disqualify(
   });
 
   await recordCostEvent(discoveryRunId, businessId, provider ?? 'GOOGLE_PLACES');
+  await recordDiscoveryAttributionPrimaryOutcome({
+    businessId,
+    discoveryRunId,
+    icpProfileId,
+    primaryOutcomeCode: DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES.PREQUALIFY_DISQUALIFIED,
+  });
 
   logger.info(
     { ...logCtx, reason, ...extra },

@@ -34,6 +34,25 @@ const CLOUDFLARE_CHALLENGE_HTML = richHtml(`
   </div>
 `);
 
+const SAFEBROWSE_INTERSTITIAL_HTML = `
+  <html>
+    <head><title>Potential Threat Detected</title></head>
+    <body>
+      <p>This site could be risky</p>
+      <p>Advanced Security blocked access</p>
+    </body>
+  </html>
+`;
+
+const CLOUDFLARE_BLOCKED_HTML = `
+  <html>
+    <head><title>Attention Required! | Cloudflare</title></head>
+    <body>
+      <p>Sorry, you have been blocked</p>
+    </body>
+  </html>
+`;
+
 const SPARSE_PAGE_HTML = richHtml(`
   <p>${LONG_TEXT}</p>
   <h1>Welcome to our business</h1>
@@ -102,6 +121,15 @@ function createMockFetchMultiPage(pageMap: Record<string, string>) {
     }
     // Default: return 404 for unmatched URLs
     return new Response('Not found', { status: 404 });
+  }) as unknown as typeof fetch;
+}
+
+function createMockFetchByUrl(
+  responder: (url: string, init?: RequestInit) => Promise<Response> | Response,
+) {
+  return vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+    return responder(urlStr, init);
   }) as unknown as typeof fetch;
 }
 
@@ -219,6 +247,45 @@ describe('WebsiteScraperAdapter', () => {
       expect(result.data.contactInfo.phones.length).toBeGreaterThan(0);
     });
 
+    it('preserves generic website inboxes for downstream company-contact fallback', async () => {
+      const mockFetch = createMockFetch(RICH_PAGE_HTML);
+      const adapter = new WebsiteScraperAdapter({
+        fetchImpl: mockFetch,
+        enablePlaywright: false,
+        maxPages: 1,
+      });
+
+      const result = await adapter.scrapeWebsite('example.com');
+      expect(result.status).toBe('success');
+      if (result.status !== 'success') throw new Error('Expected success');
+      expect(result.data.contactInfo.emails).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ email: 'info@example.com' }),
+        ]),
+      );
+    });
+
+    it('extracts local-format phone numbers from page text', async () => {
+      const mockFetch = createMockFetch(richHtml(`
+        <p>${LONG_TEXT}</p>
+        <p>Call us on 04 111 2222 for appointments.</p>
+      `));
+      const adapter = new WebsiteScraperAdapter({
+        fetchImpl: mockFetch,
+        enablePlaywright: false,
+        maxPages: 1,
+      });
+
+      const result = await adapter.scrapeWebsite('example.com');
+      expect(result.status).toBe('success');
+      if (result.status !== 'success') throw new Error('Expected success');
+      expect(result.data.contactInfo.phones).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ number: '041112222' }),
+        ]),
+      );
+    });
+
     it('returns terminal_error for invalid domain', async () => {
       const adapter = new WebsiteScraperAdapter({
         fetchImpl: vi.fn() as unknown as typeof fetch,
@@ -243,6 +310,30 @@ describe('WebsiteScraperAdapter', () => {
       expect(result.status).toBe('retryable_error');
     });
 
+    it('falls back to http when https bootstrap fails for a bare domain', async () => {
+      const mockFetch = createMockFetchByUrl((url) => {
+        if (url === 'https://example.com') {
+          throw new Error('CERT_HAS_EXPIRED');
+        }
+        return new Response(RICH_PAGE_HTML, {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
+      });
+
+      const adapter = new WebsiteScraperAdapter({
+        fetchImpl: mockFetch,
+        enablePlaywright: false,
+        maxPages: 1,
+      });
+
+      const result = await adapter.scrapeWebsite('example.com');
+      expect(result.status).toBe('success');
+      expect(mockFetch).toHaveBeenCalled();
+      expect(mockFetch.mock.calls[0]?.[0]).toBe('https://example.com');
+      expect(mockFetch.mock.calls[1]?.[0]).toBe('http://example.com');
+    });
+
     it('returns terminal_error for 403 response', async () => {
       const mockFetch = vi.fn(async () => {
         return new Response('Forbidden', { status: 403 });
@@ -257,7 +348,7 @@ describe('WebsiteScraperAdapter', () => {
       expect(result.status).toBe('terminal_error');
     });
 
-    it('returns retryable_error for 500 response', async () => {
+    it('returns terminal_error for 500 response', async () => {
       const mockFetch = vi.fn(async () => {
         return new Response('Internal Server Error', { status: 500 });
       }) as unknown as typeof fetch;
@@ -268,7 +359,37 @@ describe('WebsiteScraperAdapter', () => {
       });
 
       const result = await adapter.scrapeWebsite('example.com');
-      expect(result.status).toBe('retryable_error');
+      expect(result.status).toBe('terminal_error');
+    });
+
+    it('returns terminal_error for browser security interstitial content', async () => {
+      const adapter = new WebsiteScraperAdapter({
+        fetchImpl: createMockFetch(SAFEBROWSE_INTERSTITIAL_HTML),
+        enablePlaywright: false,
+      });
+
+      const result = await adapter.scrapeWebsite('example.com');
+      expect(result.status).toBe('terminal_error');
+    });
+
+    it('returns terminal_error for anti-bot interstitial content', async () => {
+      const adapter = new WebsiteScraperAdapter({
+        fetchImpl: createMockFetch(CLOUDFLARE_CHALLENGE_HTML),
+        enablePlaywright: false,
+      });
+
+      const result = await adapter.scrapeWebsite('example.com');
+      expect(result.status).toBe('terminal_error');
+    });
+
+    it('returns terminal_error for blocked Cloudflare interstitial content', async () => {
+      const adapter = new WebsiteScraperAdapter({
+        fetchImpl: createMockFetch(CLOUDFLARE_BLOCKED_HTML),
+        enablePlaywright: false,
+      });
+
+      const result = await adapter.scrapeWebsite('example.com');
+      expect(result.status).toBe('terminal_error');
     });
   });
 
@@ -309,6 +430,51 @@ describe('WebsiteScraperAdapter', () => {
 
         const result = await adapter.scrapeWebsite('example.com');
         // Regardless of Playwright availability, should return success with fetch data
+        expect(result.status).toBe('success');
+      } finally {
+        vi.doUnmock('playwright-core');
+      }
+    });
+
+    it('uses Playwright fallback when homepage fetch fails', async () => {
+      vi.doMock('playwright-core', () => {
+        const page = {
+          goto: vi.fn(async () => undefined),
+          locator: vi.fn(() => ({
+            first: () => ({
+              isVisible: vi.fn(async () => false),
+              click: vi.fn(async () => undefined),
+            }),
+          })),
+          waitForTimeout: vi.fn(async () => undefined),
+          content: vi.fn(async () => RICH_PAGE_HTML),
+          close: vi.fn(async () => undefined),
+        };
+        const context = {
+          newPage: vi.fn(async () => page),
+          close: vi.fn(async () => undefined),
+        };
+        const browser = {
+          newContext: vi.fn(async () => context),
+          close: vi.fn(async () => undefined),
+        };
+        return {
+          chromium: {
+            launch: vi.fn(async () => browser),
+          },
+        };
+      });
+
+      try {
+        const mockFetch = vi.fn(async () => new Response('Forbidden', { status: 403 })) as unknown as typeof fetch;
+        const adapter = new WebsiteScraperAdapter({
+          fetchImpl: mockFetch,
+          enablePlaywright: true,
+          maxPages: 1,
+          playwrightTimeoutMs: 50,
+        });
+
+        const result = await adapter.scrapeWebsite('example.com');
         expect(result.status).toBe('success');
       } finally {
         vi.doUnmock('playwright-core');
@@ -376,6 +542,36 @@ describe('WebsiteScraperAdapter', () => {
       expect(result.data.pagesCrawled).toBeGreaterThanOrEqual(2);
       expect(result.data.socialLinks.some((l) => l.platform === 'instagram')).toBe(true);
       expect(result.data.hasWhatsApp).toBe(true);
+    });
+
+    it('does not extract Instagram post or reel URLs as profile handles', async () => {
+      for (const instagramUrl of [
+        'https://instagram.com/p/abc123/',
+        'https://instagram.com/reel/def456/',
+      ]) {
+        const homepageHtml = richHtml(`
+          <p>${LONG_TEXT}</p>
+          <a href="${instagramUrl}">Instagram content</a>
+        `);
+
+        const mockFetch = createMockFetchMultiPage({
+          'example.com': homepageHtml,
+          [new URL(instagramUrl).pathname]: '<html></html>',
+        });
+
+        const adapter = new WebsiteScraperAdapter({
+          fetchImpl: mockFetch,
+          enablePlaywright: false,
+          maxPages: 1,
+        });
+
+        const result = await adapter.scrapeWebsite('example.com');
+        expect(result.status).toBe('success');
+        if (result.status !== 'success') throw new Error('Expected success');
+
+        const instagramLink = result.data.socialLinks.find((link) => link.platform === 'instagram');
+        expect(instagramLink?.handle ?? null).toBeNull();
+      }
     });
   });
 

@@ -22,6 +22,12 @@ const { discoveryMock, dbMock, trackerMock } = vi.hoisted(() => ({
       businessConversion: {
         findMany: vi.fn(),
       },
+      business: {
+        findMany: vi.fn(),
+      },
+      discoveryAttributionAssignment: {
+        createMany: vi.fn(),
+      },
     },
   },
   trackerMock: {
@@ -50,6 +56,7 @@ vi.mock('../utils/discovery-run-tracker.js', () => ({
 }));
 
 import {
+  DISCOVERY_ATTRIBUTION_ASSIGNMENT_MODE_SEARCH_TASK_FIRST_TOUCH,
   handleDiscoveryRunSearchTaskJob,
   type DiscoveryRunSearchTaskJobPayload,
 } from './discovery.run_search_task.job.js';
@@ -95,9 +102,72 @@ describe('handleDiscoveryRunSearchTaskJob rediscovery reconciliation', () => {
     dbMock.prisma.jobRun.update.mockResolvedValue({});
     dbMock.prisma.jobRun.updateMany.mockResolvedValue({ count: 1 });
     dbMock.prisma.businessConversion.findMany.mockResolvedValue([]);
+    dbMock.prisma.business.findMany.mockResolvedValue([
+      {
+        id: 'business_1',
+        discoveryRunId: 'run_old',
+      },
+    ]);
+    dbMock.prisma.discoveryAttributionAssignment.createMany.mockResolvedValue({ count: 1 });
     trackerMock.isLeadTargetReached.mockResolvedValue(false);
     trackerMock.markSearchTasksComplete.mockResolvedValue(undefined);
     trackerMock.tryFinalizeDiscoveryRun.mockResolvedValue(undefined);
+  });
+
+  it('persists first-touch assignment rows for both new and observed businesses', async () => {
+    discoveryMock.runSearchTask.mockResolvedValue({
+      taskId: 'task_1',
+      status: 'DONE',
+      taskType: 'SERP_GOOGLE_LOCAL',
+      queryHash: 'query_hash_1',
+      countryCode: 'US',
+      language: 'en',
+      durationMs: 125,
+      newBusinesses: 1,
+      newBusinessIds: ['business_new'],
+      observedBusinessIds: ['business_new', 'business_existing'],
+      newSources: 0,
+      localBusinessCount: 2,
+      organicResultCount: 0,
+      attempts: 1,
+    });
+
+    await handleDiscoveryRunSearchTaskJob(
+      logger,
+      makeJob({
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_2',
+      }),
+      {
+        boss: { send: vi.fn() },
+        provider: {} as never,
+        config: {} as never,
+        enqueueBusinessPrequalify: vi.fn(),
+      },
+    );
+
+    expect(dbMock.prisma.discoveryAttributionAssignment.createMany).toHaveBeenCalledTimes(1);
+    expect(dbMock.prisma.discoveryAttributionAssignment.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({
+          discoveryRunId: 'run_1',
+          icpProfileId: 'icp_2',
+          businessId: 'business_new',
+          searchTaskId: 'task_1',
+          assignmentMode: DISCOVERY_ATTRIBUTION_ASSIGNMENT_MODE_SEARCH_TASK_FIRST_TOUCH,
+          assignedAt: expect.any(Date),
+        }),
+        expect.objectContaining({
+          discoveryRunId: 'run_1',
+          icpProfileId: 'icp_2',
+          businessId: 'business_existing',
+          searchTaskId: 'task_1',
+          assignmentMode: DISCOVERY_ATTRIBUTION_ASSIGNMENT_MODE_SEARCH_TASK_FIRST_TOUCH,
+          assignedAt: expect.any(Date),
+        }),
+      ]),
+      skipDuplicates: true,
+    });
   });
 
   it('enqueues business.prequalify for an existing observed business instead of reconciling it in the search worker', async () => {
@@ -121,6 +191,7 @@ describe('handleDiscoveryRunSearchTaskJob rediscovery reconciliation', () => {
       businessId: 'business_1',
       discoveryRunId: 'run_1',
       icpProfileId: 'icp_2',
+      existingBusinessRediscovery: true,
       correlationId: expect.any(String),
     });
     expect(logger.info).toHaveBeenCalledWith(
@@ -132,6 +203,37 @@ describe('handleDiscoveryRunSearchTaskJob rediscovery reconciliation', () => {
       }),
       'Enqueued business.prequalify for existing businesses observed in the current search task',
     );
+  });
+
+  it('does not mark a same-run re-observation as existing-business rediscovery', async () => {
+    const enqueueBusinessPrequalify = vi.fn();
+    dbMock.prisma.business.findMany.mockResolvedValueOnce([
+      {
+        id: 'business_1',
+        discoveryRunId: 'run_1',
+      },
+    ]);
+
+    await handleDiscoveryRunSearchTaskJob(
+      logger,
+      makeJob({
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_2',
+      }),
+      {
+        boss: { send: vi.fn() },
+        provider: {} as never,
+        config: {} as never,
+        enqueueBusinessPrequalify,
+      },
+    );
+
+    expect(enqueueBusinessPrequalify).toHaveBeenCalledWith({
+      businessId: 'business_1',
+      discoveryRunId: 'run_1',
+      icpProfileId: 'icp_2',
+      correlationId: expect.any(String),
+    });
   });
 
   it('does not rewrite a failed parent job run back to RUNNING during later slot progress updates', async () => {

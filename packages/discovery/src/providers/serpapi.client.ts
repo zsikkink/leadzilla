@@ -126,13 +126,26 @@ function buildLocation(city: string | null | undefined, countryCode: DiscoveryCo
   return `${city}, ${countryName}`;
 }
 
+function getSerpStartOffset(
+  engine: 'google' | 'google_local' | 'google_maps',
+  page: number,
+): number {
+  const pageIndex = Math.max(0, page - 1);
+
+  if (engine === 'google') {
+    return pageIndex * 10;
+  }
+
+  return pageIndex * 20;
+}
+
 function buildRequestParams(
   engine: 'google' | 'google_local' | 'google_maps',
   input: SerpApiCommonRequest,
   enableCache: boolean,
   mapsZoom: number,
 ): URLSearchParams {
-  const start = Math.max(0, (input.page - 1) * 10);
+  const start = getSerpStartOffset(engine, input.page);
   const params = new URLSearchParams({
     engine,
     q: input.query,

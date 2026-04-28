@@ -25,6 +25,13 @@ const DLQ_BACKOFF_SECONDS: Record<number, number> = {
   3: 86_400,     // 24 hours
 };
 
+const DISCOVERY_PIPELINE_QUEUES = new Set([
+  'discovery.seed',
+  'discovery.run_search_task',
+  'business.prequalify',
+  'business.convert',
+]);
+
 export interface DlqProcessJobPayload {
   correlationId?: string | undefined;
 }
@@ -54,6 +61,17 @@ function collectDeadLetterQueues(): string[] {
     }
   }
   return dlqNames;
+}
+
+function getDlqRetryStartAfterSeconds(
+  originalQueue: string,
+  nextRetryCount: number,
+): number | null {
+  if (DISCOVERY_PIPELINE_QUEUES.has(originalQueue)) {
+    return null;
+  }
+
+  return DLQ_BACKOFF_SECONDS[nextRetryCount] ?? DLQ_BACKOFF_SECONDS[3]!;
 }
 
 export interface DlqProcessJobDependencies {
@@ -106,17 +124,23 @@ export async function handleDlqProcessJob(
 
           if (currentRetryCount < maxRetries) {
             const nextRetryCount = currentRetryCount + 1;
-            const startAfterSeconds =
-              DLQ_BACKOFF_SECONDS[nextRetryCount] ?? DLQ_BACKOFF_SECONDS[3]!;
+            const startAfterSeconds = getDlqRetryStartAfterSeconds(
+              originalQueue,
+              nextRetryCount,
+            );
 
             const retryData = {
               ...data,
               dlqRetryCount: nextRetryCount,
             };
 
-            await boss.send(originalQueue, retryData, {
-              startAfter: startAfterSeconds,
-            });
+            if (startAfterSeconds === null) {
+              await boss.send(originalQueue, retryData);
+            } else {
+              await boss.send(originalQueue, retryData, {
+                startAfter: startAfterSeconds,
+              });
+            }
 
             // Mark the DLQ job as completed so it's removed from the dead letter queue
             await boss.complete(dlqName, deadJob.id);
@@ -129,9 +153,10 @@ export async function handleDlqProcessJob(
                 originalQueue,
                 deadJobId: deadJob.id,
                 dlqRetryCount: nextRetryCount,
-                startAfterSeconds,
+                retryMode: startAfterSeconds === null ? 'immediate' : 'backoff',
+                ...(startAfterSeconds === null ? {} : { startAfterSeconds }),
               },
-              'Re-enqueued dead letter job with backoff',
+              'Re-enqueued dead letter job',
             );
           } else {
             // Mark as completed to remove from the DLQ, but flag for manual review

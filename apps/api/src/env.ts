@@ -34,6 +34,24 @@ const optionalUrlString = () =>
     return value;
   }, z.string().url().optional());
 
+const envBoolean = z.preprocess((value) => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) {
+      return true;
+    }
+    if (['false', '0', 'no', 'n', 'off'].includes(normalized)) {
+      return false;
+    }
+  }
+
+  return value;
+}, z.boolean());
+
 function findLegacyGoogleCseEnvKeys(source: NodeJS.ProcessEnv): string[] {
   const explicitMatches = LEGACY_GOOGLE_CSE_ENV_KEYS.filter((key) => key in source);
   const inferredMatches = Object.keys(source).filter((key) =>
@@ -49,6 +67,7 @@ const ApiEnvSchema = z.object({
   CORS_ORIGIN: z.string().url().default('http://localhost:3000'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   PG_BOSS_SCHEMA: z.string().min(1).default('pgboss'),
+  ALLOW_LOCAL_DATABASE_URL: envBoolean.default(false),
   DATABASE_URL: z
     .string()
     .min(
@@ -85,7 +104,11 @@ const ApiEnvSchema = z.object({
   DISCOVERY_MAX_LEADS_PER_RUN: z.coerce.number().int().min(1).optional(),
 });
 
-export type ApiEnv = z.infer<typeof ApiEnvSchema>;
+type ApiEnvSchemaOutput = z.infer<typeof ApiEnvSchema>;
+
+export type ApiEnv = Omit<ApiEnvSchemaOutput, 'ALLOW_LOCAL_DATABASE_URL'> & {
+  ALLOW_LOCAL_DATABASE_URL?: boolean;
+};
 
 const API_RUNTIME_DATABASE_URL_VALIDATION = {
   invalidConfigurationLabel: 'Invalid API environment configuration',

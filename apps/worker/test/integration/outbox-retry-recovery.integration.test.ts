@@ -118,7 +118,7 @@ describe('outbox retry recovery integration', () => {
       where: { id: outboxEvent.id },
       data: {
         status: 'failed',
-        nextAttemptAt: new Date(Date.now() - 1_000),
+        nextAttemptAt: new Date(0),
       },
     });
 

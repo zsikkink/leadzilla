@@ -24,6 +24,7 @@ export interface DiscoveryRunJobPayload {
   icpProfileId: string;
   countries: string[];
   cities?: string[] | undefined;
+  searchCategories?: string[] | undefined;
   includeWebsiteAnalysis?: boolean | undefined;
   includeSocialMediaAnalysis?: boolean | undefined;
   limit?: number | undefined;
@@ -40,6 +41,7 @@ export interface DiscoverySeedShardJobPayload {
   icpProfileId: string;
   countries: CreateDiscoveryRunRequest['countries'];
   cities?: CreateDiscoveryRunRequest['cities'];
+  searchCategories?: string[] | undefined;
   includeWebsiteAnalysis?: boolean | undefined;
   includeSocialMediaAnalysis?: boolean | undefined;
   maxTasks?: number | undefined;
@@ -99,6 +101,17 @@ function resolveIcpProfileIds(input: CreateDiscoveryRunRequest): string[] {
   return [];
 }
 
+function resolveRequestedSearchCategories(
+  input: CreateDiscoveryRunRequest,
+): string[] | undefined {
+  const searchCategories = input.advancedSettings?.searchCategories;
+  if (!searchCategories || searchCategories.length === 0) {
+    return undefined;
+  }
+
+  return [...searchCategories];
+}
+
 function buildDiscoverySeedShardJobPayloads(
   runId: string,
   input: CreateDiscoveryRunRequest,
@@ -113,6 +126,7 @@ function buildDiscoverySeedShardJobPayloads(
     ? totalLimit - perIcpLimit * icpCount
     : 0;
   const seedPayloads: DiscoverySeedShardJobPayload[] = [];
+  const searchCategories = resolveRequestedSearchCategories(input);
 
   for (let i = 0; i < icpProfileIds.length; i += 1) {
     const icpProfileId = icpProfileIds[i]!;
@@ -135,6 +149,7 @@ function buildDiscoverySeedShardJobPayloads(
       icpProfileId,
       countries: input.countries,
       cities: input.cities,
+      ...(searchCategories ? { searchCategories } : {}),
       includeWebsiteAnalysis: input.includeWebsiteAnalysis,
       includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
       maxTasks,
@@ -163,12 +178,14 @@ export function buildDiscoveryService(
 
       // Store the first ICP as the primary for backward compat in payload/display
       const primaryIcpProfileId = icpProfileIds[0] ?? '';
+      const searchCategories = resolveRequestedSearchCategories(input);
 
       const payload: DiscoveryRunJobPayload = {
         runId,
         icpProfileId: primaryIcpProfileId,
         countries: input.countries,
         cities: input.cities,
+        ...(searchCategories ? { searchCategories } : {}),
         includeWebsiteAnalysis: input.includeWebsiteAnalysis,
         includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
         limit: input.limit,

@@ -116,12 +116,34 @@ describe('loadWorkerEnv', () => {
     ).toThrow(/configured for remote Supabase only/);
   });
 
+  it('allows IPv6 localhost postgres urls outside ci/test when explicitly opted into local runtime', () => {
+    expect(() =>
+      loadWorkerEnv({
+        DATABASE_URL: 'postgresql://postgres:postgres@[::1]:5434/lead_flood',
+        APP_ENV: 'local',
+        NODE_ENV: 'production',
+        ALLOW_LOCAL_DATABASE_URL: 'true',
+      }),
+    ).not.toThrow();
+  });
+
   it('rejects non-Supabase postgres hosts outside ci/test validation', () => {
     expect(() =>
       loadWorkerEnv({
         DATABASE_URL: 'postgresql://postgres:postgres@db.example.com:5432/postgres?sslmode=require',
         APP_ENV: 'local',
         NODE_ENV: 'production',
+      }),
+    ).toThrow(/expected a Supabase Postgres host/);
+  });
+
+  it('still rejects non-Supabase non-local hosts when local runtime is explicitly allowed', () => {
+    expect(() =>
+      loadWorkerEnv({
+        DATABASE_URL: 'postgresql://postgres:postgres@db.example.com:5432/postgres?sslmode=require',
+        APP_ENV: 'local',
+        NODE_ENV: 'production',
+        ALLOW_LOCAL_DATABASE_URL: 'true',
       }),
     ).toThrow(/expected a Supabase Postgres host/);
   });
