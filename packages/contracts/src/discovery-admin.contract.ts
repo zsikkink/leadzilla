@@ -99,6 +99,59 @@ export const AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesResponseSch
   })
   .strict();
 
+export const AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsRequestSchema = z
+  .object({
+    assignedAtStart: z.string().datetime(),
+    assignedAtEnd: z.string().datetime(),
+    icpProfileId: z.string().min(1),
+    taskType: SearchTaskTypeSchema,
+    countryCode: z.string().min(1),
+    city: z.string().nullable(),
+    language: z.string().min(1),
+    normalizedQueryKey: z.string().min(1),
+    queryHash: z.string().min(1),
+    page: z.number().int().min(0),
+    timeBucket: z.string().min(1),
+  })
+  .strict()
+  .refine(
+    (value) => new Date(value.assignedAtEnd).getTime() > new Date(value.assignedAtStart).getTime(),
+    {
+      path: ['assignedAtEnd'],
+      message: 'assignedAtEnd must be after assignedAtStart',
+    },
+  );
+
+export const AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentRowSchema = z
+  .object({
+    assignmentId: z.string().min(1),
+    discoveryRunId: z.string().min(1),
+    assignedAt: z.string().datetime(),
+    icpProfileId: z.string().min(1),
+    businessId: z.string().min(1),
+    searchTaskId: z.string().min(1),
+    primaryOutcomeCode: z.string().min(1).nullable(),
+    phase1Class: z.string().min(1),
+    exclusionReason: z.string().min(1).nullable(),
+    taskType: SearchTaskTypeSchema,
+    countryCode: z.string().min(1),
+    city: z.string().nullable(),
+    language: z.string().min(1),
+    queryText: z.string().min(1),
+    normalizedQueryKey: z.string().min(1),
+    queryHash: z.string().min(1),
+    page: z.number().int().min(0),
+    timeBucket: z.string().min(1),
+  })
+  .strict();
+
+export const AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsResponseSchema = z
+  .object({
+    searchInputBasis: AdminDiscoveryPhase1SearchInputBasisSchema,
+    assignments: z.array(AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentRowSchema),
+  })
+  .strict();
+
 export const AdminListLeadsQuerySchema = z
   .object({
     page: z.coerce.number().int().min(1).default(1),
@@ -482,6 +535,15 @@ export type AdminDiscoveryPhase1HistoricalSearchInputCohortSummaryRow = z.infer<
 >;
 export type AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesResponse = z.infer<
   typeof AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesResponseSchema
+>;
+export type AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsRequest = z.infer<
+  typeof AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsRequestSchema
+>;
+export type AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentRow = z.infer<
+  typeof AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentRowSchema
+>;
+export type AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsResponse = z.infer<
+  typeof AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsResponseSchema
 >;
 export type AdminListLeadsQuery = z.infer<typeof AdminListLeadsQuerySchema>;
 export type AdminLeadRow = z.infer<typeof AdminLeadRowSchema>;

@@ -10,6 +10,7 @@ const { dbMocks, routeMocks } = vi.hoisted(() => ({
     PrismaDiscoveryAdminRepository: vi.fn(() => ({})),
     service: {
       getDiscoveryPhase1IcpLocationSummary: vi.fn(),
+      getDiscoveryPhase1HistoricalSearchInputCohortAssignments: vi.fn(),
       getDiscoveryPhase1HistoricalSearchInputCohortSummaries: vi.fn(),
       listJobRequests: vi.fn(),
       cancelDiscoveryRun: vi.fn(),
@@ -329,6 +330,160 @@ describe('discovery-admin.routes job requests', () => {
     });
     expect(
       routeMocks.service.getDiscoveryPhase1HistoricalSearchInputCohortSummaries,
+    ).not.toHaveBeenCalled();
+    expect(dbMocks.query).toHaveBeenCalledWith(
+      expect.stringContaining('from public.app_admins'),
+      ['22222222-2222-4222-8222-222222222222'],
+    );
+  });
+
+  it('returns historical phase-1 search-input cohort assignments for one selected cohort', async () => {
+    routeMocks.service.getDiscoveryPhase1HistoricalSearchInputCohortAssignments.mockResolvedValue({
+      searchInputBasis: 'ASSIGNED_SEARCH_TASK_INPUT',
+      assignments: [
+        {
+          assignmentId: 'assignment_1',
+          discoveryRunId: 'run_1',
+          assignedAt: '2026-03-01T01:00:00.000Z',
+          icpProfileId: 'icp_1',
+          businessId: 'business_1',
+          searchTaskId: 'task_1',
+          primaryOutcomeCode: 'LEAD_CREATED',
+          phase1Class: 'PHASE1_POSITIVE',
+          exclusionReason: null,
+          taskType: 'SERP_GOOGLE',
+          countryCode: 'AE',
+          city: 'Dubai',
+          language: 'en',
+          queryText: 'dentist dubai',
+          normalizedQueryKey: 'dentist dubai',
+          queryHash: 'query_hash_1',
+          page: 1,
+          timeBucket: 'weekday_morning',
+        },
+      ],
+    });
+
+    const payload = {
+      assignedAtStart: '2026-03-01T00:00:00.000Z',
+      assignedAtEnd: '2026-03-02T00:00:00.000Z',
+      icpProfileId: 'icp_1',
+      taskType: 'SERP_GOOGLE',
+      countryCode: 'AE',
+      city: 'Dubai',
+      language: 'en',
+      normalizedQueryKey: 'dentist dubai',
+      queryHash: 'query_hash_1',
+      page: 1,
+      timeBucket: 'weekday_morning',
+    };
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/discovery/runs/phase1-search-input-historical-cohort-assignments',
+      headers: {
+        'x-admin-key': 'admin-key',
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(
+      routeMocks.service.getDiscoveryPhase1HistoricalSearchInputCohortAssignments,
+    ).toHaveBeenCalledWith(payload);
+    expect(response.json()).toEqual({
+      searchInputBasis: 'ASSIGNED_SEARCH_TASK_INPUT',
+      assignments: [
+        {
+          assignmentId: 'assignment_1',
+          discoveryRunId: 'run_1',
+          assignedAt: '2026-03-01T01:00:00.000Z',
+          icpProfileId: 'icp_1',
+          businessId: 'business_1',
+          searchTaskId: 'task_1',
+          primaryOutcomeCode: 'LEAD_CREATED',
+          phase1Class: 'PHASE1_POSITIVE',
+          exclusionReason: null,
+          taskType: 'SERP_GOOGLE',
+          countryCode: 'AE',
+          city: 'Dubai',
+          language: 'en',
+          queryText: 'dentist dubai',
+          normalizedQueryKey: 'dentist dubai',
+          queryHash: 'query_hash_1',
+          page: 1,
+          timeBucket: 'weekday_morning',
+        },
+      ],
+    });
+  });
+
+  it('rejects an invalid historical phase-1 search-input cohort assignment payload', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/discovery/runs/phase1-search-input-historical-cohort-assignments',
+      headers: {
+        'x-admin-key': 'admin-key',
+      },
+      payload: {
+        assignedAtStart: '2026-03-02T00:00:00.000Z',
+        assignedAtEnd: '2026-03-01T00:00:00.000Z',
+        icpProfileId: 'icp_1',
+        taskType: 'SERP_GOOGLE',
+        countryCode: 'AE',
+        city: 'Dubai',
+        language: 'en',
+        normalizedQueryKey: 'dentist dubai',
+        queryHash: 'query_hash_1',
+        page: 1,
+        timeBucket: 'weekday_morning',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: 'Invalid discovery phase-1 historical search-input cohort assignment payload',
+      requestId: expect.any(String),
+    });
+    expect(
+      routeMocks.service.getDiscoveryPhase1HistoricalSearchInputCohortAssignments,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('rejects historical phase-1 search-input cohort assignments for authenticated non-admin users', async () => {
+    currentUserId = '22222222-2222-4222-8222-222222222222';
+    dbMocks.query.mockResolvedValue({
+      rows: [{ isAdmin: false }],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/discovery/runs/phase1-search-input-historical-cohort-assignments',
+      headers: {
+        'x-admin-key': 'admin-key',
+      },
+      payload: {
+        assignedAtStart: '2026-03-01T00:00:00.000Z',
+        assignedAtEnd: '2026-03-02T00:00:00.000Z',
+        icpProfileId: 'icp_1',
+        taskType: 'SERP_GOOGLE',
+        countryCode: 'AE',
+        city: 'Dubai',
+        language: 'en',
+        normalizedQueryKey: 'dentist dubai',
+        queryHash: 'query_hash_1',
+        page: 1,
+        timeBucket: 'weekday_morning',
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({
+      error: 'Forbidden',
+      requestId: expect.any(String),
+    });
+    expect(
+      routeMocks.service.getDiscoveryPhase1HistoricalSearchInputCohortAssignments,
     ).not.toHaveBeenCalled();
     expect(dbMocks.query).toHaveBeenCalledWith(
       expect.stringContaining('from public.app_admins'),

@@ -1,9 +1,12 @@
 import {
   listDiscoveryPhase1AssignmentLocationSummaries,
+  listDiscoveryPhase1HistoricalSearchInputCohortAssignments,
   listDiscoveryPhase1HistoricalSearchInputCohortSummaries,
 } from '@lead-flood/db';
 import type {
   AdminBusinessDetailResponse,
+  AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsRequest,
+  AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsResponse,
   AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesRequest,
   AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesResponse,
   AdminDiscoveryPhase1IcpLocationSummaryRequest,
@@ -51,6 +54,9 @@ export interface DiscoveryAdminService {
   getDiscoveryPhase1HistoricalSearchInputCohortSummaries(
     input: AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesRequest,
   ): Promise<AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesResponse>;
+  getDiscoveryPhase1HistoricalSearchInputCohortAssignments(
+    input: AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsRequest,
+  ): Promise<AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsResponse>;
   listBusinesses(query: AdminListBusinessesQuery): Promise<AdminListBusinessesResponse>;
   getBusinessById(id: string): Promise<AdminBusinessDetailResponse>;
   listLeads(query: AdminListLeadsQuery): Promise<AdminListLeadsResponse>;
@@ -154,6 +160,45 @@ export function buildDiscoveryAdminService(
                 : null,
           };
         }),
+      };
+    },
+    async getDiscoveryPhase1HistoricalSearchInputCohortAssignments(input) {
+      const rows = await listDiscoveryPhase1HistoricalSearchInputCohortAssignments({
+        assignedAtStart: new Date(input.assignedAtStart),
+        assignedAtEnd: new Date(input.assignedAtEnd),
+        icpProfileId: input.icpProfileId,
+        taskType: input.taskType,
+        countryCode: input.countryCode,
+        city: input.city,
+        language: input.language,
+        normalizedQueryKey: input.normalizedQueryKey,
+        queryHash: input.queryHash,
+        page: input.page,
+        timeBucket: input.timeBucket,
+      });
+
+      return {
+        searchInputBasis: 'ASSIGNED_SEARCH_TASK_INPUT',
+        assignments: rows.map((row) => ({
+          assignmentId: row.assignment_id,
+          discoveryRunId: row.discovery_run_id,
+          assignedAt: row.assigned_at.toISOString(),
+          icpProfileId: row.icp_profile_id,
+          businessId: row.business_id,
+          searchTaskId: row.search_task_id,
+          primaryOutcomeCode: row.primary_outcome_code,
+          phase1Class: row.phase1_class,
+          exclusionReason: row.exclusion_reason,
+          taskType: row.task_type as SearchTaskType,
+          countryCode: row.country_code,
+          city: row.city,
+          language: row.language,
+          queryText: row.query_text,
+          normalizedQueryKey: row.normalized_query_key,
+          queryHash: row.query_hash,
+          page: row.page,
+          timeBucket: row.time_bucket,
+        })),
       };
     },
     async listBusinesses(query) {

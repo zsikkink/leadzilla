@@ -2,6 +2,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   AdminBusinessDetailResponseSchema,
   AdminBusinessIdParamsSchema,
+  AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsRequestSchema,
+  AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsResponseSchema,
   AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesRequestSchema,
   AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesResponseSchema,
   AdminDiscoveryPhase1IcpLocationSummaryRequestSchema,
@@ -422,6 +424,38 @@ export function registerDiscoveryAdminRoutes(
         parsedBody.data,
       );
       return AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.post('/v1/admin/discovery/runs/phase1-search-input-historical-cohort-assignments', async (request, reply) => {
+    if (!(await requireDiscoveryAdminAccess(request, reply, dependencies.adminApiKey))) {
+      return;
+    }
+
+    const parsedBody =
+      AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsRequestSchema.safeParse(
+        request.body,
+      );
+    if (!parsedBody.success) {
+      return sendValidationError(
+        reply,
+        request.id,
+        'Invalid discovery phase-1 historical search-input cohort assignment payload',
+      );
+    }
+
+    try {
+      const result = await service.getDiscoveryPhase1HistoricalSearchInputCohortAssignments(
+        parsedBody.data,
+      );
+      return AdminDiscoveryPhase1HistoricalSearchInputCohortAssignmentsResponseSchema.parse(
+        result,
+      );
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;
