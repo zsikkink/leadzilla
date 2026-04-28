@@ -53,6 +53,52 @@ export const AdminDiscoveryPhase1IcpLocationSummaryResponseSchema = z
   })
   .strict();
 
+export const AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesRequestSchema = z
+  .object({
+    assignedAtStart: z.string().datetime(),
+    assignedAtEnd: z.string().datetime(),
+  })
+  .strict()
+  .refine(
+    (value) => new Date(value.assignedAtEnd).getTime() > new Date(value.assignedAtStart).getTime(),
+    {
+      path: ['assignedAtEnd'],
+      message: 'assignedAtEnd must be after assignedAtStart',
+    },
+  );
+
+export const AdminDiscoveryPhase1SearchInputBasisSchema = z.literal('ASSIGNED_SEARCH_TASK_INPUT');
+
+export const AdminDiscoveryPhase1HistoricalSearchInputCohortSummaryRowSchema = z
+  .object({
+    icpProfileId: z.string().min(1),
+    taskType: SearchTaskTypeSchema,
+    countryCode: z.string().min(1),
+    city: z.string().nullable(),
+    language: z.string().min(1),
+    normalizedQueryKey: z.string().min(1),
+    queryHash: z.string().min(1),
+    page: z.number().int().min(0),
+    timeBucket: z.string().min(1),
+    discoveryRunCount: z.number().int().min(0),
+    assignmentCount: z.number().int().min(0),
+    measuredAssignmentCount: z.number().int().min(0),
+    phase1PositiveCount: z.number().int().min(0),
+    phase1NegativeCount: z.number().int().min(0),
+    excludeOperationalCount: z.number().int().min(0),
+    excludeIncompleteCount: z.number().int().min(0),
+    measurementCoverageRate: z.number().min(0).max(1),
+    phase1PositiveRateAmongMeasuredAssignments: z.number().min(0).max(1).nullable(),
+  })
+  .strict();
+
+export const AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesResponseSchema = z
+  .object({
+    searchInputBasis: AdminDiscoveryPhase1SearchInputBasisSchema,
+    cohorts: z.array(AdminDiscoveryPhase1HistoricalSearchInputCohortSummaryRowSchema),
+  })
+  .strict();
+
 export const AdminListLeadsQuerySchema = z
   .object({
     page: z.coerce.number().int().min(1).default(1),
@@ -424,6 +470,18 @@ export type AdminDiscoveryPhase1IcpLocationSummaryRow = z.infer<
 >;
 export type AdminDiscoveryPhase1IcpLocationSummaryResponse = z.infer<
   typeof AdminDiscoveryPhase1IcpLocationSummaryResponseSchema
+>;
+export type AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesRequest = z.infer<
+  typeof AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesRequestSchema
+>;
+export type AdminDiscoveryPhase1SearchInputBasis = z.infer<
+  typeof AdminDiscoveryPhase1SearchInputBasisSchema
+>;
+export type AdminDiscoveryPhase1HistoricalSearchInputCohortSummaryRow = z.infer<
+  typeof AdminDiscoveryPhase1HistoricalSearchInputCohortSummaryRowSchema
+>;
+export type AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesResponse = z.infer<
+  typeof AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesResponseSchema
 >;
 export type AdminListLeadsQuery = z.infer<typeof AdminListLeadsQuerySchema>;
 export type AdminLeadRow = z.infer<typeof AdminLeadRowSchema>;

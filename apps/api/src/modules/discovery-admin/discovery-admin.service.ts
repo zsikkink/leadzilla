@@ -1,6 +1,11 @@
-import { listDiscoveryPhase1AssignmentLocationSummaries } from '@lead-flood/db';
+import {
+  listDiscoveryPhase1AssignmentLocationSummaries,
+  listDiscoveryPhase1HistoricalSearchInputCohortSummaries,
+} from '@lead-flood/db';
 import type {
   AdminBusinessDetailResponse,
+  AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesRequest,
+  AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesResponse,
   AdminDiscoveryPhase1IcpLocationSummaryRequest,
   AdminDiscoveryPhase1IcpLocationSummaryResponse,
   AdminListBusinessesQuery,
@@ -16,6 +21,7 @@ import type {
   ListJobRunsResponse,
   RunDiscoverySeedRequest,
   RunDiscoveryTasksRequest,
+  SearchTaskType,
   TriggerJobRunResponse,
 } from '@lead-flood/contracts';
 
@@ -42,6 +48,9 @@ export interface DiscoveryAdminService {
   getDiscoveryPhase1IcpLocationSummary(
     input: AdminDiscoveryPhase1IcpLocationSummaryRequest,
   ): Promise<AdminDiscoveryPhase1IcpLocationSummaryResponse>;
+  getDiscoveryPhase1HistoricalSearchInputCohortSummaries(
+    input: AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesRequest,
+  ): Promise<AdminDiscoveryPhase1HistoricalSearchInputCohortSummariesResponse>;
   listBusinesses(query: AdminListBusinessesQuery): Promise<AdminListBusinessesResponse>;
   getBusinessById(id: string): Promise<AdminBusinessDetailResponse>;
   listLeads(query: AdminListLeadsQuery): Promise<AdminListLeadsResponse>;
@@ -98,6 +107,44 @@ export function buildDiscoveryAdminService(
             phase1PositiveCount: row.phase1_positive_count,
             phase1NegativeCount: row.phase1_negative_count,
             holdoutAmbiguousCount: row.holdout_ambiguous_count,
+            excludeOperationalCount: row.exclude_operational_count,
+            excludeIncompleteCount: row.exclude_incomplete_count,
+            measurementCoverageRate: measuredAssignmentCount / row.assignment_count,
+            phase1PositiveRateAmongMeasuredAssignments:
+              measuredAssignmentCount > 0
+                ? row.phase1_positive_count / measuredAssignmentCount
+                : null,
+          };
+        }),
+      };
+    },
+    async getDiscoveryPhase1HistoricalSearchInputCohortSummaries(input) {
+      const rows = await listDiscoveryPhase1HistoricalSearchInputCohortSummaries({
+        assignedAtStart: new Date(input.assignedAtStart),
+        assignedAtEnd: new Date(input.assignedAtEnd),
+      });
+
+      return {
+        searchInputBasis: 'ASSIGNED_SEARCH_TASK_INPUT',
+        cohorts: rows.map((row) => {
+          const measuredAssignmentCount =
+            row.phase1_positive_count + row.phase1_negative_count;
+
+          return {
+            icpProfileId: row.icp_profile_id,
+            taskType: row.task_type as SearchTaskType,
+            countryCode: row.country_code,
+            city: row.city,
+            language: row.language,
+            normalizedQueryKey: row.normalized_query_key,
+            queryHash: row.query_hash,
+            page: row.page,
+            timeBucket: row.time_bucket,
+            discoveryRunCount: row.discovery_run_count,
+            assignmentCount: row.assignment_count,
+            measuredAssignmentCount,
+            phase1PositiveCount: row.phase1_positive_count,
+            phase1NegativeCount: row.phase1_negative_count,
             excludeOperationalCount: row.exclude_operational_count,
             excludeIncompleteCount: row.exclude_incomplete_count,
             measurementCoverageRate: measuredAssignmentCount / row.assignment_count,

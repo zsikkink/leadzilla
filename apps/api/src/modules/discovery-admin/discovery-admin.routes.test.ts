@@ -10,6 +10,7 @@ const { dbMocks, routeMocks } = vi.hoisted(() => ({
     PrismaDiscoveryAdminRepository: vi.fn(() => ({})),
     service: {
       getDiscoveryPhase1IcpLocationSummary: vi.fn(),
+      getDiscoveryPhase1HistoricalSearchInputCohortSummaries: vi.fn(),
       listJobRequests: vi.fn(),
       cancelDiscoveryRun: vi.fn(),
     },
@@ -205,6 +206,134 @@ describe('discovery-admin.routes job requests', () => {
       requestId: expect.any(String),
     });
     expect(routeMocks.service.getDiscoveryPhase1IcpLocationSummary).not.toHaveBeenCalled();
+  });
+
+  it('returns historical phase-1 search-input cohort summaries across runs for the requested assignment window', async () => {
+    routeMocks.service.getDiscoveryPhase1HistoricalSearchInputCohortSummaries.mockResolvedValue({
+      searchInputBasis: 'ASSIGNED_SEARCH_TASK_INPUT',
+      cohorts: [
+        {
+          icpProfileId: 'icp_1',
+          taskType: 'SERP_GOOGLE',
+          countryCode: 'AE',
+          city: 'Dubai',
+          language: 'en',
+          normalizedQueryKey: 'dentist dubai',
+          queryHash: 'query_hash_1',
+          page: 1,
+          timeBucket: 'weekday_morning',
+          discoveryRunCount: 2,
+          assignmentCount: 5,
+          measuredAssignmentCount: 3,
+          phase1PositiveCount: 2,
+          phase1NegativeCount: 1,
+          excludeOperationalCount: 1,
+          excludeIncompleteCount: 1,
+          measurementCoverageRate: 0.6,
+          phase1PositiveRateAmongMeasuredAssignments: 2 / 3,
+        },
+      ],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/discovery/runs/phase1-search-input-historical-cohort-summaries',
+      headers: {
+        'x-admin-key': 'admin-key',
+      },
+      payload: {
+        assignedAtStart: '2026-03-01T00:00:00.000Z',
+        assignedAtEnd: '2026-03-02T00:00:00.000Z',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(
+      routeMocks.service.getDiscoveryPhase1HistoricalSearchInputCohortSummaries,
+    ).toHaveBeenCalledWith({
+      assignedAtStart: '2026-03-01T00:00:00.000Z',
+      assignedAtEnd: '2026-03-02T00:00:00.000Z',
+    });
+    expect(response.json()).toEqual({
+      searchInputBasis: 'ASSIGNED_SEARCH_TASK_INPUT',
+      cohorts: [
+        {
+          icpProfileId: 'icp_1',
+          taskType: 'SERP_GOOGLE',
+          countryCode: 'AE',
+          city: 'Dubai',
+          language: 'en',
+          normalizedQueryKey: 'dentist dubai',
+          queryHash: 'query_hash_1',
+          page: 1,
+          timeBucket: 'weekday_morning',
+          discoveryRunCount: 2,
+          assignmentCount: 5,
+          measuredAssignmentCount: 3,
+          phase1PositiveCount: 2,
+          phase1NegativeCount: 1,
+          excludeOperationalCount: 1,
+          excludeIncompleteCount: 1,
+          measurementCoverageRate: 0.6,
+          phase1PositiveRateAmongMeasuredAssignments: 2 / 3,
+        },
+      ],
+    });
+  });
+
+  it('rejects an invalid historical phase-1 search-input cohort summary payload', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/discovery/runs/phase1-search-input-historical-cohort-summaries',
+      headers: {
+        'x-admin-key': 'admin-key',
+      },
+      payload: {
+        assignedAtStart: '2026-03-02T00:00:00.000Z',
+        assignedAtEnd: '2026-03-01T00:00:00.000Z',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: 'Invalid discovery phase-1 historical search-input cohort summary payload',
+      requestId: expect.any(String),
+    });
+    expect(
+      routeMocks.service.getDiscoveryPhase1HistoricalSearchInputCohortSummaries,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('rejects historical phase-1 search-input cohort summaries for authenticated non-admin users', async () => {
+    currentUserId = '22222222-2222-4222-8222-222222222222';
+    dbMocks.query.mockResolvedValue({
+      rows: [{ isAdmin: false }],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/discovery/runs/phase1-search-input-historical-cohort-summaries',
+      headers: {
+        'x-admin-key': 'admin-key',
+      },
+      payload: {
+        assignedAtStart: '2026-03-01T00:00:00.000Z',
+        assignedAtEnd: '2026-03-02T00:00:00.000Z',
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({
+      error: 'Forbidden',
+      requestId: expect.any(String),
+    });
+    expect(
+      routeMocks.service.getDiscoveryPhase1HistoricalSearchInputCohortSummaries,
+    ).not.toHaveBeenCalled();
+    expect(dbMocks.query).toHaveBeenCalledWith(
+      expect.stringContaining('from public.app_admins'),
+      ['22222222-2222-4222-8222-222222222222'],
+    );
   });
 
   it('rejects phase-1 summaries for authenticated non-admin users', async () => {
