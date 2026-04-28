@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { GeneratedSearchTask } from './queries/generate_tasks.js';
+import type * as GenerateTasksModule from './queries/generate_tasks.js';
 import { ICP_INDUSTRY_CATEGORY_MAP } from './queries/icp-category-map.js';
+
+type GeneratedSearchTask = GenerateTasksModule.GeneratedSearchTask;
 
 const { executeRawMock, generateTasksV2Mock } = vi.hoisted(() => ({
   executeRawMock: vi.fn(),
@@ -15,7 +17,7 @@ vi.mock('@lead-flood/db', () => ({
 }));
 
 vi.mock('./queries/generate_tasks.js', async () => {
-  const actual = await vi.importActual<typeof import('./queries/generate_tasks.js')>(
+  const actual = await vi.importActual<typeof GenerateTasksModule>(
     './queries/generate_tasks.js',
   );
 
