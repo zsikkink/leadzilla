@@ -102,7 +102,9 @@ enum DiscoveryRecordStatus {
 enum EnrichmentProvider {
   HUNTER
   CLEARBIT
+  OTHER_FREE
   PEOPLE_DATA_LABS
+  APOLLO
 }
 
 enum EnrichmentStatus {
