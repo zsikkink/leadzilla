@@ -663,6 +663,7 @@ describe('listDiscoveryPhase1AssignmentLocationSummaries', () => {
         try {
           await client.query('ROLLBACK');
         } catch {
+          // Preserve the original assertion or query failure.
         }
       }
 

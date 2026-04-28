@@ -1,6 +1,6 @@
 import type { Prisma } from '@prisma/client';
 
-const NULL_BYTE_RE = /\u0000/g;
+const NULL_BYTE = String.fromCharCode(0);
 const HEX_ESCAPED_BYTE_RUN_RE = /(?:\\x[0-9A-Fa-f]{2})+/g;
 const INCOMPLETE_HEX_ESCAPE_RE = /\\x(?![0-9A-Fa-f]{2})/g;
 
@@ -27,7 +27,7 @@ function decodeHexEscapedUtf8ByteRun(match: string): string {
 }
 
 function sanitizeStringForJson(value: string): string {
-  let sanitized = toWellFormedString(value).replace(NULL_BYTE_RE, '');
+  let sanitized = toWellFormedString(value).split(NULL_BYTE).join('');
   sanitized = sanitized.replace(HEX_ESCAPED_BYTE_RUN_RE, decodeHexEscapedUtf8ByteRun);
   sanitized = sanitized.replace(INCOMPLETE_HEX_ESCAPE_RE, '\\\\x');
   return sanitized;
