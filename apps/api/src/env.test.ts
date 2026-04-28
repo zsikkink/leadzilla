@@ -37,6 +37,32 @@ describe('loadApiEnv', () => {
     ).toThrow(/configured for remote Supabase only/);
   });
 
+  it('allows localhost postgres urls outside ci/test when explicitly opted into local runtime', () => {
+    expect(() =>
+      loadApiEnv({
+        ...baseEnv,
+        APP_ENV: 'local',
+        NODE_ENV: 'production',
+        ALLOW_LOCAL_DATABASE_URL: 'true',
+        DATABASE_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood',
+        DIRECT_URL: 'postgresql://postgres:postgres@127.0.0.1:5434/lead_flood',
+      }),
+    ).not.toThrow();
+  });
+
+  it('still rejects non-Supabase non-local hosts when local runtime is explicitly allowed', () => {
+    expect(() =>
+      loadApiEnv({
+        ...baseEnv,
+        APP_ENV: 'local',
+        NODE_ENV: 'production',
+        ALLOW_LOCAL_DATABASE_URL: 'true',
+        DATABASE_URL: 'postgresql://postgres:postgres@db.example.com:5432/postgres?sslmode=require',
+        DIRECT_URL: 'postgresql://postgres:postgres@db.example.com:5432/postgres?sslmode=require',
+      }),
+    ).toThrow(/expected a Supabase Postgres host/);
+  });
+
   it('treats blank optional string env vars as unset', () => {
     const env = loadApiEnv({
       ...baseEnv,

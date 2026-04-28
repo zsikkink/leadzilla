@@ -6,6 +6,7 @@ export type RuntimeDatabaseUrlName = 'DATABASE_URL' | 'DIRECT_URL';
 export interface RuntimeDatabaseUrlValidationSource {
   APP_ENV: string;
   NODE_ENV: string;
+  ALLOW_LOCAL_DATABASE_URL?: boolean;
 }
 
 export interface RuntimeDatabaseUrlValidationOptions {
@@ -57,6 +58,11 @@ function isSupabaseHost(hostname: string): boolean {
   );
 }
 
+function normalizeDatabaseHostname(hostname: string): string {
+  const normalized = hostname.toLowerCase();
+  return normalized === '[::1]' ? '::1' : normalized;
+}
+
 export function validateSupabaseRuntimeDatabaseUrl(
   name: RuntimeDatabaseUrlName,
   value: string,
@@ -68,9 +74,13 @@ export function validateSupabaseRuntimeDatabaseUrl(
   }
 
   const parsed = parseDatabaseUrl(name, value, options.invalidConfigurationLabel);
-  const hostname = parsed.hostname.toLowerCase();
+  const hostname = normalizeDatabaseHostname(parsed.hostname);
 
   if (LOCAL_DATABASE_HOSTS.has(hostname)) {
+    if (source.ALLOW_LOCAL_DATABASE_URL === true) {
+      return;
+    }
+
     throw buildInvalidConfigurationError(
       options.invalidConfigurationLabel,
       name,
