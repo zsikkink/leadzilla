@@ -24,7 +24,7 @@
     "build": "prisma generate --schema prisma/schema.prisma && tsc -p tsconfig.json",
     "lint": "eslint src prisma --ext .ts",
     "typecheck": "prisma generate --schema prisma/schema.prisma && tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --exclude 'src/discovery-phase1-*.test.ts'",
     "test:unit": "vitest run",
     "test:sql:discovery-phase1": "bash ../../scripts/db/test-discovery-phase1-sql.sh",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",

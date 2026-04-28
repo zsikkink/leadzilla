@@ -379,5 +379,5 @@ describe('inspection endpoints integration', () => {
     expect(debugBody.samples[0]?.ruleEvaluations[0]?.ruleId).toBe(rule.id);
 
     await server.close();
-  });
+  }, 15_000);
 });

@@ -120,6 +120,12 @@ jobs:
       - name: Run SQL-first API /ready validation
         run: pnpm db:validate:sql-bootstrap:api
 
+      - name: Run SQL-first discovery phase 1 tests
+        env:
+          SQL_BOOTSTRAP_DATABASE_NAME: lead_flood_sql_phase1
+          SQL_BOOTSTRAP_DROP_EXISTING: '1'
+        run: pnpm --filter @lead-flood/db test:sql:discovery-phase1
+
   sql-bootstrap-worker-startup:
     runs-on: ubuntu-latest
     timeout-minutes: 20
