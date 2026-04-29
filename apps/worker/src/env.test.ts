@@ -31,6 +31,7 @@ describe('loadWorkerEnv', () => {
     expect(env.DISCOVERY_ENABLED).toBe(false);
     expect(env.SERPAPI_DISCOVERY_ENABLED).toBe(true);
     expect(env.SERPAPI_WEB_SEARCH_ENABLED).toBe(true);
+    expect(env.DISCOVERY_SEARCH_PROVIDER).toBe('SERPAPI');
     expect(env.DISCOVERY_SCHEDULE_ENABLED).toBe(false);
     expect(env.DISCOVERY_STALE_JOB_MINUTES).toBe(10);
     expect(env.ENRICHMENT_ENABLED).toBe(true);
@@ -41,6 +42,26 @@ describe('loadWorkerEnv', () => {
     expect(() => loadWorkerEnv({ APP_ENV: 'test' })).toThrowError(
       'Invalid worker environment configuration',
     );
+  });
+
+  it('accepts explicit SerpAPI discovery provider', () => {
+    const env = loadWorkerEnv({
+      DATABASE_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood',
+      APP_ENV: 'test',
+      DISCOVERY_SEARCH_PROVIDER: 'SERPAPI',
+    });
+
+    expect(env.DISCOVERY_SEARCH_PROVIDER).toBe('SERPAPI');
+  });
+
+  it('accepts explicit Google Places discovery provider', () => {
+    const env = loadWorkerEnv({
+      DATABASE_URL: 'postgresql://postgres:postgres@localhost:5434/lead_flood',
+      APP_ENV: 'test',
+      DISCOVERY_SEARCH_PROVIDER: 'GOOGLE_PLACES',
+    });
+
+    expect(env.DISCOVERY_SEARCH_PROVIDER).toBe('GOOGLE_PLACES');
   });
 
   it('uses default concurrency values', () => {

@@ -5,6 +5,7 @@ import { checkWorkerSchemaHealth } from '@lead-flood/db';
 import {
   GooglePlacesDiscoveryProvider,
   loadDiscoveryRuntimeConfig,
+  SerpApiDiscoveryProvider,
   type DiscoveryRuntimeConfig,
   type DiscoveryProvider as V2DiscoveryProvider,
 } from '@lead-flood/discovery';
@@ -332,10 +333,9 @@ async function main(): Promise<void> {
       );
     }
 
-    const hasGooglePlaces = Boolean(discoveryRuntimeConfig.googlePlacesApiKey);
-
     const providerLogContext = {
       enabled: true,
+      provider: discoveryRuntimeConfig.searchProvider,
       rps: discoveryRuntimeConfig.rps,
       concurrency: discoveryRuntimeConfig.concurrency,
       maxTaskAttempts: discoveryRuntimeConfig.maxTaskAttempts,
@@ -348,28 +348,37 @@ async function main(): Promise<void> {
       jobRequestWorkerId: env.JOB_REQUEST_WORKER_ID ?? buildDefaultWorkerId(),
     };
 
-    const googlePlacesProvider = hasGooglePlaces
-      ? new GooglePlacesDiscoveryProvider({
-          apiKey: discoveryRuntimeConfig.googlePlacesApiKey!,
-          rps: discoveryRuntimeConfig.rps,
-          maxAttempts: discoveryRuntimeConfig.maxTaskAttempts,
-          backoffBaseSeconds: discoveryRuntimeConfig.backoffBaseSeconds,
-        })
-      : null;
-
-    if (discoveryRuntimeConfig.searchProvider === 'GOOGLE_PLACES' && googlePlacesProvider) {
-      v2SearchProvider = googlePlacesProvider;
+    if (discoveryRuntimeConfig.searchProvider === 'SERPAPI') {
+      if (!discoveryRuntimeConfig.serpApiKey) {
+        throw new Error('Set SERPAPI_API_KEY for DISCOVERY_SEARCH_PROVIDER=SERPAPI.');
+      }
+      v2SearchProvider = new SerpApiDiscoveryProvider({
+        apiKey: discoveryRuntimeConfig.serpApiKey,
+        rps: discoveryRuntimeConfig.rps,
+        enableCache: discoveryRuntimeConfig.enableCache,
+        mapsZoom: discoveryRuntimeConfig.mapsZoom,
+        maxAttempts: discoveryRuntimeConfig.maxTaskAttempts,
+        backoffBaseSeconds: discoveryRuntimeConfig.backoffBaseSeconds,
+      });
       logger.info(
-        { ...providerLogContext, provider: 'GOOGLE_PLACES', mode: 'strict_initial_discovery' },
-        'Discovery pipeline configured (Google Places only, strict initial discovery mode)',
+        { ...providerLogContext, mode: 'strict_initial_discovery' },
+        'Discovery pipeline configured (SerpAPI initial discovery mode)',
       );
-    } else {
-      logger.warn(
-        {
-          searchProvider: discoveryRuntimeConfig.searchProvider,
-          hasGooglePlacesKey: hasGooglePlaces,
-        },
-        'No discovery search provider configured — set GOOGLE_PLACES_API_KEY',
+    }
+
+    if (discoveryRuntimeConfig.searchProvider === 'GOOGLE_PLACES') {
+      if (!discoveryRuntimeConfig.googlePlacesApiKey) {
+        throw new Error('Set GOOGLE_PLACES_API_KEY for DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES.');
+      }
+      v2SearchProvider = new GooglePlacesDiscoveryProvider({
+        apiKey: discoveryRuntimeConfig.googlePlacesApiKey,
+        rps: discoveryRuntimeConfig.rps,
+        maxAttempts: discoveryRuntimeConfig.maxTaskAttempts,
+        backoffBaseSeconds: discoveryRuntimeConfig.backoffBaseSeconds,
+      });
+      logger.info(
+        { ...providerLogContext, mode: 'strict_initial_discovery' },
+        'Discovery pipeline configured (Google Places initial discovery mode)',
       );
     }
   } catch (error: unknown) {

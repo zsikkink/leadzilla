@@ -127,7 +127,7 @@ export interface DiscoverySeedConfig {
   seedBucket: string | null;
 }
 
-export type DiscoverySearchProvider = 'GOOGLE_PLACES';
+export type DiscoverySearchProvider = 'SERPAPI' | 'GOOGLE_PLACES';
 
 export interface DiscoveryRuntimeConfig extends DiscoverySeedConfig {
   searchProvider: DiscoverySearchProvider;
@@ -211,23 +211,32 @@ export function loadDiscoverySeedConfig(source: NodeJS.ProcessEnv): DiscoverySee
 }
 
 export function loadDiscoveryRuntimeConfig(source: NodeJS.ProcessEnv): DiscoveryRuntimeConfig {
+  const serpApiKey = source.SERPAPI_API_KEY?.trim() || null;
   const googlePlacesApiKey = source.GOOGLE_PLACES_API_KEY?.trim() || null;
 
-  const providerRaw = source.DISCOVERY_SEARCH_PROVIDER?.trim().toUpperCase();
-  if (providerRaw === 'SERPAPI') {
+  const providerRaw = source.DISCOVERY_SEARCH_PROVIDER?.trim().toUpperCase() || 'SERPAPI';
+  if (providerRaw !== 'SERPAPI' && providerRaw !== 'GOOGLE_PLACES') {
     throw new Error(
-      'Initial discovery provider SERPAPI is disabled. ' +
-      'Set DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES.',
+      `Unsupported discovery search provider '${providerRaw}'. ` +
+      'Set DISCOVERY_SEARCH_PROVIDER=SERPAPI or DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES.',
     );
   }
 
-  if (!googlePlacesApiKey) {
+  const searchProvider: DiscoverySearchProvider = providerRaw;
+
+  if (searchProvider === 'SERPAPI' && !serpApiKey) {
     throw new Error(
       'No discovery search provider API key configured. ' +
-      'Set GOOGLE_PLACES_API_KEY.',
+      'Set SERPAPI_API_KEY for DISCOVERY_SEARCH_PROVIDER=SERPAPI.',
     );
   }
-  const searchProvider: DiscoverySearchProvider = 'GOOGLE_PLACES';
+
+  if (searchProvider === 'GOOGLE_PLACES' && !googlePlacesApiKey) {
+    throw new Error(
+      'No discovery search provider API key configured. ' +
+      'Set GOOGLE_PLACES_API_KEY for DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES.',
+    );
+  }
 
   const baseConfig = loadBaseSeedConfig(source);
   const mapsZoomRaw = source.DISCOVERY_MAPS_ZOOM?.trim();
@@ -246,7 +255,7 @@ export function loadDiscoveryRuntimeConfig(source: NodeJS.ProcessEnv): Discovery
   return {
     ...baseConfig,
     searchProvider,
-    serpApiKey: source.SERPAPI_API_KEY?.trim() || null,
+    serpApiKey,
     googlePlacesApiKey,
     rps: parsePositiveInt(source.DISCOVERY_RPS, 1),
     concurrency: parsePositiveInt(source.DISCOVERY_CONCURRENCY, 3),
