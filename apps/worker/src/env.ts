@@ -158,7 +158,7 @@ const WorkerEnvSchema = z.object({
   INSTAGRAM_PASSWORD: optionalNonEmptyString(),
   INSTAGRAM_COOKIES: optionalNonEmptyString(),
   INSTAGRAM_RATE_LIMIT_PER_MIN: z.coerce.number().int().min(1).max(60).optional(),
-  DISCOVERY_SEARCH_PROVIDER: z.literal('GOOGLE_PLACES').default('GOOGLE_PLACES'),
+  DISCOVERY_SEARCH_PROVIDER: z.enum(['SERPAPI', 'GOOGLE_PLACES']).default('SERPAPI'),
   WEBSITE_SCRAPER_PLAYWRIGHT_ENABLED: envBoolean.default(true),
   WEBSITE_SCRAPER_CHROMIUM_PATH: optionalNonEmptyString(),
   WORKER_PREQUALIFY_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(5),
