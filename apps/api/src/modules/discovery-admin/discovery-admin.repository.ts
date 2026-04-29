@@ -623,6 +623,22 @@ function toIsoString(value: Date | string | null): string | null {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
+function toSafeNonnegativeInteger(value: number | bigint, label: string): number {
+  if (typeof value === 'bigint') {
+    if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new RangeError(`${label} must be a safe nonnegative integer`);
+    }
+
+    return Number(value);
+  }
+
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`${label} must be a safe nonnegative integer`);
+  }
+
+  return value;
+}
+
 export interface DiscoveryAdminRepository {
   listBusinesses(query: AdminListBusinessesQuery): Promise<AdminListBusinessesResponse>;
   getBusinessById(id: string): Promise<AdminBusinessDetailResponse>;
@@ -1033,7 +1049,7 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
 
     const rows = await prisma.$queryRawUnsafe<
       Array<{
-        id: number;
+        id: number | bigint;
         request_type: DiscoveryAdminJobRequestType;
         status: DiscoveryAdminJobRequestStatus;
         params_json: unknown;
@@ -1078,7 +1094,7 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
 
     return {
       items: rows.map((row) => ({
-        id: row.id,
+        id: toSafeNonnegativeInteger(row.id, 'job_requests.id'),
         requestType: row.request_type,
         status: row.status,
         paramsJson: row.params_json,

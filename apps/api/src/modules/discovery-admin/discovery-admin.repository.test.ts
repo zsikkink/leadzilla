@@ -240,7 +240,7 @@ describe('PrismaDiscoveryAdminRepository.listJobRequests', () => {
       .mockResolvedValueOnce([{ total: 2 }])
       .mockResolvedValueOnce([
         {
-          id: 21,
+          id: BigInt(21),
           request_type: 'DISCOVERY_RUN',
           status: 'PENDING',
           params_json: { maxTasks: 40 },
@@ -337,5 +337,38 @@ describe('PrismaDiscoveryAdminRepository.listJobRequests', () => {
       20,
       0,
     );
+  });
+
+  it('rejects job request ids that cannot be safely returned as numbers', async () => {
+    prismaMock.$queryRawUnsafe
+      .mockResolvedValueOnce([{ total: 1 }])
+      .mockResolvedValueOnce([
+        {
+          id: BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1),
+          request_type: 'DISCOVERY_RUN',
+          status: 'PENDING',
+          params_json: { maxTasks: 40 },
+          requested_by: 'user_1',
+          claimed_by: null,
+          created_at: new Date('2026-03-14T12:00:00.000Z'),
+          updated_at: new Date('2026-03-14T12:01:00.000Z'),
+          claimed_at: null,
+          started_at: null,
+          finished_at: null,
+          error_text: null,
+          job_run_id: null,
+          idempotency_key: 'idem_1',
+        },
+      ]);
+
+    const { PrismaDiscoveryAdminRepository } = await import('./discovery-admin.repository.js');
+    const repository = new PrismaDiscoveryAdminRepository();
+
+    await expect(
+      repository.listJobRequests({
+        page: 1,
+        pageSize: 20,
+      }),
+    ).rejects.toThrow('job_requests.id must be a safe nonnegative integer');
   });
 });
