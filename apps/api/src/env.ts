@@ -96,6 +96,7 @@ const ApiEnvSchema = z.object({
   ENRICHMENT_ENABLED: z.coerce.boolean().optional(),
   OPENAI_API_KEY: optionalNonEmptyString(),
   OPENAI_GENERATION_MODEL: optionalNonEmptyString(),
+  RESEND_API_KEY: optionalNonEmptyString(),
   TRENGO_WEBHOOK_SECRET: optionalNonEmptyString(),
   RESEND_WEBHOOK_SECRET: optionalNonEmptyString(),
   ADMIN_API_KEY: optionalNonEmptyString(),

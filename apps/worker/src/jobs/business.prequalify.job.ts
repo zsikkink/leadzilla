@@ -1,4 +1,5 @@
 import { prisma } from '@lead-flood/db';
+import { isNonBusinessWebsiteDomain } from '@lead-flood/discovery';
 import { promises as dns } from 'node:dns';
 import type { Job, SendOptions } from 'pg-boss';
 
@@ -211,7 +212,7 @@ export async function handleBusinessPrequalifyJob(
     }
 
     // ── Check: website domain ──────────────────────────────────────────
-    if (!business.websiteDomain) {
+    if (!business.websiteDomain || isNonBusinessWebsiteDomain(business.websiteDomain)) {
       await disqualify(
         businessId,
         discoveryRunId,

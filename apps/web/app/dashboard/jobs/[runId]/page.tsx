@@ -114,6 +114,22 @@ interface BusinessData {
   } | null;
 }
 
+interface LeadData {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  businessEmail: string | null;
+  source: string;
+  blendedScore: number | null;
+  scoreBand: string | null;
+  status: string;
+  businessId: string;
+  businessName: string;
+  businessDeterministicScore: number | null;
+  businessScoreBand: string | null;
+}
+
 interface CostEventData {
   id: string;
   provider: string;
@@ -145,7 +161,7 @@ interface RunDetailsResponse {
   };
   searchTasks: SearchTaskData[];
   businesses: BusinessData[];
-  leads: Array<Record<string, unknown>>;
+  leads: LeadData[];
   costEvents: CostEventData[];
 }
 
@@ -184,6 +200,67 @@ function MetricCard({
       </div>
       <p className="mt-2 text-2xl font-extrabold tracking-tight">{value}</p>
     </div>
+  );
+}
+
+function formatContactName(firstName: string | null | undefined, lastName: string | null | undefined): string | null {
+  const fullName = [firstName, lastName]
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part))
+    .join(' ')
+    .trim();
+
+  if (!fullName || fullName.toLowerCase() === 'unknown contact') {
+    return null;
+  }
+
+  return fullName;
+}
+
+function formatLeadDisplayName(lead: LeadData): string {
+  const businessName = lead.businessName.trim();
+  const contactName = formatContactName(lead.firstName, lead.lastName);
+
+  if (businessName && contactName) {
+    return `${businessName} - ${contactName}`;
+  }
+
+  return businessName || contactName || lead.email;
+}
+
+function formatScore(score: number | null): string {
+  return score === null ? 'N/A' : score.toFixed(3);
+}
+
+function scoreClassName(score: number | null): string {
+  if (score === null) {
+    return 'bg-muted/20 text-muted-foreground/50';
+  }
+  if (score >= 0.67) {
+    return 'bg-zbooni-green/10 text-zbooni-green';
+  }
+  if (score >= 0.34) {
+    return 'bg-yellow-500/10 text-yellow-400';
+  }
+  return 'bg-red-500/10 text-red-400';
+}
+
+function ScorePill({
+  score,
+  band,
+  label = 'Score',
+}: {
+  score: number | null;
+  band?: string | null | undefined;
+  label?: string;
+}) {
+  return (
+    <span
+      className={`shrink-0 rounded-md px-2 py-1 text-right text-[10px] font-bold tabular-nums ${scoreClassName(score)}`}
+    >
+      {label} {formatScore(score)}
+      {band ? <span className="ml-1 uppercase">{band}</span> : null}
+    </span>
   );
 }
 
@@ -515,7 +592,7 @@ export default function DiscoveryRunDetailPage() {
   const costEvents = (details.data?.costEvents ?? []) as CostEventData[];
   // Filter out null/undefined leads — business_conversions.lead_id is NULL for many rows
   const leads = (details.data?.leads ?? []).filter(
-    (l): l is Record<string, unknown> => l !== null && l !== undefined && typeof l === 'object',
+    (l): l is LeadData => l !== null && l !== undefined && typeof l === 'object',
   );
   // The "converted" count from the run's result JSON is the authoritative source
   // (set during discovery finalization). Falls back to filtered leads array length.
@@ -535,6 +612,8 @@ export default function DiscoveryRunDetailPage() {
           business_name: business.name,
           reason: business.recoveryItem.reason,
           status: business.recoveryItem.status,
+          score: business.deterministicScore,
+          scoreBand: business.scoreBand,
         })),
     [businesses],
   );
@@ -865,16 +944,14 @@ export default function DiscoveryRunDetailPage() {
           </div>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {leads.map((lead) => {
-              const leadId = (lead as Record<string, unknown>).id as string | undefined;
-              const firstName = (lead as Record<string, unknown>).firstName as string | undefined;
-              const lastName = (lead as Record<string, unknown>).lastName as string | undefined;
-              const companyName = (lead as Record<string, unknown>).companyName as string | null | undefined;
-              const displayName = [firstName, lastName].filter(Boolean).join(' ') || 'Unknown';
+              const displayName = formatLeadDisplayName(lead);
+              const score = lead.blendedScore ?? lead.businessDeterministicScore;
+              const scoreBand = lead.scoreBand ?? lead.businessScoreBand;
 
               return (
                 <Link
-                  key={leadId ?? Math.random().toString()}
-                  href={leadId ? `/dashboard/leads/${leadId}` : '#'}
+                  key={lead.id}
+                  href={`/dashboard/leads/${lead.id}`}
                   className="flex items-center gap-3 rounded-lg border border-border/20 bg-zbooni-dark/20 px-3 py-2.5 transition-colors hover:border-border/40 hover:bg-zbooni-dark/30"
                 >
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zbooni-green/10">
@@ -882,10 +959,11 @@ export default function DiscoveryRunDetailPage() {
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-xs font-semibold">{displayName}</p>
-                    {companyName ? (
-                      <p className="truncate text-[10px] text-muted-foreground/50">{companyName}</p>
-                    ) : null}
+                    <p className="truncate text-[10px] text-muted-foreground/50">
+                      {lead.businessEmail ?? lead.email}
+                    </p>
                   </div>
+                  <ScorePill score={score} band={scoreBand} />
                 </Link>
               );
             })}
@@ -934,6 +1012,7 @@ export default function DiscoveryRunDetailPage() {
                       : item.reason.replace(/_/g, ' ')}
                   </p>
                 </div>
+                <ScorePill score={item.score} band={item.scoreBand} />
                 <span className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ${
                   item.status === 'OPEN'
                     ? 'bg-amber-500/15 text-amber-400'

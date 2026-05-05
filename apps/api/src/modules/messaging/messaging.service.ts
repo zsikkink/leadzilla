@@ -1,6 +1,7 @@
 import type {
   ApproveMessageDraftRequest,
   ConversationResponse,
+  CreateManualMessageDraftRequest,
   GenerateMessageDraftRequest,
   GenerateMessageDraftResponse,
   ListMessageDraftsQuery,
@@ -45,6 +46,7 @@ export interface MessageGenerateJobPayload {
   channel?: string | undefined;
   promptVersion?: string | undefined;
   forceRegenerate?: boolean | undefined;
+  redraftFeedback?: string | undefined;
   correlationId?: string | undefined;
 }
 
@@ -62,6 +64,9 @@ export interface MessagingService {
   generateMessageDraft(input: GenerateMessageDraftRequest): Promise<GenerateMessageDraftResponse>;
   listMessageDrafts(query: ListMessageDraftsQuery): Promise<ListMessageDraftsResponse>;
   getMessageDraft(draftId: string): Promise<MessageDraftResponse>;
+  createManualMessageDraft(
+    input: CreateManualMessageDraftRequest & { approvedByUserId: string },
+  ): Promise<MessageDraftResponse>;
   approveMessageDraft(draftId: string, input: ApproveMessageDraftRequest): Promise<MessageDraftResponse>;
   rejectMessageDraft(draftId: string, input: RejectMessageDraftRequest): Promise<MessageDraftResponse>;
   sendMessage(input: SendMessageRequest): Promise<MessageSendResponse>;
@@ -191,6 +196,7 @@ export function buildMessagingService(
           channel: input.channel,
           promptVersion: input.promptVersion,
           forceRegenerate: input.forceRegenerate,
+          redraftFeedback: input.redraftFeedback,
         });
         return {
           status: 'QUEUED',
@@ -205,6 +211,9 @@ export function buildMessagingService(
     },
     async getMessageDraft(draftId) {
       return repository.getMessageDraft(draftId);
+    },
+    async createManualMessageDraft(input) {
+      return repository.createManualMessageDraft(input);
     },
     async approveMessageDraft(draftId, input) {
       const existingInitialSend = await repository.getExistingInitialSendForDraft(draftId);

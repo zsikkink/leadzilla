@@ -506,13 +506,14 @@ export async function handleDiscoveryRunSearchTaskJob(
   );
 
   const observedBusinessIds = getObservedBusinessIds(runResult);
+  const effectiveIcpProfileId = runResult.icpProfileId ?? job.data.icpProfileId;
 
-  if (job.data.discoveryRunId && job.data.icpProfileId && runResult.taskId) {
+  if (job.data.discoveryRunId && effectiveIcpProfileId && runResult.taskId) {
     await persistDiscoveryAttributionAssignments(
       prisma.discoveryAttributionAssignment,
       {
         discoveryRunId: job.data.discoveryRunId,
-        icpProfileId: job.data.icpProfileId,
+        icpProfileId: effectiveIcpProfileId,
         searchTaskId: runResult.taskId,
         newBusinessIds: runResult.newBusinessIds,
         observedBusinessIds,
@@ -526,7 +527,7 @@ export async function handleDiscoveryRunSearchTaskJob(
     runResult.newBusinessIds.length > 0 &&
     dependencies.enqueueBusinessPrequalify &&
     job.data.discoveryRunId &&
-    job.data.icpProfileId
+    effectiveIcpProfileId
   ) {
     // Check which new businesses already have leads (converted by another ICP run)
     const existingConversions = runResult.newBusinessIds.length > 0
@@ -548,7 +549,7 @@ export async function handleDiscoveryRunSearchTaskJob(
       await dependencies.enqueueBusinessPrequalify({
         businessId,
         discoveryRunId: job.data.discoveryRunId,
-        icpProfileId: job.data.icpProfileId,
+        icpProfileId: effectiveIcpProfileId,
         ...(job.data.includeWebsiteAnalysis !== undefined
           ? { includeWebsiteAnalysis: job.data.includeWebsiteAnalysis }
           : {}),
@@ -577,7 +578,7 @@ export async function handleDiscoveryRunSearchTaskJob(
     observedBusinessIds.length > 0 &&
     dependencies.enqueueBusinessPrequalify &&
     job.data.discoveryRunId &&
-    job.data.icpProfileId
+    effectiveIcpProfileId
   ) {
     const newBusinessIds = new Set(runResult.newBusinessIds);
     const existingObservedBusinessIds = observedBusinessIds.filter(
@@ -594,7 +595,7 @@ export async function handleDiscoveryRunSearchTaskJob(
       await dependencies.enqueueBusinessPrequalify({
         businessId,
         discoveryRunId: job.data.discoveryRunId,
-        icpProfileId: job.data.icpProfileId,
+        icpProfileId: effectiveIcpProfileId,
         ...(existingBusinessRediscoveryIds.has(businessId)
           ? { existingBusinessRediscovery: true }
           : {}),
@@ -616,7 +617,7 @@ export async function handleDiscoveryRunSearchTaskJob(
           jobId: job.id,
           queue: job.name,
           discoveryRunId: job.data.discoveryRunId,
-          icpProfileId: job.data.icpProfileId,
+          icpProfileId: effectiveIcpProfileId,
           observedExistingBusinessCount: existingObservedBusinessIds.length,
           enqueuedPrequalifyCount: enqueuedCount,
         },

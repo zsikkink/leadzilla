@@ -117,7 +117,7 @@ const WorkerEnvSchema = z.object({
   OPENAI_GENERATION_MODEL: z.string().min(1).default('gpt-4o'),
   OPENAI_SCORING_MODEL: z.string().min(1).default('gpt-4o'),
   RESEND_API_KEY: optionalNonEmptyString(),
-  RESEND_FROM_EMAIL: z.string().email().default('noreply@leadflood.io'),
+  RESEND_FROM_EMAIL: z.string().email().default('zack@zboonisales.com'),
   TRENGO_API_KEY: optionalNonEmptyString(),
   TRENGO_BASE_URL: z.string().url().default('https://app.trengo.com/api/v2'),
   TRENGO_CHANNEL_ID: optionalNonEmptyString(),

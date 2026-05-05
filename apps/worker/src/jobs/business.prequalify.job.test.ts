@@ -123,6 +123,34 @@ describe('handleBusinessPrequalifyJob attribution outcomes', () => {
     });
   });
 
+  it('treats Facebook and WhatsApp utility domains as missing website domains', async () => {
+    dbMock.prisma.business.findUnique.mockResolvedValueOnce({
+      id: 'business_1',
+      websiteDomain: 'm.facebook.com',
+      reviewCount: 42,
+    });
+
+    await handleBusinessPrequalifyJob(
+      logger,
+      makeJob({
+        businessId: 'business_1',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+        minReviewCount: 15,
+      }),
+    );
+
+    expect(dnsMock.resolve4).not.toHaveBeenCalled();
+    expect(dnsMock.resolve6).not.toHaveBeenCalled();
+    expect(dbMock.prisma.business.update).toHaveBeenCalledWith({
+      where: { id: 'business_1' },
+      data: {
+        preQualified: false,
+        disqualificationReason: 'NO_WEBSITE_DOMAIN',
+      },
+    });
+  });
+
   it('preserves existing-business rediscovery in the convert payload after prequalify overwrites the business run id', async () => {
     const enqueueBusinessConvert = vi.fn();
     dbMock.prisma.business.findUnique.mockResolvedValueOnce({

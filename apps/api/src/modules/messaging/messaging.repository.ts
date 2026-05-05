@@ -2,6 +2,7 @@ import type {
   ApproveMessageDraftRequest,
   ConversationEntry,
   ConversationResponse,
+  CreateManualMessageDraftRequest,
   GenerateMessageDraftRequest,
   GenerateMessageDraftResponse,
   ListMessageDraftsQuery,
@@ -54,6 +55,10 @@ export interface ApproveMessageDraftResult {
   initialSend?: MessageSendQueueIntentResult | undefined;
 }
 
+export type CreateManualMessageDraftInput = CreateManualMessageDraftRequest & {
+  approvedByUserId: string;
+};
+
 export interface MessagingRepository {
   generateMessageDraft(input: GenerateMessageDraftRequest): Promise<GenerateMessageDraftResponse>;
   clearLeadDraftGenerationError(leadId: string): Promise<void>;
@@ -68,6 +73,7 @@ export interface MessagingRepository {
   getExistingInitialSendForDraft(draftId: string): Promise<MessageSendResponse | null>;
   listMessageDrafts(query: ListMessageDraftsQuery): Promise<ListMessageDraftsResponse>;
   getMessageDraft(draftId: string): Promise<MessageDraftResponse>;
+  createManualMessageDraft(input: CreateManualMessageDraftInput): Promise<MessageDraftResponse>;
   approveMessageDraft(draftId: string, input: ApproveMessageDraftRequest): Promise<ApproveMessageDraftResult>;
   rejectMessageDraft(draftId: string, input: RejectMessageDraftRequest): Promise<MessageDraftResponse>;
   sendMessage(input: SendMessageRequest): Promise<MessageSendQueueIntentResult>;
@@ -117,6 +123,10 @@ export class StubMessagingRepository implements MessagingRepository {
 
   async getMessageDraft(_draftId: string): Promise<MessageDraftResponse> {
     throw new MessagingNotImplementedError('TODO: get message draft persistence');
+  }
+
+  async createManualMessageDraft(_input: CreateManualMessageDraftInput): Promise<MessageDraftResponse> {
+    throw new MessagingNotImplementedError('TODO: create manual message draft persistence');
   }
 
   async approveMessageDraft(
@@ -574,6 +584,83 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
     return mapDraftToResponse(draft);
   }
 
+  override async createManualMessageDraft(input: CreateManualMessageDraftInput): Promise<MessageDraftResponse> {
+    const lead = await prisma.lead.findFirst({
+      where: { id: input.leadId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!lead) {
+      throw new MessagingNotFoundError('Lead not found');
+    }
+
+    const icpProfile = await prisma.icpProfile.findUnique({
+      where: { id: input.icpProfileId },
+      select: { id: true },
+    });
+    if (!icpProfile) {
+      throw new MessagingNotFoundError('ICP profile not found');
+    }
+
+    let parentMessageSendId: string | null = null;
+    let followUpNumber = 0;
+
+    if (input.parentMessageSendId) {
+      const parent = await prisma.messageSend.findFirst({
+        where: { id: input.parentMessageSendId, leadId: input.leadId },
+        select: { id: true, followUpNumber: true },
+      });
+      if (!parent) {
+        throw new MessagingNotFoundError('Parent message send not found');
+      }
+      parentMessageSendId = parent.id;
+      followUpNumber = parent.followUpNumber + 1;
+    } else {
+      const latestSend = await prisma.messageSend.findFirst({
+        where: { leadId: input.leadId },
+        orderBy: [{ followUpNumber: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        select: { id: true, followUpNumber: true },
+      });
+      if (latestSend) {
+        parentMessageSendId = latestSend.id;
+        followUpNumber = latestSend.followUpNumber + 1;
+      }
+    }
+
+    const now = new Date();
+    const draft = await prisma.messageDraft.create({
+      data: {
+        leadId: input.leadId,
+        icpProfileId: input.icpProfileId,
+        scorePredictionId: null,
+        promptVersion: 'operator_manual',
+        generatedByModel: 'operator_manual',
+        groundingKnowledgeIds: [],
+        groundingContextJson: PrismaRuntime.JsonNull,
+        approvalStatus: 'APPROVED',
+        approvedByUserId: input.approvedByUserId,
+        approvedAt: now,
+        followUpNumber,
+        parentMessageSendId,
+        variants: {
+          create: [
+            {
+              variantKey: 'operator_manual',
+              channel: input.channel,
+              subject: input.subject?.trim() || null,
+              bodyText: input.bodyText.trim(),
+              bodyHtml: null,
+              ctaText: null,
+              isSelected: true,
+            },
+          ],
+        },
+      },
+      include: variantsInclude(),
+    });
+
+    return mapDraftToResponse(draft);
+  }
+
   override async approveMessageDraft(
     draftId: string,
     input: ApproveMessageDraftRequest,
@@ -743,14 +830,14 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
       throw new MessagingSendIneligibleError('Selected message variant does not belong to the requested draft.');
     }
 
-    if (variant.messageDraft.followUpNumber === 0) {
-      if (
-        variant.messageDraft.approvalStatus !== 'APPROVED' &&
-        variant.messageDraft.approvalStatus !== 'AUTO_APPROVED'
-      ) {
-        throw new MessagingSendIneligibleError('Initial draft must be approved before it can be sent.');
-      }
+    if (
+      variant.messageDraft.approvalStatus !== 'APPROVED' &&
+      variant.messageDraft.approvalStatus !== 'AUTO_APPROVED'
+    ) {
+      throw new MessagingSendIneligibleError('Draft must be approved before it can be sent.');
+    }
 
+    if (variant.messageDraft.followUpNumber === 0) {
       const existingInitialSend = await findBlockingInitialSendForDraft(input.messageDraftId);
       if (existingInitialSend) {
         return {
@@ -768,7 +855,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
           messageVariantId: input.messageVariantId,
           channel: variant.channel,
           idempotencyKey: input.idempotencyKey,
-          followUpNumber: 0,
+          followUpNumber: variant.messageDraft.followUpNumber,
           scheduledAt: input.scheduledAt !== undefined ? new Date(input.scheduledAt) : null,
         },
         (sendId) => sendId,
@@ -835,6 +922,11 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
     // Replies: FeedbackEvents where eventType = REPLIED
     const replies = await prisma.feedbackEvent.findMany({
       where: { leadId, eventType: 'REPLIED' },
+      include: {
+        messageSend: {
+          select: { channel: true },
+        },
+      },
       orderBy: { occurredAt: 'asc' },
     });
 
@@ -842,6 +934,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
 
     for (const send of sends) {
       entries.push({
+        id: send.id,
         type: 'sent',
         timestamp: (send.sentAt ?? send.createdAt).toISOString(),
         channel: send.channel as 'EMAIL' | 'WHATSAPP',
@@ -856,9 +949,10 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
 
     for (const reply of replies) {
       entries.push({
+        id: reply.id,
         type: 'reply',
         timestamp: reply.occurredAt.toISOString(),
-        channel: 'WHATSAPP', // Default — can refine later by looking at the linked MessageSend
+        channel: (reply.messageSend?.channel ?? 'EMAIL') as 'EMAIL' | 'WHATSAPP',
         bodyText: reply.replyText ?? '(no text)',
         bodyHtml: null,
         subject: null,

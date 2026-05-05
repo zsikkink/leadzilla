@@ -38,6 +38,14 @@ export const ResendWebhookBounceSchema = z.object({
   action: z.string().optional(),
 });
 
+export const ResendWebhookAttachmentSchema = z.object({
+  id: z.string().optional(),
+  filename: z.string().optional(),
+  content_type: z.string().optional(),
+  content_disposition: z.string().nullable().optional(),
+  content_id: z.string().nullable().optional(),
+});
+
 export const ResendWebhookDataSchema = z.object({
   /** Resend message ID */
   email_id: z.string().optional(),
@@ -45,9 +53,14 @@ export const ResendWebhookDataSchema = z.object({
   from: z.string().optional(),
   /** Recipient address(es) */
   to: z.array(z.string()).optional(),
+  cc: z.array(z.string()).optional(),
+  bcc: z.array(z.string()).optional(),
+  reply_to: z.array(z.string()).optional(),
+  message_id: z.string().optional(),
   subject: z.string().optional(),
   created_at: z.string().optional(),
   bounce: ResendWebhookBounceSchema.optional(),
+  attachments: z.array(ResendWebhookAttachmentSchema).optional(),
 });
 
 export const ResendWebhookPayloadSchema = z.object({
@@ -61,6 +74,7 @@ export const ResendWebhookResponseSchema = z.object({
 }).strict();
 
 export type ResendWebhookBounce = z.infer<typeof ResendWebhookBounceSchema>;
+export type ResendWebhookAttachment = z.infer<typeof ResendWebhookAttachmentSchema>;
 export type ResendWebhookData = z.infer<typeof ResendWebhookDataSchema>;
 export type ResendWebhookPayload = z.infer<typeof ResendWebhookPayloadSchema>;
 export type ResendWebhookResponse = z.infer<typeof ResendWebhookResponseSchema>;

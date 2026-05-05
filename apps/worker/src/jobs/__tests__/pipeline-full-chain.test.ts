@@ -122,8 +122,17 @@ function makeOpenAiScoringFetch(): typeof fetch {
 }
 
 function makeOpenAiGenerateFetch(): typeof fetch {
-  const emailBodyA =
-    'Thank you for your interest in our payment solutions. We help businesses like yours streamline transactions and boost conversion rates across the UAE market.';
+  const emailBodyA = [
+    'Hi Khalid,',
+    '',
+    'I’m reaching out from Zbooni. We help businesses turn customer messages into paid, trackable orders. When a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation.',
+    '',
+    'For FullChain Test Corp, that can make customer follow-up and payment status easier to manage from one place. Would it be useful to compare this with how your team handles customer conversations today?',
+    '',
+    'Best,',
+    'Zbooni Team',
+  ].join('\n');
+  const ctaA = 'Would it be useful to compare this with how your team handles customer conversations today?';
 
   return vi.fn().mockImplementation(() =>
     Promise.resolve(
@@ -138,10 +147,10 @@ function makeOpenAiGenerateFetch(): typeof fetch {
                 role: 'assistant',
                 content: JSON.stringify({
                   message: {
-                    subject: 'Partnership Opportunity — Zbooni',
+                    subject: 'Track customer conversations?',
                     bodyText: emailBodyA,
                     bodyHtml: `<p>${emailBodyA}</p>`,
-                    ctaText: 'Book a Demo',
+                    ctaText: ctaA,
                   },
                 }),
               },

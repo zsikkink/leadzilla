@@ -1,7 +1,7 @@
 import {
-  CuratedCountryCitiesByCode,
+  SerpApiSupportedCountryCitiesByCode,
   SupportedCountryOptions,
-  buildCountryCitiesMap,
+  buildSerpApiCountryCitiesMap,
   countryDisplayName,
   normalizeCountryCodeOrAlias,
   normalizeCountryCodes,
@@ -34,7 +34,7 @@ export function toDiscoveryCountryCodes(
 
 export const SupportedCountryPickerOptions = SupportedCountryOptions;
 
-export const CuratedCountryCities = CuratedCountryCitiesByCode;
+export const CuratedCountryCities = SerpApiSupportedCountryCitiesByCode;
 
 export const MENA_COUNTRIES = [
   'AE',
@@ -61,5 +61,5 @@ export function buildDiscoveryCountryCities(
   value: unknown,
   options?: { includeCuratedDefaults?: boolean | undefined },
 ): CountryCitiesMap {
-  return buildCountryCitiesMap(value, options);
+  return buildSerpApiCountryCitiesMap(value, options);
 }

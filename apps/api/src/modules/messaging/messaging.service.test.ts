@@ -100,6 +100,7 @@ function buildRepositoryMock(): MessagingRepository {
     getExistingInitialSendForDraft: vi.fn(async () => null),
     listMessageDrafts: vi.fn(),
     getMessageDraft: vi.fn(async () => buildDraftResponse()),
+    createManualMessageDraft: vi.fn(async () => buildDraftResponse()),
     approveMessageDraft: vi.fn(async () => ({
       draft: buildDraftResponse(),
       initialSend: {
@@ -325,6 +326,7 @@ describe('buildMessagingService generateMessageDraft', () => {
       knowledgeEntryIds: ['knowledge_1'],
       channel: 'EMAIL',
       forceRegenerate: true,
+      redraftFeedback: 'Make the subject clearer and keep the tone less personal.',
     });
 
     expect(result).toEqual({
@@ -340,6 +342,7 @@ describe('buildMessagingService generateMessageDraft', () => {
         icpProfileId: 'icp_1',
         promptVersion: 'v2',
         forceRegenerate: true,
+        redraftFeedback: 'Make the subject clearer and keep the tone less personal.',
       }),
     );
   });
@@ -398,6 +401,35 @@ describe('buildMessagingService generateMessageDraft', () => {
       }),
     );
     expect(repository.clearLeadDraftGenerationError).toHaveBeenCalledWith('lead_1');
+  });
+});
+
+describe('buildMessagingService createManualMessageDraft', () => {
+  it('delegates manual draft creation to the repository', async () => {
+    const repository = buildRepositoryMock();
+    const service = buildMessagingService(repository, {
+      enqueueMessageSend: vi.fn(async () => undefined),
+    });
+
+    await service.createManualMessageDraft({
+      leadId: 'lead_1',
+      icpProfileId: 'icp_1',
+      channel: 'EMAIL',
+      subject: 'Re: Hello',
+      bodyText: 'Thanks for getting back to us.',
+      parentMessageSendId: 'send_1',
+      approvedByUserId: 'user_auth',
+    });
+
+    expect(repository.createManualMessageDraft).toHaveBeenCalledWith({
+      leadId: 'lead_1',
+      icpProfileId: 'icp_1',
+      channel: 'EMAIL',
+      subject: 'Re: Hello',
+      bodyText: 'Thanks for getting back to us.',
+      parentMessageSendId: 'send_1',
+      approvedByUserId: 'user_auth',
+    });
   });
 });
 

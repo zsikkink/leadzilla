@@ -8,8 +8,19 @@ export interface WebhookProcessResult {
   reason?: string | undefined;
 }
 
+export interface ResendReceivedEmail {
+  id: string;
+  from: string | null;
+  to: string[];
+  subject: string | null;
+  text: string | null;
+  html: string | null;
+  createdAt: string | null;
+}
+
 export interface WebhookServiceDependencies {
   enqueueReplyClassify?: ((payload: ReplyClassifyJobPayload) => Promise<void>) | undefined;
+  fetchResendReceivedEmail?: ((emailId: string) => Promise<ResendReceivedEmail | null>) | undefined;
 }
 
 async function enqueueReplyClassification(
@@ -19,7 +30,7 @@ async function enqueueReplyClassification(
     messageSendId: string;
     replyText: string | null;
   },
-  messageId: TrengoWebhookPayload['data']['id'],
+  correlationId: string,
   deps?: WebhookServiceDependencies | undefined,
 ): Promise<void> {
   if (!deps?.enqueueReplyClassify) {
@@ -32,7 +43,7 @@ async function enqueueReplyClassification(
     replyText: event.replyText,
     leadId: event.leadId,
     messageSendId: event.messageSendId,
-    correlationId: `webhook:trengo:${messageId}`,
+    correlationId,
   });
 }
 
@@ -78,7 +89,7 @@ export async function processTrengoWebhook(
           messageSendId: existingEvent.messageSendId,
           replyText: existingEvent.replyText,
         },
-        messageId,
+        `webhook:trengo:${messageId}`,
         deps,
       );
     }
@@ -174,7 +185,7 @@ export async function processTrengoWebhook(
       messageSendId: messageSend.id,
       replyText,
     },
-    messageId,
+    `webhook:trengo:${messageId}`,
     deps,
   );
 
@@ -209,22 +220,236 @@ function extractDomain(email: string): string | null {
   return email.slice(atIndex + 1).toLowerCase();
 }
 
+function extractEmailAddress(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const angleMatch = value.match(/<([^<>\s@]+@[^<>\s@]+\.[^<>\s@]+)>/);
+  const candidate = angleMatch?.[1] ?? value;
+  const normalized = candidate.trim().replace(/^mailto:/i, '').toLowerCase();
+  const plainMatch = normalized.match(/[^\s<>,;]+@[^\s<>,;]+\.[^\s<>,;]+/);
+  return plainMatch?.[0] ?? null;
+}
+
+function stripHtmlToText(html: string | null | undefined): string | null {
+  if (!html) {
+    return null;
+  }
+
+  const text = html
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s+/g, '\n')
+    .trim();
+
+  return text.length > 0 ? text : null;
+}
+
+function parseWebhookDate(value: string | null | undefined): Date {
+  if (!value) {
+    return new Date();
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+async function processResendReceivedWebhook(
+  payload: ResendWebhookPayload,
+  deps?: WebhookServiceDependencies | undefined,
+): Promise<WebhookProcessResult> {
+  const emailId = payload.data.email_id ?? '';
+  const senderEmail = extractEmailAddress(payload.data.from);
+  const fallbackStamp = payload.data.created_at ?? payload.created_at ?? '';
+  const fallbackSubject = payload.data.subject ?? '';
+  const dedupeKey = emailId
+    ? `resend:received:${emailId}`
+    : `resend:received:fallback:${senderEmail ?? 'unknown-sender'}:${fallbackStamp}:${fallbackSubject}`;
+
+  const existingEvent = await prisma.feedbackEvent.findUnique({
+    where: { dedupeKey },
+    select: {
+      id: true,
+      dedupeKey: true,
+      leadId: true,
+      messageSendId: true,
+      replyText: true,
+      replyClassification: true,
+    },
+  });
+
+  if (existingEvent) {
+    if (!existingEvent.replyClassification && existingEvent.messageSendId) {
+      await enqueueReplyClassification(
+        {
+          id: existingEvent.id,
+          leadId: existingEvent.leadId,
+          messageSendId: existingEvent.messageSendId,
+          replyText: existingEvent.replyText,
+        },
+        `webhook:resend:received:${emailId || existingEvent.id}`,
+        deps,
+      );
+    }
+
+    return {
+      feedbackEventId: existingEvent.id,
+      dedupeKey: existingEvent.dedupeKey,
+      skipped: true,
+      reason: 'DUPLICATE_WEBHOOK',
+    };
+  }
+
+  if (!senderEmail) {
+    return {
+      feedbackEventId: null,
+      dedupeKey,
+      skipped: true,
+      reason: 'NO_SENDER',
+    };
+  }
+
+  const lead = await prisma.lead.findUnique({
+    where: { email: senderEmail, deletedAt: null },
+    select: { id: true },
+  });
+
+  if (!lead) {
+    return {
+      feedbackEventId: null,
+      dedupeKey,
+      skipped: true,
+      reason: 'NO_CORRELATED_LEAD',
+    };
+  }
+
+  const messageSend = await prisma.messageSend.findFirst({
+    where: { leadId: lead.id, channel: 'EMAIL', provider: 'RESEND' },
+    select: { id: true, leadId: true },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  if (!messageSend) {
+    return {
+      feedbackEventId: null,
+      dedupeKey,
+      skipped: true,
+      reason: 'NO_CORRELATED_MESSAGE_SEND',
+    };
+  }
+
+  const receivedEmail = emailId && deps?.fetchResendReceivedEmail
+    ? await deps.fetchResendReceivedEmail(emailId)
+    : null;
+  const replyText = receivedEmail?.text
+    ?? stripHtmlToText(receivedEmail?.html)
+    ?? '(inbound email received; body unavailable)';
+  const occurredAt = parseWebhookDate(
+    receivedEmail?.createdAt ?? payload.data.created_at ?? payload.created_at,
+  );
+
+  const event = await prisma.$transaction(async (tx) => {
+    const feedbackEvent = await tx.feedbackEvent.upsert({
+      where: { dedupeKey },
+      create: {
+        leadId: messageSend.leadId,
+        messageSendId: messageSend.id,
+        eventType: 'REPLIED',
+        source: 'WEBHOOK',
+        providerEventId: emailId,
+        dedupeKey,
+        payloadJson: JSON.parse(JSON.stringify({
+          payload,
+          receivedEmail: receivedEmail
+            ? {
+                id: receivedEmail.id,
+                from: receivedEmail.from,
+                to: receivedEmail.to,
+                subject: receivedEmail.subject,
+                createdAt: receivedEmail.createdAt,
+              }
+            : null,
+        })) as Prisma.InputJsonValue,
+        replyText,
+        occurredAt,
+      },
+      update: {},
+    });
+
+    await tx.messageSend.update({
+      where: { id: messageSend.id },
+      data: {
+        status: 'REPLIED',
+        repliedAt: occurredAt,
+      },
+    });
+
+    await tx.messageSend.updateMany({
+      where: {
+        leadId: messageSend.leadId,
+        nextFollowUpAfter: { not: null },
+      },
+      data: { nextFollowUpAfter: null },
+    });
+
+    return feedbackEvent;
+  });
+
+  await enqueueReplyClassification(
+    {
+      id: event.id,
+      leadId: messageSend.leadId,
+      messageSendId: messageSend.id,
+      replyText,
+    },
+    `webhook:resend:received:${emailId || event.id}`,
+    deps,
+  );
+
+  return {
+    feedbackEventId: event.id,
+    dedupeKey: event.dedupeKey,
+    skipped: false,
+  };
+}
+
 /**
  * Process an inbound Resend webhook event.
  *
- * 1. Parse event type: email.bounced, email.complained, email.delivered
+ * 1. Parse event type: email.received, email.bounced, email.complained, email.delivered
  * 2. Correlate to a MessageSend via recipient email on the Lead
- * 3. For bounced/complained:
+ * 3. For received:
+ *    - Fetch the stored email body when the Resend API key is configured
+ *    - Create FeedbackEvent (REPLIED)
+ *    - Update MessageSend.status to REPLIED
+ *    - Cancel follow-ups (nextFollowUpAfter=null) for all pending sends on that lead
+ * 4. For bounced/complained:
  *    - Create FeedbackEvent (BOUNCED or NOT_INTERESTED)
  *    - Update MessageSend.status to BOUNCED
  *    - Cancel follow-ups (nextFollowUpAfter=null) for all pending sends on that lead
  *    - Log bounce domain
- * 4. For delivered: update MessageSend.status to DELIVERED
- * 5. Idempotency via dedupeKey = `resend:<email_id>`
+ * 5. For delivered: update MessageSend.status to DELIVERED
+ * 6. Idempotency via dedupeKey = `resend:<email_id>` or `resend:received:<email_id>`
  */
 export async function processResendWebhook(
   payload: ResendWebhookPayload,
+  deps?: WebhookServiceDependencies | undefined,
 ): Promise<WebhookProcessResult> {
+  if (payload.type === 'email.received') {
+    return processResendReceivedWebhook(payload, deps);
+  }
+
   const emailId = payload.data.email_id ?? '';
   const recipients = payload.data.to ?? [];
   const firstRecipient = recipients[0]?.toLowerCase() ?? 'unknown-recipient';

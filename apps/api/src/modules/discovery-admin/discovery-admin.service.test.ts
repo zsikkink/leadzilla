@@ -68,7 +68,7 @@ describe('buildDiscoveryAdminService.createBulkDiscoveryRuns', () => {
       key: 'countryCities',
       valueJson: {
         AE: ['Dubai'],
-        DE: ['Berlin'],
+        JO: ['Amman'],
       },
     });
 
@@ -96,8 +96,8 @@ describe('buildDiscoveryAdminService.createBulkDiscoveryRuns', () => {
           },
           {
             icpProfileId: 'icp_2',
-            countries: ['DE'],
-            cities: ['Berlin'],
+            countries: ['JO'],
+            cities: ['Amman'],
             includeWebsiteAnalysis: true,
             includeSocialMediaAnalysis: false,
             limit: 5,

@@ -27,14 +27,12 @@ function buildRepositoryMock(): DiscoveryRepository {
 }
 
 describe('buildDiscoveryService', () => {
-  it('rejects discovery runs when a valid country has no city coverage configured', async () => {
+  it('allows discovery runs when city coverage comes from SerpAPI-safe country defaults', async () => {
     const repository = buildRepositoryMock();
     const enqueueDiscoveryRun = vi.fn(async () => undefined);
     getPipelineSettingMock.mockResolvedValue({
       key: 'countryCities',
-      valueJson: {
-        AE: ['Dubai'],
-      },
+      valueJson: {},
     });
 
     const service = buildDiscoveryService(repository, {
@@ -44,19 +42,22 @@ describe('buildDiscoveryService', () => {
     await expect(
       service.createDiscoveryRun({
         icpProfileId: 'icp_1',
-        countries: ['DE'],
+        countries: ['EG'],
         includeWebsiteAnalysis: true,
         includeSocialMediaAnalysis: true,
         limit: 10,
         requestedByUserId: 'user_1',
       }),
-    ).rejects.toThrow(DiscoveryInvalidRequestError);
+    ).resolves.toEqual({
+      runId: expect.any(String),
+      status: 'QUEUED',
+    });
 
-    expect(repository.createDiscoveryRun).not.toHaveBeenCalled();
+    expect(repository.createDiscoveryRun).toHaveBeenCalledTimes(1);
     expect(enqueueDiscoveryRun).not.toHaveBeenCalled();
   });
 
-  it('allows discovery runs with explicit cities even when no default city coverage exists', async () => {
+  it('rejects explicit cities that are not SerpAPI discovery locations', async () => {
     const repository = buildRepositoryMock();
     const enqueueDiscoveryRun = vi.fn(async () => undefined);
     getPipelineSettingMock.mockResolvedValue({
@@ -78,12 +79,9 @@ describe('buildDiscoveryService', () => {
         limit: 10,
         requestedByUserId: 'user_1',
       }),
-    ).resolves.toEqual({
-      runId: expect.any(String),
-      status: 'QUEUED',
-    });
+    ).rejects.toThrow(DiscoveryInvalidRequestError);
 
-    expect(repository.createDiscoveryRun).toHaveBeenCalledTimes(1);
+    expect(repository.createDiscoveryRun).not.toHaveBeenCalled();
   });
 
   it('fails fast when the discovery worker heartbeat is missing', async () => {
@@ -135,7 +133,7 @@ describe('buildDiscoveryService', () => {
     const response = await service.createDiscoveryRun({
       icpProfileId: 'icp_1',
       countries: ['AE'],
-      cities: ['Dubai'],
+      cities: ['Dubai', 'not-serpapi-location'],
       includeWebsiteAnalysis: true,
       includeSocialMediaAnalysis: true,
       limit: 10,
@@ -159,7 +157,11 @@ describe('buildDiscoveryService', () => {
         runId: response.runId,
         icpProfileId: 'icp_1',
         requestedByUserId: 'user_1',
+        cities: ['Dubai'],
         minReviewCount: 15,
+        maxPages: 1,
+        taskTypes: ['SERP_MAPS_LOCAL'],
+        languages: ['en', 'ar'],
         searchCategories: ['bakery', 'gym'],
       }),
     );
@@ -167,8 +169,12 @@ describe('buildDiscoveryService', () => {
       expect.objectContaining({
         discoveryRunId: response.runId,
         icpProfileId: 'icp_1',
+        cities: ['Dubai'],
         searchCategories: ['bakery', 'gym'],
         minReviewCount: 15,
+        maxPages: 1,
+        taskTypes: ['SERP_MAPS_LOCAL'],
+        languages: ['en', 'ar'],
       }),
     ]);
     expect(enqueueDiscoveryRun).not.toHaveBeenCalled();
@@ -217,10 +223,10 @@ describe('buildDiscoveryService', () => {
 
     expect(repository.createDiscoveryRun).toHaveBeenCalledTimes(2);
 
-    const [, , absentPayload, absentSeedPayloads] =
-      vi.mocked(repository.createDiscoveryRun).mock.calls[0]!;
-    const [, , emptyPayload, emptySeedPayloads] =
-      vi.mocked(repository.createDiscoveryRun).mock.calls[1]!;
+    const [, , absentPayload, absentSeedPayloads] = vi.mocked(repository.createDiscoveryRun).mock
+      .calls[0]!;
+    const [, , emptyPayload, emptySeedPayloads] = vi.mocked(repository.createDiscoveryRun).mock
+      .calls[1]!;
 
     const projectPayload = (payload: typeof absentPayload) => ({
       icpProfileId: payload.icpProfileId,
@@ -230,6 +236,9 @@ describe('buildDiscoveryService', () => {
       includeSocialMediaAnalysis: payload.includeSocialMediaAnalysis,
       limit: payload.limit,
       minReviewCount: payload.minReviewCount,
+      maxPages: payload.maxPages,
+      taskTypes: payload.taskTypes,
+      languages: payload.languages,
       requestedByUserId: payload.requestedByUserId,
       searchCategories: payload.searchCategories,
     });
@@ -241,8 +250,12 @@ describe('buildDiscoveryService', () => {
         includeWebsiteAnalysis: seedPayload.includeWebsiteAnalysis,
         includeSocialMediaAnalysis: seedPayload.includeSocialMediaAnalysis,
         maxTasks: seedPayload.maxTasks,
+        runMaxTasks: seedPayload.runMaxTasks,
         validationMode: seedPayload.validationMode,
         minReviewCount: seedPayload.minReviewCount,
+        maxPages: seedPayload.maxPages,
+        taskTypes: seedPayload.taskTypes,
+        languages: seedPayload.languages,
         enqueueRunTasks: seedPayload.enqueueRunTasks,
         searchCategories: seedPayload.searchCategories,
       }));
@@ -256,6 +269,9 @@ describe('buildDiscoveryService', () => {
       includeSocialMediaAnalysis: true,
       limit: 2,
       minReviewCount: 15,
+      maxPages: 1,
+      taskTypes: ['SERP_MAPS_LOCAL'],
+      languages: ['en', 'ar'],
       requestedByUserId: 'user_1',
       searchCategories: undefined,
     });
@@ -269,8 +285,12 @@ describe('buildDiscoveryService', () => {
         includeWebsiteAnalysis: true,
         includeSocialMediaAnalysis: true,
         maxTasks: 1,
+        runMaxTasks: 2,
         validationMode: true,
         minReviewCount: 15,
+        maxPages: 1,
+        taskTypes: ['SERP_MAPS_LOCAL'],
+        languages: ['en', 'ar'],
         enqueueRunTasks: true,
         searchCategories: undefined,
       },
@@ -281,8 +301,12 @@ describe('buildDiscoveryService', () => {
         includeWebsiteAnalysis: true,
         includeSocialMediaAnalysis: true,
         maxTasks: 1,
+        runMaxTasks: 2,
         validationMode: true,
         minReviewCount: 15,
+        maxPages: 1,
+        taskTypes: ['SERP_MAPS_LOCAL'],
+        languages: ['en', 'ar'],
         enqueueRunTasks: true,
         searchCategories: undefined,
       },
@@ -320,7 +344,8 @@ describe('buildDiscoveryService', () => {
     });
 
     expect(repository.createDiscoveryRun).toHaveBeenCalledTimes(1);
-    const [runId, input, payload, seedPayloads] = vi.mocked(repository.createDiscoveryRun).mock.calls[0]!;
+    const [runId, input, payload, seedPayloads] = vi.mocked(repository.createDiscoveryRun).mock
+      .calls[0]!;
 
     expect(runId).toBe(response.runId);
     expect(input).toEqual(
@@ -334,6 +359,10 @@ describe('buildDiscoveryService', () => {
         runId: response.runId,
         icpProfileId: 'icp_1',
         requestedByUserId: 'user_1',
+        minReviewCount: 0,
+        maxPages: 1,
+        taskTypes: ['SERP_MAPS_LOCAL'],
+        languages: ['en', 'ar'],
       }),
     );
     expect(payload.searchCategories).toBeUndefined();
@@ -345,6 +374,11 @@ describe('buildDiscoveryService', () => {
         icpProfileId: 'icp_1',
         countries: ['AE'],
         maxTasks: 1,
+        runMaxTasks: 2,
+        minReviewCount: 0,
+        maxPages: 1,
+        taskTypes: ['SERP_MAPS_LOCAL'],
+        languages: ['en', 'ar'],
         validationMode: true,
         enqueueRunTasks: true,
         jobExecutionId: expect.any(String),
@@ -356,6 +390,11 @@ describe('buildDiscoveryService', () => {
         icpProfileId: 'icp_2',
         countries: ['AE'],
         maxTasks: 1,
+        runMaxTasks: 2,
+        minReviewCount: 0,
+        maxPages: 1,
+        taskTypes: ['SERP_MAPS_LOCAL'],
+        languages: ['en', 'ar'],
         validationMode: true,
         enqueueRunTasks: true,
         jobExecutionId: expect.any(String),
@@ -365,6 +404,67 @@ describe('buildDiscoveryService', () => {
       undefined,
       undefined,
     ]);
+    expect(enqueueDiscoveryRun).not.toHaveBeenCalled();
+  });
+
+  it('treats limit as the total search-task budget for an April 12 style bulk run', async () => {
+    const repository = buildRepositoryMock();
+    const enqueueDiscoveryRun = vi.fn(async () => undefined);
+    const icpProfileIds = Array.from({ length: 8 }, (_, index) => `icp_${index + 1}`);
+    getPipelineSettingMock.mockResolvedValue({
+      key: 'countryCities',
+      valueJson: {
+        AE: ['Dubai'],
+        SA: ['Riyadh'],
+        JO: ['Amman'],
+        EG: ['Cairo'],
+      },
+    });
+
+    const service = buildDiscoveryService(repository, {
+      enqueueDiscoveryRun,
+    });
+
+    const response = await service.createDiscoveryRun({
+      icpProfileIds,
+      countries: ['JO', 'SA', 'AE', 'EG'],
+      includeWebsiteAnalysis: true,
+      includeSocialMediaAnalysis: true,
+      limit: 200,
+      requestedByUserId: 'user_1',
+    });
+
+    expect(repository.createDiscoveryRun).toHaveBeenCalledTimes(1);
+    const [, , payload, seedPayloads] = vi.mocked(repository.createDiscoveryRun).mock.calls[0]!;
+
+    expect(payload).toEqual(
+      expect.objectContaining({
+        runId: response.runId,
+        limit: 200,
+        minReviewCount: 0,
+        maxPages: 1,
+        taskTypes: ['SERP_MAPS_LOCAL'],
+        languages: ['en', 'ar'],
+        requestedByUserId: 'user_1',
+      }),
+    );
+    expect(seedPayloads).toHaveLength(8);
+    expect(seedPayloads.map((seedPayload) => seedPayload.maxTasks)).toEqual([
+      25, 25, 25, 25, 25, 25, 25, 25,
+    ]);
+    expect(seedPayloads.every((seedPayload) => seedPayload.runMaxTasks === 200)).toBe(true);
+    expect(seedPayloads.every((seedPayload) => seedPayload.minReviewCount === 0)).toBe(true);
+    expect(seedPayloads.every((seedPayload) => seedPayload.maxPages === 1)).toBe(true);
+    expect(
+      seedPayloads.every((seedPayload) => seedPayload.taskTypes?.join(',') === 'SERP_MAPS_LOCAL'),
+    ).toBe(true);
+    expect(seedPayloads.every((seedPayload) => seedPayload.languages?.join(',') === 'en,ar')).toBe(
+      true,
+    );
+    expect(seedPayloads.reduce((sum, seedPayload) => sum + (seedPayload.maxTasks ?? 0), 0)).toBe(
+      200,
+    );
+    expect(seedPayloads.every((seedPayload) => seedPayload.enqueueRunTasks)).toBe(true);
     expect(enqueueDiscoveryRun).not.toHaveBeenCalled();
   });
 });

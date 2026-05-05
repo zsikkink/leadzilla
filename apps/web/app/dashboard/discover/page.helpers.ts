@@ -20,7 +20,7 @@ export function buildDiscoveryRequest(input: {
   cities: string[];
   includeWebsiteAnalysis: boolean;
   includeSocialMediaAnalysis: boolean;
-  limit: number;
+  searchTaskLimit: number;
   requestedByUserId?: string | undefined;
 }): CreateDiscoveryRunRequest | null {
   if (input.selectedIcpIds.length === 0 || input.countries.length === 0) {
@@ -33,7 +33,7 @@ export function buildDiscoveryRequest(input: {
     ...(input.cities.length > 0 ? { cities: input.cities } : {}),
     includeWebsiteAnalysis: input.includeWebsiteAnalysis,
     includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
-    limit: input.limit,
+    limit: input.searchTaskLimit,
     ...(input.requestedByUserId ? { requestedByUserId: input.requestedByUserId } : {}),
   };
 }

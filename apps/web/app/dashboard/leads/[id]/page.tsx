@@ -1,11 +1,16 @@
 'use client';
 
-import type { GetLeadResponse } from '@lead-flood/contracts';
+import type {
+  GetLeadResponse,
+  LatestLeadScoreResponse,
+  LeadScoreBand,
+  MessageDraftResponse,
+  MessageSendResponse,
+} from '@lead-flood/contracts';
 import {
   AlertCircle,
   AlertTriangle,
   ArrowLeft,
-  Brain,
   Briefcase,
   Building2,
   Check,
@@ -44,6 +49,7 @@ import { AboutBusinessCard, parseBusinessDataForCard } from '../../../../src/com
 import type { AboutBusinessCardProps } from '../../../../src/components/about-business-card.js';
 import { ConfirmModal, useConfirmModal } from '../../../../src/components/confirm-modal.js';
 import { LeadStatusBadge } from '../../../../src/components/lead-status-badge.js';
+import { MessageDraftCard } from '../../../../src/components/message-draft-card.js';
 import { ScoreBandBadge } from '../../../../src/components/score-band-badge.js';
 import { ScoringBreakdown } from '../../../../src/components/scoring-breakdown.js';
 import {
@@ -54,6 +60,7 @@ import {
 } from '../../../../src/components/social-link-icon.js';
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
+import { useQueuedRefresh } from '../../../../src/hooks/use-queued-refresh.js';
 import { countryName } from '../../../../src/lib/countries.js';
 import { getTeamMemberTier, sortTeamMembers } from '../../../../src/lib/team-members.js';
 
@@ -66,9 +73,21 @@ interface EnrichmentField {
 }
 
 interface ScoreInfo {
-  blendedScore?: number | undefined;
-  scoreBand?: string | undefined;
+  score?: number | undefined;
+  scoreBand?: LeadScoreBand | undefined;
   reasoning?: string[] | undefined;
+  deterministicScore?: number | undefined;
+  logisticScore?: number | undefined;
+  reasonCodes?: string[] | undefined;
+  qualificationPath?: string | undefined;
+  predictedAt?: string | undefined;
+  usedTrainedModel?: boolean | undefined;
+  scoreSource: 'AI_SCORE' | 'LEGACY_SCORE';
+}
+
+interface BusinessDiscoveryScoreInfo {
+  score: number;
+  scoreBand: LeadScoreBand | null;
 }
 
 interface BusinessScrapeData {
@@ -152,6 +171,26 @@ function readOptionalString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function readOptionalNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function readOptionalBoolean(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+}
+
 function getBusinessNameFromLead(lead: GetLeadResponse | null): string | null {
   if (!lead?.enrichmentData || typeof lead.enrichmentData !== 'object') {
     return null;
@@ -163,6 +202,11 @@ function getBusinessNameFromLead(lead: GetLeadResponse | null): string | null {
       ?? data.organization_name
       ?? data.company,
   );
+}
+
+function formatLeadName(firstName: string, lastName: string): string {
+  const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
+  return fullName.toLowerCase() === 'unknown contact' ? 'Generic Contact' : fullName;
 }
 
 function buildTeamMembersFromLead(lead: GetLeadResponse | null): TeamMember[] {
@@ -224,17 +268,307 @@ function extractEnrichmentFields(data: unknown): EnrichmentField[] {
   return fields;
 }
 
-function extractScoreInfo(data: unknown): ScoreInfo | null {
-  if (!data || typeof data !== 'object') return null;
-  const d = data as Record<string, unknown>;
-  const info = d._scoreInfo;
-  if (!info || typeof info !== 'object') return null;
-  const s = info as Record<string, unknown>;
+function extractScoreInfo(
+  data: unknown,
+  prediction: LatestLeadScorePrediction | null | undefined,
+): ScoreInfo | null {
+  const predictionReasons = readRecord(prediction?.reasonsJson);
+  if (prediction) {
+    return {
+      score: (
+        readOptionalString(predictionReasons?.scoreSource) === 'llm'
+        || readOptionalString(predictionReasons?.scoreSource) === 'trained_model'
+        || readStringArray(predictionReasons?.aiReasoning).length > 0
+        || readOptionalBoolean(predictionReasons?.usedTrainedModel) === true
+      )
+        ? prediction.logisticScore
+        : prediction.blendedScore,
+      deterministicScore: prediction.deterministicScore,
+      logisticScore: prediction.logisticScore,
+      scoreBand: prediction.scoreBand as LeadScoreBand,
+      reasoning: readStringArray(predictionReasons?.aiReasoning),
+      reasonCodes: readStringArray(predictionReasons?.reasonCodes),
+      qualificationPath: readOptionalString(predictionReasons?.qualificationPath) ?? undefined,
+      predictedAt: prediction.predictedAt,
+      usedTrainedModel: readOptionalBoolean(predictionReasons?.usedTrainedModel) ?? undefined,
+      scoreSource: 'AI_SCORE',
+    };
+  }
+
+  const d = readRecord(data);
+  const info = readRecord(d?._scoreInfo);
+  if (!info) return null;
+  const band = readOptionalString(info.scoreBand);
   return {
-    blendedScore: typeof s.blendedScore === 'number' ? s.blendedScore : undefined,
-    scoreBand: typeof s.scoreBand === 'string' ? s.scoreBand : undefined,
-    reasoning: Array.isArray(s.reasoning) ? (s.reasoning as string[]) : undefined,
+    score: readOptionalNumber(info.blendedScore) ?? undefined,
+    scoreBand: band === 'HIGH' || band === 'MEDIUM' || band === 'LOW' ? band : undefined,
+    reasoning: readStringArray(info.reasoning),
+    scoreSource: 'LEGACY_SCORE',
   };
+}
+
+function scoreToPercent(score: number | null | undefined): number | null {
+  return score != null && Number.isFinite(score) ? Math.round(score * 100) : null;
+}
+
+function getSendRecency(send: MessageSendResponse): number {
+  return new Date(send.updatedAt).getTime();
+}
+
+function extractBusinessDiscoveryScore(
+  lead: GetLeadResponse | null,
+  businessProfile: Record<string, unknown> | null,
+): BusinessDiscoveryScoreInfo | null {
+  const score = lead?.businessDeterministicScore
+    ?? readOptionalNumber(businessProfile?.deterministicScore)
+    ?? readOptionalNumber(businessProfile?.deterministic_score);
+  if (score === null || score === undefined) {
+    return null;
+  }
+
+  const rawBand = lead?.businessScoreBand
+    ?? readOptionalString(businessProfile?.scoreBand)
+    ?? readOptionalString(businessProfile?.score_band);
+  const scoreBand = rawBand === 'HIGH' || rawBand === 'MEDIUM' || rawBand === 'LOW'
+    ? rawBand
+    : null;
+
+  return { score, scoreBand };
+}
+
+function getLeadScoreLabel(scoreInfo: ScoreInfo): string {
+  return scoreInfo.scoreSource === 'LEGACY_SCORE' ? 'Legacy Lead Score' : 'AI Lead Score';
+}
+
+function getWebsiteScrapeRecord(businessProfile: Record<string, unknown> | null): Record<string, unknown> | null {
+  return readRecord(businessProfile?.apifyWebsiteScrapeJson ?? businessProfile?.apify_website_scrape_json);
+}
+
+function getInstagramScrapeRecord(businessProfile: Record<string, unknown> | null): Record<string, unknown> | null {
+  return readRecord(businessProfile?.apifyInstagramScrapeJson ?? businessProfile?.apify_instagram_scrape_json);
+}
+
+function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))));
+}
+
+function extractContactStrings(
+  websiteScrape: Record<string, unknown> | null,
+  collectionKey: 'emails' | 'phones',
+  valueKey: 'email' | 'number',
+): string[] {
+  const contactInfo = readRecord(websiteScrape?.contactInfo);
+  const raw = contactInfo?.[collectionKey] ?? websiteScrape?.[collectionKey];
+  if (!Array.isArray(raw)) return [];
+  return uniqueNonEmpty(raw.map((item) => {
+    if (typeof item === 'string') return item;
+    const record = readRecord(item);
+    return readOptionalString(record?.[valueKey]);
+  }));
+}
+
+function extractTechLabels(websiteScrape: Record<string, unknown> | null): string[] {
+  const technologies = readRecord(websiteScrape?.technologies);
+  if (!technologies) return [];
+  const labels: string[] = [];
+  for (const [category, values] of Object.entries(technologies)) {
+    if (!Array.isArray(values)) continue;
+    for (const value of values) {
+      if (typeof value === 'string' && value.trim().length > 0) {
+        labels.push(`${category}: ${value.trim()}`);
+      }
+    }
+  }
+  return labels.slice(0, 8);
+}
+
+function formatDateTime(value: unknown): string | null {
+  const raw = readOptionalString(value);
+  if (!raw) return null;
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? raw : date.toLocaleString();
+}
+
+function ScrapedSignalMetric({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail?: string | null | undefined;
+}) {
+  return (
+    <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">{label}</p>
+      <p className="mt-1 text-lg font-bold text-foreground">{value}</p>
+      {detail ? <p className="mt-0.5 truncate text-xs text-muted-foreground/50">{detail}</p> : null}
+    </div>
+  );
+}
+
+function ScrapedSignalPill({ label, active }: { label: string; active: boolean }) {
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold ${
+      active ? 'bg-zbooni-green/10 text-zbooni-green' : 'bg-muted/20 text-muted-foreground/50'
+    }`}>
+      {active ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+      {label}
+    </span>
+  );
+}
+
+function ScrapedBusinessSignalsCard({ businessProfile }: { businessProfile: Record<string, unknown> | null }) {
+  if (!businessProfile) return null;
+
+  const websiteScrape = getWebsiteScrapeRecord(businessProfile);
+  const instagramScrape = getInstagramScrapeRecord(businessProfile);
+  const websiteDomain = readOptionalString(businessProfile.websiteDomain ?? businessProfile.website_domain);
+  const instagramHandle = readOptionalString(businessProfile.instagramHandle ?? businessProfile.instagram_handle);
+  const websiteScrapedAt = formatDateTime(businessProfile.websiteScrapedAt ?? businessProfile.website_scraped_at);
+  const instagramScrapedAt = formatDateTime(businessProfile.instagramScrapedAt ?? businessProfile.instagram_scraped_at);
+  const pagesCrawled = readOptionalNumber(websiteScrape?.pagesCrawled);
+  const crawlDurationMs = readOptionalNumber(websiteScrape?.crawlDurationMs);
+  const emails = extractContactStrings(websiteScrape, 'emails', 'email');
+  const phones = uniqueNonEmpty([
+    readOptionalString(businessProfile.phoneE164 ?? businessProfile.phone_e164),
+    ...extractContactStrings(websiteScrape, 'phones', 'number'),
+  ]);
+  const decisionMakersRaw = websiteScrape?.decisionMakers;
+  const paymentWidgetsRaw = websiteScrape?.paymentWidgets;
+  const decisionMakerCount = Array.isArray(decisionMakersRaw) ? decisionMakersRaw.length : 0;
+  const paymentWidgetCount = Array.isArray(paymentWidgetsRaw) ? paymentWidgetsRaw.length : 0;
+  const techLabels = extractTechLabels(websiteScrape);
+  const businessSignals = readRecord(websiteScrape?.businessSignals);
+  const rating = readOptionalNumber(businessProfile.rating);
+  const reviewCount = readOptionalNumber(businessProfile.reviewCount ?? businessProfile.review_count);
+  const followerCount = readOptionalNumber(businessProfile.followerCount ?? businessProfile.follower_count);
+
+  const hasWebsiteScrape = Boolean(websiteScrape);
+  const hasInstagramScrape = Boolean(instagramScrape);
+  const scrapeDuration = crawlDurationMs !== null ? `${(crawlDurationMs / 1000).toFixed(1)}s crawl` : null;
+
+  const signalPills = [
+    { label: 'Booking form', active: readOptionalBoolean(websiteScrape?.hasBookingForm) === true },
+    { label: 'Generic email', active: emails.length > 0 },
+    { label: 'Phone', active: phones.length > 0 },
+    { label: 'WhatsApp', active: readOptionalBoolean(businessProfile.hasWhatsapp ?? businessProfile.has_whatsapp) === true },
+    { label: 'Instagram', active: readOptionalBoolean(businessProfile.hasInstagram ?? businessProfile.has_instagram) === true || Boolean(instagramHandle || instagramScrape) },
+    { label: 'Online payments', active: readOptionalBoolean(businessProfile.acceptsOnlinePayments ?? businessProfile.accepts_online_payments) === true || paymentWidgetCount > 0 },
+    { label: 'Pricing tiers', active: readOptionalBoolean(websiteScrape?.hasPricingTiers) === true },
+    { label: 'Product catalog', active: readOptionalBoolean(websiteScrape?.hasProductCatalog) === true },
+    { label: 'Testimonials', active: readOptionalBoolean(businessSignals?.hasTestimonials) === true },
+    { label: 'Case studies', active: readOptionalBoolean(businessSignals?.hasCaseStudies) === true },
+    { label: 'Client logos', active: readOptionalBoolean(businessSignals?.hasClientLogos) === true },
+    { label: 'Recent activity', active: readOptionalBoolean(businessProfile.recentActivity ?? businessProfile.recent_activity) === true },
+  ];
+
+  return (
+    <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+      <h2 className="mb-4 flex items-center gap-2 text-base font-bold tracking-tight">
+        <Search className="h-4 w-4 text-zbooni-teal" />
+        Scraped Website and Business Signals
+      </h2>
+
+      <div className="grid gap-3 sm:grid-cols-4">
+        <ScrapedSignalMetric
+          label="Website Scrape"
+          value={hasWebsiteScrape ? (pagesCrawled !== null ? `${pagesCrawled} pages` : 'Captured') : 'Not captured'}
+          detail={websiteScrapedAt ?? scrapeDuration ?? websiteDomain}
+        />
+        <ScrapedSignalMetric
+          label="Contacts Found"
+          value={`${emails.length} email${emails.length === 1 ? '' : 's'} / ${phones.length} phone${phones.length === 1 ? '' : 's'}`}
+          detail={emails[0] ?? phones[0] ?? null}
+        />
+        <ScrapedSignalMetric
+          label="Decision Makers"
+          value={String(decisionMakerCount)}
+          detail={decisionMakerCount > 0 ? 'From website scrape' : 'None found on scraped pages'}
+        />
+        <ScrapedSignalMetric
+          label="Instagram"
+          value={hasInstagramScrape ? 'Scraped' : instagramHandle ? 'Handle found' : 'Not found'}
+          detail={instagramScrapedAt ?? (instagramHandle ? `@${instagramHandle}` : null)}
+        />
+      </div>
+
+      {(rating !== null || reviewCount !== null || followerCount !== null) && (
+        <div className="mt-4 flex flex-wrap gap-2 text-xs text-muted-foreground/70">
+          {rating !== null ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-border/20 px-2.5 py-1">
+              <Star className="h-3 w-3 text-yellow-400" />
+              {rating}/5
+            </span>
+          ) : null}
+          {reviewCount !== null ? (
+            <span className="rounded-full border border-border/20 px-2.5 py-1">
+              {reviewCount.toLocaleString()} reviews
+            </span>
+          ) : null}
+          {followerCount !== null ? (
+            <span className="rounded-full border border-border/20 px-2.5 py-1">
+              {followerCount.toLocaleString()} followers
+            </span>
+          ) : null}
+        </div>
+      )}
+
+      <div className="mt-4">
+        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
+          Signals Learned
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {signalPills.map((signal) => (
+            <ScrapedSignalPill key={`scraped-signal-${signal.label}`} label={signal.label} active={signal.active} />
+          ))}
+        </div>
+      </div>
+
+      {(emails.length > 0 || phones.length > 0) && (
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          {emails.slice(0, 3).map((email) => (
+            <a
+              key={`scraped-email-${email}`}
+              href={`mailto:${email}`}
+              className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2 text-xs text-zbooni-teal transition-colors hover:text-zbooni-green"
+            >
+              <Mail className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{email}</span>
+            </a>
+          ))}
+          {phones.slice(0, 3).map((phone) => (
+            <a
+              key={`scraped-phone-${phone}`}
+              href={`tel:${phone}`}
+              className="flex items-center gap-2 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3 py-2 text-xs text-zbooni-teal transition-colors hover:text-zbooni-green"
+            >
+              <Phone className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{phone}</span>
+            </a>
+          ))}
+        </div>
+      )}
+
+      {techLabels.length > 0 ? (
+        <div className="mt-4">
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
+            Detected Tech
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {techLabels.map((label) => (
+              <span
+                key={`tech-${label}`}
+                className="rounded-full border border-border/20 bg-zbooni-dark/30 px-2.5 py-1 text-[10px] font-semibold text-muted-foreground/70"
+              >
+                {label}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 interface _InstagramPost {
@@ -248,6 +582,7 @@ interface _InstagramPost {
 }
 
 type ExtendedLeadResponse = GetLeadResponse;
+type LatestLeadScorePrediction = NonNullable<LatestLeadScoreResponse['prediction']>;
 
 function _getInstagramPostType(raw: unknown): 'image' | 'video' | 'carousel' {
   if (raw === 'video') return 'video';
@@ -1253,13 +1588,23 @@ export default function LeadDetailPage() {
     [id],
   );
 
+  const messageDrafts = useApiQuery(
+    useCallback(() => apiClient.listDrafts({ leadId: id, page: 1, pageSize: 20 }), [apiClient, id]),
+    [id],
+  );
+
   const sends = useApiQuery(
-    useCallback(() => apiClient.listSends({ leadId: id, page: 1, pageSize: 50 }), [apiClient, id]),
+    useCallback(() => apiClient.listSends({ leadId: id, page: 1, pageSize: 100 }), [apiClient, id]),
+    [id],
+  );
+  const latestLeadScore = useApiQuery(
+    useCallback(() => apiClient.getLatestLeadScore(id), [apiClient, id]),
     [id],
   );
   const l = lead.data as ExtendedLeadResponse | null;
   const [isCreatingBackup, setIsCreatingBackup] = useState(false);
   const [backupSuccess, setBackupSuccess] = useState<string | null>(null);
+  const [isGeneratingDraft, setIsGeneratingDraft] = useState(false);
   const [showAddMemberForm, setShowAddMemberForm] = useState(false);
   const [addMemberForm, setAddMemberForm] = useState({ name: '', title: '', email: '', phone: '' });
   const businessProfileRecord = useMemo(() => {
@@ -1400,37 +1745,6 @@ export default function LeadDetailPage() {
     }
   };
 
-  // ── A3: Blend label from pipeline_settings ─────────────
-  const [blendLabel, setBlendLabel] = useState<string>('Score (100% Rule-Based)');
-
-  // ── A3: Load blend setting ─────────────────────────────
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadBlend() {
-      try {
-        const data = await apiClient.getPipelineSetting('deterministicAiBlend');
-        if (cancelled) return;
-        const raw = data.value;
-        const val = typeof raw === 'number' ? raw : Number(raw);
-        if (Number.isFinite(val) && val >= 0 && val <= 100) {
-          const detPct = Math.round(val);
-          const aiPct = 100 - detPct;
-          if (aiPct === 0) {
-            setBlendLabel('Score (100% Rule-Based)');
-          } else {
-            setBlendLabel(`Score (${detPct}% Rule-Based / ${aiPct}% AI)`);
-          }
-        }
-      } catch {
-        // Use default label
-      }
-    }
-
-    void loadBlend();
-    return () => { cancelled = true; };
-  }, [apiClient]);
-
   // handleAddMember is defined above via useCallback
 
   const businessName = useMemo(
@@ -1540,7 +1854,72 @@ export default function LeadDetailPage() {
   );
   const primaryLinkedinUrl = sortedTeamMembers[0]?.linkedinUrl ?? sortedTeamMembers.find((member) => member.linkedinUrl)?.linkedinUrl ?? null;
   const enrichmentFields = l ? extractEnrichmentFields(l.enrichmentData) : [];
-  const scoreInfo = l ? extractScoreInfo(l.enrichmentData) : null;
+  const latestScorePrediction = latestLeadScore.data?.prediction ?? null;
+  const scoreInfo = l ? extractScoreInfo(l.enrichmentData, latestScorePrediction) : null;
+  const businessDiscoveryScore = l ? extractBusinessDiscoveryScore(l, businessProfileRecord) : null;
+  const draftIcpProfileId = l?.latestIcpProfileId ?? latestScorePrediction?.icpProfileId ?? null;
+  const draftScorePredictionId = latestScorePrediction?.id ?? null;
+  const sortedMessageDrafts = useMemo<MessageDraftResponse[]>(() => {
+    if (!messageDrafts.data?.items) return [];
+    return [...messageDrafts.data.items].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+  }, [messageDrafts.data?.items]);
+  const initialSendByDraftId = useMemo<Record<string, MessageSendResponse>>(() => {
+    const result: Record<string, MessageSendResponse> = {};
+    for (const send of sends.data?.items ?? []) {
+      if (send.followUpNumber !== 0) continue;
+      const existing = result[send.messageDraftId];
+      if (!existing || getSendRecency(send) > getSendRecency(existing)) {
+        result[send.messageDraftId] = send;
+      }
+    }
+    return result;
+  }, [sends.data?.items]);
+  const refreshMessagingData = useCallback(() => {
+    messageDrafts.refetch();
+    sends.refetch();
+    lead.refetch();
+  }, [lead.refetch, messageDrafts.refetch, sends.refetch]);
+  const scheduleQueuedRefreshes = useQueuedRefresh(refreshMessagingData);
+
+  const handleGenerateDraft = useCallback(async () => {
+    if (!l) return;
+
+    if (!draftIcpProfileId) {
+      toast.error('This lead needs a linked ICP profile before an outreach draft can be generated.');
+      return;
+    }
+
+    setIsGeneratingDraft(true);
+    try {
+      const result = await apiClient.generateDraft({
+        leadId: l.id,
+        icpProfileId: draftIcpProfileId,
+        ...(draftScorePredictionId ? { scorePredictionId: draftScorePredictionId } : {}),
+        promptVersion: 'v2',
+      });
+
+      switch (result.status) {
+        case 'QUEUED':
+          toast.success('Draft generation queued for this lead.');
+          scheduleQueuedRefreshes();
+          break;
+        case 'CREATED':
+          toast.success('Draft created for this lead.');
+          break;
+        case 'EXISTS':
+          toast.info('An initial draft already exists for this lead.');
+          break;
+      }
+
+      refreshMessagingData();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to generate outreach draft');
+    } finally {
+      setIsGeneratingDraft(false);
+    }
+  }, [apiClient, draftIcpProfileId, draftScorePredictionId, l, refreshMessagingData, scheduleQueuedRefreshes]);
 
   if (lead.error) {
     return <p className="text-sm text-destructive">{lead.error}</p>;
@@ -1555,7 +1934,8 @@ export default function LeadDetailPage() {
     );
   }
 
-  const scorePercent = scoreInfo?.blendedScore ? Math.round(scoreInfo.blendedScore * 100) : null;
+  const leadScorePercent = scoreToPercent(scoreInfo?.score);
+  const businessScorePercent = scoreToPercent(businessDiscoveryScore?.score);
 
   // ── Section Order (C8):
   // 1. Header
@@ -1564,7 +1944,8 @@ export default function LeadDetailPage() {
   // 4. Team Members (editable from C9)
   // 5. Intelligence Gathered
   // 6. Scoring Breakdown
-  // 7. Message History
+  // 7. Outreach Draft
+  // 8. Message History
 
   return (
     <div className="space-y-6">
@@ -1581,7 +1962,7 @@ export default function LeadDetailPage() {
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-2xl font-extrabold tracking-tight">
-              {l.firstName} {l.lastName}
+              {formatLeadName(l.firstName, l.lastName)}
             </h1>
             <p className="mt-0.5 text-sm text-muted-foreground">{l.email}</p>
             {businessName ? (
@@ -1611,11 +1992,28 @@ export default function LeadDetailPage() {
           </div>
           {scoreInfo?.scoreBand ? (
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Lead Score</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                {getLeadScoreLabel(scoreInfo)}
+              </p>
               <div className="mt-1 flex items-center gap-2">
                 <ScoreBandBadge band={scoreInfo.scoreBand as 'HIGH' | 'MEDIUM' | 'LOW'} />
-                {scorePercent !== null ? (
-                  <span className="text-lg font-bold tabular-nums tracking-tight">{scorePercent}%</span>
+                {leadScorePercent !== null ? (
+                  <span className="text-lg font-bold tabular-nums tracking-tight">{leadScorePercent}%</span>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          {businessDiscoveryScore ? (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                Business Discovery Score
+              </p>
+              <div className="mt-1 flex items-center gap-2">
+                {businessDiscoveryScore.scoreBand ? (
+                  <ScoreBandBadge band={businessDiscoveryScore.scoreBand} />
+                ) : null}
+                {businessScorePercent !== null ? (
+                  <span className="text-lg font-bold tabular-nums tracking-tight">{businessScorePercent}%</span>
                 ) : null}
               </div>
             </div>
@@ -1678,6 +2076,14 @@ export default function LeadDetailPage() {
           businessId={l.businessId ?? null}
         />
       ) : null}
+
+      <ScoringBreakdown
+        leadId={id}
+        leadScore={scoreInfo?.score}
+        scoreBand={scoreInfo?.scoreBand}
+      />
+
+      <ScrapedBusinessSignalsCard businessProfile={businessProfileRecord} />
 
       {/* ─── 2. Brave Search Results (C3 + C4 — CEO card + Related Findings) ─── */}
       <BraveSearchSection conversion={conversionData} />
@@ -1989,47 +2395,81 @@ export default function LeadDetailPage() {
         </div>
       ) : null}
 
-      {/* ─── 5. Scoring Breakdown (C7) ─── */}
-      <ScoringBreakdown
-        leadId={id}
-        blendedScore={scoreInfo?.blendedScore}
-        scoreBand={scoreInfo?.scoreBand}
-        blendLabel={blendLabel}
-      />
-
-      {/* Score Reasoning */}
-      {scoreInfo?.reasoning && scoreInfo.reasoning.length > 0 ? (
-        <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-          <h2 className="mb-4 text-base font-bold tracking-tight flex items-center gap-2">
-            <Brain className="h-4 w-4 text-zbooni-teal" />
-            Score Reasoning
-            {scorePercent !== null ? (
-              <span className={`ml-auto inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                scoreInfo.scoreBand === 'HIGH' ? 'bg-zbooni-green/15 text-zbooni-green'
-                  : scoreInfo.scoreBand === 'MEDIUM' ? 'bg-yellow-500/15 text-yellow-400'
-                  : 'bg-red-500/15 text-red-400'
-              }`}>
-                {scorePercent}% — {scoreInfo.scoreBand}
-              </span>
-            ) : null}
-          </h2>
-          <div className="space-y-2">
-            {scoreInfo.reasoning.map((reason, i) => (
-              <div
-                key={i}
-                className="flex items-start gap-3 rounded-lg border border-border/20 bg-zbooni-dark/30 px-3.5 py-2.5"
-              >
-                <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
-                  i < 2 ? 'bg-zbooni-green/20 text-zbooni-green' : 'bg-zbooni-teal/15 text-zbooni-teal'
-                }`}>
-                  {i + 1}
-                </div>
-                <p className="text-sm text-muted-foreground">{reason}</p>
-              </div>
-            ))}
+      {/* ─── 7. Outreach Draft ─── */}
+      <section className="space-y-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-base font-bold tracking-tight flex items-center gap-2">
+              <Mail className="h-4 w-4 text-zbooni-green" />
+              Outreach Draft
+              {messageDrafts.data ? (
+                <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">
+                  {messageDrafts.data.total}
+                </span>
+              ) : null}
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground/60">
+              Generate, edit, re-draft, approve, and send this lead&apos;s outreach from the lead detail page.
+            </p>
           </div>
+          <button
+            type="button"
+            onClick={() => void handleGenerateDraft()}
+            disabled={isGeneratingDraft || !draftIcpProfileId}
+            title={!draftIcpProfileId ? 'This lead needs a linked ICP profile before a draft can be generated.' : undefined}
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-zbooni-green/15 px-3.5 py-2 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/25 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isGeneratingDraft ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Pencil className="h-3.5 w-3.5" />
+            )}
+            Generate Draft
+          </button>
         </div>
-      ) : null}
+
+        {!draftIcpProfileId ? (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-200">
+            This lead does not have a linked ICP profile yet, so the API cannot generate an outreach draft for it.
+          </div>
+        ) : null}
+
+        {messageDrafts.error ? (
+          <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            Failed to load drafts: {messageDrafts.error}
+          </div>
+        ) : null}
+
+        {messageDrafts.isLoading ? (
+          <div className="flex items-center gap-2 rounded-2xl border border-border/50 bg-card p-5 text-sm text-muted-foreground shadow-sm">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
+            Loading outreach drafts...
+          </div>
+        ) : null}
+
+        {!messageDrafts.isLoading && !messageDrafts.error && sortedMessageDrafts.length === 0 ? (
+          <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+            <p className="text-sm font-medium text-foreground">No outreach draft yet.</p>
+            <p className="mt-1 text-sm text-muted-foreground/60">
+              Generate the first draft here, then review, edit, approve, and send it from this page.
+            </p>
+          </div>
+        ) : null}
+
+        <div className="space-y-3">
+          {sortedMessageDrafts.map((draft) => (
+            <MessageDraftCard
+              key={draft.id}
+              draft={draft}
+              leadName={formatLeadName(l.firstName, l.lastName)}
+              companyName={businessName ?? undefined}
+              initialSend={draft.followUpNumber === 0 ? initialSendByDraftId[draft.id] ?? null : null}
+              initialSendLoaded={draft.followUpNumber > 0 || (!sends.isLoading && sends.error === null)}
+              onAction={refreshMessagingData}
+            />
+          ))}
+        </div>
+      </section>
 
       {/* Backup Contact Rotation Banner */}
       {showBackupBanner && nextBackup ? (
@@ -2080,7 +2520,7 @@ export default function LeadDetailPage() {
         </div>
       ) : null}
 
-      {/* ─── 6. Message History ─── */}
+      {/* ─── 8. Message History ─── */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="text-base font-bold tracking-tight flex items-center gap-2">

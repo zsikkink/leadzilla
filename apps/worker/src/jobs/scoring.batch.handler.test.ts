@@ -175,6 +175,54 @@ describe('handleScoringBatchJob consistency alignment', () => {
     );
   });
 
+  it('uses the trained model score as final score with deterministic as fallback only', async () => {
+    sharedMock.findActiveTrainedModel.mockResolvedValue({
+      model: {},
+    });
+    sharedMock.extractFeatureVectorForModel.mockReturnValue([]);
+    scoringMock.predictLogistic.mockReturnValue(0.87);
+    scoringMock.evaluateDeterministicScore.mockReturnValue({
+      qualificationScore: 0.18,
+      hardFilterPassed: true,
+      qualificationPath: 'DISQUALIFY',
+      reasonCodes: ['LOW_WEIGHTED_MATCH'],
+      categoryScores: {},
+      ruleEvaluation: [],
+    });
+
+    await handleScoringBatchJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        icpProfileId: 'icp_1',
+      }),
+    );
+
+    expect(dbMock.prisma.leadScorePrediction.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          deterministicScore: 0.18,
+          logisticScore: 0.87,
+          blendedScore: 0.87,
+          reasonsJson: expect.objectContaining({
+            scoreSource: 'trained_model',
+          }),
+        }),
+      }),
+    );
+    expect(scoringMock.toScoreBand).toHaveBeenCalledWith(0.87, {
+      high: 0.8,
+      medium: 0.5,
+    });
+    expect(dbMock.prisma.lead.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'lead_1',
+        status: { in: ['new', 'processing', 'enriched', 'scored', 'qualified', 'rejected', 'stuck'] },
+      },
+      data: { status: 'qualified' },
+    });
+  });
+
   it('does not count hard-filter failures as qualified even when blended score is high', async () => {
     sharedMock.findActiveTrainedModel.mockResolvedValue({
       model: {},

@@ -77,12 +77,19 @@ describe('ApiClient', () => {
       new Response(JSON.stringify(mockResponse), { status: 200 }),
     );
 
-    await client.listLeads({ page: 2, pageSize: 10, includeQualityMetrics: false, status: 'enriched' });
+    await client.listLeads({
+      page: 2,
+      pageSize: 10,
+      includeQualityMetrics: false,
+      status: 'enriched',
+      sortBy: 'score_desc',
+    });
 
     const calledUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
     expect(calledUrl).toContain('page=2');
     expect(calledUrl).toContain('pageSize=10');
     expect(calledUrl).toContain('status=enriched');
+    expect(calledUrl).toContain('sortBy=score_desc');
   });
 
   it('throws helpful error when API is unreachable', async () => {

@@ -5,11 +5,12 @@ import type {
   MessageSendResponse,
   MessageVariantResponse,
 } from '@lead-flood/contracts';
-import { Check, ChevronDown, ChevronUp, Pencil, Send, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Loader2, Pencil, RefreshCw, Send, X } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
 import { useAuth } from '../hooks/use-auth.js';
+import { useQueuedRefresh } from '../hooks/use-queued-refresh.js';
 import type { ApiClient } from '../lib/api-client.js';
 
 interface MessageDraftCardProps {
@@ -163,6 +164,8 @@ function VariantEditor({
   actionInProgress,
   onApprove,
   onSend,
+  onRegenerate,
+  regenerateDisabledReason,
   apiClient,
   onAction,
 }: {
@@ -172,6 +175,8 @@ function VariantEditor({
   actionInProgress: string | null;
   onApprove: (variantId: string) => void;
   onSend: (variantId: string) => void;
+  onRegenerate?: ((feedback: string) => Promise<void> | void) | undefined;
+  regenerateDisabledReason?: string | null | undefined;
   apiClient: ApiClient;
   onAction: () => void;
 }) {
@@ -179,6 +184,8 @@ function VariantEditor({
   const [editSubject, setEditSubject] = useState(variant.subject ?? '');
   const [editBody, setEditBody] = useState(variant.bodyText);
   const [isSaving, setIsSaving] = useState(false);
+  const [isRedraftOpen, setIsRedraftOpen] = useState(false);
+  const [redraftFeedback, setRedraftFeedback] = useState('');
 
   const hasChanges =
     editBody !== variant.bodyText ||
@@ -232,14 +239,32 @@ function VariantEditor({
           </span>
         </div>
         {!isEditing ? (
-          <button
-            type="button"
-            onClick={handleEditStart}
-            disabled={!!actionInProgress}
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/20 hover:text-foreground disabled:opacity-50"
-          >
-            <Pencil className="h-3 w-3" /> Edit
-          </button>
+          <div className="flex items-center gap-1.5">
+            {onRegenerate ? (
+              <button
+                type="button"
+                onClick={() => setIsRedraftOpen((current) => !current)}
+                disabled={!!actionInProgress || !!regenerateDisabledReason}
+                title={regenerateDisabledReason ?? 'Re-draft this outreach message with operator feedback'}
+                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/20 hover:text-foreground disabled:opacity-50"
+              >
+                {actionInProgress === 'regenerate' ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3 w-3" />
+                )}
+                Re-draft
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={handleEditStart}
+              disabled={!!actionInProgress}
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/20 hover:text-foreground disabled:opacity-50"
+            >
+              <Pencil className="h-3 w-3" /> Edit
+            </button>
+          </div>
         ) : null}
       </div>
 
@@ -288,6 +313,64 @@ function VariantEditor({
         </div>
       ) : (
         <>
+          {isRedraftOpen && onRegenerate ? (
+            <form
+              className="mb-3 rounded-lg border border-border/50 bg-background/40 p-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const feedback = redraftFeedback.trim();
+                if (!feedback) return;
+                void onRegenerate(feedback);
+                setIsRedraftOpen(false);
+                setRedraftFeedback('');
+              }}
+            >
+              <label
+                htmlFor={`redraft-feedback-${variant.id}`}
+                className="mb-1 block text-[11px] font-semibold text-muted-foreground/70"
+              >
+                What should change in the next draft?
+              </label>
+              <textarea
+                id={`redraft-feedback-${variant.id}`}
+                value={redraftFeedback}
+                onChange={(event) => setRedraftFeedback(event.target.value)}
+                rows={3}
+                maxLength={1000}
+                placeholder="Example: Make the subject clearer, avoid mentioning WordPress, and keep the payment angle less specific."
+                className="w-full resize-y rounded-lg border border-border/50 bg-background/60 px-3 py-2 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground/40 focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/20"
+              />
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <span className="text-[11px] text-muted-foreground/50">
+                  This note is sent to the AI with the re-draft request.
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsRedraftOpen(false);
+                      setRedraftFeedback('');
+                    }}
+                    className="rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/20 hover:text-foreground"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!!actionInProgress || !redraftFeedback.trim()}
+                    className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 px-3 py-1.5 text-xs font-semibold text-amber-300 transition-colors hover:bg-amber-500/25 disabled:opacity-50"
+                  >
+                    {actionInProgress === 'regenerate' ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3 w-3" />
+                    )}
+                    Generate New Draft
+                  </button>
+                </div>
+              </div>
+            </form>
+          ) : null}
           {variant.subject ? (
             <p className="mb-1.5 text-sm font-medium text-foreground/90">Subject: {variant.subject}</p>
           ) : null}
@@ -337,6 +420,8 @@ export function MessageDraftCard({
   const [expanded, setExpanded] = useState(false);
 
   const userId = user?.id ?? 'unknown';
+  const primaryChannel = draft.variants[0]?.channel ?? 'EMAIL';
+  const scheduleQueuedRefreshes = useQueuedRefresh(onAction);
 
   const handleApprove = async (variantId?: string | undefined) => {
     setActionInProgress('approve');
@@ -371,13 +456,68 @@ export function MessageDraftCard({
     }
   };
 
+  const handleRegenerate = async (feedback: string) => {
+    if (draft.followUpNumber !== 0) {
+      toast.error('Only initial outreach drafts can be re-drafted from this queue');
+      return;
+    }
+
+    if (!initialSendLoaded) {
+      toast.info('Checking send status before allowing re-draft');
+      return;
+    }
+
+    if (initialSend) {
+      toast.error('This draft already has a send record, so re-draft is blocked');
+      return;
+    }
+
+    setActionInProgress('regenerate');
+    setError(null);
+    try {
+      const result = await apiClient.generateDraft({
+        leadId: draft.leadId,
+        icpProfileId: draft.icpProfileId,
+        ...(draft.scorePredictionId ? { scorePredictionId: draft.scorePredictionId } : {}),
+        channel: primaryChannel,
+        promptVersion: 'v2',
+        forceRegenerate: true,
+        redraftFeedback: feedback,
+      });
+
+      if (result.status === 'QUEUED') {
+        toast.success('Re-draft queued. The current draft will be replaced after generation succeeds.');
+        scheduleQueuedRefreshes();
+      } else if (result.status === 'CREATED') {
+        toast.success('New draft created');
+      } else {
+        toast.info('A current draft still exists for this lead');
+      }
+
+      onAction();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to re-draft message';
+      setError(message);
+      toast.error(message);
+    } finally {
+      setActionInProgress(null);
+    }
+  };
+
   const isPending = draft.approvalStatus === 'PENDING';
   const approvalBadge = getApprovalBadge(draft);
   const initialSendBadge = getInitialSendBadge(draft, initialSend, initialSendLoaded);
   const sendActionLabel = getSendActionLabel(draft, initialSend, initialSendLoaded);
+  const isInitialDraft = draft.followUpNumber === 0;
+  const regenerateDisabledReason = !isInitialDraft
+    ? 'Only initial outreach drafts can be re-drafted from this queue.'
+    : !initialSendLoaded
+      ? 'Checking whether this draft has already been queued or sent.'
+      : initialSend
+        ? 'This draft already has a send record, so re-draft is blocked.'
+        : null;
 
   // Determine primary channel from first variant
-  const primaryChannel = draft.variants[0]?.channel ?? 'EMAIL';
   const channelLabel = primaryChannel === 'WHATSAPP' ? 'WhatsApp' : 'Email';
   const channelColorClass = primaryChannel === 'WHATSAPP'
     ? 'bg-[#25D366]/15 text-[#25D366]'
@@ -453,6 +593,8 @@ export function MessageDraftCard({
                 actionInProgress={actionInProgress}
                 onApprove={handleApprove}
                 onSend={handleSend}
+                onRegenerate={isInitialDraft ? handleRegenerate : undefined}
+                regenerateDisabledReason={regenerateDisabledReason}
                 apiClient={apiClient}
                 onAction={onAction}
               />

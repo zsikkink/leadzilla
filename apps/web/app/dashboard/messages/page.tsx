@@ -17,6 +17,7 @@ import { MessageDraftCard } from '../../../src/components/message-draft-card.js'
 import { Pagination } from '../../../src/components/pagination.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
+import { useQueuedRefresh } from '../../../src/hooks/use-queued-refresh.js';
 
 const APPROVAL_OPTIONS = [
   { value: '', label: 'All statuses' },
@@ -109,6 +110,7 @@ export default function MessagesPage() {
   const [bulkRejectReason, setBulkRejectReason] = useState('');
   const rejectInputRef = useRef<HTMLInputElement>(null);
   const [sendRefreshNonce, setSendRefreshNonce] = useState(0);
+  const [leadRefreshNonce, setLeadRefreshNonce] = useState(0);
   const [approvalMode, setApprovalMode] = useState<ApprovalModeState>({
     isLoading: true,
     error: null,
@@ -149,13 +151,15 @@ export default function MessagesPage() {
   const [leadDataMap, setLeadDataMap] = useState<Record<string, { name: string; company: string; error: string | null }>>({});
 
   const leadIds = useMemo(() => {
-    if (!sortedItems.length) return [];
     const ids = new Set<string>();
+    if (leadIdFilter) {
+      ids.add(leadIdFilter);
+    }
     for (const draft of sortedItems) {
       ids.add(draft.leadId);
     }
     return Array.from(ids);
-  }, [sortedItems]);
+  }, [leadIdFilter, sortedItems]);
 
   useEffect(() => {
     if (leadIds.length === 0) return;
@@ -190,7 +194,7 @@ export default function MessagesPage() {
     return () => {
       cancelled = true;
     };
-  }, [leadIds, apiClient]);
+  }, [leadIds, apiClient, leadRefreshNonce]);
 
   useEffect(() => {
     let cancelled = false;
@@ -386,7 +390,14 @@ export default function MessagesPage() {
     drafts.refetch();
     globalPendingCount.refetch();
     setSendRefreshNonce((current) => current + 1);
-  }, [drafts, globalPendingCount]);
+    setLeadRefreshNonce((current) => current + 1);
+  }, [drafts.refetch, globalPendingCount.refetch]);
+  const scheduleQueuedRefreshes = useQueuedRefresh(refreshQueueData);
+
+  useEffect(() => {
+    if (!leadIdFilter) return;
+    scheduleQueuedRefreshes();
+  }, [leadIdFilter, scheduleQueuedRefreshes]);
 
   useEffect(() => {
     setPage(1);

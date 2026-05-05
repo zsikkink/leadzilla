@@ -6,6 +6,7 @@ import type {
   ContactRecoverySnapshot,
   ContactRecoveryTelemetry,
 } from '@lead-flood/contracts';
+import { isNonBusinessWebsiteDomain } from '@lead-flood/discovery';
 import type { Job, SendOptions } from 'pg-boss';
 
 import { RetryableError } from '../errors.js';
@@ -1018,7 +1019,7 @@ export async function handleBusinessConvertJob(
   }
 
   // ── 2. Require websiteDomain ──────────────────────────────────────────
-  if (!business.websiteDomain) {
+  if (!business.websiteDomain || isNonBusinessWebsiteDomain(business.websiteDomain)) {
     logger.warn(
       { ...logCtx, reason: 'NO_DOMAIN' },
       'Business has no website domain — cannot find contacts, skipping',
@@ -1720,6 +1721,14 @@ export async function handleBusinessConvertJob(
   const leadCandidates = sortedCandidates.filter((c) => c.email !== null);
   let resolvedContact = leadCandidates[0] ?? null;
   const cseTopCandidates: Array<Record<string, unknown>> = [];
+  const genericEmailFallbackCandidate =
+    allCandidates.find(
+      (c) => c.email !== null && isGenericEmail(c.email) && !isJunkPersonalEmail(c.email),
+    )?.email
+    ?? websiteScrapeData?.contactInfo?.emails.find((e) =>
+      isGenericEmail(e.email) && !isJunkPersonalEmail(e.email),
+    )?.email
+    ?? null;
 
   // If no candidate has an email but a high-authority person exists, prefer them
   if (!resolvedContact && sortedCandidates.length > 0) {
@@ -1730,7 +1739,7 @@ export async function handleBusinessConvertJob(
   }
 
   // 6c. Hunter retryable with no resolved contact → throw to trigger pg-boss retry
-  if (!resolvedContact && hunterRetryable) {
+  if (!resolvedContact && !genericEmailFallbackCandidate && hunterRetryable) {
     throw new RetryableError(
       `Hunter returned retryable error for domain ${domain}`,
     );
@@ -1762,37 +1771,25 @@ export async function handleBusinessConvertJob(
   }
 
   // If no personal email, check all candidates for any generic email to store
-  if (!businessEmailField) {
-    const genericCandidate = allCandidates.find(
-      (c) => c.email !== null && isGenericEmail(c.email),
-    );
-    if (genericCandidate) {
-      businessEmailField = genericCandidate.email;
-    }
+  if (!businessEmailField && genericEmailFallbackCandidate) {
+    businessEmailField = genericEmailFallbackCandidate;
   }
 
-  // Also check scraped emails for generic ones to store
-  if (!businessEmailField && websiteScrapeData?.contactInfo?.emails) {
-    const genericScraped = websiteScrapeData.contactInfo.emails.find((e) =>
-      isGenericEmail(e.email),
-    );
-    if (genericScraped) {
-      businessEmailField = genericScraped.email;
-    }
-  }
+  const genericLeadEmail = !contactEmail ? businessEmailField : null;
+  const hasGenericEmailFallback = genericLeadEmail !== null;
 
-  // ── 6f. Generic email handling: keep for manual review, never primary ────────
-  if (!contactEmail && businessEmailField) {
+  // ── 6f. Generic email handling: use as a business-level lead fallback ────────
+  if (hasGenericEmailFallback) {
     logger.info(
       { ...logCtx, genericEmail: businessEmailField },
-      'Generic-only email found — preserving for manual review, not as primary lead contact',
+      'Generic-only email found — using as business-level lead contact',
     );
   }
 
   let terminalReason: ContactTerminalReason | null = null;
   const contactConfidence = scoreContactConfidence({
     hasValidatedPersonalEmail: contactEmail !== null && !isGenericEmail(contactEmail),
-    hasGenericEmailFallback: businessEmailField !== null,
+    hasGenericEmailFallback,
     selectedCandidate: resolvedContact
       ? {
           confidence: resolvedContact.confidence,
@@ -1808,7 +1805,7 @@ export async function handleBusinessConvertJob(
   gateStats.withEmail = allCandidates.filter((c) => c.email !== null).length;
 
   // ── 6g. No email at all → open recovery queue item ────────────────────
-  if (!contactEmail) {
+  if (!contactEmail && !genericLeadEmail) {
     const inconclusiveButPromising = hasCredibleNamedCandidate && identityConfidence >= identityThreshold;
     const recoveryReason = resolveRecoveryReasonWhenNoPersonalEmail({
       resolvedContact,
@@ -1896,16 +1893,17 @@ export async function handleBusinessConvertJob(
     );
     await prisma.business.update({
       where: { id: businessId },
-      data: inconclusiveButPromising
-        ? { preQualified: true, disqualificationReason: null }
-        : { preQualified: false, disqualificationReason: recoveryReason },
+      data: { preQualified: true, disqualificationReason: null },
     });
     await persistCostEvents(prisma, discoveryRunId, businessId, costEvents);
     await tryFinalizeDiscoveryRun(discoveryRunId, logger, trackerSelfExclusion);
     return;
   }
 
-  const leadEmail = contactEmail;
+  const leadEmail = contactEmail ?? genericLeadEmail;
+  if (!leadEmail) {
+    throw new Error('business.convert invariant violated: missing lead email after recovery gate');
+  }
 
   const hasRealDecisionMaker = resolvedContact !== null && isValidPersonName(resolvedContact.name, business.name);
   const contactStatus: ContactResolutionStatus = hasRealDecisionMaker
@@ -1914,7 +1912,7 @@ export async function handleBusinessConvertJob(
 
   // Auto-reject: no real decision maker AND score below qualification threshold
   let shouldAutoReject = false;
-  if (!hasRealDecisionMaker && business.deterministicScore !== null) {
+  if (!hasRealDecisionMaker && !hasGenericEmailFallback && business.deterministicScore !== null) {
     const scoreThreshold = await getScoreQualificationThreshold();
     if (business.deterministicScore < scoreThreshold) {
       shouldAutoReject = true;
@@ -2018,8 +2016,8 @@ export async function handleBusinessConvertJob(
         'Existing business rediscovery matched a single active same-business lead',
       );
 
-      await tx.businessConversion.create({
-        data: {
+      const conversionResult = await tx.businessConversion.createMany({
+        data: [{
           businessId: business.id,
           leadId: existingBusinessLead.id,
           icpProfileId,
@@ -2078,20 +2076,15 @@ export async function handleBusinessConvertJob(
             },
           }),
           ...(businessInsights !== null ? { businessInsights } : {}),
-        },
-      }).catch((err: unknown) => {
-        if (
-          err instanceof PrismaRuntime.PrismaClientKnownRequestError &&
-          err.code === 'P2002'
-        ) {
-          logger.info(
-            { ...logCtx, existingLeadId: existingBusinessLead.id },
-            'BusinessConversion already exists for existing business rediscovery — skipping duplicate',
-          );
-          return;
-        }
-        throw err;
+        }],
+        skipDuplicates: true,
       });
+      if (conversionResult.count === 0) {
+        logger.info(
+          { ...logCtx, existingLeadId: existingBusinessLead.id },
+          'BusinessConversion already exists for existing business rediscovery — skipping duplicate',
+        );
+      }
 
       if (allCandidates.length > 0) {
         await tx.businessContact.createMany({
@@ -2160,8 +2153,8 @@ export async function handleBusinessConvertJob(
         'Lead with this email already exists — linking via BusinessConversion',
       );
 
-      await tx.businessConversion.create({
-        data: {
+      const conversionResult = await tx.businessConversion.createMany({
+        data: [{
           businessId: business.id,
           leadId: existingLead.id,
           icpProfileId,
@@ -2217,20 +2210,15 @@ export async function handleBusinessConvertJob(
                 },
               }),
               ...(businessInsights !== null ? { businessInsights } : {}),
-            },
-          }).catch((err: unknown) => {
-        if (
-          err instanceof PrismaRuntime.PrismaClientKnownRequestError &&
-          err.code === 'P2002'
-        ) {
-          logger.info(
-            { ...logCtx, existingLeadId: existingLead.id },
-            'BusinessConversion already exists — skipping duplicate',
-          );
-          return;
-        }
-        throw err;
+            }],
+        skipDuplicates: true,
       });
+      if (conversionResult.count === 0) {
+        logger.info(
+          { ...logCtx, existingLeadId: existingLead.id },
+          'BusinessConversion already exists — skipping duplicate',
+        );
+      }
 
       // Create BusinessContact rows even for existing leads (store ALL discovered contacts)
       if (allCandidates.length > 0) {

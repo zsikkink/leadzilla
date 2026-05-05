@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   ApproveMessageDraftRequestSchema,
+  CreateManualMessageDraftRequestSchema,
   ErrorResponseSchema,
   GenerateMessageDraftRequestSchema,
   GenerateMessageDraftResponseSchema,
@@ -162,6 +163,31 @@ export function registerMessagingRoutes(
     try {
       const result = await service.listMessageDrafts(parsedQuery.data);
       return ListMessageDraftsResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.post('/v1/messaging/drafts/manual', async (request, reply) => {
+    const parsed = CreateManualMessageDraftRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return sendValidationError(reply, request.id, 'Invalid manual message draft payload');
+    }
+
+    const userId = requireAuthenticatedUserId(request, reply);
+    if (!userId) {
+      return;
+    }
+
+    try {
+      const result = await service.createManualMessageDraft({
+        ...parsed.data,
+        approvedByUserId: userId,
+      });
+      return MessageDraftResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;

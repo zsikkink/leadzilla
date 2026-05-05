@@ -1,6 +1,7 @@
 'use client';
 
 import type {
+  CountryCitiesMap,
   DiscoveryCountryCodeContract,
   IcpProfileResponse,
   PipelineRunStatus,
@@ -9,12 +10,11 @@ import {
   AlertCircle,
   CheckCircle2,
   ChevronRight,
-  Globe,
   Loader2,
   MapPin,
   Play,
-  Rocket,
   Search,
+  Settings2,
   Target,
   TrendingUp,
   Zap,
@@ -25,6 +25,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 import {
+  SupportedCountryPickerOptions,
   buildDiscoveryCountryCities,
   countryName,
   toDiscoveryCountryCode,
@@ -35,16 +36,185 @@ import {
   getNextSelectedIcpId,
 } from './page.helpers.js';
 
-const LIMIT_OPTIONS = [
-  { value: '5', label: '5' },
-  { value: '10', label: '10' },
-  { value: '25', label: '25' },
-  { value: '50', label: '50' },
-  { value: '100', label: '100' },
-  { value: '250', label: '250' },
-  { value: '500', label: '500' },
-  { value: '1000', label: '1000' },
-];
+const MIN_SEARCH_TASK_LIMIT = 1;
+const MAX_SEARCH_TASK_LIMIT = 1000;
+const SEARCH_TASK_OPTIONS = ['5', '10', '25', '50', '100', '250', '500', '1000'] as const;
+const DEFAULT_DISCOVERY_COUNTRY_CODES = ['AE', 'SA', 'JO', 'EG'] as const satisfies readonly DiscoveryCountryCodeContract[];
+const DEFAULT_DISCOVERY_COUNTRY_ORDER = new Map<DiscoveryCountryCodeContract, number>(
+  DEFAULT_DISCOVERY_COUNTRY_CODES.map((country, index) => [country, index]),
+);
+type CitySelectionKey = `${DiscoveryCountryCodeContract}:${string}`;
+
+function citySelectionKey(
+  country: DiscoveryCountryCodeContract,
+  city: string,
+): CitySelectionKey {
+  return `${country}:${city}`;
+}
+
+function compareDiscoveryCountryCodes(
+  left: DiscoveryCountryCodeContract,
+  right: DiscoveryCountryCodeContract,
+): number {
+  const leftDefaultIndex = DEFAULT_DISCOVERY_COUNTRY_ORDER.get(left);
+  const rightDefaultIndex = DEFAULT_DISCOVERY_COUNTRY_ORDER.get(right);
+
+  if (leftDefaultIndex !== undefined && rightDefaultIndex !== undefined) {
+    return leftDefaultIndex - rightDefaultIndex;
+  }
+  if (leftDefaultIndex !== undefined) {
+    return -1;
+  }
+  if (rightDefaultIndex !== undefined) {
+    return 1;
+  }
+
+  return countryName(left).localeCompare(countryName(right));
+}
+
+function orderDiscoveryCountryCodes(
+  countries: readonly DiscoveryCountryCodeContract[],
+): DiscoveryCountryCodeContract[] {
+  const seen = new Set<DiscoveryCountryCodeContract>();
+  const result: DiscoveryCountryCodeContract[] = [];
+
+  for (const country of countries) {
+    if (seen.has(country)) {
+      continue;
+    }
+    seen.add(country);
+    result.push(country);
+  }
+
+  return result.sort(compareDiscoveryCountryCodes);
+}
+
+function dedupeCityList(cities: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const city of cities) {
+    const normalized = city.trim().replace(/\s+/g, ' ');
+    if (!normalized) {
+      continue;
+    }
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(normalized);
+  }
+
+  return result;
+}
+
+function countrySearchOptionValue(country: DiscoveryCountryCodeContract): string {
+  return `${countryName(country)} (${country})`;
+}
+
+function getCountrySearchMatches(value: string): DiscoveryCountryCodeContract[] {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return [];
+  }
+
+  return SupportedCountryPickerOptions.map((option) => {
+    const label = option.label.toLowerCase();
+    const code = option.code.toLowerCase();
+    const optionValue = countrySearchOptionValue(option.code).toLowerCase();
+    let score: number | null = null;
+
+    if (label.startsWith(normalized)) {
+      score = 0;
+    } else if (code.startsWith(normalized)) {
+      score = 1;
+    } else if (optionValue.startsWith(normalized)) {
+      score = 2;
+    } else if (label.includes(normalized)) {
+      score = 3;
+    }
+
+    return { option, score };
+  })
+    .filter((match): match is { option: (typeof SupportedCountryPickerOptions)[number]; score: number } => match.score !== null)
+    .sort((left, right) => left.score - right.score || left.option.label.localeCompare(right.option.label))
+    .map((match) => match.option.code);
+}
+
+function resolveCountrySearchInput(value: string): DiscoveryCountryCodeContract | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const parenthesizedCode = /\(([A-Z]{2})\)$/i.exec(trimmed)?.[1];
+  if (parenthesizedCode) {
+    return toDiscoveryCountryCode(parenthesizedCode);
+  }
+
+  const directMatch = toDiscoveryCountryCode(trimmed);
+  if (directMatch) {
+    return directMatch;
+  }
+
+  const normalized = trimmed.toLowerCase();
+  return SupportedCountryPickerOptions.find(
+    (option) =>
+      option.label.toLowerCase() === normalized ||
+      option.code.toLowerCase() === normalized ||
+      countrySearchOptionValue(option.code).toLowerCase() === normalized,
+  )?.code ?? null;
+}
+
+function isBrowserDatalistSelection(event: Event): boolean {
+  return event instanceof InputEvent && event.inputType === 'insertReplacementText';
+}
+
+function getCitySelectionKeysForCountries(
+  countryCities: Record<string, readonly string[] | undefined>,
+  countries: readonly DiscoveryCountryCodeContract[],
+): CitySelectionKey[] {
+  const keys: CitySelectionKey[] = [];
+  for (const country of countries) {
+    for (const city of countryCities[country] ?? []) {
+      keys.push(citySelectionKey(country, city));
+    }
+  }
+  return keys;
+}
+
+function areAllSelectedCountryCitiesSelected(
+  countryCities: Record<string, readonly string[] | undefined>,
+  selectedCountries: readonly DiscoveryCountryCodeContract[],
+  selectedCityKeys: ReadonlySet<CitySelectionKey>,
+): boolean {
+  return selectedCountries.every((country) => {
+    const cities = countryCities[country] ?? [];
+    return cities.length > 0 && cities.every((city) => selectedCityKeys.has(citySelectionKey(country, city)));
+  });
+}
+
+function getOrderedSelectedCities(
+  countryCities: Record<string, readonly string[] | undefined>,
+  selectedCountries: readonly DiscoveryCountryCodeContract[],
+  selectedCityKeys: ReadonlySet<CitySelectionKey>,
+): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+
+  for (const country of selectedCountries) {
+    for (const city of countryCities[country] ?? []) {
+      const dedupeKey = city.toLowerCase();
+      if (selectedCityKeys.has(citySelectionKey(country, city)) && !seen.has(dedupeKey)) {
+        seen.add(dedupeKey);
+        result.push(city);
+      }
+    }
+  }
+
+  return result;
+}
 
 // ── Sub-components ──────────────────────────────────────
 
@@ -130,28 +300,13 @@ function IcpOption({
       role="checkbox"
       aria-checked={selected}
       className={cn(
-        'flex items-start gap-3 rounded-xl border p-3 text-left transition-all duration-150',
+        'block rounded-xl border p-3 text-left transition-all duration-150',
         selected
           ? 'border-zbooni-teal/40 bg-zbooni-teal/5 shadow-sm'
           : 'border-border/30 bg-zbooni-dark/20 hover:border-border/50 hover:bg-zbooni-dark/40',
       )}
     >
-      <div
-        className={cn(
-          'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 transition-colors duration-150',
-          selected
-            ? 'border-zbooni-teal bg-zbooni-teal text-zbooni-dark'
-            : 'border-border/50 bg-transparent',
-        )}
-      >
-        {selected ? (
-          <svg className="h-3 w-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={2.5}>
-            <path d="M2 6l3 3 5-5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        ) : null}
-      </div>
-
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0">
         <div className="flex items-center gap-2">
           <span className={cn('text-sm font-semibold', selected ? 'text-foreground' : 'text-muted-foreground')}>
             {icp.name}
@@ -197,7 +352,7 @@ interface RunBatch {
   }>;
   icpNames: string[];
   countries: string[];
-  totalLimit: number;
+  totalTaskLimit: number;
   totalItems: number;
   totalProcessed: number;
   totalFailed: number;
@@ -263,7 +418,7 @@ function buildBatch(
     runs,
     icpNames,
     countries: uniqueCountries,
-    totalLimit: runs.reduce((sum, r) => sum + r.limit, 0),
+    totalTaskLimit: runs.reduce((sum, r) => sum + r.limit, 0),
     totalItems: runs.reduce((sum, r) => sum + r.totalItems, 0),
     totalProcessed: runs.reduce((sum, r) => sum + r.processedItems, 0),
     totalFailed: runs.reduce((sum, r) => sum + r.failedItems, 0),
@@ -275,10 +430,18 @@ function buildBatch(
   };
 }
 
-function toCountryCodeFromIcpTarget(
-  value: string | null | undefined,
-): DiscoveryCountryCodeContract | null {
-  return toDiscoveryCountryCode(value);
+function parseSearchTaskLimit(value: string): number | null {
+  const normalized = value.trim();
+  if (!/^\d+$/.test(normalized)) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  if (parsed < MIN_SEARCH_TASK_LIMIT || parsed > MAX_SEARCH_TASK_LIMIT) {
+    return null;
+  }
+
+  return parsed;
 }
 
 // ── Main page ──────────────────────────────────────
@@ -287,43 +450,63 @@ export default function DiscoverPage() {
   const { apiClient, user } = useAuth();
 
   const [selectedIcpIds, setSelectedIcpIds] = useState<string[]>([]);
-  const [selectedCities, setSelectedCities] = useState<Set<string>>(new Set());
+  const [selectedCountryCodes, setSelectedCountryCodes] = useState<DiscoveryCountryCodeContract[]>([]);
+  const [selectedCityKeys, setSelectedCityKeys] = useState<Set<CitySelectionKey>>(new Set());
+  const [expandedCountryCodes, setExpandedCountryCodes] = useState<Set<DiscoveryCountryCodeContract>>(new Set());
+  const [hiddenCountryCodes, setHiddenCountryCodes] = useState<Set<DiscoveryCountryCodeContract>>(new Set());
+  const [addedCountryCities, setAddedCountryCities] = useState<CountryCitiesMap>({});
+  const [addCountryInput, setAddCountryInput] = useState('');
+  const [countryInputResetKey, setCountryInputResetKey] = useState(0);
+  const [addCountryError, setAddCountryError] = useState<string | null>(null);
+  const [citySearchByCountry, setCitySearchByCountry] = useState<
+    Partial<Record<DiscoveryCountryCodeContract, string>>
+  >({});
   const [includeWebsiteAnalysis, setIncludeWebsiteAnalysis] = useState(true);
   const [includeSocialMediaAnalysis, setIncludeSocialMediaAnalysis] = useState(true);
-  const [limit, setLimit] = useState('25');
+  const [searchTaskLimit, setSearchTaskLimit] = useState('25');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [showSearchTaskLimitError, setShowSearchTaskLimitError] = useState(false);
+  const [showTargetingControls, setShowTargetingControls] = useState(false);
+  const initializedDefaultIcpSelectionRef = useRef(false);
+  const initializedDefaultCountrySelectionRef = useRef(false);
 
   const pipelineSettings = useApiQuery(
     useCallback(() => apiClient.listPipelineSettings(), [apiClient]),
   );
 
-  const { yieldRates, conversionRates, countryCities } = useMemo(() => {
-    const yieldMap = new Map<string, number>();
-    const conversionMap = new Map<string, number>();
+  const pipelineCountryCities = useMemo(() => {
     const countryCitiesSetting = pipelineSettings.data?.items.find((item) => item.key === 'countryCities');
+    return buildDiscoveryCountryCities(countryCitiesSetting?.value, {
+      includeCuratedDefaults: true,
+    });
+  }, [pipelineSettings.data]);
 
-    for (const item of pipelineSettings.data?.items ?? []) {
-      const key = item.key;
-      const rate = typeof item.value === 'number' ? item.value : Number(item.value);
-      if (isNaN(rate) || rate <= 0) {
-        continue;
-      }
-      if (key.startsWith('discovery_yield_rate:')) {
-        yieldMap.set(key.replace('discovery_yield_rate:', ''), rate);
-      } else if (key.startsWith('discovery_conversion_rate:')) {
-        conversionMap.set(key.replace('discovery_conversion_rate:', ''), rate);
-      }
+  const countryCities = useMemo<CountryCitiesMap>(() => {
+    const merged: CountryCitiesMap = {};
+
+    for (const [country, cities] of Object.entries(pipelineCountryCities) as Array<
+      [DiscoveryCountryCodeContract, string[]]
+    >) {
+      merged[country] = dedupeCityList(cities);
     }
 
-    return {
-      yieldRates: yieldMap,
-      conversionRates: conversionMap,
-      countryCities: buildDiscoveryCountryCities(countryCitiesSetting?.value, {
-        includeCuratedDefaults: true,
-      }),
-    };
-  }, [pipelineSettings.data]);
+    for (const [country, cities] of Object.entries(addedCountryCities) as Array<
+      [DiscoveryCountryCodeContract, string[]]
+    >) {
+      merged[country] = dedupeCityList([...(merged[country] ?? []), ...cities]);
+    }
+
+    return merged;
+  }, [addedCountryCities, pipelineCountryCities]);
+
+  const addedCountryCodes = useMemo<DiscoveryCountryCodeContract[]>(
+    () =>
+      Object.keys(addedCountryCities)
+        .map((country) => toDiscoveryCountryCode(country))
+        .filter((country): country is DiscoveryCountryCodeContract => country !== null),
+    [addedCountryCities],
+  );
 
   // Run tracking — multi-run via API
   const [runsRefreshKey, setRunsRefreshKey] = useState(0);
@@ -367,93 +550,340 @@ export default function DiscoverPage() {
     useCallback(() => apiClient.listIcps({ page: 1, pageSize: 50, isActive: true }), [apiClient]),
   );
 
+  useEffect(() => {
+    if (initializedDefaultIcpSelectionRef.current || !icps.data) {
+      return;
+    }
+
+    initializedDefaultIcpSelectionRef.current = true;
+    setSelectedIcpIds(icps.data.items.map((item) => item.id));
+  }, [icps.data]);
+
   // Group discovery runs into batches (runs within 5s = same batch)
   const runBatches = useMemo(
     () => groupRunsIntoBatches(discoveryRuns.data?.runs ?? [], icps.data?.items),
     [discoveryRuns.data, icps.data],
   );
 
-  // Derive country codes from the selected ICPs
-  const selectedIcpCountryCodes = useMemo<DiscoveryCountryCodeContract[]>(() => {
-    if (!icps.data || selectedIcpIds.length === 0) return [];
+  const displayedCountryCodes = useMemo<DiscoveryCountryCodeContract[]>(
+    () => {
+      const defaultCountries = DEFAULT_DISCOVERY_COUNTRY_CODES.filter(
+        (country) => (countryCities[country] ?? []).length > 0,
+      );
 
-    const countryCodes = new Set<DiscoveryCountryCodeContract>();
-    for (const selectedIcpId of selectedIcpIds) {
-      const icp = icps.data.items.find((item) => item.id === selectedIcpId);
-      if (!icp) {
-        continue;
-      }
-      for (const countryNameValue of icp.targetCountries) {
-        const countryCode = toCountryCodeFromIcpTarget(countryNameValue);
-        if (countryCode) {
-          countryCodes.add(countryCode);
-        }
-      }
-    }
-
-    return Array.from(countryCodes).sort((a, b) => a.localeCompare(b));
-  }, [selectedIcpIds, icps.data]);
-
-  const countriesForCityPicker = useMemo<DiscoveryCountryCodeContract[]>(
-    () => selectedIcpCountryCodes,
-    [selectedIcpCountryCodes],
+      return orderDiscoveryCountryCodes([...defaultCountries, ...addedCountryCodes])
+        .filter((country) => !hiddenCountryCodes.has(country));
+    },
+    [addedCountryCodes, countryCities, hiddenCountryCodes],
   );
 
-  const availableCities = useMemo(() => {
-    const cities = new Set<string>();
-    for (const country of countriesForCityPicker) {
-      const mapped = countryCities[country];
-      if (mapped) for (const c of mapped) cities.add(c);
+  useEffect(() => {
+    if (
+      initializedDefaultCountrySelectionRef.current ||
+      pipelineSettings.isLoading ||
+      displayedCountryCodes.length === 0
+    ) {
+      return;
     }
-    return Array.from(cities).sort();
-  }, [countriesForCityPicker, countryCities]);
+
+    const displayedCountries = new Set(displayedCountryCodes);
+    const defaultCountries = DEFAULT_DISCOVERY_COUNTRY_CODES.filter((country) =>
+      displayedCountries.has(country),
+    );
+    const initialCountries = defaultCountries.length > 0
+      ? defaultCountries
+      : displayedCountryCodes.slice(0, 4);
+
+    initializedDefaultCountrySelectionRef.current = true;
+    setSelectedCountryCodes(initialCountries);
+    setSelectedCityKeys(new Set(getCitySelectionKeysForCountries(countryCities, initialCountries)));
+  }, [countryCities, displayedCountryCodes, pipelineSettings.isLoading]);
+
+  useEffect(() => {
+    setSelectedCountryCodes((prev) => {
+      const displayedCountries = new Set(displayedCountryCodes);
+      const filtered = prev.filter((country) => displayedCountries.has(country));
+      return filtered.length !== prev.length ? filtered : prev;
+    });
+  }, [displayedCountryCodes]);
+
+  const selectedCityList = useMemo(
+    () => getOrderedSelectedCities(countryCities, selectedCountryCodes, selectedCityKeys),
+    [countryCities, selectedCityKeys, selectedCountryCodes],
+  );
+
+  const selectedCitiesForRequest = useMemo(
+    () =>
+      areAllSelectedCountryCitiesSelected(countryCities, selectedCountryCodes, selectedCityKeys)
+        ? []
+        : selectedCityList,
+    [countryCities, selectedCityKeys, selectedCityList, selectedCountryCodes],
+  );
 
   const missingCityCountries = useMemo(
-    () =>
-      countriesForCityPicker.filter((country) => (countryCities[country] ?? []).length === 0),
-    [countriesForCityPicker, countryCities],
+    () => selectedCountryCodes.filter((country) => (countryCities[country] ?? []).length === 0),
+    [countryCities, selectedCountryCodes],
   );
 
-  // Reset city selection when countries change
+  const selectedCountriesWithoutSelectedCities = useMemo(
+    () =>
+      selectedCountryCodes.filter((country) => {
+        const cities = countryCities[country] ?? [];
+        return cities.length > 0 && !cities.some((city) => selectedCityKeys.has(citySelectionKey(country, city)));
+      }),
+    [countryCities, selectedCityKeys, selectedCountryCodes],
+  );
+
+  // Reset city selection when country selection changes.
   useEffect(() => {
-    setSelectedCities((prev) => {
-      const citySet = new Set(availableCities);
-      const filtered = new Set(Array.from(prev).filter((c) => citySet.has(c)));
+    if (selectedCountryCodes.length === 0) {
+      return;
+    }
+
+    setSelectedCityKeys((prev) => {
+      const citySet = new Set(getCitySelectionKeysForCountries(countryCities, selectedCountryCodes));
+      const filtered = new Set(Array.from(prev).filter((cityKey) => citySet.has(cityKey)));
       return filtered.size !== prev.size ? filtered : prev;
     });
-  }, [availableCities]);
+  }, [countryCities, selectedCountryCodes]);
 
-  const toggleCity = (city: string) => {
-    setSelectedCities((prev) => {
+  const toggleCountry = (country: DiscoveryCountryCodeContract) => {
+    const countryCityList = countryCities[country] ?? [];
+    setSubmitError(null);
+    setSelectedCountryCodes((prev) => {
+      if (prev.includes(country)) {
+        setHiddenCountryCodes((prevHiddenCountries) => new Set(prevHiddenCountries).add(country));
+        setExpandedCountryCodes((prevExpandedCountries) => {
+          const next = new Set(prevExpandedCountries);
+          next.delete(country);
+          return next;
+        });
+        setCitySearchByCountry((prevSearches) => ({ ...prevSearches, [country]: '' }));
+        setSelectedCityKeys((prevCities) => {
+          const next = new Set(prevCities);
+          for (const city of countryCityList) {
+            next.delete(citySelectionKey(country, city));
+          }
+          return next;
+        });
+        return prev.filter((selectedCountry) => selectedCountry !== country);
+      }
+
+      setHiddenCountryCodes((prevHiddenCountries) => {
+        const next = new Set(prevHiddenCountries);
+        next.delete(country);
+        return next;
+      });
+      setSelectedCityKeys((prevCities) => {
+        const next = new Set(prevCities);
+        for (const city of countryCityList) {
+          next.add(citySelectionKey(country, city));
+        }
+        return next;
+      });
+
+      const nextCountries = new Set([...prev, country]);
+      return displayedCountryCodes.filter((displayedCountry) => nextCountries.has(displayedCountry));
+    });
+  };
+
+  const toggleCountryExpansion = (country: DiscoveryCountryCodeContract) => {
+    setExpandedCountryCodes((prev) => {
       const next = new Set(prev);
-      if (next.has(city)) {
-        next.delete(city);
+      if (next.has(country)) {
+        next.delete(country);
       } else {
-        next.add(city);
+        next.add(country);
+      }
+      return next;
+    });
+  };
+
+  const selectAllCountries = () => {
+    setSubmitError(null);
+    setSelectedCountryCodes(displayedCountryCodes);
+    setSelectedCityKeys(new Set(getCitySelectionKeysForCountries(countryCities, displayedCountryCodes)));
+  };
+
+  const clearSelectedCountries = () => {
+    setSubmitError(null);
+    setHiddenCountryCodes((prevHiddenCountries) => new Set([...prevHiddenCountries, ...displayedCountryCodes]));
+    setExpandedCountryCodes(new Set());
+    setCitySearchByCountry({});
+    setSelectedCountryCodes([]);
+    setSelectedCityKeys(new Set());
+  };
+
+  const addCountryToSelection = (
+    inputValue = addCountryInput,
+    options: {
+      showInvalidError?: boolean;
+      country?: DiscoveryCountryCodeContract | null;
+    } = { showInvalidError: true },
+  ) => {
+    const country =
+      options.country ?? resolveCountrySearchInput(inputValue) ?? getCountrySearchMatches(inputValue)[0] ?? null;
+
+    if (!country) {
+      if (options.showInvalidError ?? true) {
+        setAddCountryError('Select a supported country.');
+      }
+      return false;
+    }
+
+    const cities = countryCities[country] ?? [];
+    if (cities.length === 0) {
+      setAddCountryError(`No cities configured for ${countryName(country)}.`);
+      return false;
+    }
+
+    setAddedCountryCities((prev) => ({
+      ...prev,
+      [country]: dedupeCityList([...(prev[country] ?? []), ...cities]),
+    }));
+
+    setHiddenCountryCodes((prev) => {
+      const next = new Set(prev);
+      next.delete(country);
+      return next;
+    });
+    setSelectedCountryCodes((prev) => orderDiscoveryCountryCodes([...prev, country]));
+    setSelectedCityKeys((prev) => {
+      const next = new Set(prev);
+      for (const city of cities) {
+        next.add(citySelectionKey(country, city));
+      }
+      return next;
+    });
+    setExpandedCountryCodes((prev) => {
+      const next = new Set(prev);
+      next.delete(country);
+      return next;
+    });
+    setAddCountryInput('');
+    setCountryInputResetKey((key) => key + 1);
+    setAddCountryError(null);
+    setSubmitError(null);
+    return true;
+  };
+
+  const toggleCity = (country: DiscoveryCountryCodeContract, city: string) => {
+    setSubmitError(null);
+    setSelectedCountryCodes((prevCountries) => {
+      if (prevCountries.includes(country)) {
+        return prevCountries;
+      }
+      const nextCountries = new Set([...prevCountries, country]);
+      return displayedCountryCodes.filter((displayedCountry) => nextCountries.has(displayedCountry));
+    });
+    setSelectedCityKeys((prev) => {
+      const next = new Set(prev);
+      const cityKey = citySelectionKey(country, city);
+      if (next.has(cityKey)) {
+        next.delete(cityKey);
+      } else {
+        next.add(cityKey);
+      }
+      return next;
+    });
+  };
+
+  const selectAllCitiesForCountry = (country: DiscoveryCountryCodeContract) => {
+    setSubmitError(null);
+    setCitySearchByCountry((prev) => ({ ...prev, [country]: '' }));
+    setSelectedCountryCodes((prev) => {
+      if (prev.includes(country)) {
+        return prev;
+      }
+      const nextCountries = new Set([...prev, country]);
+      return displayedCountryCodes.filter((displayedCountry) => nextCountries.has(displayedCountry));
+    });
+    setSelectedCityKeys((prev) => {
+      const next = new Set(prev);
+      for (const city of countryCities[country] ?? []) {
+        next.add(citySelectionKey(country, city));
+      }
+      return next;
+    });
+  };
+
+  const clearCitiesForCountry = (country: DiscoveryCountryCodeContract) => {
+    setSubmitError(null);
+    setCitySearchByCountry((prev) => ({ ...prev, [country]: '' }));
+    setSelectedCityKeys((prev) => {
+      const next = new Set(prev);
+      for (const city of countryCities[country] ?? []) {
+        next.delete(citySelectionKey(country, city));
       }
       return next;
     });
   };
 
   const selectIcp = (id: string) => {
+    setSubmitError(null);
     setSelectedIcpIds((currentSelectedIcpIds) => getNextSelectedIcpId(currentSelectedIcpIds, id));
   };
 
+  const selectAllIcps = () => {
+    if (!icps.data) {
+      return;
+    }
+    setSubmitError(null);
+    setSelectedIcpIds(icps.data.items.map((item) => item.id));
+  };
+
+  const clearSelectedIcps = () => {
+    setSubmitError(null);
+    setSelectedIcpIds([]);
+  };
+
+  const parsedSearchTaskLimit = parseSearchTaskLimit(searchTaskLimit);
+  const isPresetSearchTaskLimit = SEARCH_TASK_OPTIONS.some((option) => option === searchTaskLimit);
+
   const handleStartDiscovery = async () => {
+    if (selectedIcpIds.length === 0) {
+      setShowTargetingControls(true);
+      setSubmitError('Choose one or more ICPs for the discovery run.');
+      return;
+    }
+
+    if (selectedCountryCodes.length === 0) {
+      setShowTargetingControls(true);
+      setSubmitError('Select at least one country for the discovery run.');
+      return;
+    }
+
     if (missingCityCountries.length > 0) {
+      setShowTargetingControls(true);
       setSubmitError(
         `Add at least one city for ${missingCityCountries.map((country) => countryName(country)).join(', ')} in Controls & Settings before starting discovery.`,
       );
       return;
     }
 
+    if (selectedCountriesWithoutSelectedCities.length > 0) {
+      setShowTargetingControls(true);
+      setSubmitError(
+        `Select at least one city for ${selectedCountriesWithoutSelectedCities.map((country) => countryName(country)).join(', ')} or clear those countries.`,
+      );
+      return;
+    }
+
+    if (parsedSearchTaskLimit === null) {
+      setSubmitError(null);
+      setShowSearchTaskLimitError(true);
+      return;
+    }
+
+    setShowSearchTaskLimitError(false);
+
     const request = buildDiscoveryRequest({
       selectedIcpIds,
-      countries: selectedIcpCountryCodes,
-      cities: Array.from(selectedCities),
+      countries: selectedCountryCodes,
+      cities: selectedCitiesForRequest,
       includeWebsiteAnalysis,
       includeSocialMediaAnalysis,
-      limit: parseInt(limit, 10),
+      searchTaskLimit: parsedSearchTaskLimit,
       requestedByUserId: user?.id,
     });
     if (!request) return;
@@ -472,315 +902,432 @@ export default function DiscoverPage() {
     }
   };
 
+  const countryColumns = useMemo(() => {
+    const columns: [DiscoveryCountryCodeContract[], DiscoveryCountryCodeContract[]] = [[], []];
+    displayedCountryCodes.forEach((country, index) => {
+      const column = index % 2 === 0 ? columns[0] : columns[1];
+      column.push(country);
+    });
+    return columns;
+  }, [displayedCountryCodes]);
+
+  const renderCountryCard = (country: DiscoveryCountryCodeContract) => {
+    const countrySelected = selectedCountryCodes.includes(country);
+    const countryExpanded = expandedCountryCodes.has(country);
+    const cities = countryCities[country] ?? [];
+    const citySearchValue = citySearchByCountry[country] ?? '';
+    const normalizedCitySearchValue = citySearchValue.trim().toLowerCase();
+    const selectedCityCount = cities.filter((city) => selectedCityKeys.has(citySelectionKey(country, city))).length;
+    const visibleCities = normalizedCitySearchValue
+      ? cities.filter((city) => city.toLowerCase().includes(normalizedCitySearchValue))
+      : cities.filter((city) => selectedCityKeys.has(citySelectionKey(country, city)));
+
+    return (
+      <div
+        key={country}
+        className={cn(
+          'rounded-xl border transition-all duration-150',
+          countrySelected
+            ? 'border-zbooni-teal/40 bg-zbooni-teal/5 shadow-sm'
+            : 'border-border/30 bg-zbooni-dark/20 hover:border-border/50 hover:bg-zbooni-dark/40',
+        )}
+      >
+        <div className="flex items-center gap-3 p-3">
+          <button
+            type="button"
+            onClick={() => toggleCountryExpansion(country)}
+            aria-expanded={countryExpanded}
+            aria-controls={`country-cities-${country}`}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/20 hover:text-foreground"
+          >
+            <ChevronRight
+              className={cn(
+                'h-4 w-4 transition-transform',
+                countryExpanded ? 'rotate-90' : '',
+              )}
+            />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => toggleCountry(country)}
+            role="checkbox"
+            aria-checked={countrySelected}
+            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          >
+            <span className={cn('truncate text-sm font-semibold', countrySelected ? 'text-foreground' : 'text-muted-foreground')}>
+              {countryName(country)}
+            </span>
+            <span className="ml-auto shrink-0 text-xs text-muted-foreground/60">
+              {selectedCityCount} / {cities.length} cities
+            </span>
+          </button>
+        </div>
+
+        {countryExpanded ? (
+          <div id={`country-cities-${country}`} className="border-t border-border/20 px-4 pb-3 pt-2">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                <MapPin className="h-3.5 w-3.5" />
+                Cities
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => selectAllCitiesForCountry(country)}
+                  disabled={selectedCityCount === cities.length}
+                  className="rounded-md bg-muted/20 px-2.5 py-1 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Select all cities
+                </button>
+                <button
+                  type="button"
+                  onClick={() => clearCitiesForCountry(country)}
+                  disabled={selectedCityCount === 0}
+                  className="rounded-md bg-muted/20 px-2.5 py-1 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Clear all cities
+                </button>
+              </div>
+            </div>
+            <input
+              type="text"
+              value={citySearchValue}
+              onChange={(event) =>
+                setCitySearchByCountry((prev) => ({ ...prev, [country]: event.target.value }))
+              }
+              placeholder="Search cities"
+              className="mb-3 h-9 w-full max-w-72 rounded-lg border border-border/40 bg-card px-3 text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground/50 focus:border-zbooni-teal/50"
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
+            />
+
+            {cities.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {visibleCities.map((city) => (
+                  <PillOption
+                    key={`${country}-${city}`}
+                    selected={selectedCityKeys.has(citySelectionKey(country, city))}
+                    onClick={() => toggleCity(country, city)}
+                    className="px-2.5 py-1 text-xs"
+                  >
+                    {city}
+                  </PillOption>
+                ))}
+                {visibleCities.length === 0 && normalizedCitySearchValue ? (
+                  <p className="text-xs text-muted-foreground/50">No matching cities.</p>
+                ) : null}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground/50">
+                No cities configured for {countryName(country)}.
+              </p>
+            )}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   const isRunning = hasActiveRuns;
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-zbooni-green to-zbooni-teal">
-            <Rocket className="h-5 w-5 text-zbooni-dark" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-extrabold tracking-tight">Discover Leads</h1>
-            <p className="text-sm text-muted-foreground">
-              Find new prospects matching your Ideal Customer Profiles
-            </p>
-          </div>
-        </div>
+        <h1 className="text-2xl font-extrabold tracking-tight">Discovery Pipeline</h1>
       </div>
 
       {/* Configuration Form */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <h2 className="mb-5 flex items-center gap-2 text-base font-bold tracking-tight">
-          <Search className="h-4 w-4 text-zbooni-teal" />
-          Configure Search
-        </h2>
-
         <div className="space-y-6">
-          {/* Step 1: Select ICP */}
+          {/* Step 1: Search task budget */}
           <div>
             <div className="mb-3 flex items-center gap-2">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zbooni-teal/10 text-xs font-bold text-zbooni-teal">
-                1
-              </span>
-              <label className="text-sm font-semibold">Select ICP Profiles</label>
+              <label htmlFor="search-task-limit" className="text-sm font-semibold">Number of Search Tasks</label>
             </div>
-            <p className="mb-3 text-xs text-muted-foreground/70">
-              Choose one or more ICPs for the discovery run.
-            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {SEARCH_TASK_OPTIONS.map((option) => (
+                <PillOption
+                  key={option}
+                  selected={searchTaskLimit === option}
+                  onClick={() => {
+                    setSearchTaskLimit(option);
+                    setShowSearchTaskLimitError(false);
+                  }}
+                  className="min-w-[56px] justify-center"
+                >
+                  {option}
+                </PillOption>
+              ))}
+              <input
+                id="search-task-limit"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                aria-label="Custom number of search tasks"
+                placeholder="Custom"
+                value={isPresetSearchTaskLimit ? '' : searchTaskLimit}
+                onChange={(event) => {
+                  setSearchTaskLimit(event.target.value.replace(/\D/g, ''));
+                  setShowSearchTaskLimitError(false);
+                }}
+                className="h-10 w-24 rounded-xl border border-border/40 bg-background px-3 py-2 text-center text-sm font-mono text-foreground placeholder:text-muted-foreground/60 focus:border-zbooni-teal/50 focus:outline-none"
+              />
+            </div>
 
-            {selectedIcpIds.length > 0 ? (
-              <div className="mb-3 inline-flex items-center rounded-full bg-zbooni-teal/10 px-2.5 py-1 text-[11px] font-semibold text-zbooni-teal">
-                {selectedIcpIds.length} {selectedIcpIds.length === 1 ? 'profile' : 'profiles'} selected
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleStartDiscovery}
+                disabled={
+                  isSubmitting ||
+                  !!isRunning
+                }
+                className="inline-flex h-10 w-full items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-zbooni-green to-zbooni-teal px-6 text-sm font-bold text-zbooni-dark shadow-lg shadow-zbooni-green/20 transition-all hover:shadow-xl hover:shadow-zbooni-green/30 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+              >
+                {isSubmitting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Play className="h-4 w-4" />
+                )}
+                {isSubmitting
+                  ? 'Creating...'
+                  : isRunning
+                    ? 'Run Active...'
+                    : 'Create Run'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowTargetingControls((current) => !current)}
+                aria-expanded={showTargetingControls}
+                aria-controls="discovery-targeting-controls"
+                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-border/30 bg-zbooni-dark/20 px-4 text-sm font-semibold text-white transition-colors hover:bg-zbooni-dark/40 sm:w-auto"
+              >
+                <Settings2 className="h-4 w-4" />
+                {showTargetingControls ? 'Hide options' : 'Show options'}
+              </button>
+            </div>
+            {showSearchTaskLimitError && parsedSearchTaskLimit === null ? (
+              <p className="mt-2 text-xs text-red-400">
+                Enter a whole number from {MIN_SEARCH_TASK_LIMIT} to {MAX_SEARCH_TASK_LIMIT}.
+              </p>
+            ) : null}
+
+            {submitError ? (
+              <div className="mt-3 flex items-center gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                {submitError}
               </div>
             ) : null}
-
-            {selectedIcpIds.length === 0 && !icps.isLoading && !icps.error ? (
-              <p className="mb-3 text-xs text-muted-foreground/60">
-                Search countries and cities will load after you choose at least one profile.
-              </p>
-            ) : null}
-            {selectedIcpIds.length > 0 && selectedIcpCountryCodes.length === 0 ? (
-              <p className="mb-3 text-xs text-amber-300/80">
-                The selected ICPs do not map to any supported discovery countries yet.
-              </p>
-            ) : null}
-            {missingCityCountries.length > 0 ? (
-              <p className="mb-3 text-xs text-amber-300/80">
-                Add cities in Controls &amp; Settings for {missingCityCountries.map((country) => countryName(country)).join(', ')} before starting discovery.
-              </p>
-            ) : null}
-
-            <div role="group" aria-label="ICP profile selection">
-              {icps.isLoading ? (
-                <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
-                  Loading profiles...
-                </div>
-              ) : null}
-
-              {!icps.isLoading && icps.error ? (
-                <div className="flex items-center gap-3 rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-400">
-                  <AlertCircle className="h-4 w-4 shrink-0" />
-                  <span className="flex-1">Failed to load ICP profiles: {icps.error}</span>
-                  <button
-                    type="button"
-                    onClick={icps.refetch}
-                    className="shrink-0 rounded-md bg-red-500/20 px-2.5 py-1 text-xs font-semibold text-red-300 transition-colors hover:bg-red-500/30"
-                  >
-                    Retry
-                  </button>
-                </div>
-              ) : null}
-
-              {icps.data && icps.data.items.length > 0 ? (
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {icps.data.items.map((icp) => (
-                    <IcpOption
-                      key={icp.id}
-                      icp={icp}
-                      selected={selectedIcpIds.includes(icp.id)}
-                      onSelect={selectIcp}
-                    />
-                  ))}
-                </div>
-              ) : null}
-
-              {icps.data && icps.data.items.length === 0 ? (
-                <p className="text-sm text-muted-foreground/60">No active ICP profiles found. Create one first.</p>
-              ) : null}
-            </div>
           </div>
 
-          {/* Step 2: Search Settings — countries, cities, analysis toggles */}
-          <div>
-            <div className="mb-3 flex items-center gap-2">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zbooni-teal/10 text-xs font-bold text-zbooni-teal">
-                2
-              </span>
-              <label className="text-sm font-semibold">Search Settings</label>
-            </div>
-
-            <div className="space-y-4 rounded-xl border border-border/30 bg-zbooni-dark/10 p-4">
-              {/* Countries (derived from ICP, read-only display) */}
+          {showTargetingControls ? (
+            <div id="discovery-targeting-controls" className="space-y-6">
+              {/* Step 2: Select ICP */}
               <div>
-                <div className="mb-2 flex items-center gap-1.5">
-                  <Globe className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="text-xs font-semibold text-muted-foreground">Target Countries</span>
-                </div>
-                {countriesForCityPicker.length > 0 ? (
-                  <div className="flex flex-wrap gap-1.5">
-                    {countriesForCityPicker.map((c) => (
-                      <span key={c} className="rounded-full bg-zbooni-teal/10 px-2.5 py-1 text-xs font-medium text-zbooni-teal">
-                        {countryName(c)}
-                      </span>
-                    ))}
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm font-semibold">Select ICP Profiles</label>
                   </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground/50">
-                    {selectedIcpIds.length > 0
-                      ? 'No mapped target countries found for the selected ICP profiles.'
-                      : 'Select at least one ICP profile to load target countries.'}
-                  </p>
-                )}
-              </div>
 
-              {/* Cities (optional multi-select) */}
-              {availableCities.length > 0 ? (
-                <div>
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span className="text-xs font-semibold text-muted-foreground">Cities</span>
-                      <span className="text-[10px] text-muted-foreground/50">(optional — empty = all cities)</span>
-                    </div>
-                    {selectedCities.size > 0 ? (
+                  {icps.data && icps.data.items.length > 0 ? (
+                    <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
                       <button
                         type="button"
-                        onClick={() => setSelectedCities(new Set())}
-                        className="text-[10px] font-medium text-muted-foreground/60 hover:text-foreground"
+                        onClick={selectAllIcps}
+                        disabled={selectedIcpIds.length === icps.data.items.length}
+                        className="rounded-md bg-muted/20 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-muted/40 disabled:cursor-not-allowed disabled:hover:bg-muted/20"
+                      >
+                        Select all
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearSelectedIcps}
+                        disabled={selectedIcpIds.length === 0}
+                        className="rounded-md bg-muted/20 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-muted/40 disabled:cursor-not-allowed disabled:hover:bg-muted/20"
                       >
                         Clear all
                       </button>
-                    ) : null}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {availableCities.map((city) => (
-                      <PillOption
-                        key={city}
-                        selected={selectedCities.has(city)}
-                        onClick={() => toggleCity(city)}
-                        className="px-2.5 py-1 text-xs"
-                      >
-                        {city}
-                      </PillOption>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
-              {/* Analysis toggles */}
-              <div className="flex flex-wrap gap-4">
-                <label className="flex cursor-pointer items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={includeWebsiteAnalysis}
-                    onChange={(e) => setIncludeWebsiteAnalysis(e.target.checked)}
-                    className="h-4 w-4 rounded border-border/50 bg-zbooni-dark/30 text-zbooni-teal accent-zbooni-teal"
-                  />
-                  <span className="text-sm font-medium">Website analysis</span>
-                  <span className="text-[10px] text-muted-foreground/50">Scrape website</span>
-                </label>
-                <label className="flex cursor-pointer items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={includeSocialMediaAnalysis}
-                    onChange={(e) => setIncludeSocialMediaAnalysis(e.target.checked)}
-                    className="h-4 w-4 rounded border-border/50 bg-zbooni-dark/30 text-zbooni-teal accent-zbooni-teal"
-                  />
-                  <span className="text-sm font-medium">Social media analysis</span>
-                  <span className="text-[10px] text-muted-foreground/50">Instagram data</span>
-                </label>
-              </div>
-
-            </div>
-          </div>
-
-          {/* Step 3: Limit — expanded inline pill selector */}
-          <div>
-            <div className="mb-3 flex items-center gap-2">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zbooni-teal/10 text-xs font-bold text-zbooni-teal">
-                3
-              </span>
-              <label className="text-sm font-semibold">Number of Leads</label>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {LIMIT_OPTIONS.map((opt) => (
-                <PillOption
-                  key={opt.value}
-                  selected={limit === opt.value}
-                  onClick={() => setLimit(opt.value)}
-                  className="min-w-[56px] justify-center"
-                >
-                  {opt.label}
-                </PillOption>
-              ))}
-            </div>
-          </div>
-
-          {/* Cost Estimate */}
-          {selectedIcpIds.length > 0 && parseInt(limit, 10) > 0 ? (() => {
-            const desiredLeads = parseInt(limit, 10);
-            const selectedLeadRates = selectedIcpIds
-              .map((selectedIcpId) => {
-                const yieldRate = yieldRates.get(selectedIcpId);
-                const convRate = conversionRates.get(selectedIcpId);
-                if (yieldRate !== undefined && convRate !== undefined) {
-                  return yieldRate * convRate;
-                }
-                if (yieldRate !== undefined) {
-                  return yieldRate * 0.10;
-                }
-                return undefined;
-              })
-              .filter((rate): rate is number => rate !== undefined);
-            const avgLeadRate = selectedLeadRates.length > 0
-              ? selectedLeadRates.reduce((sum, rate) => sum + rate, 0) / selectedLeadRates.length
-              : 0.015;
-            const hasHistoricalData = selectedLeadRates.length > 0;
-            const searchBudget = Math.ceil(desiredLeads / avgLeadRate * 1.5);
-            const hunterLookups = Math.ceil(searchBudget * 0.5);
-            const estLeads = desiredLeads;
-            const googlePlacesCost = searchBudget * 0.01;
-            const hunterCost = hunterLookups * 0.03;
-            const totalCost = googlePlacesCost + hunterCost;
-            return (
-              <div className="rounded-xl border border-zbooni-teal/20 bg-zbooni-teal/5 px-4 py-3">
-                <div className="flex items-center gap-2 mb-2">
-                  <TrendingUp className="h-3.5 w-3.5 text-zbooni-teal" />
-                  <span className="text-xs font-semibold text-zbooni-teal">Cost Estimate</span>
-                  {!hasHistoricalData ? (
-                    <span className="text-[10px] text-muted-foreground/50">(using default estimate)</span>
+                    </div>
                   ) : null}
                 </div>
-                <div className="space-y-1.5">
-                  <p className="text-sm text-muted-foreground">
-                    ~<strong className="text-foreground">{searchBudget}</strong> search tasks
-                    {' + ~'}<strong className="text-foreground">{hunterLookups}</strong> Hunter lookups
-                    {' → est. '}<strong className="text-zbooni-green">{estLeads}</strong> leads
-                    {hasHistoricalData ? (
-                      <span className="text-muted-foreground/60">
-                        {' '}(based on {(avgLeadRate * 100).toFixed(1)}% lead rate)
-                      </span>
-                    ) : null}
+
+                {missingCityCountries.length > 0 ? (
+                  <p className="mb-3 text-xs text-amber-300/80">
+                    Add cities in Controls &amp; Settings for {missingCityCountries.map((country) => countryName(country)).join(', ')} before starting discovery.
                   </p>
-                  <p className="text-xs text-muted-foreground/70">
-                    Est. cost: <strong className="text-foreground">~${totalCost.toFixed(2)}</strong>
-                    <span className="text-muted-foreground/50">
-                      {' '}(Google Places ${googlePlacesCost.toFixed(2)} + Hunter ${hunterCost.toFixed(2)})
-                    </span>
-                  </p>
+                ) : null}
+
+                <div role="group" aria-label="ICP profile selection">
+                  {icps.isLoading ? (
+                    <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
+                      Loading profiles...
+                    </div>
+                  ) : null}
+
+                  {!icps.isLoading && icps.error ? (
+                    <div className="flex items-center gap-3 rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-400">
+                      <AlertCircle className="h-4 w-4 shrink-0" />
+                      <span className="flex-1">Failed to load ICP profiles: {icps.error}</span>
+                      <button
+                        type="button"
+                        onClick={icps.refetch}
+                        className="shrink-0 rounded-md bg-red-500/20 px-2.5 py-1 text-xs font-semibold text-red-300 transition-colors hover:bg-red-500/30"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {icps.data && icps.data.items.length > 0 ? (
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {icps.data.items.map((icp) => (
+                        <IcpOption
+                          key={icp.id}
+                          icp={icp}
+                          selected={selectedIcpIds.includes(icp.id)}
+                          onSelect={selectIcp}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {icps.data && icps.data.items.length === 0 ? (
+                    <p className="text-sm text-muted-foreground/60">No active ICP profiles found. Create one first.</p>
+                  ) : null}
                 </div>
               </div>
-            );
-          })() : null}
 
-          {/* Error */}
-          {submitError ? (
-            <div className="flex items-center gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              {submitError}
+              {/* Step 3: Countries — country/city targeting and analysis toggles */}
+              <div>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm font-semibold">Countries</label>
+                  </div>
+
+                  {displayedCountryCodes.length > 0 ? (
+                    <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={selectAllCountries}
+                        disabled={selectedCountryCodes.length === displayedCountryCodes.length}
+                        className="rounded-md bg-muted/20 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-muted/40 disabled:cursor-not-allowed disabled:hover:bg-muted/20"
+                      >
+                        Select all countries
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearSelectedCountries}
+                        disabled={selectedCountryCodes.length === 0}
+                        className="rounded-md bg-muted/20 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-muted/40 disabled:cursor-not-allowed disabled:hover:bg-muted/20"
+                      >
+                        Clear all countries
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <div className="mb-3 space-y-2">
+                      <div className="flex">
+                        <input
+                          key={countryInputResetKey}
+                          type="text"
+                          list="discovery-country-options"
+                          value={addCountryInput}
+                          autoComplete="off"
+                          autoCorrect="off"
+                          spellCheck={false}
+                          onChange={(event) => {
+                            const nextValue = event.target.value;
+                            setAddCountryError(null);
+                            if (
+                              isBrowserDatalistSelection(event.nativeEvent) &&
+                              addCountryToSelection(nextValue, {
+                                country: resolveCountrySearchInput(nextValue),
+                                showInvalidError: false,
+                              })
+                            ) {
+                              return;
+                            }
+                            setAddCountryInput(nextValue);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              addCountryToSelection();
+                            }
+                          }}
+                          placeholder="Search country"
+                          className="h-10 w-full max-w-72 rounded-xl border border-border/30 bg-zbooni-dark/20 px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground/50 focus:border-zbooni-teal/50 sm:w-72"
+                        />
+                        <datalist id="discovery-country-options">
+                          {SupportedCountryPickerOptions.map((country) => (
+                            <option
+                              key={country.code}
+                              value={countrySearchOptionValue(country.code)}
+                            />
+                          ))}
+                        </datalist>
+                      </div>
+                      {addCountryError ? (
+                        <p className="text-xs text-red-400">{addCountryError}</p>
+                      ) : null}
+                    </div>
+
+                    {displayedCountryCodes.length > 0 ? (
+                      <>
+                        <div className="space-y-2 sm:hidden">
+                          {displayedCountryCodes.map(renderCountryCard)}
+                        </div>
+                        <div className="hidden gap-2 sm:grid sm:grid-cols-2">
+                          {countryColumns.map((countries, columnIndex) => (
+                            <div key={`country-column-${columnIndex}`} className="space-y-2">
+                              {countries.map(renderCountryCard)}
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-xs text-muted-foreground/50">
+                        No countries configured.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Analysis toggles */}
+                  <div className="flex flex-wrap gap-4">
+                    <label className="flex cursor-pointer items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={includeWebsiteAnalysis}
+                        onChange={(e) => setIncludeWebsiteAnalysis(e.target.checked)}
+                        className="h-4 w-4 rounded border-border/50 bg-zbooni-dark/30 text-zbooni-teal accent-zbooni-teal"
+                      />
+                      <span className="text-sm font-medium">Website analysis</span>
+                      <span className="text-[10px] text-muted-foreground/50">Scrape website</span>
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={includeSocialMediaAnalysis}
+                        onChange={(e) => setIncludeSocialMediaAnalysis(e.target.checked)}
+                        className="h-4 w-4 rounded border-border/50 bg-zbooni-dark/30 text-zbooni-teal accent-zbooni-teal"
+                      />
+                      <span className="text-sm font-medium">Social media analysis</span>
+                      <span className="text-[10px] text-muted-foreground/50">Instagram data</span>
+                    </label>
+                  </div>
+
+                </div>
+              </div>
             </div>
           ) : null}
-
-          {/* Launch button */}
-          <button
-            type="button"
-            onClick={handleStartDiscovery}
-            disabled={
-              selectedIcpIds.length === 0 ||
-              selectedIcpCountryCodes.length === 0 ||
-              missingCityCountries.length > 0 ||
-              isSubmitting ||
-              !!isRunning
-            }
-            className="inline-flex w-full items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-zbooni-green to-zbooni-teal px-6 py-3 text-sm font-bold text-zbooni-dark shadow-lg shadow-zbooni-green/20 transition-all hover:shadow-xl hover:shadow-zbooni-green/30 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
-          >
-            {isSubmitting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Play className="h-4 w-4" />
-            )}
-            {isSubmitting
-              ? 'Starting...'
-              : isRunning
-                ? 'Discovery Running...'
-                : selectedIcpIds.length > 1
-                  ? `Start Discovery (${selectedIcpIds.length} ICPs)`
-                  : 'Start Discovery'}
-          </button>
         </div>
       </div>
 
@@ -887,9 +1434,9 @@ export default function DiscoverPage() {
                             {countryName(c)}
                           </span>
                         ))}
-                        {batch.totalLimit > 0 ? (
+                        {batch.totalTaskLimit > 0 ? (
                           <span className="rounded bg-muted/20 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                            {batch.totalLimit} leads
+                            {batch.totalTaskLimit} search tasks
                           </span>
                         ) : null}
                       </div>
@@ -942,8 +1489,8 @@ export default function DiscoverPage() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
           {[
             { step: 1, title: 'Select ICP', desc: 'Choose which customer profile to target', icon: Target },
-            { step: 2, title: 'Search & Discover', desc: 'AI scans multiple data sources for matching leads', icon: Search },
-            { step: 3, title: 'Enrich & Score', desc: 'Each lead is enriched and scored automatically', icon: TrendingUp },
+            { step: 2, title: 'Seed Search Tasks', desc: 'Search tasks are generated from selected ICPs and locations', icon: Search },
+            { step: 3, title: 'Enrich & Score', desc: 'Discovered businesses are scraped, enriched, and scored', icon: TrendingUp },
             { step: 4, title: 'Message & Follow-up', desc: 'Approved messages are sent via email or WhatsApp', icon: Zap },
           ].map(({ step, title, desc, icon: Icon }, idx) => (
             <div key={step} className="relative flex items-start gap-3">

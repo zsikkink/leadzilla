@@ -6,7 +6,7 @@ import type { DiscoveryRuntimeConfig } from '../config.js';
 import { normalizeQuery } from '../dedupe/normalize.js';
 import { incrementMetric } from '../metrics.js';
 import { normalizePhoneE164 } from '../normalization/phone.js';
-import { deriveRootDomainFromUrl } from '../utils/url.js';
+import { deriveBusinessWebsiteDomainFromUrl, deriveRootDomainFromUrl } from '../utils/url.js';
 import type {
   DiscoveryCountryCode,
   DiscoveryProviderName,
@@ -58,6 +58,7 @@ interface TaskProcessStats {
 export interface RunSearchTaskResult {
   taskId: string | null;
   status: 'EMPTY' | 'DONE' | 'FAILED' | 'SKIPPED';
+  icpProfileId?: string | undefined;
   queryHash?: string;
   taskType?: SearchTaskType;
   providerUsed?: DiscoveryProviderName;
@@ -149,6 +150,13 @@ function toRecord(value: Prisma.JsonValue): Record<string, unknown> {
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+function readTaskIcpProfileId(task: SearchTaskRow): string | undefined {
+  const value = toRecord(task.params_json).icpProfileId;
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : undefined;
 }
 
 function normalizeNullableString(value: string | null): string | null {
@@ -499,7 +507,7 @@ async function upsertBusinessFromLocalResult(
   local: NormalizedLocalBusiness,
   discoveryRunId?: string | undefined,
 ): Promise<{ businessId: string; created: boolean }> {
-  const websiteDomain = deriveRootDomainFromUrl(local.websiteUrl ?? local.url);
+  const websiteDomain = deriveBusinessWebsiteDomainFromUrl(local.websiteUrl);
   const phoneE164 = normalizePhoneE164(local.phone, task.country_code);
   const confidence = confidenceFromBusinessSignal(local);
   const signals = deriveBusinessSignals(local);
@@ -931,6 +939,7 @@ export async function runSearchTask(
     return {
       taskId: task.id,
       status,
+      icpProfileId: readTaskIcpProfileId(task),
       queryHash: task.query_hash,
       taskType: task.task_type,
       providerUsed: providerResponse.provider,

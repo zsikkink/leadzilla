@@ -18,6 +18,7 @@ const {
       findUnique: vi.fn(),
     },
     jobExecution: {
+      count: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
     },
@@ -97,6 +98,7 @@ describe('handleDiscoverySeedJob', () => {
     getTaskCapForLeadTargetMock.mockReturnValue(75);
     loadConversionRateMock.mockResolvedValue(null);
     loadSearchEfficiencyMock.mockResolvedValue(null);
+    prismaMock.jobExecution.count.mockResolvedValue(0);
   });
 
   it('uses request searchCategories to override the generated categories for that run only', async () => {
@@ -303,5 +305,70 @@ describe('handleDiscoverySeedJob', () => {
         emptyIcpSeedConfig.categoryOverrides,
       ),
     ).toEqual(expectedCategories);
+  });
+
+  it('keeps API maxTasks as the shard seed cap and uses runMaxTasks as the whole-run search budget', async () => {
+    prismaMock.icpProfile.findUnique.mockResolvedValue({
+      targetIndustries: ['food_beverage'],
+      targetCountries: ['AE'],
+      metadataJson: {},
+    });
+    const send = vi.fn();
+
+    await handleDiscoverySeedJob(
+      buildLogger(),
+      {
+        id: 'job_bulk_8',
+        name: 'discovery.seed',
+        data: {
+          reason: 'api',
+          correlationId: 'run_april_12',
+          jobExecutionId: 'seed_run_april_12_icp_8',
+          discoveryRunId: 'run_april_12',
+          icpProfileId: 'icp_8',
+          countries: ['AE'],
+          includeWebsiteAnalysis: true,
+          includeSocialMediaAnalysis: true,
+          maxTasks: 25,
+          runMaxTasks: 200,
+          enqueueRunTasks: true,
+        },
+      } as never,
+      {
+        boss: {
+          send,
+        },
+        config: baseConfig,
+      },
+    );
+
+    expect(loadConversionRateMock).not.toHaveBeenCalled();
+    expect(loadSearchEfficiencyMock).not.toHaveBeenCalled();
+    expect(getTaskCapForLeadTargetMock).not.toHaveBeenCalled();
+    expect(seedSearchTasksMock).toHaveBeenCalledTimes(1);
+    expect(seedSearchTasksMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        maxTasks: 25,
+      }),
+    );
+    expect(seedSearchTasksMock.mock.calls[0]?.[3]).toBe('run_april_12');
+    expect(seedSearchTasksMock.mock.calls[0]?.[4]).toBe('icp_8');
+
+    expect(send).toHaveBeenCalledTimes(baseConfig.concurrency);
+    expect(send).toHaveBeenCalledWith(
+      'discovery.run_search_task',
+      expect.objectContaining({
+        reason: 'seed',
+        correlationId: 'run_april_12',
+        discoveryRunId: 'run_april_12',
+        icpProfileId: 'icp_8',
+        includeWebsiteAnalysis: true,
+        includeSocialMediaAnalysis: true,
+        maxTasks: 200,
+      }),
+      expect.objectContaining({
+        singletonKey: 'discovery.run_search_task:run_april_12:slot-0',
+      }),
+    );
   });
 });

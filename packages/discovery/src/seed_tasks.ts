@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { normalizeCountryCodes } from '@lead-flood/contracts';
 import { prisma } from '@lead-flood/db';
 
@@ -41,18 +42,35 @@ function resolveCountries(configCountries: string[], icpTargetCountries: string[
   return configCountries;
 }
 
-/**
- * Extract the search category from a query like "bakery in Dubai".
- */
-function extractCategory(queryText: string): string {
-  const match = queryText.match(/^(.+?)\s+in\s+/i);
-  return match?.[1]?.trim().toLowerCase() ?? queryText.toLowerCase();
-}
-
 interface IndexedGeneratedSearchTask {
   task: GeneratedSearchTask;
   originalIndex: number;
 }
+
+interface RankedGeneratedSearchTask extends IndexedGeneratedSearchTask {
+  lastExecutedAtMs: number | null;
+}
+
+type SamplingSeedInput = {
+  discoveryRunId?: string | undefined;
+  now: Date;
+  config: Pick<
+    DiscoverySeedConfig,
+    | 'countries'
+    | 'languages'
+    | 'maxPagesPerQuery'
+    | 'refreshBucket'
+    | 'seedProfile'
+    | 'maxTasks'
+    | 'taskTypes'
+    | 'seedBucket'
+  >;
+  icpConfig: IcpSeedConfig;
+};
+
+const SEARCH_TASK_QUERY_CHUNK_SIZE_CAP = 1000;
+const SEARCH_TASK_QUERY_MIN_CHUNK_SIZE = 100;
+const SEARCH_TASK_BIND_BUDGET = 30_000;
 
 function compareStrings(left: string, right: string): number {
   if (left === right) {
@@ -65,75 +83,287 @@ function compareNullableStrings(left: string | null, right: string | null): numb
   return compareStrings(left ?? '', right ?? '');
 }
 
+function chunkValues<T>(values: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function resolveSearchTaskQueryChunkSize(taskTypesCount: number, pagesCount: number): number {
+  const safeTaskTypesCount = Math.max(1, taskTypesCount);
+  const safePagesCount = Math.max(1, pagesCount);
+  const multiplicativeFactor = safeTaskTypesCount * safePagesCount;
+  const computed = Math.floor(
+    (SEARCH_TASK_BIND_BUDGET - safeTaskTypesCount - safePagesCount) / multiplicativeFactor,
+  );
+
+  return Math.max(
+    SEARCH_TASK_QUERY_MIN_CHUNK_SIZE,
+    Math.min(SEARCH_TASK_QUERY_CHUNK_SIZE_CAP, computed),
+  );
+}
+
+function buildSamplingSeed(input: SamplingSeedInput): string {
+  return (
+    input.discoveryRunId ??
+    [
+      input.now.toISOString(),
+      input.config.seedBucket ?? '',
+      input.config.seedProfile,
+      input.config.refreshBucket,
+      input.config.maxPagesPerQuery,
+      input.config.maxTasks,
+      input.config.countries.join(','),
+      input.config.languages.join(','),
+      input.config.taskTypes.join(','),
+      input.icpConfig.targetIndustries.join(','),
+      input.icpConfig.targetCountries.join(','),
+      input.icpConfig.cities?.join(',') ?? '',
+    ].join('::')
+  );
+}
+
+function computeSeededOrderToken(seed: string, key: string): string {
+  return createHash('sha256').update(seed).update('\0').update(key).digest('hex');
+}
+
 function compareIndexedTasks(
   left: IndexedGeneratedSearchTask,
   right: IndexedGeneratedSearchTask,
 ): number {
   return (
+    left.task.page - right.task.page ||
     compareStrings(left.task.queryHash, right.task.queryHash) ||
-    compareStrings(left.task.normalizedQueryKey, right.task.normalizedQueryKey) ||
-    compareStrings(left.task.queryText, right.task.queryText) ||
     compareStrings(left.task.taskType, right.task.taskType) ||
     compareStrings(left.task.countryCode, right.task.countryCode) ||
     compareNullableStrings(left.task.city, right.task.city) ||
     compareStrings(left.task.language, right.task.language) ||
-    left.task.page - right.task.page ||
+    compareStrings(left.task.normalizedQueryKey, right.task.normalizedQueryKey) ||
+    compareStrings(left.task.queryText, right.task.queryText) ||
     compareStrings(left.task.timeBucket, right.task.timeBucket) ||
     left.originalIndex - right.originalIndex
   );
 }
 
+function buildQueryFreshnessKey(
+  task: Pick<GeneratedSearchTask, 'taskType' | 'normalizedQueryKey' | 'page'>,
+): string {
+  return `${task.taskType}::${task.normalizedQueryKey}::${task.page}`;
+}
+
+function buildQueryFamilyKey(
+  task: Pick<GeneratedSearchTask, 'taskType' | 'normalizedQueryKey'>,
+): string {
+  return `${task.taskType}::${task.normalizedQueryKey}`;
+}
+
+function compareRankedTasks(
+  left: RankedGeneratedSearchTask,
+  right: RankedGeneratedSearchTask,
+): number {
+  if (left.lastExecutedAtMs === null && right.lastExecutedAtMs !== null) {
+    return -1;
+  }
+  if (left.lastExecutedAtMs !== null && right.lastExecutedAtMs === null) {
+    return 1;
+  }
+  if (
+    left.lastExecutedAtMs !== null &&
+    right.lastExecutedAtMs !== null &&
+    left.lastExecutedAtMs !== right.lastExecutedAtMs
+  ) {
+    return left.lastExecutedAtMs - right.lastExecutedAtMs;
+  }
+
+  return compareIndexedTasks(left, right);
+}
+
+function compareRankedTasksForSampling(
+  left: RankedGeneratedSearchTask,
+  right: RankedGeneratedSearchTask,
+  randomizationSeed: string,
+): number {
+  if (left.lastExecutedAtMs === null && right.lastExecutedAtMs !== null) {
+    return -1;
+  }
+  if (left.lastExecutedAtMs !== null && right.lastExecutedAtMs === null) {
+    return 1;
+  }
+  if (
+    left.lastExecutedAtMs !== null &&
+    right.lastExecutedAtMs !== null &&
+    left.lastExecutedAtMs !== right.lastExecutedAtMs
+  ) {
+    return left.lastExecutedAtMs - right.lastExecutedAtMs;
+  }
+
+  if (left.task.page !== right.task.page) {
+    return left.task.page - right.task.page;
+  }
+
+  const leftFamilyToken = computeSeededOrderToken(
+    randomizationSeed,
+    buildQueryFamilyKey(left.task),
+  );
+  const rightFamilyToken = computeSeededOrderToken(
+    randomizationSeed,
+    buildQueryFamilyKey(right.task),
+  );
+  const familyComparison = compareStrings(leftFamilyToken, rightFamilyToken);
+  if (familyComparison !== 0) {
+    return familyComparison;
+  }
+
+  const leftTaskToken = computeSeededOrderToken(
+    randomizationSeed,
+    `${left.task.queryHash}::${left.originalIndex}`,
+  );
+  const rightTaskToken = computeSeededOrderToken(
+    randomizationSeed,
+    `${right.task.queryHash}::${right.originalIndex}`,
+  );
+  const taskComparison = compareStrings(leftTaskToken, rightTaskToken);
+  if (taskComparison !== 0) {
+    return taskComparison;
+  }
+
+  return compareIndexedTasks(left, right);
+}
+
+async function loadHistoricalQueryFreshness(
+  tasks: GeneratedSearchTask[],
+): Promise<Map<string, number>> {
+  if (tasks.length === 0) {
+    return new Map();
+  }
+
+  const freshnessByKey = new Map<string, number>();
+
+  const normalizedQueryKeys = [...new Set(tasks.map((task) => task.normalizedQueryKey))];
+  const taskTypes = [...new Set(tasks.map((task) => task.taskType))];
+  const pages = [...new Set(tasks.map((task) => task.page))];
+  const chunkSize = resolveSearchTaskQueryChunkSize(taskTypes.length, pages.length);
+
+  for (const normalizedQueryKeyChunk of chunkValues(normalizedQueryKeys, chunkSize)) {
+    const historicalRows = await prisma.searchTask.findMany({
+      where: {
+        normalizedQueryKey: {
+          in: normalizedQueryKeyChunk,
+        },
+        taskType: {
+          in: taskTypes,
+        },
+        page: {
+          in: pages,
+        },
+      },
+      select: {
+        taskType: true,
+        normalizedQueryKey: true,
+        page: true,
+        updatedAt: true,
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+    });
+
+    for (const row of historicalRows) {
+      const key = buildQueryFreshnessKey(row);
+      if (!freshnessByKey.has(key)) {
+        freshnessByKey.set(key, row.updatedAt.getTime());
+      }
+    }
+  }
+
+  return freshnessByKey;
+}
+
+async function loadExistingRunQueryHashes(
+  tasks: GeneratedSearchTask[],
+  discoveryRunId: string,
+): Promise<Set<string>> {
+  if (tasks.length === 0) {
+    return new Set();
+  }
+
+  const existingQueryHashes = new Set<string>();
+  const queryHashes = [...new Set(tasks.map((task) => task.queryHash))];
+  const taskTypes = [...new Set(tasks.map((task) => task.taskType))];
+  const pages = [...new Set(tasks.map((task) => task.page))];
+  const chunkSize = resolveSearchTaskQueryChunkSize(taskTypes.length, pages.length);
+
+  for (const queryHashChunk of chunkValues(queryHashes, chunkSize)) {
+    const existingTasks = await prisma.searchTask.findMany({
+      where: {
+        discoveryRunId,
+        queryHash: {
+          in: queryHashChunk,
+        },
+      },
+      select: {
+        queryHash: true,
+      },
+    });
+
+    for (const task of existingTasks) {
+      existingQueryHashes.add(task.queryHash);
+    }
+  }
+
+  return existingQueryHashes;
+}
+
 /**
- * Stratified sample: guarantee at least 1 task per (category, city) stratum,
- * then distribute remaining budget deterministically.
+ * Stratified sample: guarantee at least 1 task per unique query family
+ * (task type + normalized query) before spending budget on deeper pagination.
  */
 function stratifiedSample(
-  tasks: GeneratedSearchTask[],
+  tasks: RankedGeneratedSearchTask[],
   maxTasks: number,
-): GeneratedSearchTask[] {
-  const indexedTasks = tasks.map((task, originalIndex) => ({ task, originalIndex }));
-
-  // Group by (category, city) — the meaningful diversity dimensions
-  const strata = new Map<string, IndexedGeneratedSearchTask[]>();
-  for (const indexedTask of indexedTasks) {
-    const { task } = indexedTask;
-    const cat = extractCategory(task.queryText);
-    const city = (task.city ?? 'unknown').toLowerCase();
-    const key = `${city}::${cat}`;
+  randomizationSeed: string,
+): RankedGeneratedSearchTask[] {
+  // Group by unique query family first so page-1 coverage wins over page-depth.
+  const strata = new Map<string, RankedGeneratedSearchTask[]>();
+  for (const rankedTask of tasks) {
+    const key = buildQueryFamilyKey(rankedTask.task);
     const group = strata.get(key) ?? [];
-    group.push(indexedTask);
+    group.push(rankedTask);
     strata.set(key, group);
   }
 
-  const result: IndexedGeneratedSearchTask[] = [];
-  const strataList = [...strata.values()].map((group) => [...group].sort(compareIndexedTasks));
+  const result: RankedGeneratedSearchTask[] = [];
+  const strataList = [...strata.values()].map((group) => [...group].sort(compareRankedTasks));
 
   // If we can't even fit 1 per stratum, use the stable global ordering.
   if (maxTasks < strataList.length) {
-    return [...indexedTasks]
-      .sort(compareIndexedTasks)
-      .slice(0, maxTasks)
-      .map(({ task }) => task);
+    return strataList
+      .map((group) => group[0]!)
+      .sort((left, right) => compareRankedTasksForSampling(left, right, randomizationSeed))
+      .slice(0, maxTasks);
   }
 
-  // Round 1: 1 deterministic task per stratum
-  for (const group of strataList) {
-    result.push(group[0]!);
-  }
+  // Round 1: 1 deterministic task per query family.
+  result.push(
+    ...strataList
+      .map((group) => group[0]!)
+      .sort((left, right) => compareRankedTasksForSampling(left, right, randomizationSeed)),
+  );
 
   // Round 2: Fill remaining budget from the stable leftover ordering.
   if (result.length < maxTasks) {
     const remaining = strataList
       .flatMap((group) => group.slice(1))
-      .sort(compareIndexedTasks);
+      .sort((left, right) => compareRankedTasksForSampling(left, right, randomizationSeed));
     const needed = maxTasks - result.length;
     result.push(...remaining.slice(0, needed));
   }
 
   return result
-    .sort(compareIndexedTasks)
-    .slice(0, maxTasks)
-    .map(({ task }) => task);
+    .sort((left, right) => compareRankedTasksForSampling(left, right, randomizationSeed))
+    .slice(0, maxTasks);
 }
 
 export async function seedSearchTasks(
@@ -151,11 +381,12 @@ export async function seedSearchTasks(
   now: Date = new Date(),
   icpConfig?: IcpSeedConfig | undefined,
   discoveryRunId?: string | undefined,
+  icpProfileId?: string | undefined,
 ): Promise<SeedTasksResult> {
   if (!icpConfig) {
     throw new Error(
       'ICP config with targetIndustries is required for task generation. ' +
-      'The v1 generateTasks path has been removed — ensure the ICP profile has targetIndustries set.',
+        'The v1 generateTasks path has been removed — ensure the ICP profile has targetIndustries set.',
     );
   }
 
@@ -166,6 +397,7 @@ export async function seedSearchTasks(
         icpConfig.categoryOverrides,
       ),
       countries: resolveCountries(config.countries, icpConfig.targetCountries),
+      languages: config.languages,
       cities: icpConfig.cities,
       maxPagesPerQuery: icpConfig.maxPagesPerQuery ?? config.maxPagesPerQuery,
       taskTypes: config.taskTypes,
@@ -174,17 +406,40 @@ export async function seedSearchTasks(
     { now },
   );
 
-  // When generated tasks exceed the budget, use stratified sampling to guarantee
-  // at least 1 task per (category, city) pair before distributing remaining budget.
-  let tasksToInsert = generatedTasks;
-  if (generatedTasks.length > config.maxTasks) {
-    tasksToInsert = stratifiedSample(generatedTasks, config.maxTasks);
-  }
+  const existingRunQueryHashes = discoveryRunId
+    ? await loadExistingRunQueryHashes(generatedTasks, discoveryRunId)
+    : new Set<string>();
+  const freshnessByKey = await loadHistoricalQueryFreshness(generatedTasks);
+  const rankedTasks = generatedTasks
+    .map((task, originalIndex) => ({
+      task,
+      originalIndex,
+      lastExecutedAtMs: freshnessByKey.get(buildQueryFreshnessKey(task)) ?? null,
+    }))
+    .filter(({ task }) => !existingRunQueryHashes.has(task.queryHash));
+
+  const randomizationSeed = buildSamplingSeed({
+    discoveryRunId,
+    now,
+    config,
+    icpConfig,
+  });
+
+  const maxInsertions = Math.max(0, config.maxTasks);
+  const candidateTasks =
+    rankedTasks.length > 0
+      ? stratifiedSample(rankedTasks, rankedTasks.length, randomizationSeed)
+      : [];
 
   let inserted = 0;
 
-  for (const task of tasksToInsert) {
+  for (const { task } of candidateTasks) {
+    if (inserted >= maxInsertions) {
+      break;
+    }
+
     const runIdValue = discoveryRunId ?? null;
+    const paramsJson = icpProfileId ? { ...task.paramsJson, icpProfileId } : task.paramsJson;
     const result = await prisma.$executeRaw`
       INSERT INTO "search_tasks" (
         "id",
@@ -214,7 +469,7 @@ export async function seedSearchTasks(
         ${task.queryText},
         ${task.normalizedQueryKey},
         ${task.queryHash},
-        ${JSON.stringify(task.paramsJson)}::jsonb,
+        ${JSON.stringify(paramsJson)}::jsonb,
         ${task.page},
         ${task.timeBucket},
         'PENDING'::"SearchTaskStatus",
@@ -231,7 +486,7 @@ export async function seedSearchTasks(
   }
 
   return {
-    generated: tasksToInsert.length,
+    generated: Math.min(maxInsertions, candidateTasks.length),
     inserted,
   };
 }

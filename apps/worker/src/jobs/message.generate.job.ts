@@ -18,9 +18,12 @@ import {
 
 import {
   validateMessageVariant,
+  mergeCtaIntoBody,
+  ensureZbooniTeamSignoff,
   buildStricterPromptSuffix,
   checkNegativeKeywords,
   buildNegativeKeywordPromptSuffix,
+  type MessageQualityOptions,
 } from '../messaging/validate-message.js';
 import { MESSAGE_SEND_JOB_NAME, MESSAGE_SEND_RETRY_OPTIONS, type MessageSendJobPayload } from './message.send.job.js';
 
@@ -43,7 +46,7 @@ export const MESSAGE_GENERATE_RETRY_OPTIONS: Pick<
 export interface MessageGenerateJobPayload
   extends Pick<
     GenerateMessageDraftRequest,
-    'leadId' | 'icpProfileId' | 'knowledgeEntryIds' | 'promptVersion' | 'forceRegenerate'
+    'leadId' | 'icpProfileId' | 'knowledgeEntryIds' | 'promptVersion' | 'forceRegenerate' | 'redraftFeedback'
   >,
     Partial<Pick<GenerateMessageDraftRequest, 'channel'>> {
   runId: string;
@@ -69,6 +72,157 @@ interface MessageContext {
   socialPresence: string | null;
   techGap: string | null;
   teamSignal: string | null;
+}
+
+type RecipientType = 'DECISION_MAKER' | 'GENERIC_CONTACT';
+type RecipientEmailKind = 'PERSONAL' | 'GENERIC' | 'UNKNOWN';
+
+interface RecipientContext {
+  recipientType: RecipientType;
+  recipientName: string | null;
+  recipientTitle: string | null;
+  recipientEmailKind: RecipientEmailKind;
+}
+
+const GENERIC_EMAIL_PREFIXES = new Set([
+  'admin',
+  'booking',
+  'bookings',
+  'contact',
+  'customerservice',
+  'hello',
+  'help',
+  'info',
+  'office',
+  'orders',
+  'reception',
+  'reservations',
+  'sales',
+  'service',
+  'support',
+  'team',
+]);
+
+const BUSINESS_SIGNAL_PATTERNS = [
+  /\b(?:Shopify|WordPress|Square|Crisp|Hotjar|Google Analytics|Meta Pixel|WhatsApp|Instagram|CRM|live chat|tiered pricing|pricing tiers|payment widget|booking form|product catalog|Tabby|Tamara)\b/gi,
+  /\bno CRM\b/gi,
+  /\b\d+(?:\.\d+)?K\s+followers\b/gi,
+  /\b\d{2,}\s+followers\b/gi,
+  /\b\d+\s+reviews\b/gi,
+];
+
+function addUniqueTerm(terms: string[], term: string | null | undefined): void {
+  const cleaned = term?.replace(/\s+/g, ' ').trim();
+  if (!cleaned || cleaned.length < 3) return;
+
+  const normalized = cleaned.toLowerCase();
+  if (!terms.some((existing) => existing.toLowerCase() === normalized)) {
+    terms.push(cleaned);
+  }
+}
+
+function buildBusinessSignalTerms(
+  companyName: string | null,
+  businessIntelligence: string | null,
+): string[] {
+  const terms: string[] = [];
+
+  if (companyName) {
+    addUniqueTerm(terms, companyName);
+    const compactName = companyName
+      .split(/[-|,]/)[0]
+      ?.split(/\s+/)
+      .filter((part) => part.length > 2)
+      .slice(0, 3)
+      .join(' ');
+    addUniqueTerm(terms, compactName);
+  }
+
+  if (businessIntelligence) {
+    for (const pattern of BUSINESS_SIGNAL_PATTERNS) {
+      pattern.lastIndex = 0;
+      for (const match of businessIntelligence.matchAll(pattern)) {
+        addUniqueTerm(terms, match[0]);
+      }
+    }
+  }
+
+  return terms;
+}
+
+function buildMessageQualityOptions(
+  companyName: string | null,
+  businessIntelligence: string | null,
+  redraftFeedback: string | null,
+): MessageQualityOptions {
+  const businessSignalTerms = buildBusinessSignalTerms(companyName, businessIntelligence);
+  return {
+    requireClosingQuestion: true,
+    requireProfessionalGreeting: true,
+    requireZbooniIntroAfterGreeting: true,
+    requireZbooniTeamSignoff: true,
+    businessSignalTerms,
+    minBusinessSignalMatches: businessSignalTerms.length > 0 ? 1 : 0,
+    ...(redraftFeedback ? { redraftFeedback } : {}),
+  };
+}
+
+function isGenericEmailAddress(email: string | null | undefined): boolean {
+  const localPart = email?.split('@')[0]?.toLowerCase().replace(/[^a-z0-9]/g, '') ?? '';
+  if (!localPart) return false;
+  return GENERIC_EMAIL_PREFIXES.has(localPart);
+}
+
+function normalizeRecipientName(firstName: string, lastName: string): string | null {
+  const fullName = `${firstName} ${lastName}`.replace(/\s+/g, ' ').trim();
+  const normalized = fullName.toLowerCase();
+
+  if (!fullName || normalized === 'unknown contact' || normalized === 'generic contact') {
+    return null;
+  }
+
+  if (firstName.toLowerCase() === 'unknown' || lastName.toLowerCase() === 'contact') {
+    return null;
+  }
+
+  return fullName;
+}
+
+function buildRecipientContext(lead: {
+  firstName: string;
+  lastName: string;
+  email: string;
+  businessEmail?: string | null | undefined;
+  decisionMakerTitle?: string | null | undefined;
+  decisionMakerPhone?: string | null | undefined;
+}): RecipientContext {
+  const recipientName = normalizeRecipientName(lead.firstName, lead.lastName);
+  const title = lead.decisionMakerTitle?.replace(/\s+/g, ' ').trim() || null;
+  const hasGenericPrimaryEmail = isGenericEmailAddress(lead.email);
+  const primaryIsBusinessEmail = Boolean(
+    lead.businessEmail &&
+      lead.email.toLowerCase() === lead.businessEmail.toLowerCase(),
+  );
+
+  const recipientEmailKind: RecipientEmailKind =
+    hasGenericPrimaryEmail || primaryIsBusinessEmail
+      ? 'GENERIC'
+      : lead.email.includes('@')
+        ? 'PERSONAL'
+        : 'UNKNOWN';
+
+  const hasDecisionMakerSignal = Boolean(
+    recipientName &&
+      recipientEmailKind === 'PERSONAL' &&
+      (title || lead.decisionMakerPhone || !hasGenericPrimaryEmail),
+  );
+
+  return {
+    recipientType: hasDecisionMakerSignal ? 'DECISION_MAKER' : 'GENERIC_CONTACT',
+    recipientName: hasDecisionMakerSignal ? recipientName : null,
+    recipientTitle: hasDecisionMakerSignal ? title : null,
+    recipientEmailKind,
+  };
 }
 
 /**
@@ -309,7 +463,9 @@ export async function handleMessageGenerateJob(
         firstName: true,
         lastName: true,
         email: true,
+        businessEmail: true,
         phone: true,
+        decisionMakerTitle: true,
         decisionMakerPhone: true,
         businessId: true,
         deletedAt: true,
@@ -627,6 +783,11 @@ export async function handleMessageGenerateJob(
     if (messageContext.socialPresence) intelligenceParts.push(`Social: ${messageContext.socialPresence}`);
     if (messageContext.teamSignal) intelligenceParts.push(`Team: ${messageContext.teamSignal}`);
     const businessIntelligence = intelligenceParts.length > 0 ? intelligenceParts.join('\n') : null;
+    const redraftFeedback =
+      job.data.forceRegenerate && job.data.redraftFeedback?.trim()
+        ? job.data.redraftFeedback.trim()
+        : null;
+    const messageQualityOptions = buildMessageQualityOptions(companyName, businessIntelligence, redraftFeedback);
 
     // Load custom messaging settings from PipelineSetting (role, system prompt)
     const [roleSetting, systemPromptSetting] = await Promise.all([
@@ -680,9 +841,16 @@ export async function handleMessageGenerateJob(
       enrichedIcpDescription += `\n\nKey features to pitch for this ICP segment:\n${featuresToPitch.map((f, i) => `${i + 1}. ${f}`).join('\n')}`;
     }
 
+    const recipientContext = buildRecipientContext(lead);
+    const previousDraftVariant = existingDraftForRetry?.variants[0] ?? null;
+
     const groundingContext = {
       leadName: `${lead.firstName} ${lead.lastName}`,
       leadEmail: lead.email,
+      recipientType: recipientContext.recipientType,
+      recipientName: recipientContext.recipientName,
+      recipientTitle: recipientContext.recipientTitle,
+      recipientEmailKind: recipientContext.recipientEmailKind,
       companyName: companyName ?? null,
       industry: (featuresJson.industry as string) ?? null,
       country: (featuresJson.country as string) ?? null,
@@ -693,9 +861,12 @@ export async function handleMessageGenerateJob(
       businessIntelligence,
       icpHook: requiredIcpHook,
       icpAngle,
+      redraftFeedback,
       customRole,
       customSystemPrompt,
       messagingInstructions,
+      previousDraftSubject: previousDraftVariant?.subject ?? null,
+      previousDraftBody: previousDraftVariant?.bodyText ?? null,
       metadata: {
         hookUsed: requiredIcpHook ?? null,
         icpSegment,
@@ -762,7 +933,7 @@ export async function handleMessageGenerateJob(
     let messageContent = { subject: null as string | null, bodyText: 'Message generation pending', bodyHtml: null as string | null, ctaText: null as string | null };
 
     // Build generateContext outside the if-block so NK retry can reference it
-    let generateContext = groundingContext;
+    let generateContext = { ...groundingContext, channel: resolvedChannel };
     if (!deps?.openAiAdapter?.isConfigured) {
       const failureMessage = buildDraftGenerationFailureMessage(
         'Draft generation failed because AI message generation is not configured.',
@@ -792,9 +963,10 @@ export async function handleMessageGenerateJob(
       ].filter(Boolean).join(' ');
     }
 
+    const generationBaseContext = { ...groundingContext, channel: resolvedChannel };
     generateContext = systemPromptOverride
-      ? { ...groundingContext, icpDescription: systemPromptOverride }
-      : groundingContext;
+      ? { ...generationBaseContext, icpDescription: systemPromptOverride }
+      : generationBaseContext;
 
     const result = await deps.openAiAdapter.generateMessageVariants(generateContext);
 
@@ -832,14 +1004,14 @@ export async function handleMessageGenerateJob(
     }
 
     generatedByModel = result.data.model;
-    messageContent = result.data.message;
+    messageContent = ensureZbooniTeamSignoff(mergeCtaIntoBody(result.data.message));
 
     logger.info(
       { jobId: job.id, leadId, model: result.data.model },
       'OpenAI message generation succeeded',
     );
 
-    const validation = validateMessageVariant(resolvedChannel, messageContent);
+    const validation = validateMessageVariant(resolvedChannel, messageContent, messageQualityOptions);
 
     if (validation.reasons.length > 0) {
       logger.info(
@@ -864,7 +1036,8 @@ export async function handleMessageGenerateJob(
 
       if (retryResult.status === 'success') {
         generatedByModel = retryResult.data.model;
-        const retryValidation = validateMessageVariant(resolvedChannel, retryResult.data.message);
+        const retryMessageContent = ensureZbooniTeamSignoff(mergeCtaIntoBody(retryResult.data.message));
+        const retryValidation = validateMessageVariant(resolvedChannel, retryMessageContent, messageQualityOptions);
 
         if (retryValidation.hardReject) {
           const failureMessage = buildDraftGenerationFailureMessage(
@@ -920,7 +1093,8 @@ export async function handleMessageGenerateJob(
 
       if (nkRetryResult.status === 'success') {
         generatedByModel = nkRetryResult.data.model;
-        const nkValidation = validateMessageVariant(resolvedChannel, nkRetryResult.data.message);
+        const retryMessageContent = ensureZbooniTeamSignoff(mergeCtaIntoBody(nkRetryResult.data.message));
+        const nkValidation = validateMessageVariant(resolvedChannel, retryMessageContent, messageQualityOptions);
         const nkRecheck = checkNegativeKeywords(nkValidation.cleaned.bodyText);
 
         if (nkValidation.hardReject || nkRecheck.found) {

@@ -13,13 +13,11 @@ import {
 import { predictLogistic } from '../scoring/logistic.js';
 import {
   asDeterministicRules,
-  computeBlendRatio,
   ensureBaselineModelVersion,
   extractFeatureVectorForModel,
   findActiveTrainedModel,
 } from '../scoring/shared.js';
 import {
-  getDeterministicAiBlend,
   getScoreQualificationThreshold,
   getScoreTierBands,
 } from '../utils/pipeline-settings.js';
@@ -73,6 +71,7 @@ export interface ScoringComputeJobDependencies {
     apolloHasDirectPhone: boolean;
     correlationId?: string | undefined;
   }) => Promise<void>) | undefined;
+  requireOpenAiScore?: boolean;
 }
 
 async function markTrackedScoringRunRunning(runId: string): Promise<void> {
@@ -218,11 +217,8 @@ export async function handleScoringComputeJob(
     // Look up a trained logistic model (not the baseline stub)
     const trainedModel = await findActiveTrainedModel();
 
-    // Read UI-configured blend override and tier bands (same pattern as scoring.batch)
-    const deterministicAiBlend = await getDeterministicAiBlend();
-    const blendRatio = deterministicAiBlend !== null
-      ? { deterministicWeight: deterministicAiBlend, aiWeight: 1 - deterministicAiBlend }
-      : await computeBlendRatio();
+    // Deterministic scoring is the baseline/fallback. When AI/model scoring is available,
+    // that score is the final qualification score.
     const scoreTierBands = await getScoreTierBands();
 
     let persistedPredictions = 0;
@@ -266,12 +262,15 @@ export async function handleScoringComputeJob(
         let logisticScore = 0;
         let aiReasoning: string[] = [];
         let usedTrainedModel = false;
+        let usedAiScore = false;
+        let usedOpenAiScore = false;
 
         // Prefer trained logistic model over OpenAI when available
         if (trainedModel) {
           const featureVector = extractFeatureVectorForModel(featurePayload);
           logisticScore = predictLogistic(featureVector, trainedModel.model);
           usedTrainedModel = true;
+          usedAiScore = true;
         } else if (deps?.openAiAdapter?.isConfigured) {
           // Fall back to OpenAI AI scoring when no trained model
           try {
@@ -289,6 +288,8 @@ export async function handleScoringComputeJob(
             if (aiResult.status === 'success') {
               logisticScore = aiResult.data.score;
               aiReasoning = aiResult.data.reasoning;
+              usedAiScore = true;
+              usedOpenAiScore = true;
             } else {
               logger.warn(
                 { jobId: job.id, leadId: targetLeadId, icpId: targetIcpId, status: aiResult.status },
@@ -303,14 +304,15 @@ export async function handleScoringComputeJob(
           }
         }
 
-        const dWeight = deps?.deterministicWeight ?? blendRatio.deterministicWeight;
-        const aWeight = deps?.aiWeight ?? blendRatio.aiWeight;
-        const blendedScore = Math.min(1, Math.max(0,
-          usedTrainedModel || logisticScore > 0
-            ? dWeight * deterministicScore + aWeight * logisticScore
-            : deterministicScore,
-        ));
+        if (deps?.requireOpenAiScore && !usedOpenAiScore) {
+          throw new Error(`OpenAI scoring was required but no OpenAI score was produced for lead ${targetLeadId} and ICP ${targetIcpId}`);
+        }
+
+        const blendedScore = Math.min(1, Math.max(0, usedAiScore ? logisticScore : deterministicScore));
         const scoreBand = toScoreBand(blendedScore, scoreTierBands);
+        const scoreSource = usedAiScore
+          ? (usedTrainedModel ? 'trained_model' : 'llm')
+          : 'deterministic_fallback';
 
         const prediction = await prisma.leadScorePrediction.upsert({
           where: {
@@ -337,7 +339,7 @@ export async function handleScoringComputeJob(
               qualificationPath: deterministic.qualificationPath,
               aiReasoning: aiReasoning.length > 0 ? aiReasoning : undefined,
               usedTrainedModel,
-              blendWeights: { deterministic: dWeight, ai: aWeight },
+              scoreSource,
             }),
             ruleEvaluationJson: toInputJson(deterministic.ruleEvaluation),
             predictedAt: new Date(),
@@ -354,7 +356,7 @@ export async function handleScoringComputeJob(
               qualificationPath: deterministic.qualificationPath,
               aiReasoning: aiReasoning.length > 0 ? aiReasoning : undefined,
               usedTrainedModel,
-              blendWeights: { deterministic: dWeight, ai: aWeight },
+              scoreSource,
             }),
             ruleEvaluationJson: toInputJson(deterministic.ruleEvaluation),
             predictedAt: new Date(),

@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import {
   Activity,
   BarChart3,
+  Bot,
   ChevronsLeft,
   ChevronsRight,
   Handshake,
@@ -28,6 +29,7 @@ const DASHBOARD_NAV_ITEMS = [
   { href: '/dashboard/leads', label: 'Leads', icon: Users },
   { href: '/dashboard/messages', label: 'Messages', icon: MessageSquare },
   { href: '/dashboard/inbox', label: 'Inbox', icon: Inbox },
+  { href: '/dashboard/prompts', label: 'Prompt Center', icon: Bot },
   { href: '/dashboard/icps', label: 'ICP Profiles', icon: Target },
   { href: '/dashboard/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/dashboard/analytics/deals', label: 'Deals', icon: Handshake },

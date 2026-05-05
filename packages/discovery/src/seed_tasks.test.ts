@@ -5,21 +5,23 @@ import { ICP_INDUSTRY_CATEGORY_MAP } from './queries/icp-category-map.js';
 
 type GeneratedSearchTask = GenerateTasksModule.GeneratedSearchTask;
 
-const { executeRawMock, generateTasksV2Mock } = vi.hoisted(() => ({
+const { executeRawMock, findManyMock, generateTasksV2Mock } = vi.hoisted(() => ({
   executeRawMock: vi.fn(),
+  findManyMock: vi.fn(),
   generateTasksV2Mock: vi.fn(),
 }));
 
 vi.mock('@lead-flood/db', () => ({
   prisma: {
     $executeRaw: executeRawMock,
+    searchTask: {
+      findMany: findManyMock,
+    },
   },
 }));
 
 vi.mock('./queries/generate_tasks.js', async () => {
-  const actual = await vi.importActual<typeof GenerateTasksModule>(
-    './queries/generate_tasks.js',
-  );
+  const actual = await vi.importActual<typeof GenerateTasksModule>('./queries/generate_tasks.js');
 
   return {
     ...actual,
@@ -32,6 +34,7 @@ import { seedSearchTasks } from './seed_tasks.js';
 const FIXED_NOW = new Date('2026-04-06T12:00:00.000Z');
 const ID_ARG_INDEX = 1;
 const QUERY_HASH_ARG_INDEX = 8;
+const PARAMS_JSON_ARG_INDEX = 9;
 
 type SeedConfig = Parameters<typeof seedSearchTasks>[0];
 type SeedIcpConfig = NonNullable<Parameters<typeof seedSearchTasks>[2]>;
@@ -73,7 +76,7 @@ function createTask(
     city,
     language: 'en',
     queryText,
-    normalizedQueryKey: `${city.toLowerCase()}|${queryText.toLowerCase()}|${page}`,
+    normalizedQueryKey: `${city.toLowerCase()}|${queryText.toLowerCase()}`,
     queryHash,
     paramsJson: {
       q: queryText,
@@ -93,6 +96,7 @@ async function seedAndCollect(
   candidates: GeneratedSearchTask[],
   maxTasks: number,
   argIndex: number = QUERY_HASH_ARG_INDEX,
+  discoveryRunId?: string | undefined,
 ): Promise<string[]> {
   generateTasksV2Mock.mockImplementation(() => candidates);
   await seedSearchTasks(
@@ -102,6 +106,7 @@ async function seedAndCollect(
     },
     FIXED_NOW,
     icpConfig,
+    discoveryRunId,
   );
 
   return insertedValues(argIndex);
@@ -126,13 +131,13 @@ function installUnstableEqualTieBreakSort() {
       }
 
       const leftId = String(
-        ((left as SortableTaskLike | undefined)?.task?.id ??
-          (left as SortableTaskLike | undefined)?.id) ??
+        (left as SortableTaskLike | undefined)?.task?.id ??
+          (left as SortableTaskLike | undefined)?.id ??
           '',
       );
       const rightId = String(
-        ((right as SortableTaskLike | undefined)?.task?.id ??
-          (right as SortableTaskLike | undefined)?.id) ??
+        (right as SortableTaskLike | undefined)?.task?.id ??
+          (right as SortableTaskLike | undefined)?.id ??
           '',
       );
 
@@ -145,6 +150,9 @@ beforeEach(() => {
   executeRawMock.mockReset();
   executeRawMock.mockResolvedValue(1);
 
+  findManyMock.mockReset();
+  findManyMock.mockResolvedValue([]);
+
   generateTasksV2Mock.mockReset();
 });
 
@@ -152,21 +160,17 @@ describe('seedSearchTasks', () => {
   it('forwards explicit category overrides to generation without changing other generation knobs', async () => {
     generateTasksV2Mock.mockReturnValue([]);
 
-    await seedSearchTasks(
-      baseConfig,
-      FIXED_NOW,
-      {
-        targetIndustries: ['food_beverage'],
-        targetCountries: ['AE'],
-        cities: ['Dubai'],
-        categoryOverrides: {
-          food_beverage: {
-            remove: ICP_INDUSTRY_CATEGORY_MAP['food_beverage'],
-            add: ['bakery', 'gym'],
-          },
+    await seedSearchTasks(baseConfig, FIXED_NOW, {
+      targetIndustries: ['food_beverage'],
+      targetCountries: ['AE'],
+      cities: ['Dubai'],
+      categoryOverrides: {
+        food_beverage: {
+          remove: ICP_INDUSTRY_CATEGORY_MAP['food_beverage'],
+          add: ['bakery', 'gym'],
         },
       },
-    );
+    });
 
     expect(generateTasksV2Mock).toHaveBeenCalledWith(
       {
@@ -175,13 +179,14 @@ describe('seedSearchTasks', () => {
         cities: ['Dubai'],
         maxPagesPerQuery: baseConfig.maxPagesPerQuery,
         taskTypes: baseConfig.taskTypes,
+        languages: baseConfig.languages,
         searchProvider: undefined,
       },
       { now: FIXED_NOW },
     );
   });
 
-  it('selects one task per stratum before any same-stratum leftovers when budget can fit every stratum', async () => {
+  it('selects one page-1 task per query family before any same-family leftovers', async () => {
     const candidates = [
       createTask('c1', 'Abu Dhabi', 'plumber in Abu Dhabi', 1),
       createTask('a2', 'Dubai', 'bakery in Dubai', 2),
@@ -193,10 +198,24 @@ describe('seedSearchTasks', () => {
 
     const selected = await seedAndCollect(candidates, 4);
 
-    expect(selected).toEqual(['a1', 'b1', 'c1', 'd1']);
+    expect(new Set(selected)).toEqual(new Set(['a1', 'b1', 'c1', 'd1']));
+    expect(selected).not.toContain('a2');
+    expect(selected).not.toContain('a3');
   });
 
-  it('falls back to the stable global ordering when budget is smaller than stratum count', async () => {
+  it('persists the seed ICP profile id in search task params for downstream handoff attribution', async () => {
+    generateTasksV2Mock.mockReturnValue([createTask('a1', 'Dubai', 'bakery in Dubai', 1)]);
+
+    await seedSearchTasks(baseConfig, FIXED_NOW, icpConfig, 'discovery_run_1', 'icp_1');
+
+    expect(JSON.parse(insertedValues(PARAMS_JSON_ARG_INDEX)[0]!)).toEqual(
+      expect.objectContaining({
+        icpProfileId: 'icp_1',
+      }),
+    );
+  });
+
+  it('hash-randomizes family heads when budget is smaller than the query family count', async () => {
     const candidates = [
       createTask('d1', 'Sharjah', 'florist in Sharjah', 1),
       createTask('b1', 'Dubai', 'gym in Dubai', 1),
@@ -205,12 +224,75 @@ describe('seedSearchTasks', () => {
       createTask('a1', 'Dubai', 'bakery in Dubai', 1),
     ];
 
-    const selected = await seedAndCollect(candidates, 3);
+    const selected = await seedAndCollect(candidates, 3, QUERY_HASH_ARG_INDEX, 'run_seed_1');
 
-    expect(selected).toEqual(['a1', 'a2', 'b1']);
+    expect(selected).toHaveLength(3);
+    expect(new Set(selected).size).toBe(3);
+    expect(selected).not.toContain('a2');
+
+    executeRawMock.mockClear();
+    const repeated = await seedAndCollect(candidates, 3, QUERY_HASH_ARG_INDEX, 'run_seed_1');
+
+    expect(repeated).toEqual(selected);
   });
 
-  it('uses originalIndex as the final deterministic tie-breaker when all comparator fields collide', async () => {
+  it('prefers never-executed queries over recently executed queries', async () => {
+    const candidates = [
+      createTask('a1', 'Dubai', 'bakery in Dubai', 1),
+      createTask('b1', 'Dubai', 'gym in Dubai', 1),
+    ];
+    findManyMock.mockResolvedValueOnce([
+      {
+        taskType: 'SERP_MAPS_LOCAL',
+        normalizedQueryKey: 'dubai|bakery in dubai',
+        page: 1,
+        updatedAt: new Date('2026-04-06T11:59:00.000Z'),
+      },
+    ]);
+
+    const selected = await seedAndCollect(candidates, 1);
+
+    expect(selected).toEqual(['b1']);
+  });
+
+  it('skips query hashes that already exist for the discovery run', async () => {
+    const candidates = [
+      createTask('a1', 'Dubai', 'bakery in Dubai', 1),
+      createTask('b1', 'Dubai', 'gym in Dubai', 1),
+    ];
+    findManyMock.mockResolvedValueOnce([{ queryHash: 'a1' }]);
+    findManyMock.mockResolvedValueOnce([]);
+
+    const selected = await seedAndCollect(candidates, 2, QUERY_HASH_ARG_INDEX, 'run_1');
+
+    expect(selected).toEqual(['b1']);
+  });
+
+  it('backfills same-run insert conflicts with the next ranked task until the shard cap is met', async () => {
+    const candidates = [
+      createTask('a1', 'Dubai', 'bakery in Dubai', 1),
+      createTask('b1', 'Dubai', 'gym in Dubai', 1),
+      createTask('c1', 'Dubai', 'florist in Dubai', 1),
+    ];
+    generateTasksV2Mock.mockImplementation(() => candidates);
+    executeRawMock.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+
+    const result = await seedSearchTasks(
+      {
+        ...baseConfig,
+        maxTasks: 1,
+      },
+      FIXED_NOW,
+      icpConfig,
+      'run_1',
+    );
+
+    expect(result).toEqual({ generated: 1, inserted: 1 });
+    expect(insertedValues(QUERY_HASH_ARG_INDEX)).toHaveLength(2);
+    expect(new Set(insertedValues(QUERY_HASH_ARG_INDEX)).size).toBe(2);
+  });
+
+  it('keeps deterministic results under unstable equal-tie sort implementations', async () => {
     const candidates = [
       { ...createTask('same-hash', 'Dubai', 'bakery in Dubai', 1), id: 'z-last-lexically' },
       { ...createTask('same-hash', 'Dubai', 'bakery in Dubai', 1), id: 'a-first-lexically' },
@@ -221,13 +303,13 @@ describe('seedSearchTasks', () => {
     const sortSpy = installUnstableEqualTieBreakSort();
 
     try {
-      const selectedIds = await seedAndCollect(candidates, 3, ID_ARG_INDEX);
+      const selectedIds = await seedAndCollect(candidates, 3, ID_ARG_INDEX, 'run_seed_2');
 
-      expect(selectedIds).toEqual([
-        'z-last-lexically',
-        'a-first-lexically',
-        'm-middle-lexically',
-      ]);
+      executeRawMock.mockClear();
+      const repeatedIds = await seedAndCollect(candidates, 3, ID_ARG_INDEX, 'run_seed_2');
+
+      expect(repeatedIds).toEqual(selectedIds);
+      expect(new Set(selectedIds).size).toBe(3);
     } finally {
       sortSpy.mockRestore();
     }

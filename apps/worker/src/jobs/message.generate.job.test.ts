@@ -101,6 +101,9 @@ const logger = {
   error: vi.fn(),
 };
 
+const ZBOONI_INTRO =
+  'I’m reaching out from Zbooni. We help businesses turn customer messages into paid, trackable orders. When a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation.';
+
 function buildSuccessfulOpenAiAdapter() {
   return {
     isConfigured: true,
@@ -109,11 +112,11 @@ function buildSuccessfulOpenAiAdapter() {
       data: {
         model: 'gpt-4o',
         message: {
-          subject: 'Worth a look?',
+          subject: 'Track chat-driven orders?',
           bodyText:
-            'I noticed Ada handles trust-heavy conversations where payment certainty matters and manual follow-up slows things down. Zbooni helps teams confirm payments inside the conversation and reduce chasing without changing the way they already sell today. Would it be useful if I showed a simple example?',
+            `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor a team handling trust-heavy customer conversations, that can make follow-up and payment status easier to manage without changing how you already sell today. Would it be useful to compare this with your current conversation-to-order flow?\n\nBest,\nZbooni Team`,
           bodyHtml: null,
-          ctaText: 'Would it be useful if I showed a simple example?',
+          ctaText: 'Would it be useful to compare this with your current conversation-to-order flow?',
         },
       },
     })),
@@ -130,7 +133,9 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
       firstName: 'Ada',
       lastName: 'Lovelace',
       email: 'ada@example.com',
+      businessEmail: null,
       phone: null,
+      decisionMakerTitle: null,
       decisionMakerPhone: null,
       businessId: null,
       deletedAt: null,
@@ -160,6 +165,8 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
     });
     dbMock.prisma.leadFeatureSnapshot.findFirst.mockResolvedValue(null);
     dbMock.prisma.leadEnrichmentRecord.findFirst.mockResolvedValue(null);
+    dbMock.prisma.business.findUnique.mockResolvedValue(null);
+    dbMock.prisma.businessConversion.findFirst.mockResolvedValue(null);
     dbMock.prisma.messageDraft.create.mockResolvedValue({
       id: 'draft_1',
       approvalStatus: 'PENDING',
@@ -301,6 +308,251 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
       }),
     );
     expect(dbMock.prisma.messageSend.create).not.toHaveBeenCalled();
+  });
+
+  it('passes decision-maker recipient context into OpenAI generation', async () => {
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
+      id: 'score_current',
+      scoreBand: 'HIGH',
+      blendedScore: 0.72,
+    });
+
+    const openAiAdapter = buildSuccessfulOpenAiAdapter();
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+      }),
+      { openAiAdapter: openAiAdapter as never },
+    );
+
+    expect(openAiAdapter.generateMessageVariants).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: 'EMAIL',
+        recipientType: 'DECISION_MAKER',
+        recipientName: 'Ada Lovelace',
+        recipientEmailKind: 'PERSONAL',
+      }),
+    );
+  });
+
+  it('passes operator re-draft feedback into OpenAI generation', async () => {
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
+      id: 'score_current',
+      scoreBand: 'HIGH',
+      blendedScore: 0.72,
+    });
+
+    const openAiAdapter = buildSuccessfulOpenAiAdapter();
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+        forceRegenerate: true,
+        redraftFeedback: 'Make the subject clearer and keep the tone less personal.',
+      }),
+      { openAiAdapter: openAiAdapter as never },
+    );
+
+    expect(openAiAdapter.generateMessageVariants).toHaveBeenCalledWith(
+      expect.objectContaining({
+        redraftFeedback: 'Make the subject clearer and keep the tone less personal.',
+      }),
+    );
+  });
+
+  it('passes generic-contact recipient context for business inbox leads', async () => {
+    dbMock.prisma.lead.findUnique.mockResolvedValue({
+      id: 'lead_1',
+      firstName: 'Unknown',
+      lastName: 'Contact',
+      email: 'info@rady.example',
+      businessEmail: 'info@rady.example',
+      phone: null,
+      decisionMakerTitle: null,
+      decisionMakerPhone: null,
+      businessId: 'business_1',
+      deletedAt: null,
+      status: 'qualified',
+    });
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
+      id: 'score_current',
+      scoreBand: 'HIGH',
+      blendedScore: 0.72,
+    });
+    dbMock.prisma.business.findUnique.mockResolvedValue({
+      name: 'Rady Interior',
+      apifyWebsiteScrapeJson: null,
+      apifyInstagramScrapeJson: null,
+    });
+
+    const openAiAdapter = {
+      isConfigured: true,
+      generateMessageVariants: vi.fn(async () => ({
+        status: 'success' as const,
+        data: {
+          model: 'gpt-4o',
+          message: {
+            subject: 'Track chat orders?',
+            bodyText:
+              `Hi Rady Interior team,\n\n${ZBOONI_INTRO}\n\nFor a service business like Rady Interior, that can make WhatsApp follow-up, order details, and payment status easier to manage from one place. Would it be useful to compare this with how your team handles chat-driven orders today?\n\nBest,\nZbooni Team`,
+            bodyHtml: null,
+            ctaText: 'Would it be useful to compare this with how your team handles chat-driven orders today?',
+          },
+        },
+      })),
+    };
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+      }),
+      { openAiAdapter: openAiAdapter as never },
+    );
+
+    expect(openAiAdapter.generateMessageVariants).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: 'EMAIL',
+        recipientType: 'GENERIC_CONTACT',
+        recipientName: null,
+        recipientEmailKind: 'GENERIC',
+        companyName: 'Rady Interior',
+      }),
+    );
+  });
+
+  it('stores the CTA in bodyText when OpenAI returns ctaText separately', async () => {
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
+      id: 'score_current',
+      scoreBand: 'HIGH',
+      blendedScore: 0.72,
+    });
+
+    const openAiAdapter = {
+      isConfigured: true,
+      generateMessageVariants: vi.fn(async () => ({
+        status: 'success' as const,
+        data: {
+          model: 'gpt-4o',
+          message: {
+            subject: 'Track customer orders?',
+            bodyText:
+              `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status and customer follow-up easier to track from the same conversation.`,
+            bodyHtml: null,
+            ctaText: 'Would it be useful to compare this with your current handoff from conversation to order?',
+          },
+        },
+      })),
+    };
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+      }),
+      { openAiAdapter: openAiAdapter as never },
+    );
+
+    expect(dbMock.prisma.messageDraft.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          variants: {
+            create: [
+              expect.objectContaining({
+                bodyText: expect.stringMatching(
+                  /Would it be useful to compare this with your current handoff from conversation to order\?\s+Best,\s+Zbooni Team/,
+                ),
+              }),
+            ],
+          },
+        }),
+      }),
+    );
+  });
+
+  it('regenerates instead of saving a draft that has no closing question', async () => {
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
+      id: 'score_current',
+      scoreBand: 'HIGH',
+      blendedScore: 0.72,
+    });
+
+    const openAiAdapter = {
+      isConfigured: true,
+      generateMessageVariants: vi.fn()
+        .mockResolvedValueOnce({
+          status: 'success' as const,
+          data: {
+            model: 'gpt-4o',
+            message: {
+              subject: 'Track customer orders?',
+              bodyText:
+                `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status and customer follow-up easier to track from the same conversation.`,
+              bodyHtml: null,
+              ctaText: null,
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          status: 'success' as const,
+          data: {
+            model: 'gpt-4o',
+            message: {
+              subject: 'Track customer orders?',
+              bodyText:
+                `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status and customer follow-up easier to track from the same conversation. Would a quick comparison with your current order flow be useful?\n\nBest,\nZbooni Team`,
+              bodyHtml: null,
+              ctaText: 'Would a quick comparison with your current order flow be useful?',
+            },
+          },
+        }),
+    };
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+      }),
+      { openAiAdapter: openAiAdapter as never },
+    );
+
+    expect(openAiAdapter.generateMessageVariants).toHaveBeenCalledTimes(2);
+    expect(dbMock.prisma.messageDraft.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          variants: {
+            create: [
+              expect.objectContaining({
+                bodyText: expect.stringContaining('Would a quick comparison with your current order flow be useful?'),
+              }),
+            ],
+          },
+        }),
+      }),
+    );
   });
 
   it('auto-approves when current settings and score require it', async () => {

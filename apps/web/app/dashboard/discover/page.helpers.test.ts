@@ -20,7 +20,7 @@ describe('discover page helpers', () => {
         cities: ['Dubai'],
         includeWebsiteAnalysis: true,
         includeSocialMediaAnalysis: false,
-        limit: 25,
+        searchTaskLimit: 25,
         requestedByUserId: 'user_1',
       }),
     ).toEqual({
@@ -42,7 +42,7 @@ describe('discover page helpers', () => {
         cities: [],
         includeWebsiteAnalysis: true,
         includeSocialMediaAnalysis: true,
-        limit: 25,
+        searchTaskLimit: 25,
       }),
     ).toBeNull();
 
@@ -53,7 +53,7 @@ describe('discover page helpers', () => {
         cities: [],
         includeWebsiteAnalysis: true,
         includeSocialMediaAnalysis: true,
-        limit: 25,
+        searchTaskLimit: 25,
       }),
     ).toBeNull();
   });

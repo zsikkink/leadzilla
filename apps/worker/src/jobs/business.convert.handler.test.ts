@@ -62,6 +62,7 @@ const { dbMock, txMock, pipelineSettingsMock, trackerMock } = vi.hoisted(() => (
     },
     businessConversion: {
       create: vi.fn(),
+      createMany: vi.fn(),
     },
     businessContact: {
       createMany: vi.fn(),
@@ -300,6 +301,7 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
     txMock.jobExecution.create.mockResolvedValue({ id: 'features_run_1' });
     txMock.outboxEvent.create.mockResolvedValue({ id: 'outbox_1' });
     txMock.businessConversion.create.mockResolvedValue({ id: 'conversion_1' });
+    txMock.businessConversion.createMany.mockResolvedValue({ count: 1 });
     txMock.businessContact.createMany.mockResolvedValue({ count: 2 });
     txMock.discoveryCostEvent.create.mockResolvedValue({ id: 'cost_1' });
 
@@ -377,6 +379,38 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
         outboxEventId: 'outbox_1',
       }),
       'Persisted durable features.compute handoff for newly created lead',
+    );
+  });
+
+  it('treats WhatsApp utility domains as missing website domains before contact recovery', async () => {
+    const deps = makeDeps();
+    dbMock.prisma.business.findUnique.mockResolvedValueOnce(
+      createBusiness({
+        websiteDomain: 'wa.me',
+      }),
+    );
+
+    await handleBusinessConvertJob(
+      logger,
+      makeJob({
+        businessId: 'business_1',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+      }),
+      deps,
+    );
+
+    expect(deps.hunterAdapter.searchDomainContacts).not.toHaveBeenCalled();
+    expect(dbMock.prisma.$transaction).not.toHaveBeenCalled();
+    expect(dbMock.prisma.contactRecoveryItem.upsert).not.toHaveBeenCalled();
+    expect(dbMock.prisma.business.update).toHaveBeenCalledWith({
+      where: { id: 'business_1' },
+      data: { preQualified: false, disqualificationReason: 'NO_WEBSITE_DOMAIN' },
+    });
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith(
+      'run_1',
+      logger,
+      expect.objectContaining({ excludeActiveJobId: expect.any(String) }),
     );
   });
 
@@ -527,7 +561,96 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
         primaryOutcomeAt: expect.any(Date),
       },
     });
+    expect(dbMock.prisma.business.update).toHaveBeenCalledWith({
+      where: { id: 'business_1' },
+      data: { preQualified: true, disqualificationReason: null },
+    });
     expect(txMock.lead.create).not.toHaveBeenCalled();
+  });
+
+  it('creates a lead from a generic business email instead of opening contact recovery', async () => {
+    const enqueueFeaturesCompute = vi.fn();
+    txMock.lead.findFirst.mockResolvedValueOnce(null);
+    dbMock.prisma.business.findUnique.mockResolvedValueOnce(
+      createBusiness({
+        apifyWebsiteScrapeJson: {
+          ...createBusiness().apifyWebsiteScrapeJson,
+          decisionMakers: [],
+          contactInfo: {
+            emails: [
+              {
+                email: 'info@acme.example',
+                context: 'Contact page',
+                pageUrl: 'https://acme.example/contact',
+              },
+            ],
+            phones: [],
+            addresses: [],
+          },
+        },
+      }),
+    );
+
+    await handleBusinessConvertJob(
+      logger,
+      makeJob({
+        businessId: 'business_1',
+        discoveryRunId: 'run_old',
+        icpProfileId: 'icp_1',
+        correlationId: 'corr_1',
+      }),
+      {
+        ...makeDeps(enqueueFeaturesCompute),
+        hunterAdapter: {
+          isConfigured: false,
+          searchDomainContacts: vi.fn(),
+        },
+      },
+    );
+
+    expect(dbMock.prisma.contactRecoveryItem.upsert).not.toHaveBeenCalled();
+    expect(txMock.lead.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        firstName: 'Unknown',
+        lastName: 'Contact',
+        email: 'info@acme.example',
+        businessEmail: 'info@acme.example',
+        status: 'new',
+      }),
+    });
+    expect(txMock.jobExecution.create).toHaveBeenCalledWith({
+      data: {
+        type: 'features.compute',
+        status: 'queued',
+        payload: {
+          leadId: 'lead_new_1',
+          icpProfileId: 'icp_1',
+          snapshotVersion: 1,
+          correlationId: 'corr_1',
+        },
+        leadId: 'lead_new_1',
+      },
+      select: { id: true },
+    });
+    expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).toHaveBeenCalledWith({
+      where: {
+        businessId: 'business_1',
+        discoveryRunId: 'run_old',
+        icpProfileId: 'icp_1',
+        primaryOutcomeCode: null,
+      },
+      data: {
+        primaryOutcomeCode: 'LEAD_CREATED',
+        primaryOutcomeAt: expect.any(Date),
+      },
+    });
+    expect(dbMock.prisma.contactRecoveryItem.deleteMany).toHaveBeenCalledWith({
+      where: {
+        businessId: 'business_1',
+        icpProfileId: 'icp_1',
+      },
+    });
+    expect(trackerMock.checkLeadTargetReached).toHaveBeenCalledWith('run_old', logger);
   });
 
   it('restores current ICP lineage and re-enters features when a reused lead lacks a current ICP score', async () => {
@@ -547,7 +670,7 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
       makeDeps(enqueueFeaturesCompute),
     );
 
-    expect(txMock.businessConversion.create).toHaveBeenCalledTimes(1);
+    expect(txMock.businessConversion.createMany).toHaveBeenCalledTimes(1);
     expect(txMock.businessContact.createMany).toHaveBeenCalledTimes(1);
     expect(dbMock.prisma.contactRecoveryItem.deleteMany).toHaveBeenCalledWith({
       where: {
@@ -616,6 +739,44 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
     );
   });
 
+  it('continues existing-business rediscovery when the business conversion already exists', async () => {
+    const enqueueFeaturesCompute = vi.fn();
+    dbMock.prisma.business.findUnique.mockResolvedValueOnce(
+      createBusiness({ discoveryRunId: 'run_1' }),
+    );
+    txMock.businessConversion.createMany.mockResolvedValueOnce({ count: 0 });
+
+    await handleBusinessConvertJob(
+      logger,
+      makeJob({
+        businessId: 'business_1',
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_1',
+        existingBusinessRediscovery: true,
+      }),
+      makeDeps(enqueueFeaturesCompute),
+    );
+
+    expect(txMock.businessConversion.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({ skipDuplicates: true }),
+    );
+    expect(txMock.businessContact.createMany).toHaveBeenCalledTimes(1);
+    expect(enqueueFeaturesCompute).toHaveBeenCalledWith({
+      runId: 'run_1',
+      leadId: 'lead_existing_1',
+      icpProfileId: 'icp_1',
+      snapshotVersion: 1,
+      correlationId: expect.any(String),
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: 'business_1',
+        existingLeadId: 'lead_existing_1',
+      }),
+      'BusinessConversion already exists for existing business rediscovery — skipping duplicate',
+    );
+  });
+
   it('treats same-ICP rediscovery as an explicit already-known no-op when a score already exists', async () => {
     const enqueueFeaturesCompute = vi.fn();
     dbMock.prisma.business.findUnique.mockResolvedValueOnce(
@@ -674,7 +835,7 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
       makeDeps(enqueueFeaturesCompute),
     );
 
-    expect(txMock.businessConversion.create).not.toHaveBeenCalled();
+    expect(txMock.businessConversion.createMany).not.toHaveBeenCalled();
     expect(txMock.lead.create).not.toHaveBeenCalled();
     expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).toHaveBeenCalledWith({
       where: {
@@ -726,7 +887,7 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
       makeDeps(enqueueFeaturesCompute),
     );
 
-    expect(txMock.businessConversion.create).not.toHaveBeenCalled();
+    expect(txMock.businessConversion.createMany).not.toHaveBeenCalled();
     expect(txMock.lead.create).not.toHaveBeenCalled();
     expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).toHaveBeenCalledWith({
       where: {
@@ -773,7 +934,7 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
       makeDeps(enqueueFeaturesCompute),
     );
 
-    expect(txMock.businessConversion.create).toHaveBeenCalledTimes(1);
+    expect(txMock.businessConversion.createMany).toHaveBeenCalledTimes(1);
     expect(txMock.lead.create).not.toHaveBeenCalled();
     expect(dbMock.prisma.discoveryAttributionAssignment.updateMany).toHaveBeenCalledWith({
       where: {

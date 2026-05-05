@@ -7,6 +7,7 @@ import type {
   NormalizedProviderResponse,
   SerpApiCommonRequest,
 } from './types.js';
+import { isNonBusinessWebsiteUrl } from '../utils/url.js';
 
 /* ------------------------------------------------------------------ */
 /* Config & constants                                                  */
@@ -213,12 +214,13 @@ function normalizePlace(
   const city =
     extractAddressComponent(place.addressComponents, 'locality', 'longText') ??
     extractAddressComponent(place.addressComponents, 'administrative_area_level_1', 'longText');
+  const websiteUrl = normalizeString(place.websiteUri);
 
   return {
     id: place.id ?? `gp-${name}`,
     name,
     url: normalizeString(place.googleMapsUri),
-    websiteUrl: normalizeString(place.websiteUri),
+    websiteUrl: websiteUrl && !isNonBusinessWebsiteUrl(websiteUrl) ? websiteUrl : null,
     address: normalizeString(place.formattedAddress),
     phone,
     city,

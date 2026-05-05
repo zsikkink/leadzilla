@@ -17,14 +17,13 @@ import {
   Settings,
   Shield,
   ShieldCheck,
-  Sliders,
   Star,
   Target,
   Timer,
-  UserCog,
   X,
   Zap,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -37,10 +36,6 @@ import {
   toDiscoveryCountryCode,
   toDiscoveryCountryCodes,
 } from '../../src/lib/countries.js';
-import {
-  DEFAULT_MESSAGING_ROLE,
-  DEFAULT_MESSAGING_SYSTEM_PROMPT,
-} from '../../src/lib/messaging-defaults.js';
 // NOTE: Global messagingInstructions removed — per-ICP instructions on ICP detail page are the canonical source.
 import { buildPipelineSettingsSavePlan } from '../../src/lib/pipeline-settings-save-plan.js';
 import { cn } from '../../src/lib/utils.js';
@@ -94,26 +89,11 @@ type PipelineSetting = SliderSetting | NumberSetting | TierBandSetting;
 const PIPELINE_SETTINGS: PipelineSetting[] = [
   {
     type: 'slider',
-    key: 'deterministicAiBlend',
-    label: 'Deterministic / AI Blend',
-    description:
-      'How much to trust rules vs ML model. Shift toward AI as model matures with more labeled data.',
-    spectrum: '0 = pure rules, 100 = pure ML',
-    icon: Sliders,
-    iconColor: 'text-zbooni-teal',
-    min: 0,
-    max: 100,
-    step: 5,
-    defaultValue: 60,
-    format: (v: number) => `${v}% rules / ${100 - v}% AI`,
-  },
-  {
-    type: 'slider',
     key: 'scoreQualificationThreshold',
     label: 'Score Qualification Threshold',
     description:
-      'Leads scoring below this threshold are automatically rejected. Higher = fewer but higher-quality leads. Lower = more volume.',
-    spectrum: '0 = message everyone, 1.0 = ultra-selective',
+      'Minimum final score required for qualification. AI score is used when available; deterministic score is the fallback.',
+    spectrum: '0 = qualify almost everything, 1.0 = ultra-selective',
     icon: Target,
     iconColor: 'text-zbooni-green',
     min: 0,
@@ -155,8 +135,8 @@ const PIPELINE_SETTINGS: PipelineSetting[] = [
     key: 'scoreTierBands',
     label: 'Score Tier Bands',
     description:
-      'Visual classification only. Defines LOW / MED / HIGH thresholds for the dashboard.',
-    spectrum: 'LOW < threshold, threshold <= MED < upper, HIGH >= upper',
+      'Visual labels only. Defines LOW / MEDIUM / HIGH badges and does not change qualification.',
+    spectrum: 'Qualification is controlled by Score Qualification Threshold above',
     icon: Gauge,
     iconColor: 'text-purple-400',
     defaultValue: { low: 0.34, med: 0.67, high: 0.67 },
@@ -468,7 +448,6 @@ function SettingTierBands({
 
 // ── Settings state type ────────────────────────────────────────────────
 interface SettingsState {
-  deterministicAiBlend: number;
   scoreQualificationThreshold: number;
   enrichmentThreshold: number;
   min_review_count: number;
@@ -482,7 +461,6 @@ interface SettingsState {
 
 function getDefaultSettings(): SettingsState {
   return {
-    deterministicAiBlend: 60,
     scoreQualificationThreshold: 0.5,
     enrichmentThreshold: 0.3,
     min_review_count: 15,
@@ -497,7 +475,6 @@ function getDefaultSettings(): SettingsState {
 
 // Keys that exist in SettingsState (for type-safe lookup)
 const NUMERIC_SETTING_KEYS = new Set([
-  'deterministicAiBlend',
   'scoreQualificationThreshold',
   'enrichmentThreshold',
   'min_review_count',
@@ -516,10 +493,7 @@ const ADDITIONAL_SETTING_LABELS: Record<string, string> = {
   auto_approve_enabled: 'Auto-Approve Messages',
   auto_approve_score_min: 'Auto-Approve Min Score',
   auto_approve_score_max: 'Auto-Approve Max Score',
-  auto_draft_enabled: 'Auto Draft Messages',
-  auto_draft_min_score: 'Auto Draft Min Score',
-  messagingRole: 'Messaging Role',
-  messagingSystemPrompt: 'Messaging System Prompt',
+  messaging_manual_approval_only: 'Manual Approval Only',
 };
 
 function getErrorMessage(error: unknown): string {
@@ -554,7 +528,7 @@ function CountriesCitiesManager({
 }: {
   apiClient: {
     listPipelineSettings: () => Promise<{ items: Array<{ key: string; value: unknown }> }>;
-    updatePipelineSetting: (key: string, value: unknown) => Promise<unknown>;
+    updatePipelineSetting: (key: string, value: unknown) => Promise<{ value: unknown }>;
     listIcps: (query?: { page: number; pageSize: number; q?: string | undefined; isActive?: boolean | undefined }) => Promise<{ items: Array<{ targetCountries: string[] }> }>;
   };
 }) {
@@ -614,8 +588,8 @@ function CountriesCitiesManager({
   const save = async (data: CountryCityData) => {
     setSaving(true);
     try {
-      await apiClient.updatePipelineSetting('countryCities', data);
-      setCountryCities(data);
+      const saved = await apiClient.updatePipelineSetting('countryCities', data);
+      setCountryCities(buildDiscoveryCountryCities(saved.value));
       toast.success('Countries & cities saved');
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Failed to save');
@@ -901,13 +875,10 @@ function CountriesCitiesManager({
 export default function ControlsSettingsPage() {
   const { apiClient, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [settings, setSettings] = useState<SettingsState>(getDefaultSettings);
+  const [manualApprovalOnly, setManualApprovalOnly] = useState(false);
   const [autoApproveEnabled, setAutoApproveEnabled] = useState(false);
   const [autoApproveScoreMin, setAutoApproveScoreMin] = useState(0.5);
   const [autoApproveScoreMax, setAutoApproveScoreMax] = useState(1.0);
-  const [autoDraftEnabled, setAutoDraftEnabled] = useState(false);
-  const [autoDraftMinScore, setAutoDraftMinScore] = useState(60);
-  const [messagingRole, setMessagingRole] = useState('');
-  const [messagingSystemPrompt, setMessagingSystemPrompt] = useState('');
   const [hasChanges, setHasChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingSettings, setIsLoadingSettings] = useState(true);
@@ -922,16 +893,15 @@ export default function ControlsSettingsPage() {
     try {
       const { items } = await apiClient.listPipelineSettings();
       const newSettings = { ...getDefaultSettings() };
+      let nextManualApprovalOnly = false;
       let nextAutoApproveEnabled = false;
       let nextAutoApproveScoreMin = 0.5;
       let nextAutoApproveScoreMax = 1.0;
-      let nextAutoDraftEnabled = false;
-      let nextAutoDraftMinScore = 60;
-      let nextMessagingRole = '';
-      let nextMessagingSystemPrompt = '';
 
       for (const item of items) {
-        if (item.key === 'auto_approve_enabled') {
+        if (item.key === 'messaging_manual_approval_only') {
+          nextManualApprovalOnly = item.value === true || item.value === 'true';
+        } else if (item.key === 'auto_approve_enabled') {
           nextAutoApproveEnabled = item.value === true || item.value === 'true';
         } else if (item.key === 'auto_approve_score_min') {
           const value = Number(item.value);
@@ -943,17 +913,6 @@ export default function ControlsSettingsPage() {
           if (!Number.isNaN(value)) {
             nextAutoApproveScoreMax = value;
           }
-        } else if (item.key === 'auto_draft_enabled') {
-          nextAutoDraftEnabled = item.value === true || item.value === 'true';
-        } else if (item.key === 'auto_draft_min_score') {
-          const value = Number(item.value);
-          if (!Number.isNaN(value)) {
-            nextAutoDraftMinScore = value;
-          }
-        } else if (item.key === 'messagingRole') {
-          nextMessagingRole = String(item.value ?? '');
-        } else if (item.key === 'messagingSystemPrompt') {
-          nextMessagingSystemPrompt = String(item.value ?? '');
         } else if (item.key === 'scoreTierBands') {
           const val = item.value as {
             low?: number | undefined;
@@ -976,23 +935,17 @@ export default function ControlsSettingsPage() {
       }
 
       setSettings(newSettings);
+      setManualApprovalOnly(nextManualApprovalOnly);
       setAutoApproveEnabled(nextAutoApproveEnabled);
       setAutoApproveScoreMin(nextAutoApproveScoreMin);
       setAutoApproveScoreMax(nextAutoApproveScoreMax);
-      setAutoDraftEnabled(nextAutoDraftEnabled);
-      setAutoDraftMinScore(nextAutoDraftMinScore);
-      setMessagingRole(nextMessagingRole);
-      setMessagingSystemPrompt(nextMessagingSystemPrompt);
       setHasChanges(false);
       loadedSettingsRef.current = {
         ...newSettings,
+        messaging_manual_approval_only: nextManualApprovalOnly,
         auto_approve_enabled: nextAutoApproveEnabled,
         auto_approve_score_min: nextAutoApproveScoreMin,
         auto_approve_score_max: nextAutoApproveScoreMax,
-        auto_draft_enabled: nextAutoDraftEnabled,
-        auto_draft_min_score: nextAutoDraftMinScore,
-        messagingRole: nextMessagingRole,
-        messagingSystemPrompt: nextMessagingSystemPrompt,
       };
     } catch (error: unknown) {
       loadedSettingsRef.current = null;
@@ -1045,13 +998,10 @@ export default function ControlsSettingsPage() {
 
     const nextSettings = {
       ...settings,
+      messaging_manual_approval_only: manualApprovalOnly,
       auto_approve_enabled: autoApproveEnabled,
       auto_approve_score_min: autoApproveScoreMin,
       auto_approve_score_max: autoApproveScoreMax,
-      auto_draft_enabled: autoDraftEnabled,
-      auto_draft_min_score: autoDraftMinScore,
-      messagingRole,
-      messagingSystemPrompt,
     };
 
     const saveTargets = buildPipelineSettingsSavePlan({
@@ -1132,22 +1082,16 @@ export default function ControlsSettingsPage() {
     autoApproveEnabled,
     autoApproveScoreMax,
     autoApproveScoreMin,
-    autoDraftEnabled,
-    autoDraftMinScore,
-    messagingRole,
-    messagingSystemPrompt,
+    manualApprovalOnly,
     settings,
   ]);
 
   const handleReset = useCallback(() => {
     setSettings(getDefaultSettings());
+    setManualApprovalOnly(false);
     setAutoApproveEnabled(false);
     setAutoApproveScoreMin(0.5);
     setAutoApproveScoreMax(1.0);
-    setAutoDraftEnabled(false);
-    setAutoDraftMinScore(60);
-    setMessagingRole('');
-    setMessagingSystemPrompt('');
     setHasChanges(true);
     toast.info('Settings reset to defaults — click Save to persist');
   }, []);
@@ -1260,7 +1204,7 @@ export default function ControlsSettingsPage() {
           icon={Zap}
           iconColor="text-zbooni-green"
           bgColor="bg-zbooni-green/10"
-          label="Pipeline Providers"
+          label="Provider Capabilities"
         >
           <div className="space-y-2">
             {[
@@ -1279,6 +1223,9 @@ export default function ControlsSettingsPage() {
                 <span className="text-[10px] text-muted-foreground/40">{provider.desc}</span>
               </div>
             ))}
+            <p className="pt-1 text-[10px] leading-relaxed text-muted-foreground/40">
+              Capability list only. Live provider health is not wired on this screen.
+            </p>
           </div>
         </StatusCard>
 
@@ -1287,7 +1234,7 @@ export default function ControlsSettingsPage() {
           icon={AlertTriangle}
           iconColor="text-yellow-400"
           bgColor="bg-yellow-500/10"
-          label="DLQ Depth Placeholder"
+          label="DLQ Depth"
         >
           <div className="flex flex-col items-center py-2">
             <div className="flex items-center gap-2">
@@ -1295,7 +1242,7 @@ export default function ControlsSettingsPage() {
               <span className="text-2xl font-extrabold tracking-tight text-muted-foreground/60">--</span>
             </div>
             <p className="mt-1 text-[10px] font-medium text-muted-foreground/40">
-              Live queue depth is not wired on this screen
+              Not wired on this screen yet
             </p>
           </div>
         </StatusCard>
@@ -1322,122 +1269,19 @@ export default function ControlsSettingsPage() {
         Qualified leads do not auto-enter messaging. Operators generate drafts from Leads, and sending then depends on approval or auto-approval settings.
       </div>
 
-      {/* ── AI Role / Identity ──────────────────────────────────────── */}
-      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-500/10">
-            <UserCog className="h-4 w-4 text-purple-400" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold tracking-tight">AI Role / Identity</h2>
-            <p className="text-[11px] text-muted-foreground/50">
-              Defines who the AI is, its persona, and behavior when writing messages
-            </p>
-          </div>
+      <div className="flex flex-col gap-3 rounded-2xl border border-zbooni-teal/25 bg-zbooni-teal/5 px-4 py-3 text-sm shadow-sm sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="font-semibold text-foreground">Outreach prompt controls moved to Prompt Center</p>
+          <p className="mt-0.5 text-xs text-muted-foreground/60">
+            Edit global outreach role and instructions there. This page now keeps operational pipeline settings only.
+          </p>
         </div>
-        {isLoadingSettings ? (
-          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground/50">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading...
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <textarea
-              value={messagingRole}
-              onChange={(e) => {
-                setMessagingRole(e.target.value);
-                setHasChanges(true);
-              }}
-              rows={6}
-              className="w-full resize-y rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none"
-              placeholder="Set a custom role. Leave empty to use the default role."
-              aria-label="AI Role"
-            />
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setMessagingRole(DEFAULT_MESSAGING_ROLE);
-                  setHasChanges(true);
-                }}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
-              >
-                Use Default Template
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setMessagingRole('');
-                  setHasChanges(true);
-                  toast.info('Role reset to default — click Save to persist');
-                }}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
-              >
-                <RotateCcw className="h-3 w-3" />
-                Clear Custom Role
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* ── AI System Prompt ──────────────────────────────────────────── */}
-      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zbooni-teal/10">
-            <Sliders className="h-4 w-4 text-zbooni-teal" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold tracking-tight">AI System Prompt</h2>
-            <p className="text-[11px] text-muted-foreground/50">
-              Message structure, templates, ICP features, rules, and tone
-            </p>
-          </div>
-        </div>
-        {isLoadingSettings ? (
-          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground/50">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading...
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <textarea
-              value={messagingSystemPrompt}
-              onChange={(e) => {
-                setMessagingSystemPrompt(e.target.value);
-                setHasChanges(true);
-              }}
-              rows={12}
-              className="w-full resize-y rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none font-mono text-[12px] leading-relaxed"
-              placeholder="Set a custom system prompt. Leave empty to use the default system prompt."
-              aria-label="AI System Prompt"
-            />
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setMessagingSystemPrompt(DEFAULT_MESSAGING_SYSTEM_PROMPT);
-                  setHasChanges(true);
-                }}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
-              >
-                Use Default Template
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setMessagingSystemPrompt('');
-                  setHasChanges(true);
-                  toast.info('System prompt reset to default — click Save to persist');
-                }}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
-              >
-                <RotateCcw className="h-3 w-3" />
-                Clear Custom Prompt
-              </button>
-            </div>
-          </div>
-        )}
+        <Link
+          href="/dashboard/prompts"
+          className="inline-flex items-center justify-center rounded-lg bg-zbooni-teal/15 px-3 py-2 text-xs font-semibold text-zbooni-teal transition-colors hover:bg-zbooni-teal/25"
+        >
+          Open Prompt Center
+        </Link>
       </div>
 
       {/* ── Pipeline Settings ───────────────────────────────────────── */}
@@ -1574,62 +1418,40 @@ export default function ControlsSettingsPage() {
                 </div>
               </div>
 
-              {/* Auto Draft Messages */}
+              {/* Manual Approval Only */}
               <div className="rounded-xl border border-border/30 bg-zbooni-dark/40 p-4 transition-colors hover:border-border/50">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-start gap-3">
                     <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.04]">
-                      <Mail className="h-4 w-4 text-blue-400" />
+                      <Shield className="h-4 w-4 text-yellow-400" />
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-bold tracking-tight">Auto Draft Messages</p>
+                      <p className="text-sm font-bold tracking-tight">Manual Approval Only</p>
                       <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground/50">
-                        Automatically generate message drafts for newly qualified leads
+                        Require operator approval before generated drafts can be sent. Overrides auto-approve when enabled.
                       </p>
                     </div>
                   </div>
                   <button
                     type="button"
                     role="switch"
-                    aria-checked={autoDraftEnabled}
+                    aria-checked={manualApprovalOnly}
                     onClick={() => {
-                      setAutoDraftEnabled(!autoDraftEnabled);
+                      setManualApprovalOnly(!manualApprovalOnly);
                       setHasChanges(true);
                     }}
                     className={cn(
                       'relative inline-flex h-6 w-12 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors',
-                      autoDraftEnabled ? 'bg-blue-500' : 'bg-muted/40',
+                      manualApprovalOnly ? 'bg-yellow-500' : 'bg-muted/40',
                     )}
                   >
                     <span
                       className={cn(
                         'pointer-events-none absolute h-5 w-5 rounded-full bg-white shadow-lg transition-transform',
-                        autoDraftEnabled ? 'translate-x-[26px]' : 'translate-x-0',
+                        manualApprovalOnly ? 'translate-x-[26px]' : 'translate-x-0',
                       )}
                     />
                   </button>
-                </div>
-                <div className="mt-3 space-y-2 pl-11">
-                  <p className="text-[10px] font-medium text-muted-foreground/40">Minimum score for auto-draft:</p>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      step={1}
-                      value={autoDraftMinScore}
-                      onChange={(e) => {
-                        const n = Number(e.target.value);
-                        if (!Number.isNaN(n) && n >= 0 && n <= 100) {
-                          setAutoDraftMinScore(n);
-                          setHasChanges(true);
-                        }
-                      }}
-                      className="w-20 rounded-md border border-border/30 bg-white/[0.04] px-2 py-1 text-center font-mono text-xs font-bold tabular-nums text-foreground focus:border-zbooni-teal/50 focus:outline-none"
-                      aria-label="Minimum score for auto-draft"
-                    />
-                    <span className="text-[10px] text-muted-foreground/40">out of 100</span>
-                  </div>
                 </div>
               </div>
 

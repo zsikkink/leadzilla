@@ -23,6 +23,10 @@ import { getQualificationThreshold } from '../scoring/shared.js';
 
 const SAFETY_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
 
+function formatCountLabel(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 function extractStringFieldFromJson(
   value: Prisma.JsonValue | null | undefined,
   key: string,
@@ -56,6 +60,10 @@ interface PgBossPendingJobRow {
   state: string;
   count: number;
 }
+
+type DiscoveryAttributionOutcomeCode =
+  | 'EXISTING_BUSINESS_NO_UNIQUE_ACTIVE_SAME_BUSINESS_LEAD'
+  | 'EXISTING_SAME_BUSINESS_LEAD_REUSED';
 
 interface StaleDiscoveryPipelineJobRow {
   id: string;
@@ -447,7 +455,7 @@ export async function tryFinalizeDiscoveryRun(
     const newBusinesses = typeof result.newBusinesses === 'number' ? result.newBusinesses : 0;
     if (newBusinesses === 0 && totalBusinesses > 0) {
       // No new businesses to process (all already known) — finalize successfully.
-      await finalizeRun(possibleRunId, result, 'completed', 0, 0, 0, 0, 0, logger, null, totalBusinesses, {});
+      await finalizeRun(possibleRunId, result, 'completed', 0, 0, 0, 0, 0, 0, logger, null, totalBusinesses, {});
       return;
     }
     if (totalBusinesses === 0 || isTimedOut) {
@@ -456,6 +464,7 @@ export async function tryFinalizeDiscoveryRun(
         possibleRunId,
         result,
         'failed',
+        0,
         0,
         0,
         0,
@@ -527,25 +536,160 @@ export async function tryFinalizeDiscoveryRun(
     const recoveryRows = [...runOwnedRecoveryRows, ...sharedExistingRecoveryRows];
     const businessesWithRecovery = new Set(recoveryRows.map((row) => row.businessId));
     recoveryTerminalCount = businessesWithRecovery.size;
-    for (const row of recoveryRows) {
-      disqualReasons[row.reason] = (disqualReasons[row.reason] ?? 0) + 1;
-    }
 
     if (newQualifiedOrPendingIds.length > 0) {
-      const conversions = await prisma.businessConversion.findMany({
-        where: { businessId: { in: newQualifiedOrPendingIds } },
-        select: { businessId: true, leadId: true, metadata: true },
-      });
+      const [conversions, attributionOutcomes] = await Promise.all([
+        prisma.businessConversion.findMany({
+          where: { businessId: { in: newQualifiedOrPendingIds } },
+          select: { businessId: true, leadId: true, metadata: true },
+        }),
+        prisma.discoveryAttributionAssignment.findMany({
+          where: {
+            discoveryRunId: possibleRunId,
+            businessId: { in: newQualifiedOrPendingIds },
+            primaryOutcomeCode: {
+              in: [
+                'EXISTING_BUSINESS_NO_UNIQUE_ACTIVE_SAME_BUSINESS_LEAD',
+                'EXISTING_SAME_BUSINESS_LEAD_REUSED',
+              ],
+            },
+          },
+          select: {
+            businessId: true,
+            icpProfileId: true,
+            primaryOutcomeCode: true,
+          },
+        }),
+      ]);
+      const attributionOutcomeByBusinessId = new Map(
+        attributionOutcomes
+          .filter((row): row is {
+            businessId: string;
+            icpProfileId: string;
+            primaryOutcomeCode: DiscoveryAttributionOutcomeCode;
+          } => (
+            row.primaryOutcomeCode === 'EXISTING_BUSINESS_NO_UNIQUE_ACTIVE_SAME_BUSINESS_LEAD'
+            || row.primaryOutcomeCode === 'EXISTING_SAME_BUSINESS_LEAD_REUSED'
+          ))
+          .map((row) => [row.businessId, row.primaryOutcomeCode]),
+      );
+      const attributionIcpByBusinessId = new Map(
+        attributionOutcomes
+          .filter((row) => (
+            typeof row.icpProfileId === 'string'
+            && row.icpProfileId.length > 0
+            && row.primaryOutcomeCode === 'EXISTING_SAME_BUSINESS_LEAD_REUSED'
+          ))
+          .map((row) => [row.businessId, row.icpProfileId]),
+      );
       const runConversions = conversions.filter(
         (c) => extractStringFieldFromJson(c.metadata as Prisma.JsonValue | null, 'discoveryRunId') === possibleRunId,
       );
       const businessesWithConversion = new Set(runConversions.map((c) => c.businessId));
       const leadIds = [...new Set(runConversions.map((c) => c.leadId))];
 
-      const noConversionCount = newQualifiedOrPendingIds.filter(
+      const noConversionIds = newQualifiedOrPendingIds.filter(
         (id) => !businessesWithConversion.has(id) && !businessesWithRecovery.has(id),
-      ).length;
-      inFlightItems += noConversionCount;
+      );
+      const noUniqueExistingIds = noConversionIds.filter(
+        (id) => attributionOutcomeByBusinessId.get(id) === 'EXISTING_BUSINESS_NO_UNIQUE_ACTIVE_SAME_BUSINESS_LEAD',
+      );
+      const reusedExistingIds = noConversionIds.filter(
+        (id) => attributionOutcomeByBusinessId.get(id) === 'EXISTING_SAME_BUSINESS_LEAD_REUSED',
+      );
+      const unresolvedNoConversionCount = noConversionIds.length - noUniqueExistingIds.length - reusedExistingIds.length;
+      existingAlreadyKnownTerminalCount += noUniqueExistingIds.length;
+      inFlightItems += unresolvedNoConversionCount;
+
+      if (reusedExistingIds.length > 0) {
+        const reusedIcpIds = [
+          ...new Set(
+            reusedExistingIds
+              .map((id) => attributionIcpByBusinessId.get(id) ?? runIcpProfileId)
+              .filter((id): id is string => typeof id === 'string' && id.length > 0),
+          ),
+        ];
+        if (reusedIcpIds.length === 0) {
+          inFlightItems += reusedExistingIds.length;
+        } else {
+          const activeExistingLeadRows = await prisma.lead.findMany({
+            where: {
+              businessId: { in: reusedExistingIds },
+              deletedAt: null,
+            },
+            select: {
+              id: true,
+              businessId: true,
+            },
+          });
+          const activeExistingLeadIds = activeExistingLeadRows.map((lead) => lead.id);
+          const [drafts, scorePredictions] = activeExistingLeadIds.length > 0
+            ? await Promise.all([
+                prisma.messageDraft.findMany({
+                  where: {
+                    leadId: { in: activeExistingLeadIds },
+                    icpProfileId: { in: reusedIcpIds },
+                  },
+                  select: {
+                    id: true,
+                    leadId: true,
+                    icpProfileId: true,
+                  },
+                }),
+                prisma.leadScorePrediction.findMany({
+                  where: {
+                    leadId: { in: activeExistingLeadIds },
+                    icpProfileId: { in: reusedIcpIds },
+                  },
+                  select: {
+                    leadId: true,
+                    icpProfileId: true,
+                    scoreBand: true,
+                    blendedScore: true,
+                    predictedAt: true,
+                    createdAt: true,
+                  },
+                  orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }],
+                }),
+              ])
+            : [[], []];
+
+          const activeLeadsByBusinessId = new Map<string, Array<{ id: string }>>();
+          for (const lead of activeExistingLeadRows) {
+            if (!lead.businessId) {
+              continue;
+            }
+            const existing = activeLeadsByBusinessId.get(lead.businessId) ?? [];
+            existing.push({ id: lead.id });
+            activeLeadsByBusinessId.set(lead.businessId, existing);
+          }
+
+          const draftKeys = new Set(drafts.map((draft) => `${draft.leadId}:${draft.icpProfileId}`));
+          const scoreKeys = new Set(
+            scorePredictions.map((prediction) => `${prediction.leadId}:${prediction.icpProfileId}`),
+          );
+          for (const businessId of reusedExistingIds) {
+            const targetIcpProfileId = attributionIcpByBusinessId.get(businessId) ?? runIcpProfileId;
+            if (!targetIcpProfileId) {
+              inFlightItems++;
+              continue;
+            }
+            const activeLeads = activeLeadsByBusinessId.get(businessId) ?? [];
+            if (activeLeads.length !== 1) {
+              inFlightItems++;
+              continue;
+            }
+
+            const leadId = activeLeads[0]!.id;
+            const leadIcpKey = `${leadId}:${targetIcpProfileId}`;
+            if (draftKeys.has(leadIcpKey) || scoreKeys.has(leadIcpKey)) {
+              existingAlreadyKnownTerminalCount++;
+            } else {
+              inFlightItems++;
+            }
+          }
+        }
+      }
 
       if (leadIds.length > 0) {
         const leads = await prisma.lead.findMany({
@@ -708,9 +852,15 @@ export async function tryFinalizeDiscoveryRun(
       ? `Safety timeout: ${inFlightItems} items still in flight after ${SAFETY_TIMEOUT_MS / 60000}min`
       : null;
 
-    const disqualOrRecoveryCount = disqualifiedIds.size + recoveryTerminalCount;
-    const disqualNote = completedLeads === 0 && disqualOrRecoveryCount > 0
-      ? `0 leads produced — all ${disqualOrRecoveryCount} of ${pipelineBusinessIds.length} businesses reached terminal disqualification/recovery outcomes`
+    const terminalNoLeadCount = disqualifiedIds.size + recoveryTerminalCount + rejectedLeads + failedLeads;
+    const disqualNote = completedLeads === 0 && terminalNoLeadCount > 0
+      ? [
+          '0 converted leads',
+          `${formatCountLabel(disqualifiedIds.size, 'business', 'businesses')} disqualified`,
+          `${recoveryTerminalCount} sent to contact recovery`,
+          formatCountLabel(rejectedLeads, 'rejected lead'),
+          formatCountLabel(failedLeads, 'failed lead'),
+        ].join(' — ')
       : null;
 
     const failedLeadsNote = completedLeads === 0 && failedLeads > 0 && disqualifiedIds.size === 0
@@ -725,7 +875,8 @@ export async function tryFinalizeDiscoveryRun(
       messageDraftedLeads,
       rejectedLeads,
       failedLeads,
-      disqualifiedIds.size + recoveryTerminalCount,
+      disqualifiedIds.size,
+      recoveryTerminalCount,
       logger,
       disqualNote ?? failedLeadsNote ?? timeoutNote,
       totalBusinesses,
@@ -753,15 +904,17 @@ export async function tryFinalizeDiscoveryRun(
           failedItems: failedLeads,
           leadFailedItems: failedLeads,
           rejectedLeads,
+          sentToRecovery: recoveryTerminalCount,
           // Full funnel counts for frontend display
           totalFound: totalBusinesses,
           alreadyKnown: alreadyKnownBiz,
           newFound: newBiz,
-          disqualified: disqualifiedIds.size + recoveryTerminalCount,
+          disqualified: disqualifiedIds.size,
           converted: completedLeads,
           outcome: {
             businessesFound: totalBusinesses,
-            businessesDisqualified: disqualifiedIds.size + recoveryTerminalCount,
+            businessesDisqualified: disqualifiedIds.size,
+            businessesSentToRecovery: recoveryTerminalCount,
             leadsCreated: completedLeads,
             rejectedLeads,
             messagesDrafted: messageDraftedLeads,
@@ -817,6 +970,7 @@ export async function checkStaleDiscoveryRuns(logger: TrackerLogger): Promise<vo
         run.id,
         result,
         'failed',
+        0,
         0,
         0,
         0,
@@ -945,6 +1099,7 @@ async function finalizeRun(
   rejectedLeads: number,
   failedLeads: number,
   disqualifiedCount: number,
+  sentToRecoveryCount: number,
   logger: TrackerLogger,
   error?: string | null | undefined,
   totalBusinesses: number = 0,
@@ -956,7 +1111,7 @@ async function finalizeRun(
   const newBusinesses = toNonNegativeCount(currentResult.newBusinesses);
   const alreadyKnown = Math.max(0, totalBusinesses - newBusinesses);
   const converted = completedLeads;
-  const terminalItems = completedLeads + rejectedLeads + failedLeads + disqualifiedCount;
+  const terminalItems = completedLeads + rejectedLeads + failedLeads + disqualifiedCount + sentToRecoveryCount;
 
   // Atomic update: only finalize if still running (prevents double-finalization)
   const updated = await prisma.jobExecution.updateMany({
@@ -974,6 +1129,7 @@ async function finalizeRun(
         leadFailedItems: failedLeads,
         completedLeads,
         rejectedLeads,
+        sentToRecovery: sentToRecoveryCount,
         pipelineFailedItems: failedLeads,
         // Full funnel counts for frontend display
         totalFound: totalBusinesses,
@@ -984,6 +1140,7 @@ async function finalizeRun(
         outcome: {
           businessesFound: totalBusinesses,
           businessesDisqualified: disqualifiedCount,
+          businessesSentToRecovery: sentToRecoveryCount,
           leadsCreated: converted,
           rejectedLeads,
           messagesDrafted: messageDraftedLeads,

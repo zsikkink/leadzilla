@@ -1,8 +1,4 @@
-import {
-  getTaskCapForLeadTarget,
-  previewIndustryMappings,
-  seedSearchTasks,
-} from '@lead-flood/discovery';
+import { previewIndustryMappings, seedSearchTasks } from '@lead-flood/discovery';
 import type { IcpSeedConfig, DiscoveryRuntimeConfig } from '@lead-flood/discovery';
 import type {
   DiscoveryCountryCode,
@@ -10,7 +6,6 @@ import type {
   SearchTaskType,
 } from '@lead-flood/discovery';
 import { normalizeCountryCodes } from '@lead-flood/contracts';
-import { loadConversionRate, loadSearchEfficiency } from '../utils/pipeline-settings.js';
 import { prisma, toInputJson } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
@@ -40,7 +35,10 @@ export interface DiscoverySeedJobPayload {
   /** Durable per-shard submission record used by outbox dispatch and tracking. */
   jobExecutionId?: string | undefined;
   profile?: 'default' | 'small';
+  /** Per-shard search task seed cap. */
   maxTasks?: number;
+  /** Whole-run search task processing budget. */
+  runMaxTasks?: number;
   maxPages?: number;
   bucket?: string;
   taskTypes?: SearchTaskType[];
@@ -77,38 +75,37 @@ const ALLOWED_TASK_TYPES = new Set<SearchTaskType>([
   'SERP_MAPS_LOCAL',
 ]);
 
-const DEFAULT_CONVERSION_RATE = 0.10; // conservative cold-start
-const DEFAULT_SEARCH_EFFICIENCY = 10; // businesses per task (post R1+R2)
+async function getApiSeedShardGate(discoveryRunId: string): Promise<{
+  hasFailedShard: boolean;
+  hasIncompleteShard: boolean;
+}> {
+  const [failedShardCount, incompleteShardCount] = await Promise.all([
+    prisma.jobExecution.count({
+      where: {
+        type: 'discovery.seed',
+        status: 'failed',
+        payload: {
+          path: ['discoveryRunId'],
+          equals: discoveryRunId,
+        },
+      },
+    }),
+    prisma.jobExecution.count({
+      where: {
+        type: 'discovery.seed',
+        status: { in: ['queued', 'running'] },
+        payload: {
+          path: ['discoveryRunId'],
+          equals: discoveryRunId,
+        },
+      },
+    }),
+  ]);
 
-/**
- * Compute an adaptive search task budget using two rates:
- * - conversionRate: qualified leads per unique business
- * - searchEfficiency: unique businesses per search task
- */
-async function computeAdaptiveSearchTaskBudget(
-  desiredLeads: number,
-  icpProfileId: string | undefined,
-): Promise<{ maxTasks: number; targetUniqueBusinesses: number }> {
-  let conversionRate = DEFAULT_CONVERSION_RATE;
-  let searchEfficiency = DEFAULT_SEARCH_EFFICIENCY;
-
-  if (icpProfileId) {
-    const [storedConversion, storedEfficiency] = await Promise.all([
-      loadConversionRate(icpProfileId),
-      loadSearchEfficiency(icpProfileId),
-    ]);
-    if (storedConversion !== null) conversionRate = storedConversion;
-    if (storedEfficiency !== null) searchEfficiency = storedEfficiency;
-  }
-
-  // 5x buffer: auto-cancel (checkLeadTargetReached) stops early when enough
-  // leads exist, so over-provisioning tasks is safe and prevents runs from
-  // exhausting tasks before reaching the lead target.
-  const targetBusinesses = Math.ceil(desiredLeads / conversionRate) * 5;
-  const maxTasks = Math.ceil(targetBusinesses / searchEfficiency);
-  const targetUniqueBusinesses = Math.ceil(targetBusinesses);
-
-  return { maxTasks, targetUniqueBusinesses };
+  return {
+    hasFailedShard: failedShardCount > 0,
+    hasIncompleteShard: incompleteShardCount > 0,
+  };
 }
 
 function withSeedOverrides(
@@ -198,7 +195,7 @@ export async function handleDiscoverySeedJob(
 ): Promise<void> {
   const correlationId = job.data.correlationId ?? job.id;
   const startedAt = Date.now();
-  let seedConfig = withSeedOverrides(dependencies.config, job.data);
+  const seedConfig = withSeedOverrides(dependencies.config, job.data);
   const shouldEnqueueRunTasks = job.data.enqueueRunTasks ?? job.data.reason !== 'api';
 
   try {
@@ -258,20 +255,22 @@ export async function handleDiscoverySeedJob(
         // User-selected countries/cities override ICP profile defaults.
         // The job payload carries the user's filter from the API request.
         const userCountries = job.data.countries ?? [];
-        const effectiveCountries = userCountries.length > 0
-          ? userCountries
-          : icpProfile.targetCountries;
+        const effectiveCountries =
+          userCountries.length > 0 ? userCountries : icpProfile.targetCountries;
 
         // Extract categoryOverrides from ICP metadataJson (Change 7C)
-        const metadata = icpProfile.metadataJson && typeof icpProfile.metadataJson === 'object'
-          && !Array.isArray(icpProfile.metadataJson)
-          ? icpProfile.metadataJson as Record<string, unknown>
-          : {};
-        const categoryOverrides = metadata.categoryOverrides &&
+        const metadata =
+          icpProfile.metadataJson &&
+          typeof icpProfile.metadataJson === 'object' &&
+          !Array.isArray(icpProfile.metadataJson)
+            ? (icpProfile.metadataJson as Record<string, unknown>)
+            : {};
+        const categoryOverrides =
+          metadata.categoryOverrides &&
           typeof metadata.categoryOverrides === 'object' &&
           !Array.isArray(metadata.categoryOverrides)
-          ? metadata.categoryOverrides as Record<string, { add?: string[]; remove?: string[] }>
-          : undefined;
+            ? (metadata.categoryOverrides as Record<string, { add?: string[]; remove?: string[] }>)
+            : undefined;
         const requestedSearchCategories = normalizeRequestedSearchCategories(
           job.data.searchCategories,
         );
@@ -285,6 +284,7 @@ export async function handleDiscoverySeedJob(
         icpSeedConfig = {
           targetIndustries: icpProfile.targetIndustries,
           targetCountries: effectiveCountries,
+          searchProvider: dependencies.config.searchProvider,
           ...(job.data.cities !== undefined ? { cities: job.data.cities } : {}),
           ...(effectiveCategoryOverrides ? { categoryOverrides: effectiveCategoryOverrides } : {}),
         };
@@ -306,72 +306,13 @@ export async function handleDiscoverySeedJob(
       }
     }
 
-      // 5B: Adaptive maxTasks — if user set maxTasks (desired leads), compute search budget
-    let targetUniqueBusinesses: number | undefined;
-    if (seedConfig.maxTasks > 0 && job.data.icpProfileId && job.data.reason === 'api') {
-      const adaptive = await computeAdaptiveSearchTaskBudget(
-        seedConfig.maxTasks,
-        job.data.icpProfileId,
-      );
-      targetUniqueBusinesses = adaptive.targetUniqueBusinesses;
-      seedConfig = { ...seedConfig, maxTasks: adaptive.maxTasks };
-
-      // Change 3: Clamp to per-tier safety cap
-      const tierCap = getTaskCapForLeadTarget(job.data.maxTasks ?? 75);
-      if (seedConfig.maxTasks > tierCap) {
-        logger.warn(
-          {
-            jobId: job.id,
-            queue: job.name,
-            computedBudget: seedConfig.maxTasks,
-            tierCap,
-            desiredLeads: job.data.maxTasks,
-          },
-          'Adaptive budget exceeds tier safety cap — clamping',
-        );
-        seedConfig = { ...seedConfig, maxTasks: tierCap };
-      }
-
-      logger.info(
-        {
-          jobId: job.id,
-          queue: job.name,
-          correlationId,
-          desiredLeads: job.data.maxTasks,
-          adaptiveBudget: adaptive.maxTasks,
-          targetUniqueBusinesses,
-          tierCap,
-          finalMaxTasks: seedConfig.maxTasks,
-          icpProfileId: job.data.icpProfileId,
-        },
-        'Computed adaptive search task budget from historical rates',
-      );
-    }
-
-    if (job.data.validationMode && job.data.maxTasks !== undefined && job.data.maxTasks <= 10) {
-      const manualValidationTaskCap = Math.min(12, Math.max(job.data.maxTasks * 2, job.data.maxTasks));
-      const validationBusinessCap = Math.min(40, Math.max(job.data.maxTasks * 4, job.data.maxTasks));
-      seedConfig = { ...seedConfig, maxTasks: Math.min(seedConfig.maxTasks, manualValidationTaskCap) };
-      targetUniqueBusinesses = targetUniqueBusinesses === undefined
-        ? validationBusinessCap
-        : Math.min(targetUniqueBusinesses, validationBusinessCap);
-
-      logger.info(
-        {
-          jobId: job.id,
-          queue: job.name,
-          correlationId,
-          requestedLeads: job.data.maxTasks,
-          manualValidationTaskCap,
-          validationBusinessCap,
-          finalMaxTasks: seedConfig.maxTasks,
-          targetUniqueBusinesses,
-        },
-        'Applied manual validation cap for small discovery run',
-      );
-    }
-
-    const seedResult = await seedSearchTasks(seedConfig, new Date(), icpSeedConfig, job.data.discoveryRunId);
+    const seedResult = await seedSearchTasks(
+      seedConfig,
+      new Date(),
+      icpSeedConfig,
+      job.data.discoveryRunId,
+      job.data.icpProfileId,
+    );
 
     logger.info(
       {
@@ -389,6 +330,7 @@ export async function handleDiscoverySeedJob(
       },
       'Completed discovery frontier seed job',
     );
+    const runSearchTaskBudget = job.data.runMaxTasks ?? seedResult.generated;
 
     // If 0 tasks were generated, finalize the run immediately instead of
     // enqueuing empty run_search_task slots that race with this update.
@@ -434,31 +376,6 @@ export async function handleDiscoverySeedJob(
       return;
     }
 
-    if (shouldEnqueueRunTasks) {
-      for (let slot = 0; slot < dependencies.config.concurrency; slot += 1) {
-        await dependencies.boss.send(
-          DISCOVERY_RUN_SEARCH_TASK_JOB_NAME,
-          {
-            slot,
-            reason: 'seed',
-            correlationId,
-            jobRunId: job.data.jobRunId,
-            discoveryRunId: job.data.discoveryRunId,
-            icpProfileId: job.data.icpProfileId,
-            includeWebsiteAnalysis: job.data.includeWebsiteAnalysis,
-            includeSocialMediaAnalysis: job.data.includeSocialMediaAnalysis,
-            ...(job.data.maxTasks !== undefined ? { maxTasks: seedConfig.maxTasks } : {}),
-            ...(targetUniqueBusinesses !== undefined ? { targetUniqueBusinesses } : {}),
-            ...(job.data.minReviewCount !== undefined ? { minReviewCount: job.data.minReviewCount } : {}),
-          },
-          {
-            ...DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,
-            singletonKey: `discovery.run_search_task:${job.data.discoveryRunId ?? correlationId}:slot-${slot}`,
-          },
-        );
-      }
-    }
-
     if (job.data.jobRunId) {
       await prisma.jobRun.update({
         where: { id: job.data.jobRunId },
@@ -484,7 +401,7 @@ export async function handleDiscoverySeedJob(
           status: 'running',
           startedAt: new Date(),
           result: toInputJson({
-            totalItems: seedResult.generated,
+            totalItems: runSearchTaskBudget,
             processedItems: 0,
             failedItems: 0,
             searchTasksInserted: seedResult.inserted,
@@ -508,6 +425,60 @@ export async function handleDiscoverySeedJob(
           }),
         },
       });
+    }
+
+    if (shouldEnqueueRunTasks) {
+      if (job.data.reason === 'api' && job.data.discoveryRunId) {
+        const seedShardGate = await getApiSeedShardGate(job.data.discoveryRunId);
+        if (seedShardGate.hasFailedShard) {
+          logger.warn(
+            {
+              jobId: job.id,
+              queue: job.name,
+              correlationId,
+              discoveryRunId: job.data.discoveryRunId,
+            },
+            'Skipping discovery.run_search_task enqueue because a sibling seed shard failed',
+          );
+          return;
+        }
+        if (seedShardGate.hasIncompleteShard) {
+          logger.info(
+            {
+              jobId: job.id,
+              queue: job.name,
+              correlationId,
+              discoveryRunId: job.data.discoveryRunId,
+            },
+            'Waiting for sibling discovery.seed shards before starting search task workers',
+          );
+          return;
+        }
+      }
+
+      for (let slot = 0; slot < dependencies.config.concurrency; slot += 1) {
+        await dependencies.boss.send(
+          DISCOVERY_RUN_SEARCH_TASK_JOB_NAME,
+          {
+            slot,
+            reason: 'seed',
+            correlationId,
+            jobRunId: job.data.jobRunId,
+            discoveryRunId: job.data.discoveryRunId,
+            icpProfileId: job.data.icpProfileId,
+            includeWebsiteAnalysis: job.data.includeWebsiteAnalysis,
+            includeSocialMediaAnalysis: job.data.includeSocialMediaAnalysis,
+            ...(job.data.maxTasks !== undefined ? { maxTasks: runSearchTaskBudget } : {}),
+            ...(job.data.minReviewCount !== undefined
+              ? { minReviewCount: job.data.minReviewCount }
+              : {}),
+          },
+          {
+            ...DISCOVERY_RUN_SEARCH_TASK_RETRY_OPTIONS,
+            singletonKey: `discovery.run_search_task:${job.data.discoveryRunId ?? correlationId}:slot-${slot}`,
+          },
+        );
+      }
     }
   } catch (error: unknown) {
     if (job.data.jobExecutionId) {

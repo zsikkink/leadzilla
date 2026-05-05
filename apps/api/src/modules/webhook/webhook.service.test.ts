@@ -77,6 +77,179 @@ describe('webhook service SENDING quarantine tolerance', () => {
     });
   });
 
+  it('records inbound Resend email replies and enqueues reply classification', async () => {
+    prismaMock.feedbackEvent.findUnique.mockResolvedValue(null);
+    prismaMock.lead.findUnique.mockResolvedValue({ id: 'lead_1' });
+    prismaMock.messageSend.findFirst.mockResolvedValueOnce({
+      id: 'send_1',
+      leadId: 'lead_1',
+    });
+    txMock.feedbackEvent.upsert.mockResolvedValue({
+      id: 'feedback_1',
+      dedupeKey: 'resend:received:received_1',
+    });
+    txMock.messageSend.update.mockResolvedValue({ id: 'send_1' });
+    txMock.messageSend.updateMany.mockResolvedValue({ count: 1 });
+    const fetchResendReceivedEmail = vi.fn().mockResolvedValue({
+      id: 'received_1',
+      from: 'Ada <ada@example.com>',
+      to: ['zack@zboonisales.com'],
+      subject: 'Re: Hello',
+      text: 'Yes, tell me more.',
+      html: null,
+      createdAt: '2026-05-04T20:00:00.000Z',
+    });
+    const enqueueReplyClassify = vi.fn().mockResolvedValue(undefined);
+
+    const { processResendWebhook } = await import('./webhook.service.js');
+
+    await expect(
+      processResendWebhook(
+        {
+          type: 'email.received',
+          created_at: '2026-05-04T20:00:01.000Z',
+          data: {
+            email_id: 'received_1',
+            from: 'Ada <ada@example.com>',
+            to: ['zack@zboonisales.com'],
+            subject: 'Re: Hello',
+            created_at: '2026-05-04T20:00:00.000Z',
+          },
+        } as never,
+        {
+          fetchResendReceivedEmail,
+          enqueueReplyClassify,
+        },
+      ),
+    ).resolves.toEqual({
+      feedbackEventId: 'feedback_1',
+      dedupeKey: 'resend:received:received_1',
+      skipped: false,
+    });
+
+    expect(fetchResendReceivedEmail).toHaveBeenCalledWith('received_1');
+    expect(prismaMock.lead.findUnique).toHaveBeenCalledWith({
+      where: { email: 'ada@example.com', deletedAt: null },
+      select: { id: true },
+    });
+    expect(txMock.feedbackEvent.upsert).toHaveBeenCalledWith({
+      where: { dedupeKey: 'resend:received:received_1' },
+      create: expect.objectContaining({
+        leadId: 'lead_1',
+        messageSendId: 'send_1',
+        eventType: 'REPLIED',
+        source: 'WEBHOOK',
+        providerEventId: 'received_1',
+        dedupeKey: 'resend:received:received_1',
+        replyText: 'Yes, tell me more.',
+        occurredAt: new Date('2026-05-04T20:00:00.000Z'),
+      }),
+      update: {},
+    });
+    expect(txMock.messageSend.update).toHaveBeenCalledWith({
+      where: { id: 'send_1' },
+      data: {
+        status: 'REPLIED',
+        repliedAt: new Date('2026-05-04T20:00:00.000Z'),
+      },
+    });
+    expect(txMock.messageSend.updateMany).toHaveBeenCalledWith({
+      where: {
+        leadId: 'lead_1',
+        nextFollowUpAfter: { not: null },
+      },
+      data: { nextFollowUpAfter: null },
+    });
+    expect(enqueueReplyClassify).toHaveBeenCalledWith({
+      runId: 'reply.classify:feedback_1',
+      feedbackEventId: 'feedback_1',
+      replyText: 'Yes, tell me more.',
+      leadId: 'lead_1',
+      messageSendId: 'send_1',
+      correlationId: 'webhook:resend:received:received_1',
+    });
+  });
+
+  it('recovers a failed post-commit Resend reply classify enqueue on duplicate replay', async () => {
+    prismaMock.feedbackEvent.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'feedback_1',
+        dedupeKey: 'resend:received:received_1',
+        leadId: 'lead_1',
+        messageSendId: 'send_1',
+        replyText: 'Yes, tell me more.',
+        replyClassification: null,
+      });
+    prismaMock.lead.findUnique.mockResolvedValue({ id: 'lead_1' });
+    prismaMock.messageSend.findFirst.mockResolvedValueOnce({
+      id: 'send_1',
+      leadId: 'lead_1',
+    });
+    txMock.feedbackEvent.upsert.mockResolvedValue({
+      id: 'feedback_1',
+      dedupeKey: 'resend:received:received_1',
+    });
+    txMock.messageSend.update.mockResolvedValue({ id: 'send_1' });
+    txMock.messageSend.updateMany.mockResolvedValue({ count: 1 });
+    const fetchResendReceivedEmail = vi.fn().mockResolvedValue({
+      id: 'received_1',
+      from: 'ada@example.com',
+      to: ['zack@zboonisales.com'],
+      subject: 'Re: Hello',
+      text: 'Yes, tell me more.',
+      html: null,
+      createdAt: '2026-05-04T20:00:00.000Z',
+    });
+    const enqueueReplyClassify = vi.fn()
+      .mockRejectedValueOnce(new Error('pg-boss unavailable'))
+      .mockResolvedValueOnce(undefined);
+
+    const { processResendWebhook } = await import('./webhook.service.js');
+    const payload = {
+      type: 'email.received',
+      created_at: '2026-05-04T20:00:01.000Z',
+      data: {
+        email_id: 'received_1',
+        from: 'ada@example.com',
+        to: ['zack@zboonisales.com'],
+        subject: 'Re: Hello',
+        created_at: '2026-05-04T20:00:00.000Z',
+      },
+    };
+
+    await expect(
+      processResendWebhook(payload as never, {
+        fetchResendReceivedEmail,
+        enqueueReplyClassify,
+      }),
+    ).rejects.toThrow('pg-boss unavailable');
+
+    await expect(
+      processResendWebhook(payload as never, {
+        fetchResendReceivedEmail,
+        enqueueReplyClassify,
+      }),
+    ).resolves.toEqual({
+      feedbackEventId: 'feedback_1',
+      dedupeKey: 'resend:received:received_1',
+      skipped: true,
+      reason: 'DUPLICATE_WEBHOOK',
+    });
+
+    expect(fetchResendReceivedEmail).toHaveBeenCalledTimes(1);
+    expect(enqueueReplyClassify).toHaveBeenNthCalledWith(2, {
+      runId: 'reply.classify:feedback_1',
+      feedbackEventId: 'feedback_1',
+      replyText: 'Yes, tell me more.',
+      leadId: 'lead_1',
+      messageSendId: 'send_1',
+      correlationId: 'webhook:resend:received:received_1',
+    });
+    expect(prismaMock.messageSend.findFirst).toHaveBeenCalledTimes(1);
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
+  });
+
   it('allows Trengo reply webhook reconciliation from UNRESOLVED', async () => {
     const payload: TrengoWebhookPayload = {
       event: 'message.created',

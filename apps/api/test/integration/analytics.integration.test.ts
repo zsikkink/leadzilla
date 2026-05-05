@@ -272,7 +272,7 @@ describe('analytics score distribution integration', () => {
         trainingRunId: trainingRun.id,
         modelType: 'LOGISTIC_REGRESSION',
         versionTag: createUniqueToken('analytics-model-a'),
-        stage: 'ACTIVE',
+        stage: 'SHADOW',
         featureSchemaJson: { sourceVersion: 'features_v1' },
         deterministicWeightsJson: {},
         checksum: createUniqueToken('analytics-checksum-a'),
@@ -527,10 +527,18 @@ describe('analytics stored recommendations integration', () => {
 describe('analytics retrain status integration', () => {
   const createdTrainingRunIds: string[] = [];
   const createdModelVersionIds: string[] = [];
+  const temporarilyArchivedActiveModelVersionIds: string[] = [];
 
   afterEach(async () => {
     if (createdModelVersionIds.length > 0) {
       await prisma.modelVersion.deleteMany({ where: { id: { in: createdModelVersionIds.splice(0) } } });
+    }
+
+    if (temporarilyArchivedActiveModelVersionIds.length > 0) {
+      await prisma.modelVersion.updateMany({
+        where: { id: { in: temporarilyArchivedActiveModelVersionIds.splice(0) } },
+        data: { stage: 'ACTIVE' },
+      });
     }
 
     if (createdTrainingRunIds.length > 0) {
@@ -550,6 +558,19 @@ describe('analytics retrain status integration', () => {
       const laterSuccessEndedAt = new Date('2099-01-08T08:00:00.000Z');
       const olderActiveActivatedAt = new Date('2099-01-09T08:00:00.000Z');
       const newerActiveActivatedAt = new Date('2099-01-10T08:00:00.000Z');
+
+      const existingActiveModelVersions = await prisma.modelVersion.findMany({
+        where: { modelType: 'LOGISTIC_REGRESSION', stage: 'ACTIVE' },
+        select: { id: true },
+      });
+      if (existingActiveModelVersions.length > 0) {
+        const existingActiveModelVersionIds = existingActiveModelVersions.map((modelVersion) => modelVersion.id);
+        await prisma.modelVersion.updateMany({
+          where: { id: { in: existingActiveModelVersionIds } },
+          data: { stage: 'ARCHIVED' },
+        });
+        temporarilyArchivedActiveModelVersionIds.push(...existingActiveModelVersionIds);
+      }
 
       const runningOlder = await prisma.trainingRun.create({
         data: {
@@ -617,7 +638,7 @@ describe('analytics retrain status integration', () => {
           trainingRunId: earlierSuccessful.id,
           modelType: 'LOGISTIC_REGRESSION',
           versionTag: createUniqueToken('analytics-retrain-active-old'),
-          stage: 'ACTIVE',
+          stage: 'SHADOW',
           featureSchemaJson: { sourceVersion: 'features_v1' },
           deterministicWeightsJson: {},
           checksum: createUniqueToken('analytics-retrain-checksum-old'),

@@ -9,6 +9,7 @@ const { routeMocks } = vi.hoisted(() => ({
       generateMessageDraft: vi.fn(),
       listMessageDrafts: vi.fn(),
       getMessageDraft: vi.fn(),
+      createManualMessageDraft: vi.fn(),
       approveMessageDraft: vi.fn(),
       rejectMessageDraft: vi.fn(),
       sendMessage: vi.fn(),
@@ -186,6 +187,8 @@ describe('messaging.routes generate draft rejection handling', () => {
         leadId: 'lead_1',
         icpProfileId: 'icp_1',
         promptVersion: 'v2',
+        forceRegenerate: true,
+        redraftFeedback: 'Make the subject clearer and less feature-focused.',
       },
     });
 
@@ -195,6 +198,12 @@ describe('messaging.routes generate draft rejection handling', () => {
       draftId: null,
       variantIds: [],
     });
+    expect(routeMocks.service.generateMessageDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forceRegenerate: true,
+        redraftFeedback: 'Make the subject clearer and less feature-focused.',
+      }),
+    );
   });
 
   it('returns an honest existing-draft response without pretending a new draft was created', async () => {
@@ -246,6 +255,43 @@ describe('messaging.routes generate draft rejection handling', () => {
       page: 1,
       pageSize: 20,
       total: 1,
+    });
+  });
+
+  it('creates a manual draft using the authenticated operator', async () => {
+    routeMocks.service.createManualMessageDraft.mockResolvedValue(
+      buildDraftResponse({
+        generatedByModel: 'operator_manual',
+        promptVersion: 'operator_manual',
+      }),
+    );
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/messaging/drafts/manual',
+      payload: {
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        channel: 'EMAIL',
+        subject: 'Re: Follow up',
+        bodyText: 'Thanks for the reply.',
+        parentMessageSendId: 'send_1',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(routeMocks.service.createManualMessageDraft).toHaveBeenCalledWith({
+      leadId: 'lead_1',
+      icpProfileId: 'icp_1',
+      channel: 'EMAIL',
+      subject: 'Re: Follow up',
+      bodyText: 'Thanks for the reply.',
+      parentMessageSendId: 'send_1',
+      approvedByUserId: 'user_auth',
+    });
+    expect(response.json()).toMatchObject({
+      generatedByModel: 'operator_manual',
+      promptVersion: 'operator_manual',
     });
   });
 

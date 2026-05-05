@@ -474,6 +474,110 @@ describe('buildServer', () => {
     });
   });
 
+  it('normalizes dirty lead emails before validating the list response', async () => {
+    const server = buildServer({
+      ...makeDefaultOptions(),
+      listLeads: async () => ({
+        items: [
+          {
+            id: 'lead_1',
+            firstName: 'Demo',
+            lastName: 'Lead',
+            email: 'info@example.com%20',
+            source: 'maps_local',
+            status: 'qualified',
+            error: null,
+            createdAt: '2026-04-11T00:00:00.000Z',
+            updatedAt: '2026-04-11T00:00:00.000Z',
+            latestIcpProfileId: null,
+            latestScoreBand: null,
+            latestBlendedScore: null,
+            latestScorePredictionId: null,
+            latestDiscoveryRawPayload: null,
+            latestEnrichmentNormalizedPayload: null,
+            latestEnrichmentRawPayload: null,
+            businessCountryCode: null,
+            businessCountry: null,
+            businessCity: null,
+            businessCategory: null,
+            businessName: null,
+            decisionMakerTitle: null,
+          },
+          {
+            id: 'lead_2',
+            firstName: 'Multi',
+            lastName: 'Lead',
+            email: 'sales@example.com,info@example.com',
+            source: 'maps_local',
+            status: 'qualified',
+            error: null,
+            createdAt: '2026-04-11T00:00:00.000Z',
+            updatedAt: '2026-04-11T00:00:00.000Z',
+            latestIcpProfileId: null,
+            latestScoreBand: null,
+            latestBlendedScore: null,
+            latestScorePredictionId: null,
+            latestDiscoveryRawPayload: null,
+            latestEnrichmentNormalizedPayload: null,
+            latestEnrichmentRawPayload: null,
+            businessCountryCode: null,
+            businessCountry: null,
+            businessCity: null,
+            businessCategory: null,
+            businessName: null,
+            decisionMakerTitle: null,
+          },
+          {
+            id: 'lead_3',
+            firstName: 'Bad',
+            lastName: 'Lead',
+            email: 'sales@example.',
+            source: 'maps_local',
+            status: 'qualified',
+            error: null,
+            createdAt: '2026-04-11T00:00:00.000Z',
+            updatedAt: '2026-04-11T00:00:00.000Z',
+            latestIcpProfileId: null,
+            latestScoreBand: null,
+            latestBlendedScore: null,
+            latestScorePredictionId: null,
+            latestDiscoveryRawPayload: null,
+            latestEnrichmentNormalizedPayload: null,
+            latestEnrichmentRawPayload: null,
+            businessCountryCode: null,
+            businessCountry: null,
+            businessCity: null,
+            businessCategory: null,
+            businessName: null,
+            decisionMakerTitle: null,
+          },
+        ],
+        page: 1,
+        pageSize: 20,
+        total: 3,
+      }),
+    });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'GET',
+      url: '/v1/leads?page=1&pageSize=20',
+      headers: authHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      items: [
+        { id: 'lead_1', email: 'info@example.com' },
+        { id: 'lead_2', email: 'sales@example.com' },
+        { id: 'lead_3', email: 'unknown@lead.local' },
+      ],
+      page: 1,
+      pageSize: 20,
+      total: 3,
+    });
+  });
+
   it('returns paginated contact recovery list', async () => {
     const server = buildServer({
       ...makeDefaultOptions(),

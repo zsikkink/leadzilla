@@ -12,8 +12,11 @@ import { createLogger } from '@lead-flood/observability';
 import type {
   ContactRecoveryDetailResponse,
   ContactRecoverySnapshot,
+  LeadDisplayScoreSource,
+  LeadScoreBand,
   ListContactRecoveryItemsQuery,
   ListContactRecoveryItemsResponse,
+  ListLeadsQuery,
   RunDiscoverySeedRequest,
   TriggerJobRunResponse,
 } from '@lead-flood/contracts';
@@ -33,10 +36,252 @@ import type { MessageGenerateJobPayload, MessagingSendJobPayload } from './modul
 import type { ScoringRunJobPayload } from './modules/scoring/scoring.service.js';
 import { buildTriggerDiscoveryTaskRun } from './modules/discovery-admin/discovery-task-run.trigger.js';
 import { buildServer, LeadAlreadyExistsError, LeadContextUnavailableError } from './server.js';
+import type { ResendReceivedEmail } from './modules/webhook/webhook.service.js';
 
 function toDayStart(value: string): Date {
   const source = new Date(value);
   return new Date(Date.UTC(source.getUTCFullYear(), source.getUTCMonth(), source.getUTCDate()));
+}
+
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function toNullableString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function buildResendReceivedEmailFetcher(
+  apiKey: string | undefined,
+): ((emailId: string) => Promise<ResendReceivedEmail | null>) | undefined {
+  if (!apiKey) {
+    return undefined;
+  }
+
+  return async (emailId: string): Promise<ResendReceivedEmail | null> => {
+    const response = await fetch(`https://api.resend.com/emails/receiving/${encodeURIComponent(emailId)}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+    });
+
+    if (response.status === 404) {
+      return null;
+    }
+
+    if (!response.ok) {
+      throw new Error(`Resend Receiving API returned status ${response.status}`);
+    }
+
+    const body = await response.json() as Record<string, unknown>;
+
+    return {
+      id: toNullableString(body.id) ?? emailId,
+      from: toNullableString(body.from),
+      to: toStringArray(body.to),
+      subject: toNullableString(body.subject),
+      text: toNullableString(body.text),
+      html: toNullableString(body.html),
+      createdAt: toNullableString(body.created_at),
+    };
+  };
+}
+
+function pushSqlParam(params: unknown[], value: unknown): string {
+  params.push(value);
+  return `$${params.length}`;
+}
+
+function isLeadScoreBand(value: unknown): value is LeadScoreBand {
+  return value === 'LOW' || value === 'MEDIUM' || value === 'HIGH';
+}
+
+function readLegacyScoreInfo(scoreInfoFallback: Record<string, unknown> | undefined): {
+  score: number | null;
+  band: LeadScoreBand | null;
+} {
+  return {
+    score: typeof scoreInfoFallback?.blendedScore === 'number' ? scoreInfoFallback.blendedScore : null,
+    band: isLeadScoreBand(scoreInfoFallback?.scoreBand) ? scoreInfoFallback.scoreBand : null,
+  };
+}
+
+function resolveDisplayScore(input: {
+  latestScore: { blendedScore: number; scoreBand: LeadScoreBand } | null | undefined;
+  legacyScore: number | null;
+  legacyBand: LeadScoreBand | null;
+  businessScore: number | null | undefined;
+  businessBand: LeadScoreBand | null | undefined;
+}): {
+  score: number | null;
+  band: LeadScoreBand | null;
+  source: LeadDisplayScoreSource;
+} {
+  if (input.latestScore) {
+    return {
+      score: input.latestScore.blendedScore,
+      band: input.latestScore.scoreBand,
+      source: 'AI_SCORE',
+    };
+  }
+
+  if (input.legacyScore !== null) {
+    return {
+      score: input.legacyScore,
+      band: input.legacyBand,
+      source: 'LEGACY_SCORE',
+    };
+  }
+
+  if (typeof input.businessScore === 'number' && Number.isFinite(input.businessScore)) {
+    return {
+      score: input.businessScore,
+      band: input.businessBand ?? null,
+      source: 'BUSINESS_SCORE',
+    };
+  }
+
+  return {
+    score: null,
+    band: null,
+    source: 'NONE',
+  };
+}
+
+function buildLeadIdsSql(
+  listQuery: ListLeadsQuery,
+  options: { includePagination: boolean } = { includePagination: true },
+): { text: string; values: readonly unknown[] } {
+  const values: unknown[] = [];
+  const where: string[] = ['l."deletedAt" is null'];
+  const latestScoreWhere: string[] = ['sp."leadId" = l.id'];
+  const legacyScoreSql = `case
+    when l."enrichmentData" #>> '{_scoreInfo,blendedScore}' ~ '^[0-9]+(\\.[0-9]+)?$'
+    then (l."enrichmentData" #>> '{_scoreInfo,blendedScore}')::double precision
+    else null
+  end`;
+  const legacyBandSql = `case
+    when l."enrichmentData" #>> '{_scoreInfo,scoreBand}' in ('LOW', 'MEDIUM', 'HIGH')
+    then l."enrichmentData" #>> '{_scoreInfo,scoreBand}'
+    else null
+  end`;
+  const resolvedScoreSql = `coalesce(latest_score."blendedScore", ${legacyScoreSql}, b.deterministic_score)`;
+  const resolvedBandSql = `coalesce(latest_score."scoreBand"::text, ${legacyBandSql}, b.score_band::text)`;
+
+  if (listQuery.icpProfileId) {
+    const latestScoreIcp = pushSqlParam(values, listQuery.icpProfileId);
+    latestScoreWhere.push(`sp."icpProfileId" = ${latestScoreIcp}`);
+  }
+
+  if (listQuery.status) {
+    const status = pushSqlParam(values, listQuery.status);
+    where.push(`l.status = ${status}`);
+  } else if (!listQuery.includeRejected) {
+    where.push("l.status <> 'rejected'");
+  }
+
+  if (listQuery.icpProfileId) {
+    const discoveryIcp = pushSqlParam(values, listQuery.icpProfileId);
+    const scoreIcp = pushSqlParam(values, listQuery.icpProfileId);
+    const conversionIcp = pushSqlParam(values, listQuery.icpProfileId);
+    where.push(`(
+      exists (
+        select 1
+        from "LeadDiscoveryRecord" dr
+        where dr."leadId" = l.id and dr."icpProfileId" = ${discoveryIcp}
+      )
+      or exists (
+        select 1
+        from "LeadScorePrediction" sp_icp
+        where sp_icp."leadId" = l.id and sp_icp."icpProfileId" = ${scoreIcp}
+      )
+      or exists (
+        select 1
+        from "business_conversions" bc
+        where bc."leadId" = l.id and bc."icpProfileId" = ${conversionIcp}
+      )
+    )`);
+  }
+
+  if (listQuery.scoreBand || listQuery.minBlendedScore !== undefined) {
+    if (listQuery.scoreBand) {
+      const scoreBand = pushSqlParam(values, listQuery.scoreBand);
+      where.push(`${resolvedBandSql} = ${scoreBand}`);
+    }
+    if (listQuery.minBlendedScore !== undefined) {
+      const minScore = pushSqlParam(values, listQuery.minBlendedScore);
+      where.push(`${resolvedScoreSql} >= ${minScore}`);
+    }
+  }
+
+  if (listQuery.from) {
+    const from = pushSqlParam(values, new Date(listQuery.from));
+    where.push(`l."createdAt" >= ${from}`);
+  }
+  if (listQuery.to) {
+    const to = pushSqlParam(values, new Date(listQuery.to));
+    where.push(`l."createdAt" <= ${to}`);
+  }
+
+  if (listQuery.search) {
+    const search = pushSqlParam(values, `%${listQuery.search}%`);
+    where.push(`(
+      l."firstName" ilike ${search}
+      or l."lastName" ilike ${search}
+      or l.email ilike ${search}
+      or b.name ilike ${search}
+      or b.category ilike ${search}
+    )`);
+  }
+
+  const limit = options.includePagination ? pushSqlParam(values, listQuery.pageSize) : null;
+  const offset = options.includePagination ? pushSqlParam(values, (listQuery.page - 1) * listQuery.pageSize) : null;
+  const scoreDirection = listQuery.sortBy === 'score_asc' ? 'asc' : 'desc';
+  const orderBy = listQuery.sortBy === 'created_desc' || listQuery.sortBy === undefined
+    ? 'l."createdAt" desc, l.id desc'
+    : `${resolvedScoreSql} ${scoreDirection} nulls last, l."createdAt" desc, l.id desc`;
+
+  return {
+    text: `
+      select l.id
+      from "Lead" l
+      left join businesses b on b.id = l."businessId"
+      left join lateral (
+        select sp."blendedScore"
+          , sp."scoreBand"
+        from "LeadScorePrediction" sp
+        where ${latestScoreWhere.join(' and ')}
+        order by sp."predictedAt" desc, sp."createdAt" desc, sp.id desc
+        limit 1
+      ) latest_score on true
+      where ${where.join(' and ')}
+      ${options.includePagination ? `order by ${orderBy} limit ${limit} offset ${offset}` : ''}
+    `,
+    values,
+  };
+}
+
+function buildLeadCountSql(listQuery: ListLeadsQuery): { text: string; values: readonly unknown[] } {
+  const { text, values } = buildLeadIdsSql(listQuery, { includePagination: false });
+  return {
+    text: `select count(*)::integer as total from (${text}) lead_count`,
+    values,
+  };
+}
+
+async function listResolvedScoreLeadIds(listQuery: ListLeadsQuery): Promise<string[]> {
+  const { text, values } = buildLeadIdsSql(listQuery);
+  const result = await query<{ id: string }>(text, values);
+  return result.rows.map((row) => row.id);
+}
+
+async function countResolvedScoreLeads(listQuery: ListLeadsQuery): Promise<number> {
+  const { text, values } = buildLeadCountSql(listQuery);
+  const result = await query<{ total: number }>(text, values);
+  return result.rows[0]?.total ?? 0;
 }
 
 function isPrismaKnownRequestError(error: unknown): error is { code: string } {
@@ -145,6 +390,8 @@ const leadDetailBusinessSelect = {
   rating: true,
   reviewCount: true,
   followerCount: true,
+  deterministicScore: true,
+  scoreBand: true,
   websiteDomain: true,
   phoneE164: true,
   instagramHandle: true,
@@ -951,6 +1198,7 @@ async function main(): Promise<void> {
       });
     },
     enqueueReplyClassify,
+    fetchResendReceivedEmail: buildResendReceivedEmailFetcher(env.RESEND_API_KEY),
     trengoWebhookSecret: env.TRENGO_WEBHOOK_SECRET,
     resendWebhookSecret: env.RESEND_WEBHOOK_SECRET,
     triggerDiscoverySeedJob,
@@ -1038,6 +1286,8 @@ async function main(): Promise<void> {
         businessCountry: biz?.country ?? null,
         businessCity: biz?.city ?? null,
         businessCategory: biz?.category ?? null,
+        businessDeterministicScore: biz?.deterministicScore ?? null,
+        businessScoreBand: biz?.scoreBand ?? null,
         latestIcpProfileId,
         businessId: biz?.id ?? lead.businessId ?? null,
         websiteDomain: biz?.websiteDomain ?? null,
@@ -1247,13 +1497,23 @@ async function main(): Promise<void> {
         ...(query.status ? { status: query.status } : {}),
         ...(query.scoreBand || query.minBlendedScore !== undefined
           ? {
-              scorePredictions: {
-                some: {
-                  ...(query.icpProfileId ? { icpProfileId: query.icpProfileId } : {}),
-                  ...(query.scoreBand ? { scoreBand: query.scoreBand } : {}),
-                  ...(query.minBlendedScore !== undefined ? { blendedScore: { gte: query.minBlendedScore } } : {}),
+              OR: [
+                {
+                  scorePredictions: {
+                    some: {
+                      ...(query.icpProfileId ? { icpProfileId: query.icpProfileId } : {}),
+                      ...(query.scoreBand ? { scoreBand: query.scoreBand } : {}),
+                      ...(query.minBlendedScore !== undefined ? { blendedScore: { gte: query.minBlendedScore } } : {}),
+                    },
+                  },
                 },
-              },
+                {
+                  business: {
+                    ...(query.scoreBand ? { scoreBand: query.scoreBand } : {}),
+                    ...(query.minBlendedScore !== undefined ? { deterministicScore: { gte: query.minBlendedScore } } : {}),
+                  },
+                },
+              ],
             }
           : {}),
         ...(query.from || query.to
@@ -1282,39 +1542,80 @@ async function main(): Promise<void> {
           : {}),
       };
 
-      const [total, rows] = await Promise.all([
-        prisma.lead.count({ where }),
-        prisma.lead.findMany({
-          where,
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-          skip: (query.page - 1) * query.pageSize,
-          take: query.pageSize,
-          include: {
-            discoveryRecords: {
-              ...(query.icpProfileId ? { where: { icpProfileId: query.icpProfileId } } : {}),
-              orderBy: [{ discoveredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
-              take: 1,
-            },
-            businessConversions: {
-              orderBy: [{ convertedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
-              take: 1,
-              select: { id: true, convertedAt: true, icpProfileId: true },
-            },
-            enrichmentRecords: {
-              orderBy: [{ enrichedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
-              take: 1,
-            },
-            scorePredictions: {
-              ...(query.icpProfileId ? { where: { icpProfileId: query.icpProfileId } } : {}),
-              orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
-              take: 1,
-            },
-            business: {
-              select: { countryCode: true, country: true, city: true, category: true, name: true },
-            },
+      const leadInclude = {
+        discoveryRecords: {
+          ...(query.icpProfileId ? { where: { icpProfileId: query.icpProfileId } } : {}),
+          orderBy: [{ discoveredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          take: 1,
+        },
+        businessConversions: {
+          orderBy: [{ convertedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          take: 1,
+          select: { id: true, convertedAt: true, icpProfileId: true },
+        },
+        enrichmentRecords: {
+          orderBy: [{ enrichedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          take: 1,
+        },
+        scorePredictions: {
+          ...(query.icpProfileId ? { where: { icpProfileId: query.icpProfileId } } : {}),
+          orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          take: 1,
+        },
+        business: {
+          select: {
+            countryCode: true,
+            country: true,
+            city: true,
+            category: true,
+            name: true,
+            deterministicScore: true,
+            scoreBand: true,
           },
-        }),
-      ]);
+        },
+      } satisfies Prisma.LeadInclude;
+      type LeadListRow = Prisma.LeadGetPayload<{ include: typeof leadInclude }>;
+
+      let total: number;
+      let rows: LeadListRow[];
+      const sortBy = query.sortBy ?? 'created_desc';
+      const shouldUseResolvedScoreQuery =
+        sortBy === 'score_desc'
+        || sortBy === 'score_asc'
+        || query.scoreBand !== undefined
+        || query.minBlendedScore !== undefined;
+
+      if (shouldUseResolvedScoreQuery) {
+        const [totalCount, orderedIds] = await Promise.all([
+          countResolvedScoreLeads(query),
+          listResolvedScoreLeadIds(query),
+        ]);
+
+        total = totalCount;
+        if (orderedIds.length === 0) {
+          rows = [];
+        } else {
+          const unorderedRows = await prisma.lead.findMany({
+            where: { id: { in: orderedIds } },
+            include: leadInclude,
+          });
+          const rowsById = new Map(unorderedRows.map((row) => [row.id, row]));
+          rows = orderedIds
+            .map((id) => rowsById.get(id))
+            .filter((row): row is LeadListRow => row !== undefined);
+        }
+      } else {
+        [total, rows] = await Promise.all([
+          prisma.lead.count({ where }),
+          prisma.lead.findMany({
+            where,
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            skip: (query.page - 1) * query.pageSize,
+            take: query.pageSize,
+            include: leadInclude,
+          }),
+        ]);
+      }
 
       const qualityRows = query.includeQualityMetrics
         ? await prisma.analyticsDailyRollup.findMany({
@@ -1371,6 +1672,14 @@ async function main(): Promise<void> {
           // Fall back to lead.enrichmentData when relation tables are empty (e.g. seed data)
           const enrichmentFallback = lead.enrichmentData as Record<string, unknown> | null;
           const scoreInfoFallback = enrichmentFallback?._scoreInfo as Record<string, unknown> | undefined;
+          const legacyScore = readLegacyScoreInfo(scoreInfoFallback);
+          const displayScore = resolveDisplayScore({
+            latestScore: lead.scorePredictions[0] ?? null,
+            legacyScore: legacyScore.score,
+            legacyBand: legacyScore.band,
+            businessScore: lead.business?.deterministicScore ?? null,
+            businessBand: lead.business?.scoreBand ?? null,
+          });
 
           return {
             id: lead.id,
@@ -1384,11 +1693,13 @@ async function main(): Promise<void> {
             updatedAt: lead.updatedAt.toISOString(),
             latestIcpProfileId: lead.discoveryRecords[0]?.icpProfileId ?? lead.scorePredictions[0]?.icpProfileId ?? lead.businessConversions[0]?.icpProfileId ?? null,
             latestScoreBand: lead.scorePredictions[0]?.scoreBand
-              ?? (scoreInfoFallback?.scoreBand === 'HIGH' || scoreInfoFallback?.scoreBand === 'MEDIUM' || scoreInfoFallback?.scoreBand === 'LOW'
-                ? scoreInfoFallback.scoreBand : null),
+              ?? legacyScore.band,
             latestBlendedScore: lead.scorePredictions[0]?.blendedScore
-              ?? (typeof scoreInfoFallback?.blendedScore === 'number' ? scoreInfoFallback.blendedScore : null),
+              ?? legacyScore.score,
             latestScorePredictionId: lead.scorePredictions[0]?.id ?? null,
+            displayScore: displayScore.score,
+            displayScoreBand: displayScore.band,
+            displayScoreSource: displayScore.source,
             latestDiscoveryRawPayload: lead.discoveryRecords[0]?.rawPayload ?? null,
             latestEnrichmentNormalizedPayload: lead.enrichmentRecords[0]?.normalizedPayload ?? enrichmentFallback ?? null,
             latestEnrichmentRawPayload: lead.enrichmentRecords[0]?.rawPayload ?? null,
@@ -1396,6 +1707,8 @@ async function main(): Promise<void> {
             businessCountry: lead.business?.country ?? null,
             businessCity: lead.business?.city ?? null,
             businessCategory: lead.business?.category ?? null,
+            businessDeterministicScore: lead.business?.deterministicScore ?? null,
+            businessScoreBand: lead.business?.scoreBand ?? null,
             businessName: lead.business?.name ?? null,
             decisionMakerTitle: lead.decisionMakerTitle ?? null,
           };

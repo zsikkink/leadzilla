@@ -33,7 +33,7 @@ describe('ResendAdapter integration', () => {
     expect((options as RequestInit).method).toBe('POST');
 
     const body = JSON.parse((options as RequestInit).body as string) as Record<string, unknown>;
-    expect(body.from).toBe('noreply@leadflood.io');
+    expect(body.from).toBe('zack@zboonisales.com');
     expect(body.to).toEqual(['sara@acme.com']);
     expect(body.subject).toBe('Boost your payments');
     expect(body.html).toBe('<p>Hi Sara, I noticed Acme...</p>');

@@ -77,7 +77,17 @@ function makeOpenAiGenerateFetch(): typeof fetch {
   // Return a fresh Response per call to avoid "Body has already been read" errors
   // when message validation triggers a retry with stricter prompt.
   // Bodies must be >= 100 chars to pass EMAIL channel minimum length validation.
-  const bodyA = 'Thank you for your interest in our payment solutions. We help businesses like yours streamline transactions and boost conversion rates across the UAE market.';
+  const bodyA = [
+    'Hi Pipeline,',
+    '',
+    'I’m reaching out from Zbooni. We help businesses turn customer messages into paid, trackable orders. When a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation.',
+    '',
+    'For Zbooni Test Corp, that can make customer follow-up and payment status easier to manage from one place. Would it be useful to compare this with how your team handles customer conversations today?',
+    '',
+    'Best,',
+    'Zbooni Team',
+  ].join('\n');
+  const ctaA = 'Would it be useful to compare this with how your team handles customer conversations today?';
   return vi.fn().mockImplementation(() =>
     Promise.resolve(
       new Response(
@@ -94,7 +104,7 @@ function makeOpenAiGenerateFetch(): typeof fetch {
                     subject: 'Test Email Subject A',
                     bodyText: bodyA,
                     bodyHtml: `<p>${bodyA}</p>`,
-                    ctaText: 'Learn More',
+                    ctaText: ctaA,
                   },
                 }),
               },
@@ -332,9 +342,6 @@ describe('pipeline full lifecycle', () => {
     await prisma.lead.deleteMany({
       where: { id: LEAD_ID },
     });
-    await prisma.modelVersion.deleteMany({
-      where: { versionTag: 'deterministic-baseline-v1' },
-    }).catch(() => { /* may already exist */ });
     await prisma.icpProfile.deleteMany({
       where: { id: ICP_ID },
     });

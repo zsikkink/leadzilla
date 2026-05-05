@@ -254,7 +254,7 @@ export function registerDiscoveryRoutes(
 
     const limits = getDiscoveryLimits();
 
-    // Cap leads per run
+    // Historical env name; now caps the operator's search-task budget per run.
     const cappedLimit = Math.min(parsed.data.limit ?? limits.DISCOVERY_MAX_LEADS_PER_RUN, limits.DISCOVERY_MAX_LEADS_PER_RUN);
 
     // Check per-user concurrent runs (QUEUED or RUNNING)
@@ -457,6 +457,7 @@ export function registerDiscoveryRoutes(
                     firstName: true,
                     lastName: true,
                     email: true,
+                    businessEmail: true,
                     source: true,
                     scorePredictions: {
                       orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }],
@@ -464,6 +465,14 @@ export function registerDiscoveryRoutes(
                       select: { blendedScore: true, scoreBand: true },
                     },
                     status: true,
+                  },
+                },
+                business: {
+                  select: {
+                    id: true,
+                    name: true,
+                    deterministicScore: true,
+                    scoreBand: true,
                   },
                 },
               },
@@ -698,16 +707,29 @@ export function registerDiscoveryRoutes(
           disqualificationReason: b.disqualificationReason,
           searchTaskId: b.evidence[0]?.searchTaskId ?? null,
         })),
-        leads: leads.map((c) => ({
-          id: c.id,
-          firstName: c.firstName,
-          lastName: c.lastName,
-          email: c.email,
-          source: c.source,
-          blendedScore: c.scorePredictions[0]?.blendedScore ?? null,
-          scoreBand: c.scorePredictions[0]?.scoreBand ?? null,
-          status: c.status,
-        })),
+        leads: conversionRows
+          .filter((row) => {
+            if (!row.metadata || typeof row.metadata !== 'object' || Array.isArray(row.metadata)) {
+              return false;
+            }
+            const metadata = row.metadata as Record<string, unknown>;
+            return metadata.discoveryRunId === runId;
+          })
+          .map((row) => ({
+            id: row.lead.id,
+            firstName: row.lead.firstName,
+            lastName: row.lead.lastName,
+            email: row.lead.email,
+            businessEmail: row.lead.businessEmail,
+            source: row.lead.source,
+            blendedScore: row.lead.scorePredictions[0]?.blendedScore ?? null,
+            scoreBand: row.lead.scorePredictions[0]?.scoreBand ?? null,
+            status: row.lead.status,
+            businessId: row.business.id,
+            businessName: row.business.name,
+            businessDeterministicScore: row.business.deterministicScore,
+            businessScoreBand: row.business.scoreBand,
+          })),
         costEvents: costEvents.map((e) => ({
           id: e.id,
           provider: e.provider,

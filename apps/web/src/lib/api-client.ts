@@ -9,6 +9,7 @@ import type {
   CreateIcpProfileRequest,
   CreateLeadRequest,
   CreateLeadResponse,
+  CreateManualMessageDraftRequest,
   DiscoveryRunStatusResponse,
   FeedbackSummaryResponse,
   FunnelQuery,
@@ -288,8 +289,16 @@ export class ApiClient {
     channel?: string | undefined;
     promptVersion: string;
     forceRegenerate?: boolean | undefined;
+    redraftFeedback?: string | undefined;
   }): Promise<GenerateMessageDraftResponse> {
     return this.request('/v1/messaging/drafts/generate', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  createManualDraft(data: CreateManualMessageDraftRequest): Promise<MessageDraftResponse> {
+    return this.request('/v1/messaging/drafts/manual', {
       method: 'POST',
       body: JSON.stringify(data),
     });
@@ -423,7 +432,21 @@ export class ApiClient {
         telemetry: Record<string, unknown> | null;
       } | null;
     }>;
-    leads: Array<Record<string, unknown>>;
+    leads: Array<{
+      id: string;
+      firstName: string;
+      lastName: string;
+      email: string;
+      businessEmail: string | null;
+      source: string;
+      blendedScore: number | null;
+      scoreBand: string | null;
+      status: string;
+      businessId: string;
+      businessName: string;
+      businessDeterministicScore: number | null;
+      businessScoreBand: string | null;
+    }>;
     costEvents: Array<{ id: string; provider: string; action: string; creditCost: number; createdAt: string }>;
   }> {
     return this.request(`/v1/discovery/runs/${runId}/details`);

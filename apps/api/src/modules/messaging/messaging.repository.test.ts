@@ -265,6 +265,66 @@ describe('PrismaMessagingRepository.sendMessage', () => {
       },
     });
   });
+
+  it('preserves the draft follow-up number when queueing a manual follow-up send', async () => {
+    prismaMock.messageVariant.findUnique.mockResolvedValue({
+      channel: 'EMAIL',
+      messageDraft: {
+        id: 'draft_followup_2',
+        leadId: 'lead_1',
+        followUpNumber: 2,
+        approvalStatus: 'APPROVED',
+      },
+    });
+
+    const tx = {
+      messageSend: {
+        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) =>
+          buildPrismaSend({
+            id: 'send_followup_2',
+            messageDraftId: data.messageDraftId,
+            messageVariantId: data.messageVariantId,
+            idempotencyKey: data.idempotencyKey,
+            followUpNumber: data.followUpNumber,
+            updatedAt: new Date('2026-03-21T00:00:00.000Z'),
+          }),
+        ),
+      },
+      outboxEvent: {
+        create: vi.fn(async () => ({ id: 'outbox_followup_2' })),
+      },
+    };
+    prismaMock.$transaction.mockImplementation(async (callback) => callback(tx as never));
+
+    const { PrismaMessagingRepository } = await import('./messaging.repository.js');
+    const repository = new PrismaMessagingRepository();
+
+    await expect(
+      repository.sendMessage({
+        messageDraftId: 'draft_followup_2',
+        messageVariantId: 'variant_followup_2',
+        idempotencyKey: 'ui:draft_followup_2:variant_followup_2:durable',
+      }),
+    ).resolves.toMatchObject({
+      send: {
+        id: 'send_followup_2',
+        messageDraftId: 'draft_followup_2',
+        messageVariantId: 'variant_followup_2',
+        followUpNumber: 2,
+      },
+      outboxEventId: 'outbox_followup_2',
+    });
+
+    expect(prismaMock.messageSend.findFirst).not.toHaveBeenCalled();
+    expect(tx.messageSend.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        messageDraftId: 'draft_followup_2',
+        messageVariantId: 'variant_followup_2',
+        idempotencyKey: 'ui:draft_followup_2:variant_followup_2:durable',
+        followUpNumber: 2,
+      }),
+    });
+  });
 });
 
 describe('PrismaMessagingRepository.approveMessageDraft', () => {

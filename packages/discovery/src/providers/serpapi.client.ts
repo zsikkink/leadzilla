@@ -9,6 +9,7 @@ import type {
   NormalizedSearchResult,
   SerpApiCommonRequest,
 } from './types.js';
+import { isNonBusinessWebsiteUrl } from '../utils/url.js';
 
 interface SerpApiResponseRoot {
   error?: unknown;
@@ -246,14 +247,6 @@ function toUrlCandidate(value: unknown): string | null {
   return null;
 }
 
-function normalizeHost(url: string): string | null {
-  try {
-    return new URL(url).hostname.toLowerCase().replace(/^www\./, '');
-  } catch {
-    return null;
-  }
-}
-
 function isGoogleMapsUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
@@ -267,14 +260,6 @@ function isGoogleMapsUrl(url: string): boolean {
   }
 }
 
-function isSocialProfileUrl(url: string): boolean {
-  const hostname = normalizeHost(url);
-  if (!hostname) {
-    return false;
-  }
-  return hostname === 'instagram.com' || hostname === 'facebook.com' || hostname === 'tiktok.com';
-}
-
 function pickWebsiteCandidate(candidates: unknown[]): string | null {
   for (const candidate of candidates) {
     const normalized = toUrlCandidate(candidate);
@@ -284,7 +269,7 @@ function pickWebsiteCandidate(candidates: unknown[]): string | null {
     if (isGoogleMapsUrl(normalized)) {
       continue;
     }
-    if (isSocialProfileUrl(normalized)) {
+    if (isNonBusinessWebsiteUrl(normalized)) {
       continue;
     }
     return normalized;

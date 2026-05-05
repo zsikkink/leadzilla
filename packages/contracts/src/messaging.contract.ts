@@ -56,6 +56,7 @@ export const GenerateMessageDraftRequestSchema = z
     channel: MessageChannelSchema.default('EMAIL'),
     promptVersion: z.string().min(1),
     forceRegenerate: z.boolean().optional(),
+    redraftFeedback: z.string().trim().min(1).max(1000).optional(),
   })
   .strict();
 
@@ -66,6 +67,17 @@ export const GenerateMessageDraftResponseSchema = z
     status: GenerateMessageDraftStatusSchema,
     draftId: z.string().min(1).nullable(),
     variantIds: z.array(z.string()),
+  })
+  .strict();
+
+export const CreateManualMessageDraftRequestSchema = z
+  .object({
+    leadId: z.string().min(1),
+    icpProfileId: z.string().min(1),
+    channel: MessageChannelSchema.default('EMAIL'),
+    subject: z.string().trim().max(500).optional(),
+    bodyText: z.string().trim().min(1).max(10000),
+    parentMessageSendId: z.string().min(1).optional(),
   })
   .strict();
 
@@ -215,6 +227,7 @@ export const ConversationLeadIdParamsSchema = z
   .strict();
 
 export const ConversationEntrySchema = z.object({
+  id: z.string().min(1),
   type: z.enum(['sent', 'reply']),
   timestamp: z.string().datetime(),
   channel: MessageChannelSchema,
@@ -247,6 +260,9 @@ export type GenerateMessageDraftRequest = z.infer<
 >;
 export type GenerateMessageDraftResponse = z.infer<
   typeof GenerateMessageDraftResponseSchema
+>;
+export type CreateManualMessageDraftRequest = z.infer<
+  typeof CreateManualMessageDraftRequestSchema
 >;
 export type MessageVariantResponse = z.infer<typeof MessageVariantResponseSchema>;
 export type MessageDraftResponse = z.infer<typeof MessageDraftResponseSchema>;

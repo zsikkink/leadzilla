@@ -809,7 +809,7 @@ Repo-grounded assessment:
 
 | Variable(s) | App | Classification | Notes |
 | --- | --- | --- | --- |
-| `RESEND_API_KEY`, `RESEND_FROM_EMAIL` | Worker | Required for email outreach | `RESEND_FROM_EMAIL` defaults to `noreply@leadflood.io` if not set. |
+| `RESEND_API_KEY`, `RESEND_FROM_EMAIL` | Worker | Required for email outreach | `RESEND_FROM_EMAIL` defaults to `zack@zboonisales.com` if not set. |
 | `TRENGO_API_KEY`, `TRENGO_BASE_URL`, `TRENGO_CHANNEL_ID`, `TRENGO_TEMPLATE_ID` | Worker | Required for WhatsApp outreach | Trengo send path. |
 | `TRENGO_INTERNAL_CONVERSATION_ID` | Worker | Optional but useful | Internal Trengo notification target. |
 | `SLACK_WEBHOOK_URL`, `SALES_NOTIFICATION_EMAIL` | Worker | Optional but recommended | Human handoff / notification channels. |
@@ -878,4 +878,3 @@ Important keys evidenced in code/UI:
 - Messaging: `message.generate`, `message.send`, `followup.check`, `reply.classify`, `notify.sales`
 - Recovery/ops: `message.approval.recovery`, `message.send.recovery`, `search-task.recovery`, `dlq.process`, `pipeline.health`, `outbox.cleanup`, `data.retention`  
   Evidence: `apps/worker/src/queues.ts`, `apps/worker/src/schedules.ts`, `apps/worker/src/index.ts`
-

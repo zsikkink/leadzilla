@@ -77,6 +77,38 @@ function clearAuthState(): void {
   localStorage.removeItem(USER_KEY);
 }
 
+function readPersistedAuthState(): { token: string; user: AuthUser } | null {
+  const storedToken = readString(localStorage.getItem(TOKEN_KEY));
+  const storedUser = localStorage.getItem(USER_KEY);
+  if (!storedToken || !storedUser) {
+    return null;
+  }
+
+  try {
+    const parsedUser = JSON.parse(storedUser) as Partial<AuthUser>;
+    const id = readString(parsedUser.id);
+    const email = readString(parsedUser.email);
+    const firstName = readString(parsedUser.firstName);
+    const lastName = typeof parsedUser.lastName === 'string' ? parsedUser.lastName : null;
+
+    if (!id || !email || !firstName || lastName === null) {
+      return null;
+    }
+
+    return {
+      token: storedToken,
+      user: {
+        id,
+        email,
+        firstName,
+        lastName,
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -121,6 +153,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         persistAuthState(data.session.access_token, mappedUser);
         setToken(data.session.access_token);
         setUser(mappedUser);
+      })
+      .catch(() => {
+        if (!isMounted) {
+          return;
+        }
+
+        const persisted = readPersistedAuthState();
+        if (persisted) {
+          setToken(persisted.token);
+          setUser(persisted.user);
+          return;
+        }
+
+        void supabase?.auth.signOut().catch(() => {});
+        clearAuthState();
+        setToken(null);
+        setUser(null);
       })
       .finally(() => {
         if (isMounted) {

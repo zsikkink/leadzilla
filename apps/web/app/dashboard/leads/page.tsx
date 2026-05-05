@@ -1,6 +1,6 @@
 'use client';
 
-import type { LeadScoreBand, LeadStatus } from '@lead-flood/contracts';
+import type { LeadDisplayScoreSource, LeadListSortBy, LeadScoreBand, LeadStatus } from '@lead-flood/contracts';
 import { AlertTriangle, Loader2, MessageSquare, RefreshCw, Undo2, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -36,6 +36,12 @@ const SCORE_OPTIONS = [
   { value: 'LOW', label: 'Low' },
 ];
 
+const SORT_OPTIONS = [
+  { value: 'created_desc', label: 'Newest first' },
+  { value: 'score_desc', label: 'Score high to low' },
+  { value: 'score_asc', label: 'Score low to high' },
+];
+
 const PAGE_SIZE_OPTIONS = [
   { value: '10', label: '10 per page' },
   { value: '20', label: '20 per page' },
@@ -43,6 +49,13 @@ const PAGE_SIZE_OPTIONS = [
   { value: '40', label: '40 per page' },
   { value: '50', label: '50 per page' },
 ];
+
+const SCORE_SOURCE_LABELS: Record<LeadDisplayScoreSource, string> = {
+  AI_SCORE: 'AI',
+  LEGACY_SCORE: 'Legacy',
+  BUSINESS_SCORE: 'Business',
+  NONE: '',
+};
 
 function buildMessageQueueHref(leadId: string, draftId?: string | null): string {
   const params = new URLSearchParams({ leadId });
@@ -52,8 +65,8 @@ function buildMessageQueueHref(leadId: string, draftId?: string | null): string 
   return `/dashboard/messages?${params.toString()}`;
 }
 
-// ── Extract blended score from enrichment data ──────────
-function extractBlendedScore(enrichmentData: unknown): number | null {
+// ── Extract legacy score from enrichment data ──────────
+function extractLegacyScore(enrichmentData: unknown): number | null {
   if (!enrichmentData || typeof enrichmentData !== 'object') return null;
   const data = enrichmentData as Record<string, unknown>;
 
@@ -139,24 +152,106 @@ interface RejectedLeadRow {
   country: string | null;
 }
 
+interface LeadsTableState {
+  page: number;
+  pageSize: number;
+  statusFilter: LeadStatus | null;
+  scoreBandFilter: LeadScoreBand | null;
+  sortBy: LeadListSortBy;
+  searchQuery: string;
+}
+
+const LEADS_TABLE_STATE_STORAGE_KEY = 'lead-flood:leads-table-state:v1';
+
+const DEFAULT_LEADS_TABLE_STATE: LeadsTableState = {
+  page: 1,
+  pageSize: 20,
+  statusFilter: null,
+  scoreBandFilter: null,
+  sortBy: 'score_desc',
+  searchQuery: '',
+};
+
+const VALID_STATUS_FILTERS = new Set(STATUS_OPTIONS.map((option) => option.value).filter(Boolean));
+const VALID_SCORE_FILTERS = new Set(SCORE_OPTIONS.map((option) => option.value).filter(Boolean));
+const VALID_SORTS = new Set(SORT_OPTIONS.map((option) => option.value));
+const VALID_PAGE_SIZES = new Set(PAGE_SIZE_OPTIONS.map((option) => Number.parseInt(option.value, 10)));
+
+function readPositiveInteger(value: unknown, fallback: number): number {
+  const parsed = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseInt(value, 10)
+      : Number.NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readPersistedLeadsTableState(): LeadsTableState {
+  if (typeof window === 'undefined') return DEFAULT_LEADS_TABLE_STATE;
+
+  try {
+    const raw = window.sessionStorage.getItem(LEADS_TABLE_STATE_STORAGE_KEY);
+    if (!raw) return DEFAULT_LEADS_TABLE_STATE;
+
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return DEFAULT_LEADS_TABLE_STATE;
+    }
+
+    const record = parsed as Record<string, unknown>;
+    const pageSize = readPositiveInteger(record.pageSize, DEFAULT_LEADS_TABLE_STATE.pageSize);
+    const sortBy = typeof record.sortBy === 'string' && VALID_SORTS.has(record.sortBy)
+      ? record.sortBy as LeadListSortBy
+      : DEFAULT_LEADS_TABLE_STATE.sortBy;
+
+    return {
+      page: readPositiveInteger(record.page, DEFAULT_LEADS_TABLE_STATE.page),
+      pageSize: VALID_PAGE_SIZES.has(pageSize) ? pageSize : DEFAULT_LEADS_TABLE_STATE.pageSize,
+      statusFilter: typeof record.statusFilter === 'string' && VALID_STATUS_FILTERS.has(record.statusFilter)
+        ? record.statusFilter as LeadStatus
+        : null,
+      scoreBandFilter: typeof record.scoreBandFilter === 'string' && VALID_SCORE_FILTERS.has(record.scoreBandFilter)
+        ? record.scoreBandFilter as LeadScoreBand
+        : null,
+      sortBy,
+      searchQuery: typeof record.searchQuery === 'string' ? record.searchQuery : DEFAULT_LEADS_TABLE_STATE.searchQuery,
+    };
+  } catch {
+    return DEFAULT_LEADS_TABLE_STATE;
+  }
+}
+
+function persistLeadsTableState(state: LeadsTableState): void {
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.sessionStorage.setItem(LEADS_TABLE_STATE_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Ignore storage failures; the table can still operate with in-memory state.
+  }
+}
+
 export default function LeadsPage() {
   const { apiClient, token, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const [initialTableState] = useState(() => readPersistedLeadsTableState());
 
   const [activeTab, setActiveTab] = useState<Tab>('active');
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-  const [statusFilter, setStatusFilter] = useState<LeadStatus | undefined>(undefined);
-  const [scoreBandFilter, setScoreBandFilter] = useState<LeadScoreBand | undefined>(undefined);
+  const [page, setPage] = useState(initialTableState.page);
+  const [pageSize, setPageSize] = useState(initialTableState.pageSize);
+  const [statusFilter, setStatusFilter] = useState<LeadStatus | undefined>(initialTableState.statusFilter ?? undefined);
+  const [scoreBandFilter, setScoreBandFilter] = useState<LeadScoreBand | undefined>(initialTableState.scoreBandFilter ?? undefined);
+  const [sortBy, setSortBy] = useState<LeadListSortBy>(initialTableState.sortBy);
   const [qualificationThreshold, setQualificationThreshold] = useState<number | null>(null);
   const [isQualificationThresholdLoading, setIsQualificationThresholdLoading] = useState(true);
   const [qualificationThresholdError, setQualificationThresholdError] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [searchQuery, setSearchQuery] = useState(initialTableState.searchQuery);
+  const [debouncedSearch, setDebouncedSearch] = useState(initialTableState.searchQuery);
   const [generatingForLead, setGeneratingForLead] = useState<string | null>(null);
   const [rejectingLead, setRejectingLead] = useState<string | null>(null);
   const thresholdLoadedRef = useRef(false);
+  const searchResetReadyRef = useRef(false);
 
   // Rejected leads state
   const [rejectedLeads, setRejectedLeads] = useState<RejectedLeadRow[]>([]);
@@ -179,7 +274,6 @@ export default function LeadsPage() {
   useEffect(() => {
     const tab = searchParams.get('tab');
     setActiveTab(tab === 'rejected' ? 'rejected' : 'active');
-    setPage(1);
   }, [searchParams]);
 
   const loadQualificationThreshold = useCallback(async () => {
@@ -227,8 +321,23 @@ export default function LeadsPage() {
 
   // Reset to page 1 when search query changes
   useEffect(() => {
+    if (!searchResetReadyRef.current) {
+      searchResetReadyRef.current = true;
+      return;
+    }
     setPage(1);
   }, [debouncedSearch]);
+
+  useEffect(() => {
+    persistLeadsTableState({
+      page,
+      pageSize,
+      statusFilter: statusFilter ?? null,
+      scoreBandFilter: scoreBandFilter ?? null,
+      sortBy,
+      searchQuery,
+    });
+  }, [page, pageSize, statusFilter, scoreBandFilter, sortBy, searchQuery]);
 
   // Build the API query with score filter and search
   const leads = useApiQuery(
@@ -238,13 +347,14 @@ export default function LeadsPage() {
           page,
           pageSize,
           includeQualityMetrics: false,
+          sortBy,
           ...(statusFilter ? { status: statusFilter } : {}),
           ...(scoreBandFilter ? { scoreBand: scoreBandFilter } : {}),
           ...(debouncedSearch ? { search: debouncedSearch } : {}),
         }),
-      [apiClient, page, pageSize, statusFilter, scoreBandFilter, debouncedSearch],
+      [apiClient, page, pageSize, statusFilter, scoreBandFilter, sortBy, debouncedSearch],
     ),
-    [page, pageSize, statusFilter, scoreBandFilter, debouncedSearch],
+    [page, pageSize, statusFilter, scoreBandFilter, sortBy, debouncedSearch],
   );
 
   const totalPages = leads.data ? Math.ceil(leads.data.total / leads.data.pageSize) : 0;
@@ -460,7 +570,16 @@ export default function LeadsPage() {
               className="h-9 w-48 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-zbooni-teal/50 focus:outline-none focus:ring-2 focus:ring-zbooni-teal/20"
             />
 
-            <div className="ml-auto">
+            <div className="ml-auto flex items-center gap-2">
+              <CustomSelect
+                value={sortBy}
+                onChange={(v) => {
+                  setSortBy(v as LeadListSortBy);
+                  setPage(1);
+                }}
+                options={SORT_OPTIONS}
+                placeholder="Newest first"
+              />
               <CustomSelect
                 value={String(pageSize)}
                 onChange={(v) => {
@@ -528,7 +647,6 @@ export default function LeadsPage() {
                     <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Company</th>
                     <th className="hidden px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground lg:table-cell">Position</th>
                     <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
-                    <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Band</th>
                     <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Score</th>
                     <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Created</th>
                     <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Actions</th>
@@ -537,7 +655,12 @@ export default function LeadsPage() {
                 <tbody>
                   {(leads.data?.items ?? []).map((lead) => {
                     const enrichmentRaw = lead.latestEnrichmentNormalizedPayload ?? lead.latestEnrichmentRawPayload;
-                    const blendedScore = lead.latestBlendedScore ?? extractBlendedScore(enrichmentRaw);
+                    const fallbackScore = lead.latestBlendedScore ?? extractLegacyScore(enrichmentRaw);
+                    const displayScore = lead.displayScore ?? fallbackScore;
+                    const displayScoreBand = lead.displayScoreBand ?? lead.latestScoreBand;
+                    const scoreSourceLabel = lead.displayScoreSource
+                      ? SCORE_SOURCE_LABELS[lead.displayScoreSource]
+                      : null;
                     // Use API-provided fields first, then fall back to enrichment extraction
                     const companyName = lead.businessName ?? extractCompanyName(enrichmentRaw);
                     const position = lead.decisionMakerTitle ?? extractPosition(enrichmentRaw);
@@ -572,29 +695,34 @@ export default function LeadsPage() {
                         <td className="px-4 py-3">
                           <LeadStatusBadge status={lead.status} />
                         </td>
-                        <td className="px-4 py-3">
-                          {lead.latestScoreBand ? (
-                            <ScoreBandBadge band={lead.latestScoreBand} />
-                          ) : (
-                            <span className="text-muted-foreground/40">&mdash;</span>
-                          )}
-                        </td>
                         <td className="px-4 py-3 text-right">
-                          {blendedScore !== null ? (
-                            <span
-                              className={cn(
-                                'font-mono text-sm font-bold tabular-nums',
-                                blendedScore >= 0.7
-                                  ? 'text-zbooni-green'
-                                  : blendedScore >= 0.4
-                                    ? 'text-yellow-400'
-                                    : 'text-red-400',
-                              )}
-                            >
-                              {(blendedScore * 100).toFixed(0)}
-                            </span>
+                          {displayScore !== null ? (
+                            <div className="flex flex-col items-end gap-1">
+                              <span
+                                className={cn(
+                                  'font-mono text-sm font-bold tabular-nums',
+                                  displayScore >= 0.7
+                                    ? 'text-zbooni-green'
+                                    : displayScore >= 0.4
+                                      ? 'text-yellow-400'
+                                      : 'text-red-400',
+                                )}
+                              >
+                                {(displayScore * 100).toFixed(0)}
+                              </span>
+                              <div className="flex items-center justify-end gap-1.5">
+                                {displayScoreBand ? (
+                                  <ScoreBandBadge band={displayScoreBand} />
+                                ) : null}
+                                {scoreSourceLabel ? (
+                                  <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/40">
+                                    {scoreSourceLabel}
+                                  </span>
+                                ) : null}
+                              </div>
+                            </div>
                           ) : (
-                            <span className="text-muted-foreground/40">&mdash;</span>
+                            <span className="text-xs text-muted-foreground/40">No score yet</span>
                           )}
                         </td>
                         <td className="px-4 py-3 text-muted-foreground">
@@ -666,7 +794,7 @@ export default function LeadsPage() {
                   })}
                   {leads.isLoading ? (
                     <tr>
-                      <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
+                      <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
                         <div className="flex items-center justify-center gap-2">
                           <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
                           Loading leads...
@@ -676,7 +804,7 @@ export default function LeadsPage() {
                   ) : null}
                   {!leads.isLoading && (leads.data?.items ?? []).length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
+                      <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
                         No leads found.
                       </td>
                     </tr>

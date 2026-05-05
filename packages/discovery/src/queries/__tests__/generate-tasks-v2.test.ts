@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { defaultCitiesByCountry, queryTemplatesV2EN } from '../seeds.js';
+import {
+  queryTemplatesV2AR,
+  queryTemplatesV2EN,
+  queryTemplatesV2SerpApiAR,
+  queryTemplatesV2SerpApiEN,
+  serpApiSearchCitiesByCountry,
+} from '../seeds.js';
 import type { GenerateTasksV2Input } from '../generate_tasks.js';
 import { generateTasksV2 } from '../generate_tasks.js';
 
@@ -17,8 +23,7 @@ describe('generateTasksV2', () => {
     const tasks = generateTasksV2(input, { now: fixedDate });
 
     // 1 country × 1 city × 2 categories × 1 template × 1 page × 1 taskType = 2
-    const expectedCount =
-      1 * 1 * input.categories.length * queryTemplatesV2EN.length * 1 * 1;
+    const expectedCount = 1 * 1 * input.categories.length * queryTemplatesV2EN.length * 1 * 1;
     expect(tasks.length).toBe(expectedCount);
     expect(expectedCount).toBe(2);
   });
@@ -31,9 +36,9 @@ describe('generateTasksV2', () => {
 
     const tasks = generateTasksV2(input, { now: fixedDate });
 
-    // QA uses the curated defaults from the shared global registry.
-    const defaultCities = defaultCitiesByCountry['QA']!;
-    expect(defaultCities).toEqual(['Doha', 'Al Wakrah', 'Al Khor', 'Lusail']);
+    // QA uses the SerpAPI-safe defaults instead of legacy broad defaults.
+    const defaultCities = serpApiSearchCitiesByCountry['QA']!;
+    expect(defaultCities).toEqual(expect.arrayContaining(['Doha', 'Al Wakrah', 'Al Khor']));
     expect(tasks.length).toBe(defaultCities.length * 1 * queryTemplatesV2EN.length * 1 * 1);
 
     const taskCities = new Set(tasks.map((task) => task.city));
@@ -49,12 +54,12 @@ describe('generateTasksV2', () => {
 
     const tasks = generateTasksV2(input, { now: fixedDate });
 
-    // AE uses the full curated default set from the shared global registry.
-    const aeCities = defaultCitiesByCountry['AE']!;
-    expect(aeCities.length).toBe(8);
+    // AE uses the SerpAPI-safe default set, not legacy broad defaults.
+    const aeCities = serpApiSearchCitiesByCountry['AE']!;
+    expect(aeCities).toEqual(expect.arrayContaining(['Dubai', 'Abu Dhabi', 'Sharjah', 'Al Ain']));
+    expect(aeCities.length).toBeGreaterThanOrEqual(10);
 
-    const expectedCount =
-      aeCities.length * 1 * queryTemplatesV2EN.length * 1 * 1;
+    const expectedCount = aeCities.length * 1 * queryTemplatesV2EN.length * 1 * 1;
     expect(tasks.length).toBe(expectedCount);
 
     // Verify all default cities are present
@@ -62,6 +67,42 @@ describe('generateTasksV2', () => {
     for (const city of aeCities) {
       expect(taskCities.has(city)).toBe(true);
     }
+  });
+
+  it('filters explicit cities to SerpAPI-supported search locations for launch countries', () => {
+    const input: GenerateTasksV2Input = {
+      categories: ['beauty salon'],
+      countries: ['EG', 'JO', 'SA'],
+      cities: ['not-serpapi-location', 'Abu Kabir', 'Riyadh'],
+    };
+
+    const tasks = generateTasksV2(input, { now: fixedDate });
+    const taskCities = new Set(tasks.map((task) => task.city));
+
+    expect(taskCities).toEqual(new Set(['Abu Kabir', 'Riyadh']));
+  });
+
+  it('does not fall back to broad defaults for countries without a SerpAPI allowlist', () => {
+    const input: GenerateTasksV2Input = {
+      categories: ['bakery'],
+      countries: ['DE'],
+    };
+
+    const tasks = generateTasksV2(input, { now: fixedDate });
+
+    expect(tasks).toHaveLength(0);
+  });
+
+  it('does not pass explicit cities through for countries without a SerpAPI allowlist', () => {
+    const input: GenerateTasksV2Input = {
+      categories: ['bakery'],
+      countries: ['DE'],
+      cities: ['Berlin'],
+    };
+
+    const tasks = generateTasksV2(input, { now: fixedDate });
+
+    expect(tasks).toHaveLength(0);
   });
 
   it('uses custom cities when provided', () => {
@@ -78,6 +119,49 @@ describe('generateTasksV2', () => {
 
     const taskCities = new Set(tasks.map((t) => t.city));
     expect(taskCities).toEqual(new Set(['Riyadh', 'Jeddah']));
+  });
+
+  it('generates English and Arabic queries when both languages are requested', () => {
+    const input: GenerateTasksV2Input = {
+      categories: ['bakery'],
+      countries: ['AE'],
+      cities: ['Dubai'],
+      languages: ['en', 'ar'],
+    };
+
+    const tasks = generateTasksV2(input, { now: fixedDate });
+
+    expect(tasks).toHaveLength(queryTemplatesV2EN.length + queryTemplatesV2AR.length);
+    expect(new Set(tasks.map((task) => task.language))).toEqual(new Set(['en', 'ar']));
+    expect(tasks.map((task) => task.queryText)).toEqual(
+      expect.arrayContaining(['bakery in Dubai', 'bakery في Dubai']),
+    );
+  });
+
+  it('uses contact-signal query templates for SerpAPI-backed English and Arabic runs', () => {
+    const input: GenerateTasksV2Input = {
+      categories: ['bakery'],
+      countries: ['AE'],
+      cities: ['Dubai'],
+      languages: ['en', 'ar'],
+      searchProvider: 'SERPAPI',
+      taskTypes: ['SERP_MAPS_LOCAL'],
+    };
+
+    const tasks = generateTasksV2(input, { now: fixedDate });
+
+    expect(tasks).toHaveLength(queryTemplatesV2SerpApiEN.length + queryTemplatesV2SerpApiAR.length);
+    expect(tasks.map((task) => task.queryText)).toEqual(
+      expect.arrayContaining([
+        'bakery in Dubai official website',
+        'bakery in Dubai whatsapp',
+        'bakery in Dubai instagram',
+        'bakery في Dubai الموقع الرسمي',
+        'bakery في Dubai واتساب',
+        'bakery في Dubai انستقرام',
+      ]),
+    );
+    expect(new Set(tasks.map((task) => task.paramsJson.engine))).toEqual(new Set(['google_maps']));
   });
 
   it('defaults to SERP_MAPS_LOCAL task type only', () => {
@@ -125,6 +209,21 @@ describe('generateTasksV2', () => {
 
     const pages = new Set(tasks.map((t) => t.page));
     expect(pages).toEqual(new Set([1, 2, 3]));
+  });
+
+  it('uses Google Maps pagination offsets for maps-local tasks', () => {
+    const input: GenerateTasksV2Input = {
+      categories: ['bakery'],
+      countries: ['AE'],
+      cities: ['Dubai'],
+      maxPagesPerQuery: 2,
+      taskTypes: ['SERP_MAPS_LOCAL'],
+    };
+
+    const tasks = generateTasksV2(input, { now: fixedDate });
+    const pageTwoTask = tasks.find((task) => task.page === 2);
+
+    expect(pageTwoTask?.paramsJson.start).toBe(20);
   });
 
   it('does not include country name in query text', () => {

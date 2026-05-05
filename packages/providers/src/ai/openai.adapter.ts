@@ -14,6 +14,11 @@ export interface OpenAiAdapterConfig {
 export interface MessageGenerationContext {
   leadName: string;
   leadEmail: string;
+  channel?: 'EMAIL' | 'WHATSAPP' | undefined;
+  recipientType?: 'DECISION_MAKER' | 'GENERIC_CONTACT' | undefined;
+  recipientName?: string | null | undefined;
+  recipientTitle?: string | null | undefined;
+  recipientEmailKind?: 'PERSONAL' | 'GENERIC' | 'UNKNOWN' | undefined;
   companyName: string | null;
   industry: string | null;
   country: string | null;
@@ -33,6 +38,12 @@ export interface MessageGenerationContext {
   icpHook?: string | null | undefined;
   /** Sales angle from ICP profile — the value proposition framing. */
   icpAngle?: string | null | undefined;
+  /** Operator feedback explaining what should change when regenerating a draft. */
+  redraftFeedback?: string | null | undefined;
+  /** Previous draft subject when regenerating from operator feedback. */
+  previousDraftSubject?: string | null | undefined;
+  /** Previous draft body when regenerating from operator feedback. */
+  previousDraftBody?: string | null | undefined;
 }
 
 export interface MessageVariantContent {
@@ -114,6 +125,10 @@ const DEFAULT_GENERATION_MODEL = 'gpt-4o';
 const DEFAULT_SCORING_MODEL = 'gpt-4o';
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_TIMEOUT_MS = 30_000;
+const ZBOONI_OUTREACH_OPENING =
+  'I’m reaching out from Zbooni. We help businesses turn customer messages into paid, trackable orders.';
+const ZBOONI_OUTREACH_CONTEXT_SENTENCE =
+  'When a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation.';
 
 // ---------- Messaging Defaults (exported for UI preview) ----------
 
@@ -121,76 +136,105 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  * Section 0 from messaging-template-research.md — AI identity and persona.
  * Sent as the opening preamble of the system message.
  */
-export const DEFAULT_MESSAGING_ROLE = `You are a senior sales development representative at Zbooni writing to business owners and decision makers in the MENA region (UAE, Saudi Arabia, Egypt, Jordan).
+export const DEFAULT_MESSAGING_ROLE = `You are a senior sales development representative at Zbooni writing to businesses in the MENA region (UAE, Saudi Arabia, Egypt, Jordan).
 
-Your only goal is to start a conversation — not to close a deal or book a call. You sound like someone who spent five minutes researching this specific business, noticed something interesting, and wanted to reach out.
+Your only goal is to start a conversation — not to close a deal or book a call. You write lightly personalized first-touch outreach that sounds relevant without sounding overly researched, familiar, or invasive.
 
-You never sound like a template. Every message must read like it was written for this one person at this one company. If you cannot point to a specific detail from the business intelligence (their website tech stack, Instagram presence, specific services they offer, team members you found), do not write the message — it means you lack the data to be relevant.
+You understand Zbooni as a conversational commerce platform: it helps businesses turn WhatsApp, Instagram, social, and direct-chat conversations into paid, structured, trackable orders.
 
-You are direct, warm, and professional. You respect hierarchy. You never pressure.`;
+You are direct, warm, and professional. You respect hierarchy. You never pressure, overclaim, or pretend to know more than the data supports.`;
 
 /**
  * Sections 1-6 from messaging-template-research.md — distilled into actionable AI instructions.
  * Covers positioning, framework, ICP feature map, templates, hard rules, and tone.
  */
 export const DEFAULT_MESSAGING_SYSTEM_PROMPT = `## STEP 1: OPEN WITH THE SALES HOOK
-Your FIRST sentence must connect the business's specific situation to the ICP sales hook provided. Do NOT start with a generic greeting or compliment. Start with a sharp observation that makes the hook feel earned.
+Use the ICP sales hook as the core angle, but keep the opening natural. The message should feel like a relevant business note, not a forensic audit.
 
-Example (good): "I noticed {Company} handles high-value interior projects — the kind where a client wiring AED 50K for a deposit and wondering if it went through can stall the whole timeline."
-Example (bad): "Hi, I came across {Company} and was impressed by your work."
+Default Zbooni angle: "Your customers are already messaging you. Zbooni helps turn those conversations into paid, trackable orders."
 
-The sales hook is the reason you are reaching out. It must appear in the first 1-2 sentences, adapted naturally to this specific business. If no sales hook is provided, derive one from the ICP description and the business intelligence.
+Start with a greeting, then immediately include this positioning: "I’m reaching out from Zbooni. We help businesses turn customer messages into paid, trackable orders." Continue with the cart/payment/tracking sentence when it reads naturally.
 
-## STEP 2: PROVE YOU DID YOUR HOMEWORK (MANDATORY)
-You MUST reference at least 2-3 specific details from the business intelligence provided. These must be concrete, verifiable facts — not generic observations. Pick from:
-- What they sell or what services they offer (from website scrape or Instagram)
-- Their tech stack or payment setup (Shopify, no CRM, WhatsApp ordering)
-- Their Instagram presence (follower count, engagement, posting themes, verified status)
-- Team members found on their website (by name and title)
-- Physical location, review count, rating
-- Specific gaps (no live chat, no integrated payments, basic analytics)
+If a stronger ICP-specific hook is provided, use that hook. If no sales hook is provided, derive one from the ICP description and the safest available business context.
 
-NEVER write a message that could apply to any business in the same industry. If you can swap in a different company name and the message still makes sense, it is too generic. Rewrite it.
+## STEP 2: LIGHT PERSONALIZATION ONLY
+Use at most ONE safe personalization signal. Good signals include:
+- The company name or business category
+- A clear website, Instagram, WhatsApp, ecommerce, catalog, booking, payment, or service signal
+- The ICP segment or broad industry when scrape data is thin
 
-## STEP 3: CONNECT TO ZBOONI VALUE (ONE FEATURE ONLY)
-Zbooni is a chat revenue and operations layer for high-ticket businesses — NOT a payment link tool.
-Pick exactly ONE Zbooni feature that directly solves a problem you identified in Step 2:
-- Payment certainty: instant confirmation, multi-MID retry, live support, up to AED 1M
-- Staged payments: deposits, milestones, partial payments
-- Operational control: tracking, reconciliation, CRM, per-agent reporting
-- Catalog and commerce: CShop catalog, promo codes, WhatsApp campaigns
-- BNPL integration: Tabby, Tamara (for wellness, education, coaching)
+Do NOT stack multiple scraped details. Do NOT mention team members, follower counts, technologies, pricing tiers, payment processors, or operational gaps unless they are explicitly provided and directly relevant.
+If confidence is low, use category-level language instead of inventing specifics.
 
-Do NOT list multiple features. One feature, connected to one specific pain point you observed.
+## STEP 3: PICK ONE MESSAGE FAMILY
+Choose one family that best fits the ICP, industry, and business intelligence:
+1. WhatsApp or social-first business: turn chats into paid orders.
+2. Retail, boutique, luxury, or multi-agent selling: make WhatsApp sales trackable.
+3. Shopify or ecommerce: recover abandoned carts through real WhatsApp conversations.
+4. High-ticket rentals, travel, hospitality, or luxury services: reduce payment friction for ready-to-pay customers.
+5. Owner, operations, or finance buyer: know which chats become revenue.
+6. Existing commerce stack: add conversational checkout without replacing Shopify, WooCommerce, Magento, Salesforce, or an existing payment provider.
 
-Include social proof with a real number: "200+ merchants", "81% conversion rate on payment links", etc.
+## STEP 4: CONNECT TO ONE ZBOONI CAPABILITY
+Pick exactly ONE capability and connect it to the message family:
+- Create baskets, invoices, payment links, or QR payments from a customer conversation
+- Catalogs, collections, cShop, or social storefronts
+- Order, payment, customer, receipt, payout, and sales-performance tracking
+- WhatsApp campaigns, remarketing, or abandoned-cart recovery
+- Flexible payment methods and payment-provider integrations
+- Multi-user sales visibility for teams selling through chat
 
-## STEP 4: END WITH A SOFT QUESTION
-End with a single low-commitment question — never ask to schedule a call.
+Do NOT position Zbooni as just a payment gateway, just a WhatsApp inbox, or just a payment-link tool.
+
+## STEP 5: CONTACT AWARENESS
+Use the contact context from the user message.
+- DECISION_MAKER: address the named person if a real name is available. You may use role-aware language, but still write to the team/business.
+- GENERIC_CONTACT: address the company team, e.g. "Hi {Company} team,". Do not pretend the inbox is a person. Do not write "Hi Unknown" or "Hi Generic Contact".
+- For generic contacts, use "your team", "the team", or "whoever handles WhatsApp orders/payments/operations."
+- The first line must be a professional greeting: "Hi {FirstName}," for a decision-maker or "Hi {Company} team," for a generic contact. Never start with only the name, e.g. "Ann,". Do not use "Dear".
+- Immediately after the greeting, include the required Zbooni opening sentence.
+
+## STEP 6: PROOF POINTS
+Use proof points only when segment-relevant, and frame them as case-study examples, not guarantees:
+- Tryano: retail/clienteling teams; AED 3.2M in WhatsApp sales and 70 sales agents onboarded in one week.
+- Sand Dollar: Shopify/cart recovery; WhatsApp recovery converted 6x higher than email and reached 30%+ recovery in the case study.
+- Elite Rentals: high-ticket rentals/luxury services; useful for payment-friction framing.
+- Checkout.com: payment acceptance and checkout-speed credibility.
+
+Most first messages should not need a proof point. Use plain Zbooni value when a proof point would feel forced.
+
+## STEP 7: END WITH A SOFT QUESTION AND SIGN-OFF
+End with a single low-commitment question before the sign-off — never ask to schedule a call.
 Good: "Is this something you've been thinking about?"
-Good: "Would it help if I showed you how {similar company type} handle this?"
+Good: "Would it be useful to compare this with how your team handles chat-driven orders today?"
 Bad: "Can we schedule a call this week?"
 Bad: "I'd love to jump on a quick call."
 
+Every message body must end with:
+Best,
+Zbooni Team
+
 ## MESSAGE FORMAT
 - 3-5 sentences total. Short and punchy.
-- WhatsApp: 40-80 words. Conversational. No subject line, no "Dear", no sign-off block.
-- Email: up to 120 words. Subject line must be a 2-6 word question. Sign off: "Best regards, {Sender}".
-- Use "you/your" more than "we/our."
+- WhatsApp: 50-110 words. Conversational. No subject line, no "Dear".
+- Email: 70-140 words. Subject line must be a 2-6 word question.
+- Email subjects should be clear and buyer-readable. Use sample subject themes only as style guidance; write a fresh 2-6 word question tied to the prospect context. Never reuse example subjects verbatim, and never use vague feature-only subjects like "Milestone payments?".
+- Do not use alarmist or scare-hook subjects like "Failed payments on big deals?", "Lost revenue?", or "Payment problems?".
+- Use "you/your" naturally, but do not overuse "you" for generic contacts.
 - No emojis. No exclamation marks.
 
 ## HARD RULES
 BANNED phrases: "To be honest with you", "Are you the decision-maker?", "Just checking in", "game-changer", "innovative", "revolutionary", "I'd love to jump on a call", "payment link" used alone, "cheapest/lowest fees", "better than [competitor]", "I hope this finds you well"
-NEVER: ask to schedule a call, mention competitor names, use generic openers, list multiple features
+NEVER: ask to schedule a call, mention competitor names, use generic openers, list multiple features, invent scraped facts, imply guaranteed outcomes
 Follow-ups: reference the previous message's specific topic, do not restart from scratch
 
 ## TONE
-Direct, warm, confident. You sound like a knowledgeable peer, not a salesperson. Regional awareness (UAE/Saudi/MENA business culture). Hierarchy-respectful. Specific not verbose. Professional warmth, not corporate formality.`;
+Direct, warm, confident. You sound like a knowledgeable peer, not a salesperson. Regional awareness (UAE/Saudi/MENA business culture). Hierarchy-respectful. Lightly personalized, not overly familiar. Professional warmth, not corporate formality.`;
 
 /**
  * JSON output format specification — always appended at the end of the system message.
  */
-const OUTPUT_FORMAT_SPEC = 'Output JSON with a single "message" object containing: subject (email subject line, 2-6 word question format; null for WhatsApp), bodyText (plain text), bodyHtml (null), ctaText (the CTA text or null).';
+const OUTPUT_FORMAT_SPEC = 'Output JSON with a single "message" object containing: subject (email subject line, 2-6 word question format; null for WhatsApp), bodyText (the complete send-ready plain-text message, including the low-friction question and the exact final sign-off "Best,\\nZbooni Team"), bodyHtml (null), ctaText (the low-friction CTA question, or null).';
 
 // ---------- Helpers ----------
 
@@ -250,6 +294,8 @@ export class OpenAiAdapter {
     const role = (context.customRole && context.customRole.trim()) || DEFAULT_MESSAGING_ROLE;
     const prompt = (context.customSystemPrompt && context.customSystemPrompt.trim()) || DEFAULT_MESSAGING_SYSTEM_PROMPT;
     const icpHook = context.icpHook?.trim() || null;
+    const redraftFeedback = context.redraftFeedback?.trim() || null;
+    const normalizedRedraftFeedback = redraftFeedback?.toLowerCase() ?? '';
 
     const hookInstruction = icpHook
       ? `You MUST incorporate the following sales hook as the core angle of your message. Do not substitute it with generic statistics or filler. Sales hook: "${icpHook}"`
@@ -259,6 +305,10 @@ export class OpenAiAdapter {
       role,
       '\n---\n',
       prompt,
+      '\n\nPREFERRED INTRO POSITIONING:',
+      `The message body must start with a professional greeting, such as "Hi Ann," or "Hi ${context.companyName ?? 'Company'} team,". Immediately after the greeting, include this exact opening before personalization or business-specific observation: "${ZBOONI_OUTREACH_OPENING}" Continue with this sentence when it reads naturally: "${ZBOONI_OUTREACH_CONTEXT_SENTENCE}"`,
+      '\n\nMANDATORY SUBJECT LINE DISCIPLINE:',
+      'For email, write a calm 2-6 word buyer-readable question. Do not use alarmist or scare-hook subjects such as "Failed payments on big deals?", "Lost revenue?", or "Payment problems?". Prefer neutral workflow subjects such as "Track client inquiries?" or "Chat-to-payment flow?".',
       '\n\nMANDATORY ICP HOOK INSTRUCTION:',
       hookInstruction,
     ];
@@ -269,18 +319,60 @@ export class OpenAiAdapter {
       );
     }
 
+    if (redraftFeedback) {
+      systemPromptParts.push([
+        '\n\nRE-DRAFT INSTRUCTION:',
+        'The operator rejected or disliked the previous draft and gave feedback.',
+        'Treat this feedback as high priority and use it to change the new draft materially.',
+        'Operator feedback overrides default CTA examples and default CTA preferences.',
+        'Do not repeat the criticized subject, CTA, opening, personalization angle, or phrasing from the previous draft.',
+        'If feedback would break basic message safety such as placeholders, spam, or missing sign-off, use the closest compliant alternative.',
+      ].join(' '));
+
+      if (/\b(?:do not|don't|dont|avoid|stop)\b[^.?!]*(?:send|offer|share)?[^.?!]*\bexample\b/.test(normalizedRedraftFeedback)) {
+        systemPromptParts.push('The operator specifically rejected offering or sending an example. Do not use the word "example" anywhere in the new draft.');
+      }
+
+      if (/\b(?:schedule|meeting|meet)\b/.test(normalizedRedraftFeedback) && /\bright person\b/.test(normalizedRedraftFeedback)) {
+        systemPromptParts.push('The operator wants a meeting-oriented right-person CTA. End with a question similar to: "Would you be open to a short conversation, or is someone else on your team the right person to speak with?"');
+      }
+    }
+
     systemPromptParts.push(`\n\n${OUTPUT_FORMAT_SPEC}`);
 
     const systemPrompt = systemPromptParts.join('\n');
 
+    const recipientType = context.recipientType ?? 'DECISION_MAKER';
+    const recipientName = context.recipientName?.trim() || null;
+    const recipientTitle = context.recipientTitle?.trim() || null;
+    const recipientEmailKind = context.recipientEmailKind ?? 'UNKNOWN';
+    const channel = context.channel ?? 'EMAIL';
+
     const userPrompt = [
+      `Channel: ${channel}`,
       `Lead: ${context.leadName} (${context.leadEmail})`,
+      `Contact type: ${recipientType}`,
+      recipientName ? `Recipient name: ${recipientName}` : 'Recipient name: none verified',
+      recipientTitle ? `Recipient title: ${recipientTitle}` : null,
+      `Recipient email kind: ${recipientEmailKind}`,
+      recipientType === 'GENERIC_CONTACT'
+        ? 'Recipient guidance: write to the company team, not to an individual person.'
+        : 'Recipient guidance: write to the named person while keeping the value framed around their team/business.',
       context.companyName ? `Company: ${context.companyName}` : null,
       context.industry ? `Industry: ${context.industry}` : null,
       context.country ? `Country: ${context.country}` : null,
       `Score band: ${context.scoreBand} (${context.blendedScore.toFixed(2)})`,
       `ICP description: ${context.icpDescription}`,
       context.icpAngle ? `ICP angle (value proposition framing): ${context.icpAngle}` : null,
+      context.redraftFeedback?.trim()
+        ? `\nOperator re-draft feedback:\n${context.redraftFeedback.trim()}\nApply this feedback to the new draft while still following all system rules.`
+        : null,
+      context.previousDraftSubject?.trim()
+        ? `Previous draft subject:\n${context.previousDraftSubject.trim()}`
+        : null,
+      context.previousDraftBody?.trim()
+        ? `Previous draft body:\n${context.previousDraftBody.trim()}`
+        : null,
       context.businessIntelligence
         ? `\nBusiness Intelligence:\n${context.businessIntelligence}`
         : 'No structured business intelligence available.',

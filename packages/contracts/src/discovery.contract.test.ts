@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CuratedCountryCitiesByCode,
+  SerpApiSupportedCountryCitiesByCode,
+  buildSerpApiCountryCitiesMap,
+} from './country.contract.js';
+import {
   CreateDiscoveryRunRequestSchema,
   normalizeDiscoveryCountryCode,
   normalizeDiscoveryCountryCodes,
@@ -53,5 +58,87 @@ describe('CreateDiscoveryRunRequestSchema', () => {
       countries: ['Algeria', 'UAE', 'KSA', 'Bahrain'],
     });
     expect(parsed.countries).toEqual(['DZ', 'AE', 'SA', 'BH']);
+  });
+
+  it('defaults discovery prequalification to no minimum review count', () => {
+    const parsed = CreateDiscoveryRunRequestSchema.parse({
+      icpProfileIds: ['icp_1'],
+      countries: ['AE'],
+      advancedSettings: {},
+    });
+
+    expect(parsed.advancedSettings?.minReviewCount).toBe(0);
+  });
+});
+
+describe('CuratedCountryCitiesByCode', () => {
+  it('stores only the SerpAPI-backed discovery location registry', () => {
+    expect(CuratedCountryCitiesByCode).toBe(SerpApiSupportedCountryCitiesByCode);
+    expect(CuratedCountryCitiesByCode.AE).toEqual(
+      expect.arrayContaining(['Dubai', 'Abu Dhabi', 'Sharjah', 'Al Ain']),
+    );
+    expect(CuratedCountryCitiesByCode.SA).toEqual(
+      expect.arrayContaining(['Riyadh', 'Jeddah', 'Makkah', 'Madinah', 'Dammam']),
+    );
+    expect(CuratedCountryCitiesByCode.EG).toEqual(
+      expect.arrayContaining(['Cairo', 'Alexandria', 'Giza', 'Port Said']),
+    );
+    expect(CuratedCountryCitiesByCode.JO).toEqual(
+      expect.arrayContaining([
+        'Amman',
+        'Zarqa Governorate',
+        'Irbid Governorate',
+        'Aqaba Governorate',
+      ]),
+    );
+
+    expect(CuratedCountryCitiesByCode.AE?.length).toBeGreaterThanOrEqual(10);
+    expect(CuratedCountryCitiesByCode.SA?.length).toBeGreaterThanOrEqual(20);
+    expect(CuratedCountryCitiesByCode.EG?.length).toBeGreaterThanOrEqual(20);
+    expect(CuratedCountryCitiesByCode.JO?.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('does not keep broad defaults for countries without SerpAPI discovery coverage', () => {
+    expect(CuratedCountryCitiesByCode.US).toBeUndefined();
+    expect(CuratedCountryCitiesByCode.DE).toBeUndefined();
+  });
+
+  it('does not include blank or duplicate default city entries', () => {
+    for (const [countryCode, cities] of Object.entries(CuratedCountryCitiesByCode)) {
+      expect(cities.length, countryCode).toBeGreaterThan(0);
+      expect(
+        cities.every((city) => city.trim().length > 0),
+        countryCode,
+      ).toBe(true);
+      expect(new Set(cities.map((city) => city.toLowerCase())).size, countryCode).toBe(
+        cities.length,
+      );
+    }
+  });
+});
+
+describe('SerpApiSupportedCountryCitiesByCode', () => {
+  it('keeps launch-country discovery defaults to SerpAPI-supported search locations', () => {
+    expect(SerpApiSupportedCountryCitiesByCode.EG).toEqual(
+      expect.arrayContaining(['Cairo', 'Abu Kabir']),
+    );
+    expect(SerpApiSupportedCountryCitiesByCode.JO).toEqual(
+      expect.arrayContaining(['Amman', 'Aqaba Governorate']),
+    );
+    expect(SerpApiSupportedCountryCitiesByCode.SA).toEqual(
+      expect.arrayContaining(['Riyadh', 'Diriyah']),
+    );
+  });
+
+  it('filters configured launch-country cities against the SerpAPI-safe list', () => {
+    const countryCities = buildSerpApiCountryCitiesMap({
+      Egypt: ['Cairo', 'not-serpapi-location'],
+      KSA: ['Riyadh', 'not-serpapi-location'],
+      DE: ['Berlin'],
+    });
+
+    expect(countryCities.EG).toEqual(['Cairo']);
+    expect(countryCities.SA).toEqual(['Riyadh']);
+    expect(countryCities.DE).toBeUndefined();
   });
 });

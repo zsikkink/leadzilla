@@ -198,7 +198,7 @@ describe('inspection endpoints integration', () => {
         trainingRunId: trainingRun.id,
         modelType: 'LOGISTIC_REGRESSION',
         versionTag: `inspection-model-${Date.now()}`,
-        stage: 'ACTIVE',
+        stage: 'SHADOW',
         featureSchemaJson: { sourceVersion: 'features_v1' },
         deterministicWeightsJson: {},
         checksum: `checksum-${Date.now()}`,

@@ -5,7 +5,7 @@ import {
   Brain,
   ChevronDown,
   ChevronRight,
-  Sigma,
+  Info,
   TrendingDown,
   TrendingUp,
 } from 'lucide-react';
@@ -36,6 +36,30 @@ interface DeterministicData {
   predictionId: string | null;
 }
 
+function InfoTooltip({ text }: { text: string }) {
+  return (
+    <span
+      tabIndex={0}
+      aria-label={text}
+      className="group relative inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-muted-foreground/50 outline-none transition-colors hover:text-zbooni-teal focus-visible:text-zbooni-teal"
+    >
+      <Info className="h-3 w-3" />
+      <span className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 hidden w-64 -translate-x-1/2 rounded-lg border border-border/40 bg-zbooni-dark px-3 py-2 text-left text-[11px] font-medium leading-relaxed text-foreground shadow-lg group-hover:block group-focus-visible:block">
+        {text}
+      </span>
+    </span>
+  );
+}
+
+function MetricLabel({ children, tooltip }: { children: string; tooltip: string }) {
+  return (
+    <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
+      <span>{children}</span>
+      <InfoTooltip text={tooltip} />
+    </p>
+  );
+}
+
 // A5+A6: Category bonus data from score prediction
 interface CategoryScoreData {
   matched: number;
@@ -53,6 +77,9 @@ interface LatestScoreData {
     blendWeights?: { deterministic: number; ai: number } | undefined;
     categoryScores?: Record<string, CategoryScoreData> | undefined;
     qualificationPath?: string | undefined;
+    aiReasoning?: string[] | undefined;
+    reasonCodes?: string[] | undefined;
+    scoreSource?: string | undefined;
   };
 }
 
@@ -80,16 +107,14 @@ const FIELD_KEY_TO_CATEGORY: Record<string, string> = {
 
 interface ScoringBreakdownProps {
   leadId: string;
-  blendedScore?: number | undefined;
+  leadScore?: number | undefined;
   scoreBand?: string | undefined;
-  blendLabel?: string | undefined;
 }
 
 export function ScoringBreakdown({
   leadId,
-  blendedScore,
+  leadScore,
   scoreBand,
-  blendLabel,
 }: ScoringBreakdownProps) {
   const { apiClient } = useAuth();
   const [snapshot, setSnapshot] = useState<FeatureSnapshot | null>(null);
@@ -177,6 +202,13 @@ export function ScoringBreakdown({
                   : undefined,
                 categoryScores: reasons.categoryScores as Record<string, CategoryScoreData> | undefined,
                 qualificationPath: typeof reasons.qualificationPath === 'string' ? reasons.qualificationPath : undefined,
+                aiReasoning: Array.isArray(reasons.aiReasoning)
+                  ? reasons.aiReasoning.filter((value): value is string => typeof value === 'string')
+                  : undefined,
+                reasonCodes: Array.isArray(reasons.reasonCodes)
+                  ? reasons.reasonCodes.filter((value): value is string => typeof value === 'string')
+                  : undefined,
+                scoreSource: typeof reasons.scoreSource === 'string' ? reasons.scoreSource : undefined,
               },
             });
           }
@@ -203,7 +235,7 @@ export function ScoringBreakdown({
     );
   }
 
-  if (error || (!snapshot && !deterministic)) return null;
+  if (error || (!snapshot && !deterministic && !latestScore)) return null;
 
   // Filter out hard filters -- we only show weighted rules in the equation
   const weightedRules = deterministic?.ruleEvaluation
@@ -213,19 +245,29 @@ export function ScoringBreakdown({
   const positiveRules = weightedRules.filter((r) => r.matched && r.contribution > 0);
   const negativeRules = weightedRules.filter((r) => r.matched && r.contribution < 0);
   const missedRules = weightedRules.filter((r) => !r.matched);
+  const weightedRuleMatchCount = weightedRules.filter((r) => r.matched).length;
+  const weightedRuleTooltip = weightedRules.length > 0
+    ? `The ${weightedRules.length} weighted signals for this lead are: ${weightedRules
+      .map((rule) => `${formatFieldKey(rule.fieldKey)} (${rule.matched ? 'matched' : 'not matched'})`)
+      .join('; ')}.`
+    : 'No weighted rule signals were configured for this lead and ICP.';
 
   // A5: Count category bonus matches alongside rule matches
   const CATEGORY_PASS_THRESHOLD = 0.5;
 
   const detScore = deterministic?.deterministicScore ?? latestScore?.deterministicScore ?? null;
-  const blendPct = blendedScore != null ? Math.round(blendedScore * 100) : null;
+  const aiReasoning = latestScore?.reasonsJson?.aiReasoning ?? [];
+  const hasAiOrModelScore = latestScore?.reasonsJson?.scoreSource === 'llm'
+    || latestScore?.reasonsJson?.scoreSource === 'trained_model'
+    || latestScore?.reasonsJson?.usedTrainedModel === true
+    || aiReasoning.length > 0;
+  const effectiveLeadScore = leadScore
+    ?? (hasAiOrModelScore ? latestScore?.logisticScore : latestScore?.blendedScore)
+    ?? null;
+  const effectiveScoreBand = scoreBand ?? latestScore?.scoreBand;
+  const leadScorePct = effectiveLeadScore != null ? Math.round(effectiveLeadScore * 100) : null;
   const detPct = detScore != null ? Math.round(detScore * 100) : null;
-
-  // ML / blend info
-  const usedMl = latestScore?.reasonsJson?.usedTrainedModel ?? false;
-  const blendWeights = latestScore?.reasonsJson?.blendWeights;
-  const mlScore = usedMl ? latestScore?.logisticScore ?? null : null;
-  const mlPct = mlScore != null ? Math.round(mlScore * 100) : null;
+  const leadScoreLabel = hasAiOrModelScore ? 'AI Lead Score' : 'Lead Score';
 
   // Category bonuses/penalties
   const categoryScores = latestScore?.reasonsJson?.categoryScores;
@@ -236,6 +278,7 @@ export function ScoringBreakdown({
     ([, score]) => score.rate >= CATEGORY_PASS_THRESHOLD && score.matched >= 1,
   ).length;
   const qualificationPath = latestScore?.reasonsJson?.qualificationPath ?? null;
+  const reasonCodes = latestScore?.reasonsJson?.reasonCodes ?? [];
 
   // Total weight pool (sum of all weights applied)
   const totalWeightPool = weightedRules.reduce((sum, r) => sum + Math.abs(r.weightApplied), 0);
@@ -244,35 +287,30 @@ export function ScoringBreakdown({
     <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
       <h2 className="mb-4 flex items-center gap-2 text-base font-bold tracking-tight">
         <Brain className="h-4 w-4 text-zbooni-teal" />
-        Scoring Breakdown
-        {blendLabel && (
-          <span className="ml-auto text-[10px] font-semibold text-muted-foreground/50">
-            {blendLabel}
-          </span>
-        )}
+        Scoring
       </h2>
 
       {/* Score summary cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {blendPct !== null && (
+        {leadScorePct !== null && (
           <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
-              Final Score
+              {leadScoreLabel}
             </p>
             <div className="mt-0.5 flex items-center gap-2">
-              <span className="text-lg font-bold tabular-nums">{blendPct}%</span>
-              {scoreBand && (
+              <span className="text-lg font-bold tabular-nums">{leadScorePct}%</span>
+              {effectiveScoreBand && (
                 <span
                   className={cn(
                     'rounded-full px-2 py-0.5 text-[10px] font-bold uppercase',
-                    scoreBand === 'HIGH'
+                    effectiveScoreBand === 'HIGH'
                       ? 'bg-zbooni-green/15 text-zbooni-green'
-                      : scoreBand === 'MEDIUM'
+                      : effectiveScoreBand === 'MEDIUM'
                         ? 'bg-yellow-500/15 text-yellow-400'
                         : 'bg-red-500/15 text-red-400',
                   )}
                 >
-                  {scoreBand}
+                  {effectiveScoreBand}
                 </span>
               )}
             </div>
@@ -280,67 +318,87 @@ export function ScoringBreakdown({
         )}
         {detPct !== null && (
           <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
-              {!latestScore?.reasonsJson?.usedTrainedModel
-                ? 'Score (100% Rule-Based)'
-                : blendWeights
-                  ? `Rule-Based (${Math.round(blendWeights.deterministic * 100)}%)`
-                  : 'Rule-Based'}
-            </p>
+            <MetricLabel tooltip="The rule-based starting point. It summarizes the signals we could measure from business/search/scrape data and is used as a fallback or context for AI scoring.">
+              Deterministic Baseline
+            </MetricLabel>
             <p className="mt-0.5 text-lg font-bold tabular-nums">{detPct}%</p>
           </div>
         )}
-        {usedMl && mlPct !== null && (
+        {latestScore && (
           <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
-              ML Model
+            <MetricLabel tooltip="The deterministic path from the rule engine: proceed, selective, disqualify, or hard-filtered. It explains the baseline, not a separate final score.">
+              Decision Path
+            </MetricLabel>
+            <p className="mt-0.5 text-sm font-bold uppercase text-foreground">
+              {qualificationPath?.replace(/_/g, ' ') ?? 'Not recorded'}
             </p>
-            <p className="mt-0.5 text-lg font-bold tabular-nums">{mlPct}%</p>
+          </div>
+        )}
+        {categoryEntries.length > 0 && (
+          <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
+            <MetricLabel tooltip="High-level buckets of related signals, such as sales motion, payment complexity, risk/urgency, and switching willingness. A group passes when at least half of its signals match.">
+              Signal Groups Passed
+            </MetricLabel>
+            <p className="mt-0.5 text-lg font-bold tabular-nums">
+              {categoryBonusMatchCount}
+              <span className="text-sm font-normal text-muted-foreground/40">/{categoryEntries.length}</span>
+            </p>
           </div>
         )}
         {snapshot && (
           <div className="rounded-lg border border-border/20 bg-zbooni-dark/30 p-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
-              Rules Matched
-            </p>
+            <MetricLabel tooltip={weightedRuleTooltip}>
+              Rule Signals Matched
+            </MetricLabel>
             <p className="mt-0.5 text-lg font-bold tabular-nums">
-              {snapshot.ruleMatchCount + categoryBonusMatchCount}
+              {weightedRuleMatchCount}
               <span className="text-sm font-normal text-muted-foreground/40">/{weightedRules.length}</span>
-              {categoryBonusMatchCount > 0 && (
-                <span className="ml-1 text-[10px] font-semibold text-zbooni-green">
-                  (+{categoryBonusMatchCount} category)
-                </span>
-              )}
             </p>
           </div>
         )}
       </div>
 
-      {/* Blend formula */}
-      {usedMl && blendWeights && detPct !== null && mlPct !== null && (
-        <div className="mt-4 rounded-lg border border-border/20 bg-zbooni-dark/20 px-4 py-3">
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
-            <Sigma className="mr-1 inline h-3 w-3" />
-            Blend Formula
+      {(aiReasoning.length > 0 || reasonCodes.length > 0) && (
+        <div className="mt-4 rounded-lg border border-zbooni-teal/20 bg-zbooni-teal/5 px-4 py-3">
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zbooni-teal/80">
+            AI Scoring Reasoning
           </p>
-          <p className="font-mono text-sm text-foreground/80">
-            <span className="text-muted-foreground/60">Final</span> = {detPct}% <span className="text-muted-foreground/40">x</span>{' '}
-            <span className="text-zbooni-teal">{Math.round(blendWeights.deterministic * 100)}%</span>
-            {' + '}
-            {mlPct}% <span className="text-muted-foreground/40">x</span>{' '}
-            <span className="text-purple-400">{Math.round(blendWeights.ai * 100)}%</span>
-            {' = '}
-            <span className="font-bold text-foreground">{blendPct}%</span>
-          </p>
+          {aiReasoning.length > 0 ? (
+            <div className="space-y-2">
+              {aiReasoning.map((reason, index) => (
+                <div key={`ai-reason-${index}`} className="flex items-start gap-2 text-sm text-foreground/80">
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zbooni-teal/15 text-[10px] font-bold text-zbooni-teal">
+                    {index + 1}
+                  </span>
+                  <span>{reason}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {reasonCodes.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {reasonCodes.map((code) => (
+                <span
+                  key={`reason-code-${code}`}
+                  className="rounded-full border border-zbooni-teal/20 bg-zbooni-dark/30 px-2 py-0.5 text-[10px] font-semibold text-zbooni-teal"
+                >
+                  {formatFieldKey(code)}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
       )}
 
       {/* Category bonuses/penalties */}
       {categoryEntries.length > 0 && (
         <div className="mt-4">
-          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">
-            Category Match Rates
-          </p>
+          <div className="mb-2 flex items-center gap-1.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">
+              Signal Group Match
+            </p>
+            <InfoTooltip text="Each pill shows one signal group as matched signals over total signals in that group. Example: 2/4 signals means two of the four checks in that group matched." />
+          </div>
           <div className="flex flex-wrap gap-2">
             {categoryEntries.map(([cat, scores]) => {
               const rate = Math.round(scores.rate * 100);
@@ -357,7 +415,7 @@ export function ScoringBreakdown({
                 >
                   <span className="font-semibold">{formatFieldKey(cat)}</span>
                   <span className="ml-2 font-mono text-[10px]">
-                    {scores.matched}/{scores.total} ({rate}%)
+                    {scores.matched}/{scores.total} signals ({rate}%)
                   </span>
                 </div>
               );
@@ -505,11 +563,11 @@ export function ScoringBreakdown({
                 </div>
               ))}
 
-              {/* A6: Category Bonuses sub-section with per-feature breakdown */}
+              {/* Category groups with per-feature breakdown */}
               {categoryEntries.length > 0 && (
                 <div className="mt-3 rounded-lg border border-border/20 bg-zbooni-dark/20 p-3">
                   <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
-                    Category Bonuses
+                    Baseline Signal Groups
                     {qualificationPath ? (
                       <span className={cn(
                         'ml-2 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase',
@@ -526,11 +584,6 @@ export function ScoringBreakdown({
                   <div className="space-y-2">
                     {categoryEntries.map(([category, score]) => {
                       const passed = score.rate >= CATEGORY_PASS_THRESHOLD && score.matched >= 1;
-                      const bonusValue = passed
-                        ? (qualificationPath === 'PROCEED' ? '+10%'
-                          : qualificationPath === 'SELECTIVE' ? '+5%'
-                          : '-5%')
-                        : null;
                       // Find individual features belonging to this category from rule evaluations
                       const categoryFeatures = (deterministic?.ruleEvaluation ?? [])
                         .filter((r) => r.ruleType !== 'HARD_FILTER' && FIELD_KEY_TO_CATEGORY[r.fieldKey] === category);
@@ -558,13 +611,9 @@ export function ScoringBreakdown({
                             </span>
                             <span className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground/40">
                               <span>{score.matched}/{score.total} ({Math.round(score.rate * 100)}%)</span>
-                              {passed && bonusValue ? (
-                                <span className={bonusValue.startsWith('+') ? 'text-zbooni-green' : 'text-red-400'}>
-                                  {bonusValue}
-                                </span>
-                              ) : (
-                                <span className="text-muted-foreground/30">no bonus</span>
-                              )}
+                              <span className={passed ? 'text-zbooni-green' : 'text-muted-foreground/30'}>
+                                {passed ? 'passed' : 'not passed'}
+                              </span>
                             </span>
                           </div>
                           {/* Per-feature breakdown within this category */}

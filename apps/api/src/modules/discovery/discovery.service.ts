@@ -11,13 +11,22 @@ import type {
   PipelineRunStatus,
 } from '@lead-flood/contracts';
 import {
-  buildCountryCitiesMap,
+  buildSerpApiCountryCitiesMap,
   countryDisplayName,
   findCountriesMissingCities,
+  normalizeCountryCodes,
 } from '@lead-flood/contracts';
 
 import type { DiscoveryRepository } from './discovery.repository.js';
 import { DiscoveryInvalidRequestError } from './discovery.errors.js';
+
+type DiscoverySeedLanguageCode = 'en' | 'ar';
+type DiscoverySeedTaskType = 'SERP_GOOGLE' | 'SERP_GOOGLE_LOCAL' | 'SERP_MAPS_LOCAL';
+
+const DASHBOARD_BULK_LANGUAGES: DiscoverySeedLanguageCode[] = ['en', 'ar'];
+const DASHBOARD_BULK_TASK_TYPES: DiscoverySeedTaskType[] = ['SERP_MAPS_LOCAL'];
+const DASHBOARD_BULK_MAX_PAGES = 1;
+const DASHBOARD_BULK_MIN_REVIEW_COUNT = 0;
 
 export interface DiscoveryRunJobPayload {
   runId: string;
@@ -30,6 +39,9 @@ export interface DiscoveryRunJobPayload {
   limit?: number | undefined;
   validationMode?: boolean | undefined;
   minReviewCount?: number | undefined;
+  maxPages?: number | undefined;
+  taskTypes?: DiscoverySeedTaskType[] | undefined;
+  languages?: DiscoverySeedLanguageCode[] | undefined;
   requestedByUserId?: string | undefined;
 }
 
@@ -44,7 +56,13 @@ export interface DiscoverySeedShardJobPayload {
   searchCategories?: string[] | undefined;
   includeWebsiteAnalysis?: boolean | undefined;
   includeSocialMediaAnalysis?: boolean | undefined;
+  /** Per-ICP seed cap; the sum across seed shards equals the requested search-task budget. */
   maxTasks?: number | undefined;
+  /** Whole-run search-task budget used by discovery.run_search_task workers. */
+  runMaxTasks?: number | undefined;
+  maxPages?: number | undefined;
+  taskTypes?: DiscoverySeedTaskType[] | undefined;
+  languages?: DiscoverySeedLanguageCode[] | undefined;
   validationMode?: boolean | undefined;
   minReviewCount?: number | undefined;
   enqueueRunTasks: true;
@@ -67,24 +85,43 @@ export interface DiscoveryService {
   ): Promise<ListDiscoveryRunsResponse>;
 }
 
-async function assertCountryCityCoverage(input: CreateDiscoveryRunRequest): Promise<void> {
-  if (input.cities && input.cities.length > 0) {
-    return;
-  }
-
+async function resolveSupportedDiscoveryCities(
+  input: CreateDiscoveryRunRequest,
+): Promise<string[] | undefined> {
   const setting = await getPipelineSetting('countryCities');
-  const countryCities = buildCountryCitiesMap(setting?.valueJson, {
+  const countryCities = buildSerpApiCountryCitiesMap(setting?.valueJson, {
     includeCuratedDefaults: true,
   });
   const missingCountries = findCountriesMissingCities(input.countries, countryCities);
 
-  if (missingCountries.length === 0) {
-    return;
+  if (missingCountries.length > 0) {
+    throw new DiscoveryInvalidRequestError(
+      `Add at least one city in Controls & Settings for ${missingCountries.map((country) => countryDisplayName(country)).join(', ')} before starting discovery.`,
+    );
   }
 
-  throw new DiscoveryInvalidRequestError(
-    `Add at least one city in Controls & Settings for ${missingCountries.map((country) => countryDisplayName(country)).join(', ')} before starting discovery.`,
-  );
+  if (!input.cities || input.cities.length === 0) {
+    return undefined;
+  }
+
+  const selectedCityKeys = new Set(input.cities.map((city) => city.trim().toLowerCase()));
+  const supportedCities: string[] = [];
+
+  for (const country of normalizeCountryCodes(input.countries)) {
+    for (const city of countryCities[country] ?? []) {
+      if (selectedCityKeys.has(city.toLowerCase())) {
+        supportedCities.push(city);
+      }
+    }
+  }
+
+  if (supportedCities.length === 0) {
+    throw new DiscoveryInvalidRequestError(
+      'Select at least one SerpAPI-supported city before starting discovery.',
+    );
+  }
+
+  return Array.from(new Set(supportedCities));
 }
 
 /**
@@ -101,9 +138,7 @@ function resolveIcpProfileIds(input: CreateDiscoveryRunRequest): string[] {
   return [];
 }
 
-function resolveRequestedSearchCategories(
-  input: CreateDiscoveryRunRequest,
-): string[] | undefined {
+function resolveRequestedSearchCategories(input: CreateDiscoveryRunRequest): string[] | undefined {
   const searchCategories = input.advancedSettings?.searchCategories;
   if (!searchCategories || searchCategories.length === 0) {
     return undefined;
@@ -119,14 +154,13 @@ function buildDiscoverySeedShardJobPayloads(
 ): DiscoverySeedShardJobPayload[] {
   const totalLimit = input.limit;
   const icpCount = icpProfileIds.length;
-  const perIcpLimit = totalLimit !== undefined && icpCount > 0
-    ? Math.floor(totalLimit / icpCount)
-    : undefined;
-  const remainderLimit = totalLimit !== undefined && perIcpLimit !== undefined
-    ? totalLimit - perIcpLimit * icpCount
-    : 0;
+  const perIcpLimit =
+    totalLimit !== undefined && icpCount > 0 ? Math.floor(totalLimit / icpCount) : undefined;
+  const remainderLimit =
+    totalLimit !== undefined && perIcpLimit !== undefined ? totalLimit - perIcpLimit * icpCount : 0;
   const seedPayloads: DiscoverySeedShardJobPayload[] = [];
   const searchCategories = resolveRequestedSearchCategories(input);
+  const minReviewCount = input.advancedSettings?.minReviewCount ?? DASHBOARD_BULK_MIN_REVIEW_COUNT;
 
   for (let i = 0; i < icpProfileIds.length; i += 1) {
     const icpProfileId = icpProfileIds[i]!;
@@ -153,8 +187,12 @@ function buildDiscoverySeedShardJobPayloads(
       includeWebsiteAnalysis: input.includeWebsiteAnalysis,
       includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
       maxTasks,
+      runMaxTasks: totalLimit,
+      maxPages: DASHBOARD_BULK_MAX_PAGES,
+      taskTypes: [...DASHBOARD_BULK_TASK_TYPES],
+      languages: [...DASHBOARD_BULK_LANGUAGES],
       validationMode: (input.limit ?? 0) <= 10,
-      minReviewCount: input.advancedSettings?.minReviewCount,
+      minReviewCount,
       enqueueRunTasks: true,
     });
   }
@@ -171,30 +209,43 @@ export function buildDiscoveryService(
   return {
     async createDiscoveryRun(input) {
       await repository.assertDiscoveryWorkerAvailable();
-      await assertCountryCityCoverage(input);
+      const supportedCities = await resolveSupportedDiscoveryCities(input);
+      const normalizedInput: CreateDiscoveryRunRequest = {
+        ...input,
+        ...(supportedCities ? { cities: supportedCities } : {}),
+      };
 
       const runId = randomUUID();
-      const icpProfileIds = resolveIcpProfileIds(input);
+      const icpProfileIds = resolveIcpProfileIds(normalizedInput);
 
       // Store the first ICP as the primary for backward compat in payload/display
       const primaryIcpProfileId = icpProfileIds[0] ?? '';
-      const searchCategories = resolveRequestedSearchCategories(input);
+      const searchCategories = resolveRequestedSearchCategories(normalizedInput);
+      const minReviewCount =
+        normalizedInput.advancedSettings?.minReviewCount ?? DASHBOARD_BULK_MIN_REVIEW_COUNT;
 
       const payload: DiscoveryRunJobPayload = {
         runId,
         icpProfileId: primaryIcpProfileId,
-        countries: input.countries,
-        cities: input.cities,
+        countries: normalizedInput.countries,
+        cities: normalizedInput.cities,
         ...(searchCategories ? { searchCategories } : {}),
-        includeWebsiteAnalysis: input.includeWebsiteAnalysis,
-        includeSocialMediaAnalysis: input.includeSocialMediaAnalysis,
-        limit: input.limit,
-        minReviewCount: input.advancedSettings?.minReviewCount,
-        requestedByUserId: input.requestedByUserId,
+        includeWebsiteAnalysis: normalizedInput.includeWebsiteAnalysis,
+        includeSocialMediaAnalysis: normalizedInput.includeSocialMediaAnalysis,
+        limit: normalizedInput.limit,
+        minReviewCount,
+        maxPages: DASHBOARD_BULK_MAX_PAGES,
+        taskTypes: [...DASHBOARD_BULK_TASK_TYPES],
+        languages: [...DASHBOARD_BULK_LANGUAGES],
+        requestedByUserId: normalizedInput.requestedByUserId,
       };
 
-      const seedPayloads = buildDiscoverySeedShardJobPayloads(runId, input, icpProfileIds);
-      await repository.createDiscoveryRun(runId, input, payload, seedPayloads);
+      const seedPayloads = buildDiscoverySeedShardJobPayloads(
+        runId,
+        normalizedInput,
+        icpProfileIds,
+      );
+      await repository.createDiscoveryRun(runId, normalizedInput, payload, seedPayloads);
 
       return {
         runId,

@@ -73,6 +73,7 @@ import type { ScoringRunJobPayload } from './modules/scoring/scoring.service.js'
 import { registerSettingsRoutes } from './modules/settings/settings.routes.js';
 import { registerStatsRoutes } from './modules/stats/stats.routes.js';
 import { registerWebhookRoutes } from './modules/webhook/webhook.routes.js';
+import type { ResendReceivedEmail } from './modules/webhook/webhook.service.js';
 
 // ── Email normalization (API can't import @lead-flood/providers) ──
 
@@ -111,10 +112,18 @@ function normalizeLeadEmail(raw: string): string {
   } catch {
     email = raw;
   }
-  email = email.trim().replace(/\s+/g, '');
+  email = email.trim().replace(/[\s\u200B-\u200D\uFEFF]+/g, '');
   if (SIMPLE_EMAIL_RE.test(email)) return email;
-  // If still invalid after normalization, return a safe fallback
-  return email.includes('@') ? email : 'unknown@lead.local';
+
+  const validCandidate = email
+    .split(/[,;]+/)
+    .map((candidate) => candidate.trim().replace(/[\s\u200B-\u200D\uFEFF]+/g, ''))
+    .find((candidate) => SIMPLE_EMAIL_RE.test(candidate));
+
+  if (validCandidate) return validCandidate;
+
+  // If still invalid after normalization, return a safe fallback.
+  return 'unknown@lead.local';
 }
 
 // ── Generic email filter (inline — API can't import @lead-flood/providers) ──
@@ -239,6 +248,7 @@ export interface BuildServerOptions {
   enqueueMessageGenerate?: ((payload: MessageGenerateJobPayload) => Promise<void>) | undefined;
   enqueueAnalyticsRollup?: ((payload: AnalyticsRollupJobPayload) => Promise<void>) | undefined;
   enqueueReplyClassify?: ((payload: ReplyClassifyJobPayload) => Promise<void>) | undefined;
+  fetchResendReceivedEmail?: ((emailId: string) => Promise<ResendReceivedEmail | null>) | undefined;
   trengoWebhookSecret?: string | undefined;
   resendWebhookSecret?: string | undefined;
   triggerDiscoverySeedJob?: ((input: RunDiscoverySeedRequest) => Promise<TriggerJobRunResponse>) | undefined;
@@ -333,6 +343,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       trengoWebhookSecret: options.trengoWebhookSecret,
       resendWebhookSecret: options.resendWebhookSecret,
       enqueueReplyClassify: options.enqueueReplyClassify,
+      fetchResendReceivedEmail: options.fetchResendReceivedEmail,
     });
   }
 

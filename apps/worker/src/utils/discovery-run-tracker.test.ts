@@ -16,6 +16,9 @@ const prismaMock = {
   businessConversion: {
     findMany: vi.fn(),
   },
+  discoveryAttributionAssignment: {
+    findMany: vi.fn(),
+  },
   leadDiscoveryRecord: {
     findMany: vi.fn(),
   },
@@ -62,7 +65,7 @@ describe('tryFinalizeDiscoveryRun', () => {
       type: 'discovery.run',
       status: 'running',
       payload: {
-        icpProfileId: 'icp_1',
+        icpProfileId: 'payload_icp',
       },
       result: {
         searchTasksComplete: true,
@@ -85,6 +88,7 @@ describe('tryFinalizeDiscoveryRun', () => {
     });
     prismaMock.contactRecoveryItem.findMany.mockResolvedValue([]);
     prismaMock.businessConversion.findMany.mockResolvedValue([]);
+    prismaMock.discoveryAttributionAssignment.findMany.mockResolvedValue([]);
     prismaMock.leadDiscoveryRecord.findMany.mockResolvedValue([]);
     prismaMock.lead.findMany.mockResolvedValue([]);
     prismaMock.messageDraft.findMany.mockResolvedValue([]);
@@ -316,7 +320,86 @@ describe('tryFinalizeDiscoveryRun', () => {
         data: expect.objectContaining({
           result: expect.objectContaining({
             converted: 0,
+            disqualified: 1,
+            sentToRecovery: 1,
             outcome: expect.objectContaining({
+              businessesDisqualified: 1,
+              businessesSentToRecovery: 1,
+              leadsCreated: 0,
+              disqualificationReasons: {
+                NO_WEBSITE_DOMAIN: 1,
+              },
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('counts run-owned existing-business attribution outcomes as terminal', async () => {
+    prismaMock.jobExecution.findUnique.mockResolvedValue({
+      id: 'run_1',
+      type: 'discovery.run',
+      status: 'running',
+      payload: {
+        icpProfileId: 'icp_1',
+      },
+      result: {
+        searchTasksComplete: true,
+        searchTasksCompletedAt: new Date().toISOString(),
+        newBusinesses: 2,
+        totalFound: 2,
+      },
+    });
+    prismaMock.business.findMany.mockResolvedValue([
+      { id: 'biz_no_unique', discoveryRunId: 'run_1', preQualified: true, disqualificationReason: null },
+      { id: 'biz_reused', discoveryRunId: 'run_1', preQualified: true, disqualificationReason: null },
+    ]);
+    prismaMock.businessConversion.findMany.mockResolvedValue([]);
+    prismaMock.discoveryAttributionAssignment.findMany.mockResolvedValue([
+      {
+        businessId: 'biz_no_unique',
+        icpProfileId: 'icp_1',
+        primaryOutcomeCode: 'EXISTING_BUSINESS_NO_UNIQUE_ACTIVE_SAME_BUSINESS_LEAD',
+      },
+      {
+        businessId: 'biz_reused',
+        icpProfileId: 'icp_1',
+        primaryOutcomeCode: 'EXISTING_SAME_BUSINESS_LEAD_REUSED',
+      },
+    ]);
+    prismaMock.lead.findMany.mockResolvedValue([
+      { id: 'lead_reused', businessId: 'biz_reused' },
+    ]);
+    prismaMock.messageDraft.findMany.mockResolvedValue([]);
+    prismaMock.leadScorePrediction.findMany.mockResolvedValue([
+      {
+        leadId: 'lead_reused',
+        icpProfileId: 'icp_1',
+        scoreBand: 'MEDIUM',
+        blendedScore: 0.62,
+        predictedAt: new Date('2026-03-20T10:00:00.000Z'),
+        createdAt: new Date('2026-03-20T10:00:00.000Z'),
+      },
+    ]);
+    prismaMock.$queryRawUnsafe.mockResolvedValue([]);
+    prismaMock.jobExecution.updateMany.mockResolvedValue({ count: 1 });
+
+    const { tryFinalizeDiscoveryRun } = await import('./discovery-run-tracker.js');
+
+    await tryFinalizeDiscoveryRun('run_1', {
+      info: vi.fn(),
+      warn: vi.fn(),
+    });
+
+    expect(prismaMock.jobExecution.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'completed',
+          result: expect.objectContaining({
+            converted: 0,
+            outcome: expect.objectContaining({
+              businessesFound: 2,
               leadsCreated: 0,
             }),
           }),

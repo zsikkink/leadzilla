@@ -5,7 +5,7 @@ import {
   listPipelineSettings,
   upsertPipelineSetting,
 } from '@lead-flood/db';
-import { normalizeCountryCitiesMap } from '@lead-flood/contracts';
+import { buildSerpApiCountryCitiesMap } from '@lead-flood/contracts';
 
 import { requireAppAdminAccess } from '../../auth/guard.js';
 
@@ -30,7 +30,7 @@ const UpdatePipelineSettingBodySchema = z.object({
 
 function normalizePipelineSettingValue(key: string, value: unknown): unknown {
   if (key === 'countryCities') {
-    return normalizeCountryCitiesMap(value);
+    return buildSerpApiCountryCitiesMap(value);
   }
 
   return value;

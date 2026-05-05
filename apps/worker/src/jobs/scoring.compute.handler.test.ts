@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import type { OpenAiAdapter } from '@lead-flood/providers';
 import type { Job } from 'pg-boss';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -207,6 +208,69 @@ describe('handleScoringComputeJob primary business conversion anchoring', () => 
     });
     expect(dbMock.prisma.leadRejection.deleteMany).toHaveBeenCalledWith({
       where: { leadId: 'lead_1' },
+    });
+  });
+
+  it('uses the OpenAI score as the final score with deterministic as baseline only', async () => {
+    scoringMock.evaluateDeterministicScore.mockReturnValue({
+      qualificationScore: 0.12,
+      hardFilterPassed: true,
+      qualificationPath: 'DISQUALIFY',
+      reasonCodes: ['LOW_WEIGHTED_MATCH'],
+      categoryScores: {},
+      ruleEvaluation: [],
+    });
+    dbMock.prisma.icpProfile.findUnique.mockResolvedValue({
+      description: 'Zbooni ICP',
+    });
+    const openAiAdapter = {
+      isConfigured: true,
+      evaluateLeadScore: vi.fn().mockResolvedValue({
+        status: 'success',
+        data: {
+          score: 0.82,
+          reasoning: ['LLM found strong ICP fit'],
+        },
+      }),
+    };
+
+    await handleScoringComputeJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        mode: 'BY_LEAD_IDS',
+        leadIds: ['lead_1'],
+        icpProfileId: 'icp_1',
+        requestedByUserId: 'user_1',
+      }),
+      {
+        openAiAdapter: openAiAdapter as unknown as OpenAiAdapter,
+      },
+    );
+
+    expect(dbMock.prisma.leadScorePrediction.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          deterministicScore: 0.12,
+          logisticScore: 0.82,
+          blendedScore: 0.82,
+          reasonsJson: expect.objectContaining({
+            aiReasoning: ['LLM found strong ICP fit'],
+            scoreSource: 'llm',
+          }),
+        }),
+      }),
+    );
+    expect(scoringMock.toScoreBand).toHaveBeenCalledWith(0.82, {
+      high: 0.8,
+      medium: 0.5,
+    });
+    expect(dbMock.prisma.lead.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'lead_1',
+        status: { in: ['new', 'processing', 'enriched', 'scored', 'qualified', 'rejected', 'stuck'] },
+      },
+      data: { status: 'qualified' },
     });
   });
 

@@ -2,19 +2,23 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   ErrorResponseSchema,
-  type ReplyClassifyJobPayload,
   ResendWebhookPayloadSchema,
   ResendWebhookResponseSchema,
   TrengoWebhookPayloadSchema,
   TrengoWebhookResponseSchema,
 } from '@lead-flood/contracts';
 
-import { processResendWebhook, processTrengoWebhook } from './webhook.service.js';
+import {
+  processResendWebhook,
+  processTrengoWebhook,
+  type WebhookServiceDependencies,
+} from './webhook.service.js';
 
 export interface WebhookRouteDependencies {
   trengoWebhookSecret?: string | undefined;
   resendWebhookSecret?: string | undefined;
-  enqueueReplyClassify?: ((payload: ReplyClassifyJobPayload) => Promise<void>) | undefined;
+  enqueueReplyClassify?: WebhookServiceDependencies['enqueueReplyClassify'];
+  fetchResendReceivedEmail?: WebhookServiceDependencies['fetchResendReceivedEmail'];
 }
 
 function verifyTrengoSignature(
@@ -203,7 +207,10 @@ export function registerWebhookRoutes(
       }
 
       try {
-        const result = await processResendWebhook(parsed.data);
+        const result = await processResendWebhook(parsed.data, {
+          enqueueReplyClassify: deps.enqueueReplyClassify,
+          fetchResendReceivedEmail: deps.fetchResendReceivedEmail,
+        });
 
         request.log.info(
           {

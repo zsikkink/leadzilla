@@ -14,6 +14,7 @@ const MOBILE_NAV = [
   { href: '/dashboard/leads', label: 'Leads' },
   { href: '/dashboard/messages', label: 'Messages' },
   { href: '/dashboard/inbox', label: 'Inbox' },
+  { href: '/dashboard/prompts', label: 'Prompt Center' },
   { href: '/dashboard/icps', label: 'ICP Profiles' },
   { href: '/dashboard/analytics', label: 'Analytics' },
   { href: '/discovery', label: 'Controls & Settings' },
@@ -31,6 +32,7 @@ function getPageTitle(pathname: string): string {
   if (pathname === '/dashboard/leads') return 'Leads';
   if (pathname === '/dashboard/messages') return 'Message Queue';
   if (pathname === '/dashboard/inbox') return 'Inbox';
+  if (pathname === '/dashboard/prompts') return 'Prompt Center';
   if (pathname.startsWith('/dashboard/icps/')) return 'ICP Profile';
   if (pathname === '/dashboard/icps') return 'ICP Profiles';
   if (pathname === '/dashboard/analytics') return 'Analytics';

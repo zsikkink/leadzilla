@@ -367,26 +367,72 @@ function buildCountryAliasesByCode(): Partial<Record<SupportedCountryCode, strin
 const COUNTRY_ALIAS_TO_CODE = buildCountryAliasMap();
 const COUNTRY_ALIASES_BY_CODE = buildCountryAliasesByCode();
 
-export const CuratedCountryCitiesByCode: CountryCitiesMap = {
-  AE: ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Ras Al Khaimah', 'Fujairah', 'Umm Al Quwain', 'Al Ain'],
-  SA: ['Riyadh', 'Jeddah', 'Mecca', 'Medina', 'Dammam', 'Khobar', 'Tabuk', 'Abha'],
-  EG: ['Cairo', 'Alexandria', 'Giza', 'Sharm El Sheikh'],
-  JO: ['Amman', 'Irbid', 'Zarqa', 'Aqaba'],
-  BH: ['Manama', 'Riffa', 'Muharraq', 'Hamad Town'],
-  KW: ['Kuwait City', 'Hawalli', 'Salmiya', 'Jahra'],
-  OM: ['Muscat', 'Salalah', 'Nizwa', 'Sohar'],
-  QA: ['Doha', 'Al Wakrah', 'Al Khor', 'Lusail'],
-  LB: ['Beirut', 'Tripoli', 'Sidon', 'Jounieh'],
-  IQ: ['Baghdad', 'Basra', 'Erbil', 'Sulaymaniyah'],
-  MA: ['Casablanca', 'Rabat', 'Marrakech', 'Fez', 'Tangier'],
-  TN: ['Tunis', 'Sfax', 'Sousse', 'Kairouan'],
-  DZ: ['Algiers', 'Oran', 'Constantine', 'Annaba'],
-  LY: ['Tripoli', 'Benghazi', 'Misrata', 'Sabha'],
-  YE: ['Sanaa', 'Aden', 'Taiz', 'Hodeidah'],
-  SY: ['Damascus', 'Aleppo', 'Homs', 'Latakia'],
-  PS: ['Ramallah', 'Gaza', 'Hebron', 'Bethlehem', 'Nablus'],
-  SD: ['Khartoum', 'Omdurman', 'Port Sudan', 'Kassala'],
+// Default discovery locations are stored only when SerpAPI can resolve them
+// through https://serpapi.com/locations.json. Keep this list intentionally small
+// and prefer SerpAPI location names over local aliases.
+const SERPAPI_DISCOVERY_COUNTRY_CITIES: CountryCitiesMap = {
+  AE: [
+    "Dubai", "Abu Dhabi", "Sharjah", "Ajman", "Al Ain", "Ras Al-Khaimah", "Fujairah", "Umm Al Quwain",
+    "Kalba", "Madinat Zayed", "Ruwais", "Zayed City",
+  ],
+  BH: [
+    "Manama", "Riffa", "Isa Town",
+  ],
+  DZ: [
+    "Algiers", "Oran", "Constantine", "Annaba",
+  ],
+  EG: [
+    "Cairo", "Giza", "Alexandria", "Sharm El-Sheikh", "Hurghada", "Luxor", "Aswan", "Mansoura",
+    "Tanta", "Zagazig", "Ismailia", "Suez", "Port Said", "Damietta", "Minya", "Asyut",
+    "Sohag", "Beni Suef", "Faiyum", "Qena", "Damanhour", "Banha", "Bilbeis", "Abu Kabir",
+    "6th of October City", "10th of Ramadan City", "Dahab", "Arish",
+  ],
+  IL: [
+    "Tel Aviv-Yafo", "Jerusalem", "Haifa",
+  ],
+  IQ: [
+    "Baghdad", "Basrah", "Erbil", "Sulaymaniyah Governorate",
+  ],
+  JO: [
+    "Amman", "Aqaba Governorate", "Irbid Governorate", "Zarqa Governorate", "Madaba Governorate",
+    "Jerash Governorate", "Mafraq Governorate", "Karak Governorate",
+  ],
+  KW: [
+    "Salmiya", "Jabriya", "Al Farwaniyah", "Al Jahra", "Hawally", "Shuwaikh Industrial",
+    "Sabah Al Salem", "Ardiya", "Zahra", "Mangaf",
+  ],
+  LB: [
+    "Beirut",
+  ],
+  LY: [
+    "Tripoli", "Benghazi", "Misrata", "Sabha",
+  ],
+  MA: [
+    "Casablanca", "Rabat", "Marrakesh", "Fes", "Tangier",
+  ],
+  OM: [
+    "Muscat", "Seeb", "Al Buraimi",
+  ],
+  QA: [
+    "Doha", "Ar-Rayyan", "Al Wukair", "Al Wakrah", "Al Khor",
+  ],
+  SA: [
+    "Riyadh", "Jeddah", "Makkah", "Madinah", "Dammam", "Al Khobar", "Dhahran", "Al Jubail",
+    "Taif", "Tabuk", "Abha", "Buraydah", "Hail", "Najran", "Jazan", "Al Hofuf",
+    "Yanbu", "Al Qatif", "Al Mubarraz", "Arar", "Al Bahah", "Diriyah",
+  ],
+  SD: [
+    "Khartoum",
+  ],
+  TN: [
+    "Tunis", "Sfax", "Sousse", "Kairouan",
+  ],
 };
+
+// Retain the public export name for existing callers, but make the stored default
+// registry SerpAPI-backed only.
+export const CuratedCountryCitiesByCode: CountryCitiesMap = SERPAPI_DISCOVERY_COUNTRY_CITIES;
+export const SerpApiSupportedCountryCitiesByCode: CountryCitiesMap = SERPAPI_DISCOVERY_COUNTRY_CITIES;
 
 export const SupportedCountryOptions = SupportedCountryCodeValues
   .map((code) => ({
@@ -505,6 +551,48 @@ export function buildCountryCitiesMap(
     [SupportedCountryCode, string[]]
   >) {
     merged[code] = dedupeCities([...(merged[code] ?? []), ...cities]);
+  }
+
+  return merged;
+}
+
+function filterSerpApiSupportedCities(
+  countryCode: SupportedCountryCode,
+  cities: readonly string[],
+): string[] {
+  const supportedCities = SerpApiSupportedCountryCitiesByCode[countryCode];
+  if (!supportedCities) {
+    return [];
+  }
+
+  const supportedCityKeys = new Set(supportedCities.map((city) => city.toLowerCase()));
+  return dedupeCities(cities.filter((city) => supportedCityKeys.has(city.trim().toLowerCase())));
+}
+
+export function buildSerpApiCountryCitiesMap(
+  value: unknown,
+  options?: { includeCuratedDefaults?: boolean | undefined },
+): CountryCitiesMap {
+  const includeCuratedDefaults = options?.includeCuratedDefaults ?? false;
+  const normalized = normalizeCountryCitiesMap(value);
+  const merged: CountryCitiesMap = {};
+
+  if (includeCuratedDefaults) {
+    for (const [code, cities] of Object.entries(SerpApiSupportedCountryCitiesByCode) as Array<
+      [SupportedCountryCode, string[]]
+    >) {
+      merged[code] = dedupeCities(cities);
+    }
+  }
+
+  for (const [code, cities] of Object.entries(normalized) as Array<
+    [SupportedCountryCode, string[]]
+  >) {
+    const supportedCities = filterSerpApiSupportedCities(code, cities);
+    if (supportedCities.length === 0) {
+      continue;
+    }
+    merged[code] = dedupeCities([...(merged[code] ?? []), ...supportedCities]);
   }
 
   return merged;

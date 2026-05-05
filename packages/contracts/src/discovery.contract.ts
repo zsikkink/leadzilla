@@ -50,12 +50,7 @@ export const DiscoveryRecordProviderSchema = z.union([
   z.literal('GOOGLE_SEARCH'),
 ]);
 
-export const DiscoveryRecordStatusSchema = z.enum([
-  'DISCOVERED',
-  'DUPLICATE',
-  'REJECTED',
-  'ERROR',
-]);
+export const DiscoveryRecordStatusSchema = z.enum(['DISCOVERED', 'DUPLICATE', 'REJECTED', 'ERROR']);
 
 export const DiscoveryPipelineRunStatusSchema = z.enum([
   'QUEUED',
@@ -74,7 +69,7 @@ export const DiscoveryRunIdParamsSchema = z
 
 export const DiscoveryAdvancedSettingsSchema = z
   .object({
-    minReviewCount: z.coerce.number().int().min(0).default(15),
+    minReviewCount: z.coerce.number().int().min(0).default(0),
     searchCategories: z.array(z.string().min(1)).optional(),
   })
   .strict();
@@ -83,24 +78,26 @@ export const CreateDiscoveryRunRequestSchema = z
   .object({
     /** @deprecated Use icpProfileIds instead */
     icpProfileId: z.string().min(1).optional(),
-    /** Array of ICP profile IDs to discover for (limit is split across ICPs) */
+    /** Array of ICP profile IDs to discover for */
     icpProfileIds: z.array(z.string().min(1)).min(1).optional(),
     countries: z.preprocess((value) => {
       if (!Array.isArray(value)) return value;
-      return value.map((entry) => (typeof entry === 'string' ? normalizeDiscoveryCountryCode(entry) ?? entry : entry));
+      return value.map((entry) =>
+        typeof entry === 'string' ? (normalizeDiscoveryCountryCode(entry) ?? entry) : entry,
+      );
     }, z.array(SupportedCountryCodeSchema).min(1)),
     cities: z.array(z.string().min(1)).optional(),
     includeWebsiteAnalysis: z.boolean().default(true),
     includeSocialMediaAnalysis: z.boolean().default(true),
+    /** Total search-task budget for this discovery run */
     limit: z.coerce.number().int().min(1).max(1000).optional(),
     advancedSettings: DiscoveryAdvancedSettingsSchema.optional(),
     requestedByUserId: z.string().min(1).optional(),
   })
   .strict()
-  .refine(
-    (data) => data.icpProfileIds?.length || data.icpProfileId,
-    { message: 'Either icpProfileIds or icpProfileId is required' },
-  );
+  .refine((data) => data.icpProfileIds?.length || data.icpProfileId, {
+    message: 'Either icpProfileIds or icpProfileId is required',
+  });
 
 export const CreateDiscoveryRunResponseSchema = z
   .object({
@@ -208,17 +205,11 @@ export type DiscoveryRecordStatus = z.infer<typeof DiscoveryRecordStatusSchema>;
 export type PipelineRunStatus = z.infer<typeof DiscoveryPipelineRunStatusSchema>;
 export type CreateDiscoveryRunRequest = z.infer<typeof CreateDiscoveryRunRequestSchema>;
 export type CreateDiscoveryRunResponse = z.infer<typeof CreateDiscoveryRunResponseSchema>;
-export type DiscoveryRunStatusResponse = z.infer<
-  typeof DiscoveryRunStatusResponseSchema
->;
+export type DiscoveryRunStatusResponse = z.infer<typeof DiscoveryRunStatusResponseSchema>;
 export type ListDiscoveryRecordsQuery = z.infer<typeof ListDiscoveryRecordsQuerySchema>;
-export type LeadDiscoveryRecordResponse = z.infer<
-  typeof LeadDiscoveryRecordResponseSchema
->;
+export type LeadDiscoveryRecordResponse = z.infer<typeof LeadDiscoveryRecordResponseSchema>;
 export type DiscoveryQualityMetrics = z.infer<typeof DiscoveryQualityMetricsSchema>;
-export type ListDiscoveryRecordsResponse = z.infer<
-  typeof ListDiscoveryRecordsResponseSchema
->;
+export type ListDiscoveryRecordsResponse = z.infer<typeof ListDiscoveryRecordsResponseSchema>;
 // ── List Discovery Runs ─────────────────────────────────────────────────
 export const ListDiscoveryRunsQuerySchema = z
   .object({

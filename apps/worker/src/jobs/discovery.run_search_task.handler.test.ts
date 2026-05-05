@@ -170,6 +170,59 @@ describe('handleDiscoveryRunSearchTaskJob rediscovery reconciliation', () => {
     });
   });
 
+  it('uses the locked search task ICP profile when handing businesses to prequalify', async () => {
+    const enqueueBusinessPrequalify = vi.fn();
+    discoveryMock.runSearchTask.mockResolvedValue({
+      taskId: 'task_1',
+      status: 'DONE',
+      icpProfileId: 'icp_from_task',
+      taskType: 'SERP_GOOGLE_LOCAL',
+      queryHash: 'query_hash_1',
+      countryCode: 'US',
+      language: 'en',
+      durationMs: 125,
+      newBusinesses: 1,
+      newBusinessIds: ['business_new'],
+      observedBusinessIds: ['business_new'],
+      newSources: 0,
+      localBusinessCount: 1,
+      organicResultCount: 0,
+      attempts: 1,
+    });
+
+    await handleDiscoveryRunSearchTaskJob(
+      logger,
+      makeJob({
+        discoveryRunId: 'run_1',
+        icpProfileId: 'icp_seed_fallback',
+      }),
+      {
+        boss: { send: vi.fn() },
+        provider: {} as never,
+        config: {} as never,
+        enqueueBusinessPrequalify,
+      },
+    );
+
+    expect(dbMock.prisma.discoveryAttributionAssignment.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          discoveryRunId: 'run_1',
+          icpProfileId: 'icp_from_task',
+          businessId: 'business_new',
+          searchTaskId: 'task_1',
+        }),
+      ],
+      skipDuplicates: true,
+    });
+    expect(enqueueBusinessPrequalify).toHaveBeenCalledWith({
+      businessId: 'business_new',
+      discoveryRunId: 'run_1',
+      icpProfileId: 'icp_from_task',
+      correlationId: expect.any(String),
+    });
+  });
+
   it('enqueues business.prequalify for an existing observed business instead of reconciling it in the search worker', async () => {
     const enqueueBusinessPrequalify = vi.fn();
 

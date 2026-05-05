@@ -83,6 +83,27 @@ describe('GooglePlacesDiscoveryProvider', () => {
     expect(biz.instagramHandle).toBeNull();
   });
 
+  it('does not expose WhatsApp utility links as business websites', async () => {
+    const provider = createProvider({
+      places: [
+        {
+          id: 'ChIJ123',
+          displayName: { text: 'WhatsApp Only Gym' },
+          websiteUri: 'https://wa.me/971501234567',
+          googleMapsUri: 'https://maps.google.com/?cid=123',
+          addressComponents: [
+            { longText: 'United Arab Emirates', shortText: 'AE', types: ['country'] },
+          ],
+        },
+      ],
+    });
+
+    const result = await provider.searchGoogleLocal(BASE_REQUEST);
+
+    expect(result.localBusinesses).toHaveLength(1);
+    expect(result.localBusinesses[0]?.websiteUrl).toBeNull();
+  });
+
   it('filters out cross-border results by country code', async () => {
     const provider = createProvider({
       places: [

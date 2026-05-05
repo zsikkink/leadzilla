@@ -85,6 +85,36 @@ describe('SerpApiDiscoveryProvider local parsing', () => {
     expect(result.localBusinesses[0]?.instagramHandle).toBe('dehyasalon');
   });
 
+  it('does not treat Facebook or WhatsApp utility links as business websites', async () => {
+    const provider = createProvider({
+      local_results: [
+        {
+          title: 'Social Only Market',
+          website: 'https://m.facebook.com/social-only-market',
+          links: {
+            website: 'https://wa.me/971501234567',
+          },
+        },
+        {
+          title: 'WhatsApp Gym',
+          website: 'https://api.whatsapp.com/send?phone=971501234567',
+        },
+      ],
+    });
+
+    const result = await provider.searchMapsLocal({
+      query: 'gym dubai',
+      countryCode: 'AE',
+      language: 'en',
+      city: 'Dubai',
+      page: 1,
+    });
+
+    expect(result.localBusinesses).toHaveLength(2);
+    expect(result.localBusinesses[0]?.websiteUrl).toBeNull();
+    expect(result.localBusinesses[1]?.websiteUrl).toBeNull();
+  });
+
   it('uses 20-result pagination offsets for local engines', async () => {
     let requestUrl = '';
     const fetchImpl: typeof fetch = async (input) => {

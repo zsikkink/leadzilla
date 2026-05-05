@@ -3,6 +3,8 @@ import { z } from 'zod';
 export const LeadStatusSchema = z.enum(['new', 'processing', 'enriched', 'scored', 'qualified', 'drafted', 'rejected', 'stuck', 'failed', 'messaged', 'replied', 'cold']);
 export const JobStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']);
 export const LeadScoreBandSchema = z.enum(['LOW', 'MEDIUM', 'HIGH']);
+export const LeadListSortBySchema = z.enum(['created_desc', 'score_desc', 'score_asc']);
+export const LeadDisplayScoreSourceSchema = z.enum(['AI_SCORE', 'LEGACY_SCORE', 'BUSINESS_SCORE', 'NONE']);
 export const LeadContactDiscoverySourceFamilySchema = z.enum(['linkedin', 'company_page', 'public_web', 'mixed', 'unknown']);
 export const LeadContactDiscoveryOutcomeSchema = z.enum(['lead_created', 'recovery_opened', 'no_contact_terminal']);
 export const LeadContactVerificationVerdictSchema = z.enum(['verified', 'not_verified', 'inconclusive', 'skipped']);
@@ -123,6 +125,8 @@ export const GetLeadResponseSchema = z.object({
   businessCountry: z.string().nullable().optional(),
   businessCity: z.string().nullable().optional(),
   businessCategory: z.string().nullable().optional(),
+  businessDeterministicScore: z.number().nullable().optional(),
+  businessScoreBand: LeadScoreBandSchema.nullable().optional(),
   latestIcpProfileId: z.string().nullable().optional(),
   phoneSource: z.string().nullable().optional(),
   businessEmail: z.string().nullable().optional(),
@@ -157,6 +161,7 @@ export const ListLeadsQuerySchema = z
     minBlendedScore: z.coerce.number().min(0).max(1).optional(),
     includeRejected: z.coerce.boolean().default(false).optional(),
     search: z.string().max(200).optional(),
+    sortBy: LeadListSortBySchema.optional(),
     from: z.string().datetime().optional(),
     to: z.string().datetime().optional(),
     includeQualityMetrics: z.coerce.boolean().default(false),
@@ -189,6 +194,9 @@ export const LeadInspectionResponseSchema = z
     latestScoreBand: LeadScoreBandSchema.nullable(),
     latestBlendedScore: z.number().nullable(),
     latestScorePredictionId: z.string().nullable(),
+    displayScore: z.number().nullable().optional(),
+    displayScoreBand: LeadScoreBandSchema.nullable().optional(),
+    displayScoreSource: LeadDisplayScoreSourceSchema.optional(),
     latestDiscoveryRawPayload: z.unknown().nullable(),
     latestEnrichmentNormalizedPayload: z.unknown().nullable(),
     latestEnrichmentRawPayload: z.unknown().nullable(),
@@ -196,6 +204,8 @@ export const LeadInspectionResponseSchema = z
     businessCountry: z.string().nullable(),
     businessCity: z.string().nullable(),
     businessCategory: z.string().nullable(),
+    businessDeterministicScore: z.number().nullable().optional(),
+    businessScoreBand: LeadScoreBandSchema.nullable().optional(),
     businessName: z.string().nullable().optional(),
     decisionMakerTitle: z.string().nullable().optional(),
   })
@@ -228,6 +238,8 @@ export type LeadConversionContext = z.infer<typeof LeadConversionContextSchema>;
 export type GetLeadResponse = z.infer<typeof GetLeadResponseSchema>;
 export type GetJobStatusResponse = z.infer<typeof GetJobStatusResponseSchema>;
 export type LeadScoreBand = z.infer<typeof LeadScoreBandSchema>;
+export type LeadListSortBy = z.infer<typeof LeadListSortBySchema>;
+export type LeadDisplayScoreSource = z.infer<typeof LeadDisplayScoreSourceSchema>;
 export type ListLeadsQuery = z.infer<typeof ListLeadsQuerySchema>;
 export type LeadInspectionResponse = z.infer<typeof LeadInspectionResponseSchema>;
 export type LeadInspectionQualityMetrics = z.infer<typeof LeadInspectionQualityMetricsSchema>;

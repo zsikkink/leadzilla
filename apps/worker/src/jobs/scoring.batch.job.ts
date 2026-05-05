@@ -10,13 +10,11 @@ import {
 import { predictLogistic } from '../scoring/logistic.js';
 import {
   asDeterministicRules,
-  computeBlendRatio,
   ensureBaselineModelVersion,
   extractFeatureVectorForModel,
   findActiveTrainedModel,
 } from '../scoring/shared.js';
 import {
-  getDeterministicAiBlend,
   getScoreQualificationThreshold,
   getScoreTierBands,
 } from '../utils/pipeline-settings.js';
@@ -152,11 +150,8 @@ export async function handleScoringBatchJob(
     const trainedModel = await findActiveTrainedModel();
     const qualificationThreshold = await getScoreQualificationThreshold();
 
-    // Read UI-configured blend override and tier bands
-    const deterministicAiBlend = await getDeterministicAiBlend();
-    const blendRatio = deterministicAiBlend !== null
-      ? { deterministicWeight: deterministicAiBlend, aiWeight: 1 - deterministicAiBlend }
-      : await computeBlendRatio();
+    // Deterministic scoring is the baseline/fallback. When a model score is available,
+    // that score is the final qualification score.
     const scoreTierBands = await getScoreTierBands();
 
     let scored = 0;
@@ -213,14 +208,9 @@ export async function handleScoringBatchJob(
           usedTrainedModel = true;
         }
 
-        // Blend scores
-        const blendedScore = Math.min(1, Math.max(0,
-          usedTrainedModel || logisticScore > 0
-            ? blendRatio.deterministicWeight * deterministicScore +
-              blendRatio.aiWeight * logisticScore
-            : deterministicScore,
-        ));
+        const blendedScore = Math.min(1, Math.max(0, usedTrainedModel ? logisticScore : deterministicScore));
         const scoreBand = toScoreBand(blendedScore, scoreTierBands);
+        const scoreSource = usedTrainedModel ? 'trained_model' : 'deterministic_fallback';
 
         // Persist prediction
         await prisma.leadScorePrediction.upsert({
@@ -247,7 +237,7 @@ export async function handleScoringBatchJob(
               categoryScores: deterministic.categoryScores,
               qualificationPath: deterministic.qualificationPath,
               usedTrainedModel,
-              blendWeights: { deterministic: blendRatio.deterministicWeight, ai: blendRatio.aiWeight },
+              scoreSource,
             }),
             ruleEvaluationJson: toInputJson(deterministic.ruleEvaluation),
             predictedAt: new Date(),
@@ -263,7 +253,7 @@ export async function handleScoringBatchJob(
               categoryScores: deterministic.categoryScores,
               qualificationPath: deterministic.qualificationPath,
               usedTrainedModel,
-              blendWeights: { deterministic: blendRatio.deterministicWeight, ai: blendRatio.aiWeight },
+              scoreSource,
             }),
             ruleEvaluationJson: toInputJson(deterministic.ruleEvaluation),
             predictedAt: new Date(),

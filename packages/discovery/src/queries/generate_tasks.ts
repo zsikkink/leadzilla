@@ -1,8 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import {
-  countryDisplayName,
-  normalizeCountryCodeOrAlias,
-} from '@lead-flood/contracts';
+import { countryDisplayName, normalizeCountryCodeOrAlias } from '@lead-flood/contracts';
 
 import type { DiscoverySeedConfig } from '../config.js';
 import { normalizeCity, normalizeQuery } from '../dedupe/normalize.js';
@@ -13,8 +10,11 @@ import type {
   SearchTaskType,
 } from '../providers/types.js';
 import {
-  defaultCitiesByCountry,
+  queryTemplatesV2AR,
   queryTemplatesV2EN,
+  queryTemplatesV2SerpApiAR,
+  queryTemplatesV2SerpApiEN,
+  serpApiSearchCitiesByCountry,
 } from './seeds.js';
 
 function renderTemplate(
@@ -31,6 +31,16 @@ function renderTemplate(
     .replaceAll('{country}', params.country);
 }
 
+function getSerpStartOffset(taskType: SearchTaskType, page: number): number {
+  const pageIndex = Math.max(0, page - 1);
+
+  if (taskType === 'SERP_GOOGLE') {
+    return pageIndex * 10;
+  }
+
+  return pageIndex * 20;
+}
+
 function buildSerpParams(
   taskType: SearchTaskType,
   queryText: string,
@@ -39,7 +49,7 @@ function buildSerpParams(
   city: string,
   page: number,
 ): Record<string, unknown> {
-  const start = Math.max(0, (page - 1) * 10);
+  const start = getSerpStartOffset(taskType, page);
   const params: Record<string, unknown> = {
     q: queryText,
     gl: countryCode.toLowerCase(),
@@ -131,14 +141,7 @@ export function createGeneratedTask(
     queryText,
     normalizedQueryKey,
     queryHash,
-    paramsJson: buildSerpParams(
-      taskType,
-      queryText,
-      countryCode,
-      language,
-      cityRaw,
-      page,
-    ),
+    paramsJson: buildSerpParams(taskType, queryText, countryCode, language, cityRaw, page),
     page,
     timeBucket,
   };
@@ -151,6 +154,7 @@ export function createGeneratedTask(
 export interface GenerateTasksV2Input {
   categories: string[];
   countries: string[];
+  languages?: DiscoveryLanguageCode[] | undefined;
   cities?: string[] | undefined;
   maxPagesPerQuery?: number | undefined;
   taskTypes?: SearchTaskType[] | undefined;
@@ -163,43 +167,53 @@ export interface GenerateTasksV2Input {
  *
  * - If explicit `cities` are provided and do NOT include "All", filter them
  *   to only cities that belong to this country (case-insensitive match against
- *   defaultCitiesByCountry). This prevents cross-country pollution, e.g.
+ *   SerpAPI-safe search locations where configured). This prevents cross-country pollution, e.g.
  *   selecting ["Dubai", "Cairo"] won't create "Cairo in UAE" tasks.
  * - If `cities` includes the literal string "All" (case-insensitive), expand
- *   to all default cities for every country.
- * - If `cities` is omitted, look up `defaultCitiesByCountry` and fall back to
- *   an empty list. Upstream validation should already block country-only runs
- *   without configured cities.
+ *   to all default SerpAPI-safe cities for every country.
+ * - If `cities` is omitted, use only configured SerpAPI-safe default locations.
+ *   Countries without a SerpAPI allowlist resolve to an empty list instead of
+ *   falling back to legacy broad defaults.
  */
 function resolveCitiesForCountry(
   countryCode: string,
   explicitCities: string[] | undefined,
 ): string[] {
+  const countryCities = serpApiSearchCitiesByCountry[countryCode];
+
   if (explicitCities && explicitCities.length > 0) {
     const hasAll = explicitCities.some((c) => c.toLowerCase() === 'all');
     if (hasAll) {
-      return defaultCitiesByCountry[countryCode] ?? [];
+      return countryCities ?? [];
     }
 
     // Filter explicit cities to only those belonging to this country.
     // Build a lowercase set of this country's known cities for O(1) lookup.
-    const countryCities = defaultCitiesByCountry[countryCode];
     if (countryCities && countryCities.length > 0) {
       const knownCitiesLower = new Set(countryCities.map((c) => c.toLowerCase()));
       const filtered = explicitCities.filter((c) => knownCitiesLower.has(c.toLowerCase()));
       if (filtered.length > 0) {
         return filtered;
       }
-    // None of the explicit cities belong to this country — skip it entirely
+    }
+
+    // None of the explicit cities belong to this country; skip it entirely
     // by returning an empty array (the caller's loop will produce no tasks).
     return [];
   }
 
-    // No curated city list for this country — pass explicit cities through as-is.
-    return explicitCities;
+  return countryCities ?? [];
+}
+
+function getQueryTemplatesForLanguage(
+  searchProvider: GenerateTasksV2Input['searchProvider'],
+  language: DiscoveryLanguageCode,
+): string[] {
+  if (searchProvider === 'SERPAPI') {
+    return language === 'ar' ? queryTemplatesV2SerpApiAR : queryTemplatesV2SerpApiEN;
   }
 
-  return defaultCitiesByCountry[countryCode] ?? [];
+  return language === 'ar' ? queryTemplatesV2AR : queryTemplatesV2EN;
 }
 
 export function generateTasksV2(
@@ -223,8 +237,10 @@ export function generateTasksV2(
     ? ['SERP_GOOGLE_LOCAL']
     : ['SERP_MAPS_LOCAL'];
   const taskTypes: SearchTaskType[] = input.taskTypes ?? defaultTaskTypes;
-  const templates = queryTemplatesV2EN;
-  const language: DiscoveryLanguageCode = 'en';
+  const languages =
+    input.languages && input.languages.length > 0
+      ? [...new Set(input.languages)]
+      : (['en'] satisfies DiscoveryLanguageCode[]);
 
   const tasks: GeneratedSearchTask[] = [];
 
@@ -237,27 +253,31 @@ export function generateTasksV2(
     const cities = resolveCitiesForCountry(countryCode, input.cities);
 
     for (const cityRaw of cities) {
-      for (const category of input.categories) {
-        for (const template of templates) {
-          const queryText = renderTemplate(template, {
-            category,
-            city: cityRaw,
-            country: countryName,
-          });
+      for (const language of languages) {
+        const templates = getQueryTemplatesForLanguage(input.searchProvider, language);
 
-          for (let page = 1; page <= maxPages; page += 1) {
-            for (const taskType of taskTypes) {
-              tasks.push(
-                createGeneratedTask(
-                  taskType,
-                  countryCode as DiscoveryCountryCode,
-                  language,
-                  cityRaw,
-                  queryText,
-                  page,
-                  timeBucket,
-                ),
-              );
+        for (const category of input.categories) {
+          for (const template of templates) {
+            const queryText = renderTemplate(template, {
+              category,
+              city: cityRaw,
+              country: countryName,
+            });
+
+            for (let page = 1; page <= maxPages; page += 1) {
+              for (const taskType of taskTypes) {
+                tasks.push(
+                  createGeneratedTask(
+                    taskType,
+                    countryCode as DiscoveryCountryCode,
+                    language,
+                    cityRaw,
+                    queryText,
+                    page,
+                    timeBucket,
+                  ),
+                );
+              }
             }
           }
         }
