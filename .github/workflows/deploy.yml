@@ -291,15 +291,27 @@ jobs:
           PY
 
       - name: Run production API readiness check
-        if: ${{ env.PRODUCTION_API_READY_URL != '' }}
         run: |
+          ready_urls=()
+          if [[ -n "$PRODUCTION_API_READY_URL" ]]; then
+            ready_urls+=("$PRODUCTION_API_READY_URL")
+          fi
+          if [[ -n "$SMOKE_API_BASE_URL" ]]; then
+            ready_urls+=("${SMOKE_API_BASE_URL%/}/ready")
+          fi
+          if [[ "${#ready_urls[@]}" -eq 0 ]]; then
+            echo "No production API readiness URL configured."
+            exit 1
+          fi
           for _ in $(seq 1 30); do
-            if curl -fsS "$PRODUCTION_API_READY_URL" > /dev/null; then
-              exit 0
-            fi
+            for ready_url in "${ready_urls[@]}"; do
+              if curl -fsS "$ready_url" > /dev/null; then
+                exit 0
+              fi
+            done
             sleep 10
           done
-          echo "Production API /ready check timed out: $PRODUCTION_API_READY_URL"
+          echo "Production API /ready check timed out."
           exit 1
 
       - name: Run required repo-owned production smoke check
