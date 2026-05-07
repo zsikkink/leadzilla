@@ -1,10 +1,15 @@
 # Project Summary
 
+Historical note: this is a client handoff snapshot from an earlier production
+state. It is preserved for context, not as the current operational source of
+truth. For current deploy/provider status use `docs/CURRENT_STATE.md`,
+`docs/DEPLOYMENT.md`, and `docs/DISCOVERY_PROVIDER_STACK.md`.
+
 I took a careful look through the current Lead-Flood repo and the handoff materials, and I think the most accurate framing is this: the system is not vendor-agnostic today, but it is also not built on a closed platform. The architecture reflects the implementation choices made during the capstone build phase; the purpose of this document is to describe the current system accurately and make handoff decisions explicit. The current implementation is materially coupled to Supabase for web login and session management, API token verification, database permission rules, and the production database migration process. At the same time, Supabase itself is open source and can be self-hosted, so the issue is less “lock-in to a closed vendor” and more the practical ownership cost of operating and maintaining that stack in-house.
 
 A meaningful part of the core data and business logic is still standard PostgreSQL and TypeScript and could be moved or reworked with engineering effort. However, self-hosting the current Supabase-based architecture would still require taking on infrastructure, security, backups, monitoring, uptime, and related operational responsibilities.
 
-The broader ownership issue is also bigger than Supabase alone. The system currently includes a separate web app, API, background worker, database migration process, deployment automation, webhook handling, and several optional third-party vendors. For the current live setup, the web app is running on Vercel, and the optional vendors currently enabled are Hunter, Google Places, SERPAPI, and OpenAI. The current live plans are on free tiers.
+The broader ownership issue is also bigger than Supabase alone. The system includes a separate web app, API, background worker, database migration process, deployment automation, webhook handling, and several optional third-party vendors. At the time this snapshot was written, the live setup was described as Vercel for web with Railway/Supabase and optional vendors including Hunter, Google Places, SerpAPI, and OpenAI. That live-provider statement is historical and must be reverified against the current docs before use.
 
 I have also organized the handoff materials into a current-state summary covering infrastructure, system architecture, deployment flow, environment and secret locations, and the current development process. That should give us a clear starting point for the meeting and make it easier to separate what is running today from what would need future simplification, replacement, or operational ownership.
 
@@ -30,12 +35,12 @@ At a high level:
 
 ## B. Current Live Hosting and Release Path
 
-### Current live state
+### Historical live state captured by this handoff note
 
 - Live web host: Vercel
-- Current live tiers: free tiers
+- Live tiers at the time of this historical snapshot: free tiers
 - Live database and auth provider: Supabase
-- Enabled optional vendors: Hunter, Google Places, SERPAPI, OpenAI
+- Enabled optional vendors at the time of this snapshot: Hunter, SerpAPI, Google Places, OpenAI
 
 The API and worker are treated as separate backend services. The repo and deployment materials point to Railway as the current backend hosting model for those services.
 
@@ -90,17 +95,17 @@ In plain terms, the current live setup is split across several tools:
 
 | Service | Current role | Current state |
 |---|---|---|
-| Vercel | Live web hosting | Live now |
-| Supabase | Database, auth, and database migration/project operations | Live now |
+| Vercel | Web hosting | Live at the time of this historical snapshot; reverify current status in `docs/CURRENT_STATE.md` |
+| Supabase | Database, auth, and database migration/project operations | Live at the time of this historical snapshot; reverify current status in `docs/CURRENT_STATE.md` |
 | GitHub Actions + GHCR | Build, image publishing, and release automation | Active release path |
 | Railway | Backend deployment target for API and worker in the current repo flow | Current backend deployment model |
 
-### Optional vendors currently enabled
+### Optional vendors captured in this historical snapshot
 
-| Vendor | Current use | Status |
+| Vendor | Use captured in snapshot | Snapshot status |
 |---|---|---|
-| Google Places | Business/discovery search | Enabled |
-| SERPAPI | Supporting search/discovery | Enabled |
+| SERPAPI | Search-task discovery provider in the current docs/code default | Enabled |
+| Google Places | Explicit alternate business/discovery search provider | Enabled |
 | Hunter | Enrichment and contact discovery | Enabled |
 | OpenAI | Scoring and message-generation features | Enabled |
 
@@ -315,7 +320,7 @@ The key point is that Prisma is still part of the workflow, but it is not the ma
 
 ## H. Known Workflow Drift or Caveats
 
-- The setup docs still say “No Docker required,” but the bootstrap script uses Docker for local infrastructure
+- The current setup docs distinguish default cloud-Supabase development from Docker-backed local infra/bootstrap flows
 - The setup docs emphasize remote Supabase-based local development, while the bootstrap script brings up local Postgres and seeds local data
 - The deploy workflow builds a Docker image for `web`, while the live web app is currently on Vercel
 - The database layer is intentionally mixed today: SQL-first in production, Prisma still present in runtime and local workflows

@@ -169,6 +169,16 @@ describe('handleScoringComputeJob primary business conversion anchoring', () => 
 
   it('loads BusinessConversion only from the lead primary business context before enqueueing Apollo enrich', async () => {
     const enqueueApolloEnrich = vi.fn(async () => undefined);
+    const openAiAdapter = {
+      isConfigured: true,
+      evaluateLeadScore: vi.fn(async () => ({
+        status: 'success' as const,
+        data: {
+          score: 0.91,
+          reasoning: ['Strong fit.'],
+        },
+      })),
+    } as unknown as OpenAiAdapter;
 
     await handleScoringComputeJob(
       logger,
@@ -181,6 +191,7 @@ describe('handleScoringComputeJob primary business conversion anchoring', () => 
       }),
       {
         enqueueApolloEnrich,
+        openAiAdapter,
       },
     );
 
@@ -209,6 +220,70 @@ describe('handleScoringComputeJob primary business conversion anchoring', () => 
     expect(dbMock.prisma.leadRejection.deleteMany).toHaveBeenCalledWith({
       where: { leadId: 'lead_1' },
     });
+  });
+
+  it('does not enqueue provider enrichment from a deterministic fallback score', async () => {
+    const enqueueApolloEnrich = vi.fn(async () => undefined);
+    scoringMock.evaluateDeterministicScore.mockReturnValue({
+      qualificationScore: 0.95,
+      hardFilterPassed: true,
+      qualificationPath: 'QUALIFIED',
+      reasonCodes: [],
+      categoryScores: {},
+      ruleEvaluation: [],
+    });
+
+    await handleScoringComputeJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        mode: 'BY_LEAD_IDS',
+        leadIds: ['lead_1'],
+        icpProfileId: 'icp_1',
+        requestedByUserId: 'user_1',
+      }),
+      {
+        enqueueApolloEnrich,
+      },
+    );
+
+    expect(enqueueApolloEnrich).not.toHaveBeenCalled();
+    expect(dbMock.prisma.businessConversion.findFirst).not.toHaveBeenCalled();
+    expect(dbMock.prisma.leadRejection.deleteMany).toHaveBeenCalledWith({
+      where: { leadId: 'lead_1' },
+    });
+  });
+
+  it('does not enqueue provider enrichment when the AI score is exactly 0.90', async () => {
+    const enqueueApolloEnrich = vi.fn(async () => undefined);
+    const openAiAdapter = {
+      isConfigured: true,
+      evaluateLeadScore: vi.fn(async () => ({
+        status: 'success' as const,
+        data: {
+          score: 0.9,
+          reasoning: ['Borderline fit.'],
+        },
+      })),
+    } as unknown as OpenAiAdapter;
+
+    await handleScoringComputeJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        mode: 'BY_LEAD_IDS',
+        leadIds: ['lead_1'],
+        icpProfileId: 'icp_1',
+        requestedByUserId: 'user_1',
+      }),
+      {
+        enqueueApolloEnrich,
+        openAiAdapter,
+      },
+    );
+
+    expect(enqueueApolloEnrich).not.toHaveBeenCalled();
+    expect(dbMock.prisma.businessConversion.findFirst).not.toHaveBeenCalled();
   });
 
   it('uses the OpenAI score as the final score with deterministic as baseline only', async () => {

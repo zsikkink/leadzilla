@@ -555,6 +555,151 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
     );
   });
 
+  it('keeps retrying validation failures with validator feedback until a compliant draft is generated', async () => {
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
+      id: 'score_current',
+      scoreBand: 'HIGH',
+      blendedScore: 0.72,
+    });
+
+    const openAiAdapter = {
+      isConfigured: true,
+      generateMessageVariants: vi.fn()
+        .mockResolvedValueOnce({
+          status: 'success' as const,
+          data: {
+            model: 'gpt-4o',
+            message: {
+              subject: 'Act now?',
+              bodyText:
+                `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status easier to track from the same conversation. Act now if this is useful? \n\nBest,\nZbooni Team`,
+              bodyHtml: null,
+              ctaText: null,
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          status: 'success' as const,
+          data: {
+            model: 'gpt-4o',
+            message: {
+              subject: 'Track project payments?',
+              bodyText:
+                `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status easier to track from the same conversation.\n\nBest,\nZbooni Team`,
+              bodyHtml: null,
+              ctaText: null,
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          status: 'success' as const,
+          data: {
+            model: 'gpt-4o',
+            message: {
+              subject: 'Track project payments?',
+              bodyText:
+                `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status easier to track from the same conversation. Would it be useful to compare this with your current order flow?\n\nBest,\nZbooni Team`,
+              bodyHtml: null,
+              ctaText: 'Would it be useful to compare this with your current order flow?',
+            },
+          },
+        }),
+    };
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+      }),
+      { openAiAdapter: openAiAdapter as never },
+    );
+
+    expect(openAiAdapter.generateMessageVariants).toHaveBeenCalledTimes(3);
+    expect(openAiAdapter.generateMessageVariants).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        icpDescription: expect.stringContaining('Contains spam trigger words: act now'),
+      }),
+    );
+    expect(openAiAdapter.generateMessageVariants).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        icpDescription: expect.stringContaining('Missing low-friction closing question'),
+      }),
+    );
+    expect(dbMock.prisma.messageDraft.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          variants: {
+            create: [
+              expect.objectContaining({
+                bodyText: expect.stringContaining('Would it be useful to compare this with your current order flow?'),
+              }),
+            ],
+          },
+        }),
+      }),
+    );
+    expect(
+      dbMock.prisma.lead.updateMany.mock.calls.some(([arg]) =>
+        typeof arg?.data?.error === 'string' &&
+        arg.data.error.includes('AI response did not pass message quality checks'),
+      ),
+    ).toBe(false);
+  });
+
+  it('retries the job instead of showing a lead error when validation attempts are exhausted', async () => {
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
+      id: 'score_current',
+      scoreBand: 'HIGH',
+      blendedScore: 0.72,
+    });
+
+    const openAiAdapter = {
+      isConfigured: true,
+      generateMessageVariants: vi.fn(async () => ({
+        status: 'success' as const,
+        data: {
+          model: 'gpt-4o',
+          message: {
+            subject: 'Act now?',
+            bodyText:
+              `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status easier to track from the same conversation. Act now if this is useful?\n\nBest,\nZbooni Team`,
+            bodyHtml: null,
+            ctaText: null,
+          },
+        },
+      })),
+    };
+
+    await expect(
+      handleMessageGenerateJob(
+        logger,
+        makeJob({
+          runId: 'run_1',
+          leadId: 'lead_1',
+          icpProfileId: 'icp_1',
+          knowledgeEntryIds: [],
+          promptVersion: 'v2',
+        }),
+        { openAiAdapter: openAiAdapter as never },
+      ),
+    ).rejects.toBeInstanceOf(RetryableError);
+
+    expect(openAiAdapter.generateMessageVariants).toHaveBeenCalledTimes(5);
+    expect(dbMock.prisma.messageDraft.create).not.toHaveBeenCalled();
+    expect(
+      dbMock.prisma.lead.updateMany.mock.calls.some(([arg]) =>
+        typeof arg?.data?.error === 'string' &&
+        arg.data.error.includes('AI response did not pass message quality checks'),
+      ),
+    ).toBe(false);
+  });
+
   it('auto-approves when current settings and score require it', async () => {
     dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
       id: 'score_current',

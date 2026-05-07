@@ -35,7 +35,12 @@ import type { LearningModelTrainJobPayload } from './modules/learning/learning.s
 import type { MessageGenerateJobPayload, MessagingSendJobPayload } from './modules/messaging/messaging.service.js';
 import type { ScoringRunJobPayload } from './modules/scoring/scoring.service.js';
 import { buildTriggerDiscoveryTaskRun } from './modules/discovery-admin/discovery-task-run.trigger.js';
-import { buildServer, LeadAlreadyExistsError, LeadContextUnavailableError } from './server.js';
+import {
+  buildServer,
+  LeadAlreadyExistsError,
+  LeadContextUnavailableError,
+  type HunterEnrichQueuePayload,
+} from './server.js';
 import type { ResendReceivedEmail } from './modules/webhook/webhook.service.js';
 
 function toDayStart(value: string): Date {
@@ -447,6 +452,7 @@ async function main(): Promise<void> {
   await boss.createQueue('reply.classify');
   await boss.createQueue('discovery.seed');
   await boss.createQueue('discovery.run_search_task');
+  await boss.createQueue('hunter.enrich');
 
   const enqueueReplyClassify = async (payload: ReplyClassifyJobPayload): Promise<void> => {
     await boss.send('reply.classify', payload, {
@@ -454,6 +460,16 @@ async function main(): Promise<void> {
       retryDelay: 60,
       retryBackoff: true,
       deadLetter: 'reply.classify.dead_letter',
+    });
+  };
+
+  const enqueueHunterEnrich = async (payload: HunterEnrichQueuePayload): Promise<void> => {
+    await boss.send('hunter.enrich', payload, {
+      singletonKey: `hunter.enrich:${payload.leadId}`,
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      deadLetter: 'hunter.enrich.dead_letter',
     });
   };
 
@@ -1198,6 +1214,7 @@ async function main(): Promise<void> {
       });
     },
     enqueueReplyClassify,
+    enqueueHunterEnrich,
     fetchResendReceivedEmail: buildResendReceivedEmailFetcher(env.RESEND_API_KEY),
     trengoWebhookSecret: env.TRENGO_WEBHOOK_SECRET,
     resendWebhookSecret: env.RESEND_WEBHOOK_SECRET,
@@ -1557,6 +1574,16 @@ async function main(): Promise<void> {
           orderBy: [{ enrichedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
           take: 1,
         },
+        _count: {
+          select: {
+            enrichmentRecords: {
+              where: { provider: 'HUNTER' },
+            },
+            jobs: {
+              where: { type: 'hunter.enrich' },
+            },
+          },
+        },
         scorePredictions: {
           ...(query.icpProfileId ? { where: { icpProfileId: query.icpProfileId } } : {}),
           orderBy: [{ predictedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
@@ -1711,6 +1738,9 @@ async function main(): Promise<void> {
             businessScoreBand: lead.business?.scoreBand ?? null,
             businessName: lead.business?.name ?? null,
             decisionMakerTitle: lead.decisionMakerTitle ?? null,
+            hunterEnrichmentUsed:
+              lead._count.enrichmentRecords > 0
+              || lead._count.jobs > 0,
           };
         }),
         qualityMetrics,

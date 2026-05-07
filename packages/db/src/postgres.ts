@@ -1,4 +1,4 @@
-import { Pool, type PoolClient, type PoolConfig, type QueryResult, type QueryResultRow } from 'pg';
+import { Client, Pool, type PoolClient, type PoolConfig, type QueryResult, type QueryResultRow } from 'pg';
 
 const DEFAULT_POOL_MAX = 1;
 const DEFAULT_IDLE_TIMEOUT_MS = 10_000;
@@ -15,6 +15,15 @@ export interface SqlQueryable {
     text: string,
     values?: QueryParams,
   ): Promise<QueryResult<T>>;
+}
+
+export interface PgNotificationPayload {
+  channel: string;
+  payload?: string | undefined;
+}
+
+export interface PgNotificationSubscription {
+  close(): Promise<void>;
 }
 
 function readPositiveIntEnv(name: string, fallback: number): number {
@@ -57,6 +66,28 @@ function buildPoolConfig(): PoolConfig {
   };
 }
 
+function buildDedicatedClientConfig(): PoolConfig {
+  const connectionString = process.env.DIRECT_URL ?? process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error('DIRECT_URL or DATABASE_URL is required to create a dedicated Postgres client');
+  }
+
+  return {
+    connectionString,
+    connectionTimeoutMillis: readPositiveIntEnv(
+      'PG_LISTEN_CONNECTION_TIMEOUT_MS',
+      DEFAULT_CONNECTION_TIMEOUT_MS,
+    ),
+  };
+}
+
+function quoteIdentifier(identifier: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(identifier)) {
+    throw new Error(`Invalid Postgres identifier: ${identifier}`);
+  }
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+
 export function getPgPool(): Pool {
   if (globalForPostgres.leadFloodPgPool) {
     return globalForPostgres.leadFloodPgPool;
@@ -72,6 +103,40 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
   values?: QueryParams,
 ): Promise<QueryResult<T>> {
   return getPgPool().query<T>(text, toQueryValues(values));
+}
+
+export async function listenToPgChannel(
+  channel: string,
+  onNotification: (notification: PgNotificationPayload) => void,
+  onError?: ((error: Error) => void) | undefined,
+): Promise<PgNotificationSubscription> {
+  const client = new Client(buildDedicatedClientConfig());
+  const quotedChannel = quoteIdentifier(channel);
+
+  client.on('notification', (notification) => {
+    onNotification({
+      channel: notification.channel,
+      payload: notification.payload ?? undefined,
+    });
+  });
+
+  if (onError) {
+    client.on('error', onError);
+  }
+
+  await client.connect();
+  await client.query(`LISTEN ${quotedChannel}`);
+
+  return {
+    async close() {
+      try {
+        await client.query(`UNLISTEN ${quotedChannel}`);
+      } catch {
+        // Closing is best-effort; end the socket below either way.
+      }
+      await client.end().catch(() => undefined);
+    },
+  };
 }
 
 export async function withTransaction<T>(

@@ -15,8 +15,10 @@ AI-powered lead discovery, enrichment, and scoring pipeline for B2B sales.
 ## Current DB Architecture
 
 - Supabase is the only schema and data source of truth.
-- The active canonical migration chain is:
+- The active canonical migration chain is every SQL file in `supabase/migrations/`, starting at:
   - `supabase/migrations/20260314210837_lead_flood_dev_baseline.sql`
+  and currently extending through:
+  - `supabase/migrations/20260504010000_restrict_lead_score_prediction_model_version_delete.sql`
 - The old pre-reconciliation migration chain is archived for auditability in:
   - `supabase/migrations-archived/pre-reconciliation/`
 - Runtime DB access is intentionally dual-stack during the Prisma-to-Postgres transition:
@@ -31,7 +33,7 @@ AI-powered lead discovery, enrichment, and scoring pipeline for B2B sales.
 - Node.js `22+` (repo pin: `.nvmrc`)
 - pnpm `10.14.0` (from `packageManager`)
 
-No Docker required — the database is a shared cloud Supabase instance.
+The default developer setup uses a shared cloud Supabase instance. Docker is only needed for local disposable infra, bootstrap, or validation flows that explicitly use `pnpm dev:infra`, `pnpm bootstrap`, or `pnpm doctor`.
 
 ## Quick Start
 
@@ -63,7 +65,8 @@ pnpm dev
 
 - Web: `http://localhost:3000`
 - Login: `http://localhost:3000/login` (Supabase Auth)
-- Discovery console: `http://localhost:3000/discovery`
+- Operator discovery page: `http://localhost:3000/dashboard/discover`
+- Legacy/debug discovery console: `http://localhost:3000/discovery`
 - API health: `http://localhost:5050/health`
 - API ready: `http://localhost:5050/ready`
 
@@ -76,19 +79,20 @@ pnpm dev
 
 ## Discovery Pipeline
 
-The discovery system uses Google Places to find businesses matching your Ideal Customer Profile (ICP). The pipeline runs as background jobs through pg-boss:
+The current discovery system defaults to SerpAPI-backed local/search tasks and can still be configured to use Google Places explicitly. The dashboard bulk path seeds SerpAPI-compatible local-map tasks against curated SerpAPI-supported cities. The pipeline runs as background jobs through pg-boss:
 
 1. **Discovery seed** — generates search tasks from ICP categories and target cities
-2. **Run search tasks** — queries Google Places for matching businesses
+2. **Run search tasks** — queries the configured discovery provider for matching businesses
 3. **Pre-qualify** — filters results against minimum criteria (reviews, country)
 4. **Convert** — enriches qualified businesses into leads (website scraping, contact discovery)
-5. **Score** — ML + rule-based scoring against ICP fit
-6. **Message** — operators trigger draft generation for qualified leads, and approval gates sending
+5. **Score** — deterministic baseline plus AI/model score when available; the persisted DB column is still named `blendedScore`, but the UI treats it as the resolved AI/model/fallback score
+6. **Message** — operators trigger draft generation for qualified leads, and manual approval gates sending unless runtime auto-approval is explicitly enabled
 
 Required worker env for discovery:
 
 - `DATABASE_URL` (cloud Supabase Postgres with `?connection_limit=3`)
-- `GOOGLE_PLACES_API_KEY`
+- `SERPAPI_API_KEY` when `DISCOVERY_SEARCH_PROVIDER=SERPAPI` (the default)
+- `GOOGLE_PLACES_API_KEY` only when `DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES`
 
 Admin access requires your Supabase Auth user ID in the `app_admins` table:
 

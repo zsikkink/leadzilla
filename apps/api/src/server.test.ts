@@ -278,6 +278,28 @@ describe('buildServer', () => {
     expect(response.headers['x-request-id']).toBe(body.requestId);
   });
 
+  it('does not reject empty JSON bodies when webhook raw-body parsing is enabled', async () => {
+    const server = buildServer({
+      ...makeDefaultOptions(),
+      resendWebhookSecret: 'test-resend-secret',
+    });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      headers: {
+        'content-type': 'application/json',
+      },
+      payload: '',
+    });
+    const body = response.json() as { error: string; requestId?: string };
+
+    expect(response.statusCode).toBe(410);
+    expect(body.error).toContain('Deprecated endpoint');
+    expect(response.headers['x-request-id']).toBe(body.requestId);
+  });
+
   it('creates lead and returns leadId/jobId', async () => {
     const server = buildServer(makeDefaultOptions());
     servers.push(server);

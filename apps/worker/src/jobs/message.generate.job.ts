@@ -1,4 +1,4 @@
-import type { GenerateMessageDraftRequest } from '@lead-flood/contracts';
+import { MESSAGE_DRAFT_EVENTS_CHANNEL, type GenerateMessageDraftRequest } from '@lead-flood/contracts';
 import { prisma, toInputJson } from '@lead-flood/db';
 import type { OpenAiAdapter } from '@lead-flood/providers';
 import type PgBoss from 'pg-boss';
@@ -40,6 +40,8 @@ export const MESSAGE_GENERATE_RETRY_OPTIONS: Pick<
   retryBackoff: true,
   deadLetter: 'message.generate.dead_letter',
 };
+
+const MESSAGE_VALIDATION_MAX_ATTEMPTS = 5;
 
 // Worker execution reloads the current score before eligibility checks,
 // approval, and persistence, so queued jobs do not carry scorePredictionId.
@@ -433,6 +435,43 @@ async function clearLeadDraftGenerationError(leadId: string): Promise<void> {
     where: { id: leadId },
     data: { error: null },
   });
+}
+
+async function notifyMessageDraftCreated(
+  logger: MessageGenerateLogger,
+  input: {
+    leadId: string;
+    icpProfileId: string;
+    draftId: string;
+    followUpNumber: number;
+    forceRegenerate?: boolean | undefined;
+    createdAt?: Date | undefined;
+  },
+): Promise<void> {
+  const createdAt = input.createdAt instanceof Date ? input.createdAt : new Date();
+  const payload = JSON.stringify({
+    type: 'message_draft',
+    status: 'CREATED',
+    leadId: input.leadId,
+    icpProfileId: input.icpProfileId,
+    draftId: input.draftId,
+    forceRegenerate: input.forceRegenerate,
+    followUpNumber: input.followUpNumber,
+    createdAt: createdAt.toISOString(),
+  });
+
+  try {
+    await prisma.$executeRaw`select pg_notify(${MESSAGE_DRAFT_EVENTS_CHANNEL}, ${payload})`;
+  } catch (error: unknown) {
+    logger.warn(
+      {
+        leadId: input.leadId,
+        draftId: input.draftId,
+        error,
+      },
+      'Failed to publish message draft completion notification',
+    );
+  }
 }
 
 export async function handleMessageGenerateJob(
@@ -1011,7 +1050,7 @@ export async function handleMessageGenerateJob(
       'OpenAI message generation succeeded',
     );
 
-    const validation = validateMessageVariant(resolvedChannel, messageContent, messageQualityOptions);
+    let validation = validateMessageVariant(resolvedChannel, messageContent, messageQualityOptions);
 
     if (validation.reasons.length > 0) {
       logger.info(
@@ -1020,16 +1059,44 @@ export async function handleMessageGenerateJob(
       );
     }
 
-    if (validation.hardReject) {
+    let validationAttempt = 1;
+    while (validation.hardReject) {
+      if (validationAttempt >= MESSAGE_VALIDATION_MAX_ATTEMPTS) {
+        logger.warn(
+          {
+            jobId: job.id,
+            leadId,
+            attempts: validationAttempt,
+            reasons: validation.reasons,
+          },
+          'Message validation failed after retry attempts; leaving existing draft untouched and retrying job',
+        );
+        throw new RetryableError(
+          'Draft generation is retrying because the AI response did not pass message quality checks.',
+          { reasons: validation.reasons, attempts: validationAttempt },
+        );
+      }
+
       logger.warn(
-        { jobId: job.id, leadId, reasons: validation.reasons },
-        'Hard rejection detected, retrying with stricter prompt',
+        {
+          jobId: job.id,
+          leadId,
+          attempt: validationAttempt + 1,
+          maxAttempts: MESSAGE_VALIDATION_MAX_ATTEMPTS,
+          reasons: validation.reasons,
+        },
+        'Message validation failed, retrying with validator feedback',
       );
 
-      const stricterSuffix = buildStricterPromptSuffix(resolvedChannel);
+      const stricterSuffix = buildStricterPromptSuffix(resolvedChannel, validation.reasons);
       const retryContext = {
         ...generateContext,
-        icpDescription: `${generateContext.icpDescription}\n\n${stricterSuffix}`,
+        icpDescription: [
+          generateContext.icpDescription,
+          '',
+          `MESSAGE QUALITY RETRY ${validationAttempt + 1}/${MESSAGE_VALIDATION_MAX_ATTEMPTS}:`,
+          stricterSuffix,
+        ].join('\n'),
       };
 
       const retryResult = await deps.openAiAdapter.generateMessageVariants(retryContext);
@@ -1037,29 +1104,30 @@ export async function handleMessageGenerateJob(
       if (retryResult.status === 'success') {
         generatedByModel = retryResult.data.model;
         const retryMessageContent = ensureZbooniTeamSignoff(mergeCtaIntoBody(retryResult.data.message));
-        const retryValidation = validateMessageVariant(resolvedChannel, retryMessageContent, messageQualityOptions);
+        messageContent = retryMessageContent;
+        validation = validateMessageVariant(resolvedChannel, messageContent, messageQualityOptions);
+        validationAttempt++;
 
-        if (retryValidation.hardReject) {
-          const failureMessage = buildDraftGenerationFailureMessage(
-            'Draft generation failed because the AI response did not pass message quality checks.',
-            Boolean(job.data.forceRegenerate),
+        if (validation.reasons.length > 0) {
+          logger.info(
+            { jobId: job.id, leadId, reasons: validation.reasons },
+            'Message validation findings',
           );
-          await setLeadDraftGenerationError(leadId, failureMessage, {
-            failureType: 'validation_failed',
-            reasons: retryValidation.reasons,
-          });
-          await tryFinalizeDiscoveryRun(runId, logger);
-          return;
+        }
+      } else {
+        if (retryResult.status === 'retryable_error') {
+          throw new RetryableError(
+            'Draft generation retry failed because the AI provider was temporarily unavailable.',
+            retryResult.failure,
+          );
         }
 
-        messageContent = retryValidation.cleaned;
-      } else {
         const failureMessage = buildDraftGenerationFailureMessage(
-          'Draft generation failed because the AI response did not pass message quality checks.',
+          'Draft generation failed because the AI provider returned an invalid response.',
           Boolean(job.data.forceRegenerate),
         );
         await setLeadDraftGenerationError(leadId, failureMessage, {
-          failureType: 'validation_retry_failed',
+          failureType: retryResult.status,
           providerStatus: retryResult.status,
           providerMessage: retryResult.failure.message,
           statusCode: retryResult.failure.statusCode,
@@ -1067,9 +1135,9 @@ export async function handleMessageGenerateJob(
         await tryFinalizeDiscoveryRun(runId, logger);
         return;
       }
-    } else {
-      messageContent = validation.cleaned;
     }
+
+    messageContent = validation.cleaned;
 
     // -----------------------------------------------------------------------
     // Negative keyword filter — catch Zbooni ICP disqualification signals
@@ -1211,6 +1279,15 @@ export async function handleMessageGenerateJob(
     }
 
     await maybeEnqueueSendForAutoApprovedDraft(draft);
+
+    await notifyMessageDraftCreated(logger, {
+      leadId,
+      icpProfileId,
+      draftId: draft.id,
+      followUpNumber,
+      forceRegenerate: job.data.forceRegenerate,
+      createdAt: draft.createdAt,
+    });
 
     logger.info(
       {

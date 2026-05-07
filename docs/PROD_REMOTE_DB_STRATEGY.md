@@ -31,7 +31,7 @@ For the current runtime migration split, see `docs/RUNTIME_DB_ACCESS_STATUS.md`.
 - Treat `docs/schema-capture/2026-03-14/` and the reconciliation notes as
   historical audit material, not active migration inputs.
 
-## Primary Provider (Recommended): Supabase Postgres (Free Tier)
+## Primary Provider (Recommended): Managed Supabase Postgres
 
 Supabase is the primary production-like remote Postgres provider for this repo.
 

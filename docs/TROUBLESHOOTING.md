@@ -6,7 +6,7 @@ Common errors and fixes for the cloud Supabase setup.
 
 ### `MaxClientsInSessionMode` — API or Worker crashes on boot
 
-**Cause:** Too many database connections. Cloud Supabase free tier allows ~15 concurrent connections. Without limits, Prisma + pg-boss can open 20+.
+**Cause:** Too many database connections. Small Supabase compute tiers have tight connection limits, and Prisma + pg-boss can open more connections than expected without explicit limits.
 
 **Fix:** Ensure `?connection_limit=3` is at the end of every `DATABASE_URL` and `DIRECT_URL`:
 ```

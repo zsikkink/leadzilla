@@ -64,6 +64,10 @@ import {
   APOLLO_ENRICH_RETRY_OPTIONS,
 } from './jobs/apollo.enrich.job.js';
 import {
+  HUNTER_ENRICH_JOB_NAME,
+  HUNTER_ENRICH_RETRY_OPTIONS,
+} from './jobs/hunter.enrich.job.js';
+import {
   PIPELINE_HEALTH_JOB_NAME,
   PIPELINE_HEALTH_RETRY_OPTIONS,
 } from './jobs/pipeline.health.job.js';
@@ -175,6 +179,10 @@ export const WORKER_QUEUE_DEFINITIONS: readonly WorkerQueueDefinition[] = [
   {
     name: APOLLO_ENRICH_JOB_NAME,
     retryOptions: normalizeRetryOptions(APOLLO_ENRICH_JOB_NAME, APOLLO_ENRICH_RETRY_OPTIONS),
+  },
+  {
+    name: HUNTER_ENRICH_JOB_NAME,
+    retryOptions: normalizeRetryOptions(HUNTER_ENRICH_JOB_NAME, HUNTER_ENRICH_RETRY_OPTIONS),
   },
   {
     name: SCORING_BATCH_JOB_NAME,

@@ -2,6 +2,11 @@
 
 ## Recommendations Engine Audit (Session E — Mar 25, 2026)
 
+Accuracy note added 2026-05-05: this response has been updated for the current
+`manager.analyze` code path. `DEAL_LOST` is now included in negative/deal-loss
+analysis, `UNSUBSCRIBED` is treated as a legacy negative event alongside
+`NOT_INTERESTED`, and discovery yield is scoped to a recent 30-day window.
+
 ### What the manager.analyze job does
 
 The `manager.analyze` worker job (`apps/worker/src/jobs/manager.analyze.job.ts`) runs on a weekly schedule. It collects pipeline performance data from the past week, compares it to the prior week, generates recommendations, and persists both the analysis and individual recommendation records.
@@ -9,10 +14,10 @@ The `manager.analyze` worker job (`apps/worker/src/jobs/manager.analyze.job.ts`)
 ### Data inputs the job uses
 
 1. **Message sends** — Counts of messages sent per ICP, per variant, and per score band (HIGH/MEDIUM/LOW) in the current and previous week windows.
-2. **Feedback events** — Counts of REPLIED, MEETING_BOOKED, DEAL_WON, BOUNCED, and UNSUBSCRIBED events, correlated to message sends via `messageSend.messageDraft.icpProfileId`.
+2. **Feedback events** — Counts of REPLIED, MEETING_BOOKED, DEAL_WON, BOUNCED, NOT_INTERESTED, legacy UNSUBSCRIBED, and DEAL_LOST events, correlated to message sends via `messageSend.messageDraft.icpProfileId`.
 3. **Score band breakdown** — How many sends/replies/positive outcomes each score band (HIGH, MEDIUM, LOW) produced, to evaluate scoring calibration.
-4. **Variant breakdown** — Reply rates per message variant (A/B testing), with chi-squared significance testing.
-5. **Discovery yield** — Per-ICP yield rate (leads produced vs businesses discovered), used to flag low-yield ICPs and recommend volume increases for high-yield ones.
+4. **Variant breakdown** — Reply rates per message variant with chi-squared significance testing when multiple variants exist. Current draft generation normally creates one `variant_a`, so this is mostly useful for historical or manually varied data.
+5. **Discovery yield** — Per-ICP yield rate over a recent 30-day window (leads produced vs businesses discovered), used to flag low-yield ICPs and recommend volume increases for high-yield ones.
 6. **Week-over-week trend** — Delta in reply rate, positive rate, bounce rate between current and previous week.
 
 ### Recommendation types generated
@@ -29,15 +34,15 @@ The `manager.analyze` worker job (`apps/worker/src/jobs/manager.analyze.job.ts`)
 
 ### Gaps identified
 
-1. **DEAL_LOST is not used in analysis.** The job counts DEAL_WON as a positive event but completely ignores DEAL_LOST. Lost deals could provide valuable signal — e.g., if a particular ICP or score band has a high loss rate, that's a strong indicator to adjust strategy.
+1. **Deal value is not used.** The job distinguishes `DEAL_WON` and `DEAL_LOST`, but it has no concept of deal values or expected revenue. A single high-value won deal is worth more than ten low-value ones, but the current analysis treats wins/losses by count only.
 
-2. **No deal value awareness.** The job has no concept of deal values (revenue). A single high-value won deal is worth more than ten low-value ones, but the current analysis treats all wins equally. Adding revenue-weighted metrics would make recommendations far more useful.
+2. **No revenue-weighted recommendations.** Adding revenue-weighted metrics would make recommendation confidence more useful for high-ticket ICPs.
 
 3. **DISABLE_FEATURE never generated.** The recommendation type exists but the `generateRecommendations` function never produces it. This was a planned feature to flag low-signal scoring features (detection rate <1%), which was done manually in earlier sessions but never automated.
 
-4. **UNSUBSCRIBED still referenced.** The `NEGATIVE_EVENT_TYPES` array includes `UNSUBSCRIBED` (line 35). If the enum is being renamed to `NOT_INTERESTED`, this reference needs updating. The `feedback.repository.ts` also counts `UNSUBSCRIBED` events in the summary response (line 182).
+4. **Variant analysis rarely has multiple current variants.** The analyzer can compare variants, but current draft generation normally creates one `variant_a`, so `PREFER_VARIANT` recommendations depend on historical/manual variation.
 
-5. **Discovery yield is lifetime, not weekly.** The `computeDiscoveryYield()` function counts ALL discovery records and leads across all time, not scoped to the analysis week. This means the yield rate never reflects recent changes to search categories or ICP configuration — it's diluted by historical data.
+5. **Discovery yield uses a fixed recent window, not the exact weekly analysis window.** `computeDiscoveryYield()` now uses a 30-day window, which is more current than lifetime data but still does not exactly match the current/prior week windows.
 
 6. **No hook effectiveness analysis.** The job doesn't analyze whether the sales hook text correlates with reply rates. Session A (QA Feedback Batch) added hook tracking in MessageDraft metadata, but the manager.analyze job doesn't consume it.
 
@@ -52,12 +57,11 @@ The `manager.analyze` worker job (`apps/worker/src/jobs/manager.analyze.job.ts`)
 ### Improvement recommendations
 
 **High priority:**
-- Add DEAL_LOST tracking to identify segments with high loss rates
-- Scope discovery yield to the analysis window (or a recent 30-day window)
 - Generate DISABLE_FEATURE recommendations automatically based on feature detection rates from the scoring model
+- Add revenue/deal-value weighting to won/lost outcome calculations
+- Decide whether discovery yield should stay 30-day or match the analysis week windows
 
 **Medium priority:**
-- Add deal value weighting to positive outcome calculations
 - Analyze sales hook correlation with reply rates
 - Add follow-up effectiveness metrics
 

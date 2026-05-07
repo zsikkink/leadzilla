@@ -6,10 +6,10 @@
 - Empty `people: []` is valid, not error
 - Phone reveals cost credits — only for primary contact
 
-## Apify
-- 0 scraper items is valid (all-404 URLs)
-- Set `timeoutSecs`. Cache results 7 days
-- Aggregate multi-page results before downstream processing
+## Website / Instagram Scraping
+- The runtime scrapers are custom adapters, not Apify actors. Many DB fields still use legacy `apify_*` names for compatibility.
+- Empty scrape output is valid; downstream code should treat it as no evidence, not as a provider failure by itself.
+- Website/Instagram scrape JSON can be reused by enrichment, scoring, business intelligence, and draft generation, so preserve raw structured fields when available.
 
 ## OpenAI
 - Strip markdown fences even with structured output
@@ -35,5 +35,12 @@
 - Sec-Fetch headers required (Dest, Mode, Site)
 
 ## SerpAPI
-- Primary discovery provider (SERPAPI_API_KEY)
-- Auto-fallback to Google Places if key missing
+- Default discovery provider when `DISCOVERY_SEARCH_PROVIDER=SERPAPI`
+- Requires `SERPAPI_API_KEY`; startup/config validation fails clearly if SerpAPI is selected without a key
+- There is no implicit Google Places fallback just because the SerpAPI key is missing
+- Supported dashboard locations come from `SerpApiSupportedCountryCitiesByCode` / curated country-city contracts
+
+## Google Places
+- Explicitly supported only when `DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES`
+- Requires `GOOGLE_PLACES_API_KEY`
+- Google Places task generation clamps max pages to 1

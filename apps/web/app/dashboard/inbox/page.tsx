@@ -36,6 +36,7 @@ import { toast } from 'sonner';
 import { MessageDraftCard } from '../../../src/components/message-draft-card.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
+import { useDraftCompletionNotifier } from '../../../src/hooks/use-draft-completion-notifier.js';
 
 // Mirrors the worker/provider default until the API exposes runtime sender config.
 const OUTBOUND_EMAIL = 'zack@zboonisales.com';
@@ -486,6 +487,10 @@ export default function InboxPage() {
     selectedDrafts.refetch();
     conversation.refetch();
   }, [conversation, drafts, selectedDrafts, sends]);
+  const waitForDraftCompletion = useDraftCompletionNotifier({
+    apiClient,
+    onCompleted: refreshMessaging,
+  });
 
   const handleMoveEntryToTrash = useCallback((entry: ConversationEntry) => {
     if (!selectedLeadId) return;
@@ -880,6 +885,14 @@ export default function InboxPage() {
                         initialSend={null}
                         initialSendLoaded={!sends.isLoading}
                         onAction={refreshMessaging}
+                        onQueuedRegenerate={(queuedDraft) => {
+                          waitForDraftCompletion({
+                            leadId: queuedDraft.leadId,
+                            afterMs: Date.now() - 5_000,
+                            excludeDraftId: queuedDraft.id,
+                            forceRegenerate: true,
+                          });
+                        }}
                       />
                     ))}
                   </div>

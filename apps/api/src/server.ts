@@ -15,6 +15,7 @@ import {
   ContactRecoveryIdParamsSchema,
   CreateLeadRequestSchema,
   CreateLeadResponseSchema,
+  EnrichLeadResponseSchema,
   ErrorResponseSchema,
   GetJobStatusResponseSchema,
   GetLeadResponseSchema,
@@ -124,6 +125,24 @@ function normalizeLeadEmail(raw: string): string {
 
   // If still invalid after normalization, return a safe fallback.
   return 'unknown@lead.local';
+}
+
+function normalizeDomain(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed.includes('://') ? trimmed : `https://${trimmed}`);
+    return parsed.hostname.replace(/^www\./i, '').toLowerCase() || null;
+  } catch {
+    return trimmed
+      .replace(/^https?:\/\//i, '')
+      .split('/')[0]
+      ?.replace(/^www\./i, '')
+      .toLowerCase() || null;
+  }
 }
 
 // ── Generic email filter (inline — API can't import @lead-flood/providers) ──
@@ -248,6 +267,7 @@ export interface BuildServerOptions {
   enqueueMessageGenerate?: ((payload: MessageGenerateJobPayload) => Promise<void>) | undefined;
   enqueueAnalyticsRollup?: ((payload: AnalyticsRollupJobPayload) => Promise<void>) | undefined;
   enqueueReplyClassify?: ((payload: ReplyClassifyJobPayload) => Promise<void>) | undefined;
+  enqueueHunterEnrich?: ((payload: HunterEnrichQueuePayload) => Promise<void>) | undefined;
   fetchResendReceivedEmail?: ((emailId: string) => Promise<ResendReceivedEmail | null>) | undefined;
   trengoWebhookSecret?: string | undefined;
   resendWebhookSecret?: string | undefined;
@@ -266,6 +286,13 @@ export interface BuildServerOptions {
     reason?: string | undefined;
   }) => Promise<ContactRecoveryDetailResponse | null>;
   getJobById: (jobId: string) => Promise<JobRecord | null>;
+}
+
+export interface HunterEnrichQueuePayload {
+  leadId: string;
+  runId: string;
+  requestedByUserId: string;
+  correlationId?: string | undefined;
 }
 
 export function buildServer(options: BuildServerOptions): FastifyInstance {
@@ -571,6 +598,116 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         businessContacts: lead.businessContacts ?? [],
         businessProfileRaw: lead.businessProfileRaw ?? null,
         conversionContext: lead.conversionContext ?? { businessInsights: null, metadata: null },
+      });
+    });
+
+    api.post('/v1/leads/:id/enrich', async (request, reply) => {
+      const parsedParams = z.object({ id: z.string().min(1) }).safeParse(request.params);
+      if (!parsedParams.success) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: 'Invalid lead id',
+          requestId: request.id,
+        });
+      }
+
+      if (!options.enqueueHunterEnrich) {
+        reply.status(501);
+        return ErrorResponseSchema.parse({
+          error: 'Hunter enrichment queue is not configured',
+          requestId: request.id,
+        });
+      }
+
+      const userId = request.user?.sub;
+      if (!userId) {
+        reply.status(401);
+        return ErrorResponseSchema.parse({
+          error: 'Authentication required',
+          requestId: request.id,
+        });
+      }
+
+      const leadId = parsedParams.data.id;
+      const lead = await prisma.lead.findFirst({
+        where: { id: leadId, deletedAt: null },
+        select: {
+          id: true,
+          businessId: true,
+          business: {
+            select: {
+              websiteDomain: true,
+            },
+          },
+        },
+      });
+
+      if (!lead) {
+        reply.status(404);
+        return ErrorResponseSchema.parse({
+          error: 'Lead not found',
+          requestId: request.id,
+        });
+      }
+
+      if (!lead.businessId) {
+        reply.status(422);
+        return ErrorResponseSchema.parse({
+          error: 'Lead is not linked to a business, so Hunter enrichment cannot determine a company domain',
+          requestId: request.id,
+        });
+      }
+
+      const domain = normalizeDomain(lead.business?.websiteDomain);
+      if (!domain) {
+        reply.status(422);
+        return ErrorResponseSchema.parse({
+          error: 'Lead business does not have a website domain for Hunter enrichment',
+          requestId: request.id,
+        });
+      }
+
+      const payload = {
+        leadId,
+        businessId: lead.businessId,
+        domain,
+        requestedByUserId: userId,
+      };
+
+      const jobExecution = await prisma.jobExecution.create({
+        data: {
+          type: 'hunter.enrich',
+          status: 'queued',
+          leadId,
+          payload: JSON.parse(JSON.stringify(payload)) as Prisma.InputJsonValue,
+        },
+        select: { id: true },
+      });
+
+      try {
+        await options.enqueueHunterEnrich({
+          leadId,
+          runId: jobExecution.id,
+          requestedByUserId: userId,
+          correlationId: `api:hunter.enrich:${jobExecution.id}`,
+        });
+      } catch (error: unknown) {
+        await prisma.jobExecution.update({
+          where: { id: jobExecution.id },
+          data: {
+            status: 'failed',
+            finishedAt: new Date(),
+            error: error instanceof Error ? error.message : 'Failed to enqueue Hunter enrichment',
+          },
+        });
+        throw error;
+      }
+
+      reply.status(202);
+      return EnrichLeadResponseSchema.parse({
+        jobId: jobExecution.id,
+        status: 'QUEUED',
+        provider: 'HUNTER',
       });
     });
 

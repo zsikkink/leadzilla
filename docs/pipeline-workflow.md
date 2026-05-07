@@ -2,6 +2,8 @@
 
 > From the moment you press "Start Discovery" through messaging, follow-ups, and the learning loop that makes the system smarter over time.
 
+Accuracy note added 2026-05-05: this operator overview has been updated for the current SerpAPI-default discovery path, resolved score semantics, manual draft-generation/approval flow, and current no-fallback-template draft failure behavior.
+
 ---
 
 ## The 30-Second Version
@@ -10,7 +12,7 @@
 You pick a target audience (ICP) and press "Start Discovery"
     |
     v
-We search Google Maps for matching businesses
+We search the configured provider for matching businesses
     |
     v
 Each business gets checked: real website? enough reviews? not parked?
@@ -25,10 +27,10 @@ We hunt for the decision maker's email (and phone if they score high)
 We score them: are they actually a good fit?
     |
     v
-AI writes a personalized message using everything we learned
+AI drafts a lightly personalized message when an operator triggers it
     |
     v
-You approve it (or it auto-sends if you've enabled that)
+You approve it unless runtime auto-approval is explicitly enabled
     |
     v
 Message goes out via Email or WhatsApp
@@ -68,11 +70,12 @@ Message goes out via Email or WhatsApp
                                 v
               +----------------------------------+
               |   STAGE 2: SEARCH                 |
-              |   Find Businesses on Google Maps   |
+              |   Find Businesses via Provider      |
               +----------------+-----------------+
                                |
          What happens:         |
-         - Runs each search on Google Maps
+         - Runs each search through SerpAPI by default
+           or Google Places when explicitly configured
          - Finds businesses with: name,
            rating, reviews, website, location
          - 3 search workers run in parallel
@@ -179,7 +182,7 @@ Message goes out via Email or WhatsApp
     - review_count (Google Maps reviews)
     - follower_count (Instagram followers)
     - has_decision_maker_phone (did Apollo find one?)
-    - apify_has_shopify (do they use Shopify?)
+    - apify_has_shopify (legacy field name for website-scraper Shopify detection)
     - instagram_engagement_rate
     - high_ticket_signals (luxury keywords found?)
     - custom_order_signals (bespoke/tailored language?)
@@ -192,7 +195,7 @@ Message goes out via Email or WhatsApp
     |   "How good of a fit is this lead, really?"          |
     +-------------------------+---------------------------+
                               |
-    Two scoring methods blended together:
+    Deterministic baseline plus AI/model score:
                               |
     RULE-BASED (always runs):
       Each ICP has qualification rules with weights.
@@ -201,15 +204,15 @@ Message goes out via Email or WhatsApp
                "Pure e-commerce (self-serve)" = -5%
       Base score starts at 10%, rules add/subtract.
                               |
-    ML MODEL (when trained):
-      Logistic regression trained on your past
-      feedback (which leads converted vs didn't).
-      Needs 500+ samples + good accuracy (AUC >= 0.70)
-      to be trusted.
+    AI / MODEL SCORE (when available):
+      OpenAI scoring or a trained model can produce
+      the final score for the lead + ICP.
                               |
-    BLEND: weighted average of both scores
-      Early days: 90% rules, 10% ML
-      With data:  50% rules, 50% ML
+    CURRENT RESOLUTION:
+      Use AI/model score when produced.
+      Otherwise use deterministic fallback.
+      The DB column is still named blendedScore
+      for compatibility, but it is not a 70/30 blend.
                               |
     Final score: 0.00 to 1.00
                               |
@@ -253,13 +256,13 @@ Message goes out via Email or WhatsApp
     NOTE: Message generation is NOT auto-triggered.
     Leads remain "qualified" after enrichment.
     An operator generates drafts manually from
-    the Leads page (or auto-approve handles it).
+    the lead detail page or Messages page.
                               |
                               v
     +-----------------------------------------------------+
     |   STAGE 8: GENERATE MESSAGE                          |
-    |   "Write a personalized outreach message"            |
-    |   (triggered manually or by auto-approve)            |
+    |   "Write a lightly personalized outreach draft"      |
+    |   (triggered manually/API-side)                       |
     +-------------------------+---------------------------+
                               |
     AI (OpenAI) gets:
@@ -271,20 +274,19 @@ Message goes out via Email or WhatsApp
     - ICP sales hook:
       "We help high-ticket businesses automate
        WhatsApp payment collection"
-    - Custom instructions (from your Settings page)
+    - Custom outreach prompt controls
                               |
-    AI writes the message.    |
+    AI writes one draft variant. |
                               |
     Message gets validated:
     - No spam words?
     - Sounds natural?
     - Under character limit?
-    - Sales hook included?
+    - Required Zbooni intro and sign-off included?
                               |
-    If validation fails --> retry once with stricter prompt
-    If retry fails too --> use fallback template
-    (Fallback still uses company name + ICP hook,
-     just less personalized)
+    If validation fails --> retry with stricter prompt
+    If retry fails too --> store a visible draft-generation
+    error and keep any existing draft intact
                               |
                               v
     +-----------------------------------------------------+
@@ -294,10 +296,12 @@ Message goes out via Email or WhatsApp
                               |
          Two paths:           |
                               |
-    MANUAL (default):         AUTO-APPROVE:
+    MANUAL (normal):          AUTO-APPROVE:
     Message sits as a         If enabled in Settings
     "draft" on your           AND score is above the
-    Leads page.               auto-approve threshold,
+    lead detail / Messages    auto-approve range
+    page.                     and manualApprovalOnly
+                              is off,
     You review it and         message is approved
     click "Approve" or        instantly.
     "Reject."                 |
@@ -448,7 +452,7 @@ Message goes out via Email or WhatsApp
 At every stage, some businesses/leads drop off. Here's the funnel:
 
 ```
-  100 businesses found on Google Maps
+  100 businesses found by the discovery provider
    |
    |  Pre-qualify filters out ~40-60%
    |  (no website, too few reviews, dead domain, parked)
@@ -480,9 +484,10 @@ At every stage, some businesses/leads drop off. Here's the funnel:
 |---------|-------------|---------|
 | Lead target | How many leads to aim for per run | 50 |
 | Min review count | Businesses need this many Google reviews to pass | 15 |
-| Qualification threshold | Score below this = LOW band, no message | 0.40 |
+| Qualification threshold | Score below this is not eligible for draft generation | 0.40 |
 | Enrichment threshold | Score must be above this for paid Apollo reveal | 0.30 |
-| Auto-approve | Skip manual review for high-scoring leads | Off |
+| Manual approval only | Suppress auto-approval for outbound drafts | On in the honest/manual operating mode |
+| Auto-approve | Skip manual review only when enabled and manual approval only is off | Off |
 | Daily email limit | Max emails per day | Unlimited |
 | WhatsApp daily limit | Max WhatsApp messages per day | 50 |
 | WhatsApp hours | When WhatsApp messages can be sent | 9am-6pm GST |
@@ -522,7 +527,8 @@ Each lead costs a mix of API credits:
 
 | Provider | What it does | Cost |
 |----------|-------------|------|
-| Google Places (SerpAPI) | Find businesses on Maps | ~$0.01/search |
+| SerpAPI | Default discovery provider for local/search tasks | Provider/account dependent |
+| Google Places | Explicit alternate discovery provider | Provider/account dependent |
 | Website Scraper | Crawl business websites | ~$0.005/page |
 | Instagram Scraper | Pull Instagram data | ~$0.01/profile |
 | Hunter | Find emails by domain | ~$0.03/search |
@@ -571,11 +577,11 @@ The AI gets a modified system prompt for follow-ups. Instead of a cold introduct
 
 **Max follow-ups:**
 
-Controlled by the `followUpMaxCount` pipeline setting (configurable on your Settings page). Once a lead has received this many follow-ups without replying, the system stops reaching out.
+Controlled by the `followUpMaxCount` pipeline setting. Not every pipeline setting has a dedicated operator UI; prompt controls live at `/dashboard/prompts`.
 
 **Auto-approval for follow-ups:**
 
-Follow-up messages can be auto-approved based on the lead's blended score and your auto-approve settings. If a lead scored high enough and auto-approve is enabled, follow-ups send automatically without waiting for manual review.
+Follow-up messages can be auto-approved only if auto-approval is enabled, the latest final persisted score is in range, and `manualApprovalOnly` is off. In the normal manual operating mode, follow-up drafts remain reviewable before sending.
 
 ---
 
@@ -699,7 +705,7 @@ The system literally gets better at finding good leads the more you use it. Earl
 
 Every API call in the pipeline records a cost event — a line item showing which provider was called, for which business, in which discovery run. These are stored in the `DiscoveryCostEvent` table and rolled up on your Jobs page.
 
-The system tracks costs from: Google Places searches, website scraping, Instagram scraping, Hunter email lookups, Apollo pre-screens, Apollo phone reveals, SMTP email verification, and OpenAI message generation.
+The system tracks costs from discovery-provider searches, website scraping, Instagram scraping, Hunter email lookups, Apollo pre-screens, Apollo phone reveals, SMTP email verification, and OpenAI scoring/generation.
 
 **Discovery yield analytics:**
 
@@ -727,7 +733,7 @@ Your Analytics page shows cost breakdowns: total API spend per discovery run, co
 
 ### Post-Message Settings Reference
 
-These settings control the post-message pipeline. All are configurable from your Settings page:
+These settings control the post-message pipeline. They are runtime pipeline settings; prompt controls are operator-editable from `/dashboard/prompts`, while some pipeline settings may still require API/admin/DB-level operations rather than a dedicated UI.
 
 | Setting | What it does | Default |
 |---------|-------------|---------|
@@ -735,7 +741,7 @@ These settings control the post-message pipeline. All are configurable from your
 | Cold lead timeout | Days without feedback before labeling a lead as cold/negative | 30 days |
 | Retrain threshold | New labels needed before auto-triggering model retraining | 50 |
 | Model activation AUC | Minimum accuracy score for a new model to go live | 0.70 |
-| Blend ratio | How much weight rule-based vs. ML scoring gets | Auto (based on data quality) |
+| Legacy score weighting | Legacy/simulator-adjacent deterministic-vs-model weighting; current `scoring.compute` uses the AI/model score as final when produced and deterministic score as fallback | Not an operator-facing production score control |
 
 ---
 

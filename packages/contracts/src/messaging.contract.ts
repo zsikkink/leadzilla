@@ -70,6 +70,29 @@ export const GenerateMessageDraftResponseSchema = z
   })
   .strict();
 
+export const MESSAGE_DRAFT_EVENTS_CHANNEL = 'lead_flood_message_draft_events';
+
+export const MessageDraftEventsQuerySchema = z
+  .object({
+    leadId: z.string().min(1),
+    afterMs: z.coerce.number().int().min(0).optional(),
+    excludeDraftId: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const MessageDraftEventPayloadSchema = z
+  .object({
+    type: z.literal('message_draft'),
+    status: z.enum(['CREATED']),
+    leadId: z.string().min(1),
+    icpProfileId: z.string().min(1),
+    draftId: z.string().min(1),
+    forceRegenerate: z.boolean().optional(),
+    followUpNumber: z.number().int().min(0),
+    createdAt: z.string().datetime(),
+  })
+  .strict();
+
 export const CreateManualMessageDraftRequestSchema = z
   .object({
     leadId: z.string().min(1),
@@ -261,6 +284,8 @@ export type GenerateMessageDraftRequest = z.infer<
 export type GenerateMessageDraftResponse = z.infer<
   typeof GenerateMessageDraftResponseSchema
 >;
+export type MessageDraftEventsQuery = z.infer<typeof MessageDraftEventsQuerySchema>;
+export type MessageDraftEventPayload = z.infer<typeof MessageDraftEventPayloadSchema>;
 export type CreateManualMessageDraftRequest = z.infer<
   typeof CreateManualMessageDraftRequestSchema
 >;

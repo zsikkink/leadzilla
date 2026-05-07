@@ -8,6 +8,8 @@ Historical status note:
   `pnpm db:verify:prod` plus `supabase db push --linked --dry-run --yes` now
   pass against the active chain.
 - Use `docs/PROD_REMOTE_DB_STRATEGY.md` for the current operator workflow.
+- The active chain now lives in `supabase/migrations/`; it begins with the
+  2026-03-14 baseline and includes later post-baseline migrations.
 
 Historical purpose:
 
@@ -17,7 +19,7 @@ Historical purpose:
 - Prefer no-op confirmation if the live public schema already matches the new
   baseline and remote metadata is already sufficient.
 
-Current repo-side assumptions:
+Historical repo-side assumptions at the time:
 
 - Active canonical chain:
   - `supabase/migrations/20260314210837_lead_flood_dev_baseline.sql`
@@ -37,9 +39,9 @@ Recommended remote-reconciliation model:
 - Do not perform metadata repair unless verification shows the baseline version
   is missing remotely or the CLI cannot operate safely without it.
 
-Why this is the safest path:
+Why this was the safest path at the time:
 
-- The new active local chain contains only one baseline migration version:
+- The then-new active local chain contained only one baseline migration version:
   `20260314210837`.
 - Remote metadata already contains `20260314210837`, so metadata may already be
   sufficient for the active chain.
@@ -54,7 +56,7 @@ Planned operator procedure at the time:
   - `docs/SCHEMA_RECONCILIATION_20260314.md`
   - `docs/SCHEMA_HISTORY_REPAIR_PLAN_20260314.md`
   - this file
-- Confirm the active local chain is still only:
+- Historical planned check at the time: confirm the active local chain was still only:
   - `supabase/migrations/20260314210837_lead_flood_dev_baseline.sql`
 - Confirm runtime Prisma-to-Postgres migration work is still paused.
 - Ensure operator has:

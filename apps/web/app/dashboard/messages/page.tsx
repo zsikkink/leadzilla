@@ -6,7 +6,7 @@ import type {
   MessageDraftResponse,
   MessageSendResponse,
 } from '@lead-flood/contracts';
-import { AlertTriangle, Check, CheckCheck, Minus, Square, X, XCircle } from 'lucide-react';
+import { AlertTriangle, Check, Minus, Send, Square, X, XCircle } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -17,7 +17,7 @@ import { MessageDraftCard } from '../../../src/components/message-draft-card.js'
 import { Pagination } from '../../../src/components/pagination.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
-import { useQueuedRefresh } from '../../../src/hooks/use-queued-refresh.js';
+import { useDraftCompletionNotifier } from '../../../src/hooks/use-draft-completion-notifier.js';
 
 const APPROVAL_OPTIONS = [
   { value: '', label: 'All statuses' },
@@ -124,6 +124,8 @@ export default function MessagesPage() {
 
   const leadIdFilter = searchParams.get('leadId')?.trim() || undefined;
   const draftIdTarget = searchParams.get('draftId')?.trim() || undefined;
+  const shouldPollDraftFromUrl = searchParams.get('pollDraft') === '1';
+  const draftCompletionUrlKeyRef = useRef<string | null>(null);
 
   const drafts = useApiQuery(
     useCallback(
@@ -392,12 +394,21 @@ export default function MessagesPage() {
     setSendRefreshNonce((current) => current + 1);
     setLeadRefreshNonce((current) => current + 1);
   }, [drafts.refetch, globalPendingCount.refetch]);
-  const scheduleQueuedRefreshes = useQueuedRefresh(refreshQueueData);
+  const waitForDraftCompletion = useDraftCompletionNotifier({
+    apiClient,
+    onCompleted: refreshQueueData,
+  });
 
   useEffect(() => {
-    if (!leadIdFilter) return;
-    scheduleQueuedRefreshes();
-  }, [leadIdFilter, scheduleQueuedRefreshes]);
+    if (!leadIdFilter || !shouldPollDraftFromUrl) return;
+    const key = `${leadIdFilter}:url`;
+    if (draftCompletionUrlKeyRef.current === key) return;
+    draftCompletionUrlKeyRef.current = key;
+    waitForDraftCompletion({
+      leadId: leadIdFilter,
+      afterMs: Date.now() - 60_000,
+    });
+  }, [leadIdFilter, shouldPollDraftFromUrl, waitForDraftCompletion]);
 
   useEffect(() => {
     setPage(1);
@@ -434,14 +445,14 @@ export default function MessagesPage() {
 
       if (allPending.length === 0) {
         toast.dismiss(toastId);
-        toast.info('No pending drafts to approve');
+        toast.info('No pending drafts to send');
         setApproving(false);
         return;
       }
 
       let approved = 0;
       let failed = 0;
-      toast.loading(`Approving... 0 of ${allPending.length}`, { id: toastId });
+      toast.loading(`Sending... 0 of ${allPending.length}`, { id: toastId });
 
       for (const draft of allPending) {
         try {
@@ -454,14 +465,14 @@ export default function MessagesPage() {
         } catch {
           failed++;
         }
-        toast.loading(`Approving... ${approved + failed} of ${allPending.length}`, { id: toastId });
+        toast.loading(`Sending... ${approved + failed} of ${allPending.length}`, { id: toastId });
       }
 
       toast.dismiss(toastId);
       if (failed === 0) {
-        toast.success(`Approved all ${approved} pending drafts`);
+        toast.success(`Queued all ${approved} pending drafts to send`);
       } else {
-        toast.error(`Approved ${approved} of ${allPending.length} drafts (${failed} failed)`);
+        toast.error(`Queued ${approved} of ${allPending.length} drafts to send (${failed} failed)`);
       }
 
       refreshQueueData();
@@ -503,9 +514,9 @@ export default function MessagesPage() {
     const failed = results.filter((r) => r.status === 'rejected').length;
 
     if (failed === 0) {
-      toast.success(`Approved ${succeeded} draft${succeeded !== 1 ? 's' : ''}`);
+      toast.success(`Queued ${succeeded} draft${succeeded !== 1 ? 's' : ''} to send`);
     } else {
-      toast.error(`Approved ${succeeded} of ${targets.length} drafts (${failed} failed)`);
+      toast.error(`Queued ${succeeded} of ${targets.length} drafts to send (${failed} failed)`);
     }
 
     clearSelection();
@@ -736,8 +747,8 @@ export default function MessagesPage() {
               onClick={handleAutoApproveAll}
               className="inline-flex items-center gap-1.5 rounded-lg bg-zbooni-green/20 px-3.5 py-2 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/30 disabled:opacity-50"
             >
-              <CheckCheck className="h-3.5 w-3.5" />
-              {approving ? 'Approving...' : `Approve All (${pendingCount})`}
+              <Send className="h-3.5 w-3.5" />
+              {approving ? 'Sending...' : `Send all (${pendingCount})`}
             </button>
           ) : null}
           <CustomSelect
@@ -757,7 +768,7 @@ export default function MessagesPage() {
         <p className="text-sm text-destructive">{drafts.error}</p>
       ) : null}
 
-      {drafts.isLoading ? (
+      {drafts.isLoading && !drafts.data ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
           Loading drafts...
@@ -822,6 +833,14 @@ export default function MessagesPage() {
                     draft.followUpNumber > 0 || loadedInitialSendLeadIds.has(draft.leadId)
                   }
                   onAction={refreshQueueData}
+                  onQueuedRegenerate={(queuedDraft) => {
+                    waitForDraftCompletion({
+                      leadId: queuedDraft.leadId,
+                      afterMs: Date.now() - 5_000,
+                      excludeDraftId: queuedDraft.id,
+                      forceRegenerate: true,
+                    });
+                  }}
                 />
               </div>
             </div>
@@ -829,7 +848,7 @@ export default function MessagesPage() {
         })}
       </div>
 
-      {!drafts.isLoading && visibleItems.length === 0 ? (
+      {drafts.data && !drafts.error && visibleItems.length === 0 ? (
         <div className="rounded-2xl border border-border/50 bg-card p-8 text-center shadow-sm">
           <p className="text-muted-foreground/60">
             {leadIdFilter
@@ -921,10 +940,10 @@ export default function MessagesPage() {
                 onClick={handleBulkApprove}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-zbooni-green/20 px-3.5 py-2 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/30 disabled:opacity-50"
               >
-                <Check className="h-3.5 w-3.5" />
+                <Send className="h-3.5 w-3.5" />
                 {bulkAction === 'approve'
-                  ? 'Approving...'
-                  : `Approve (${selectedPendingCount})`}
+                  ? 'Sending...'
+                  : `Send all (${selectedPendingCount})`}
               </button>
 
               <button

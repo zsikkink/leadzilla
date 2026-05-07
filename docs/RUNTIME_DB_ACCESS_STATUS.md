@@ -1,6 +1,8 @@
 # Runtime DB Access Status
 
-Current status as of 2026-03-14.
+Last reviewed for docs accuracy on 2026-05-05. This document describes the
+runtime DB-access split at a high level; use code search for exact current
+callsites before changing a surface.
 
 ## Current model
 

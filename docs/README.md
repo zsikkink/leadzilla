@@ -2,7 +2,7 @@
 
 ## Current Canonical Docs
 
-1. `docs/CURRENT_STATE.md` — Authoritative high-level current-state and handoff doc for active architecture, boundaries, sequencing, and the currently verified production release
+1. `docs/CURRENT_STATE.md` — Authoritative high-level current-state and handoff doc for active architecture, boundaries, sequencing, and the latest verified production status
 2. `docs/PROD_REMOTE_DB_STRATEGY.md` — Canonical DB/schema workflow and operator commands
 3. `docs/RUNTIME_DB_ACCESS_STATUS.md` — Current Prisma-to-Postgres runtime migration status
 4. `docs/SETUP_ONBOARDING.md` — Fresh-clone setup and local runtime expectations
@@ -11,7 +11,9 @@
 
 ## Supporting References
 
-- `lead-flood-system-walkthrough.md` (repo root) — Pipeline walkthrough
+- `lead-flood-system-walkthrough.md` (repo root) — Pipeline walkthrough; current for the corrected scoring, messaging, discovery-provider, and contact-handling behavior called out at the top of the file
+- `docs/PROCESS-FLOW.md` — Mirror of the pipeline walkthrough kept for docs discoverability
+- `docs/pipeline-workflow.md` — Operator-oriented pipeline overview
 - `docs/api-gotchas.md` — Provider-specific API quirks
 - `docs/DISCOVERY_PROVIDER_STACK.md` — Discovery/enrichment provider toggles
 - `docs/VERCEL_PROD_SETUP.md` — Vercel deployment settings
@@ -19,6 +21,10 @@
 ## Historical / Audit Material
 
 - `docs/SCHEMA_RECONCILIATION_20260314.md` — Historical reconciliation log
+- `docs/client-handoff-current-state.md` — Historical client handoff snapshot; not authoritative for current provider/deploy status
+- `docs/ZBOONI_HANDOFF_REQUIREMENTS_AUDIT.md` — Historical handoff-readiness audit from 2026-03-25; use current docs for live provider/deploy status
+- `docs/ZBOONI_HANDOFF_TECHNICAL_REQUIREMENTS.md` — Historical technical requirements artifact
+- `docs/zbooni-feedback-response.md` — Historical feedback response / product-analysis note
 - `docs/SCHEMA_HISTORY_REPAIR_PLAN_20260314.md` — Historical repair planning note
 - `docs/REMOTE_RECONCILIATION_PLAN_20260314.md` — Historical remote-reconciliation plan
 - `docs/schema-capture/2026-03-14/` — Captured live-schema artifacts and review notes

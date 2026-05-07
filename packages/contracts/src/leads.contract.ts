@@ -89,6 +89,14 @@ export const CreateLeadResponseSchema = z.object({
   jobId: z.string().min(1),
 });
 
+export const EnrichLeadResponseSchema = z
+  .object({
+    jobId: z.string().min(1),
+    status: z.literal('QUEUED'),
+    provider: z.literal('HUNTER'),
+  })
+  .strict();
+
 export const LeadBusinessContactSchema = z
   .object({
     id: z.string().min(1),
@@ -208,6 +216,7 @@ export const LeadInspectionResponseSchema = z
     businessScoreBand: LeadScoreBandSchema.nullable().optional(),
     businessName: z.string().nullable().optional(),
     decisionMakerTitle: z.string().nullable().optional(),
+    hunterEnrichmentUsed: z.boolean().optional(),
   })
   .strict();
 
@@ -233,6 +242,7 @@ export type LeadContactDiscoveryCandidate = z.infer<typeof LeadContactDiscoveryC
 export type LeadContactDiscovery = z.infer<typeof LeadContactDiscoverySchema>;
 export type CreateLeadRequest = z.infer<typeof CreateLeadRequestSchema>;
 export type CreateLeadResponse = z.infer<typeof CreateLeadResponseSchema>;
+export type EnrichLeadResponse = z.infer<typeof EnrichLeadResponseSchema>;
 export type LeadBusinessContact = z.infer<typeof LeadBusinessContactSchema>;
 export type LeadConversionContext = z.infer<typeof LeadConversionContextSchema>;
 export type GetLeadResponse = z.infer<typeof GetLeadResponseSchema>;

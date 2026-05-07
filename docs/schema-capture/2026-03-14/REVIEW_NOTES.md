@@ -7,8 +7,9 @@ Artifacts in this directory:
 
 Current status:
 - The repo-side history repair archived the old local migration chain.
-- The active canonical migration chain now lives in:
-  - `supabase/migrations/20260314210837_lead_flood_dev_baseline.sql`
+- The active canonical migration chain now lives in `supabase/migrations/`.
+  It begins with `20260314210837_lead_flood_dev_baseline.sql` and may include
+  later post-baseline migrations.
 - This reviewed candidate remains supporting material for auditability and
   future refinement, not the active migration file.
 

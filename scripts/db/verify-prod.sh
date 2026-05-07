@@ -35,6 +35,7 @@ bash scripts/db/guard-no-prisma-migrate-prod.sh "supabase migration list"
 require_cmd supabase
 require_cmd psql
 require_var DATABASE_URL
+psql_url="${DIRECT_URL:-$DATABASE_URL}"
 
 if [[ ! -d "supabase/migrations" ]]; then
   echo "[db:verify:prod] Missing supabase/migrations directory" >&2
@@ -72,8 +73,8 @@ if ! grep -Eq "up to date|No database changes to push|Remote database is up to d
 fi
 
 echo "[db:verify:prod] Verifying remote migration metadata via SQL"
-remote_count="$(psql "$DATABASE_URL" -Atqc "SELECT COUNT(*) FROM supabase_migrations.schema_migrations;")"
-remote_has_latest="$(psql "$DATABASE_URL" -Atqc "SELECT EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '$local_latest_version');")"
+remote_count="$(psql "$psql_url" -Atqc "SELECT COUNT(*) FROM supabase_migrations.schema_migrations;")"
+remote_has_latest="$(psql "$psql_url" -Atqc "SELECT EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '$local_latest_version');")"
 
 if [[ "$remote_count" -lt 1 ]]; then
   echo "[db:verify:prod] Remote migration history table is empty." >&2

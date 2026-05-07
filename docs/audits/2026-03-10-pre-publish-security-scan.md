@@ -5,6 +5,10 @@
 **Scope:** All 516 git-tracked files in the lead-flood repository
 **Goal:** Find hardcoded secrets, API keys, passwords, tokens, and connection strings before publishing
 
+Historical note added 2026-05-05: this is a point-in-time pre-publish scan.
+Do not treat its file counts, branch names, or issue status as current without
+rerunning a fresh secret/security scan.
+
 ---
 
 ## Summary

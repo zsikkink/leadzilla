@@ -67,7 +67,7 @@ Repo-side history repair performed:
 
 - Archived old pre-reconciliation chain:
   - `supabase/migrations-archived/pre-reconciliation/`
-- Replaced active `supabase/migrations` with a single canonical baseline:
+- At that point, replaced active `supabase/migrations` with a single canonical baseline:
   - `supabase/migrations/20260314210837_lead_flood_dev_baseline.sql`
 - Left remote untouched after the earlier `db pull --yes` metadata side effect.
 
@@ -81,6 +81,6 @@ Historical rules during capture:
 State reached during the capture/review phase:
 
 1. The old chain is historical-only in `supabase/migrations-archived/pre-reconciliation/`.
-2. The active canonical chain is now the single baseline file in `supabase/migrations/`.
+2. At that point, the active canonical chain was the single baseline file in `supabase/migrations/`; current production workflow uses the full active chain in `supabase/migrations/`.
 3. The refined reviewed candidate remains review/supporting material in `docs/schema-capture/2026-03-14/`; it is not the active migration file.
 4. Runtime migration work was still paused at this point in the process.

@@ -40,7 +40,18 @@ describe('validateMessageVariant', () => {
     });
     expect(result.valid).toBe(false);
     expect(result.hardReject).toBe(true);
-    expect(result.reasons).toContain('Contains spam trigger words');
+    expect(result.reasons).toContain('Contains spam trigger words: act now, limited time, guaranteed');
+  });
+
+  it('does not treat hyphenated non-offer language as standalone spam trigger words', () => {
+    const result = validateMessageVariant('EMAIL', {
+      ...base,
+      bodyText:
+        'Hi Ann, Zbooni helps teams create a friction-free chat-to-payment flow for customer conversations. Would it be useful to compare this with how your team handles chat-driven orders today?\n\nBest,\nZbooni Team',
+    });
+    expect(result.reasons).not.toEqual(
+      expect.arrayContaining([expect.stringContaining('Contains spam trigger words')]),
+    );
   });
 
   it('hard-rejects too-short body', () => {
@@ -354,5 +365,16 @@ describe('buildStricterPromptSuffix', () => {
     expect(suffix).toContain('Avoid alarmist email subjects');
     expect(suffix).toContain('Immediately after the greeting');
     expect(suffix).not.toContain('Cleaner project payments');
+  });
+
+  it('includes exact validation reasons when provided', () => {
+    const suffix = buildStricterPromptSuffix('EMAIL', [
+      'Contains spam trigger words: act now',
+      'Missing low-friction closing question',
+    ]);
+
+    expect(suffix).toContain('The previous draft failed validation for these exact reasons');
+    expect(suffix).toContain('Contains spam trigger words: act now');
+    expect(suffix).toContain('Missing low-friction closing question');
   });
 });

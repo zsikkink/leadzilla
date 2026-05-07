@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { OutgoingHttpHeaders } from 'node:http';
 import {
   ApproveMessageDraftRequestSchema,
   CreateManualMessageDraftRequestSchema,
@@ -20,7 +21,13 @@ import {
   UpdateMessageVariantRequestSchema,
   ConversationLeadIdParamsSchema,
   ConversationResponseSchema,
+  MESSAGE_DRAFT_EVENTS_CHANNEL,
+  MessageDraftEventPayloadSchema,
+  MessageDraftEventsQuerySchema,
+  type MessageDraftEventPayload,
+  type MessageDraftResponse,
 } from '@lead-flood/contracts';
+import { listenToPgChannel, type PgNotificationSubscription } from '@lead-flood/db';
 
 import {
   MessagingDraftGenerationIneligibleError,
@@ -66,6 +73,49 @@ function requireAuthenticatedUserId(
     }),
   );
   return null;
+}
+
+function isDraftEventTargetMatch(
+  draft: Pick<MessageDraftResponse, 'id' | 'leadId' | 'followUpNumber' | 'approvalStatus' | 'createdAt'>,
+  target: { leadId: string; afterMs?: number | undefined; excludeDraftId?: string | undefined },
+): boolean {
+  if (draft.leadId !== target.leadId || draft.followUpNumber !== 0) {
+    return false;
+  }
+  if (target.excludeDraftId && draft.id === target.excludeDraftId) {
+    return false;
+  }
+  if (draft.approvalStatus === 'REJECTED') {
+    return false;
+  }
+  if (target.afterMs !== undefined && new Date(draft.createdAt).getTime() < target.afterMs) {
+    return false;
+  }
+  return true;
+}
+
+function isMessageDraftEventTargetMatch(
+  event: MessageDraftEventPayload,
+  target: { leadId: string; afterMs?: number | undefined; excludeDraftId?: string | undefined },
+): boolean {
+  if (event.leadId !== target.leadId || event.followUpNumber !== 0) {
+    return false;
+  }
+  if (target.excludeDraftId && event.draftId === target.excludeDraftId) {
+    return false;
+  }
+  if (target.afterMs !== undefined && new Date(event.createdAt).getTime() < target.afterMs) {
+    return false;
+  }
+  return true;
+}
+
+function writeSseEvent(reply: FastifyReply, event: string, data: unknown): void {
+  if (reply.raw.destroyed || reply.raw.writableEnded) {
+    return;
+  }
+  reply.raw.write(`event: ${event}\n`);
+  reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
 function handleModuleError(error: unknown, request: FastifyRequest, reply: FastifyReply): boolean {
@@ -168,6 +218,121 @@ export function registerMessagingRoutes(
         return;
       }
       throw error;
+    }
+  });
+
+  app.get('/v1/messaging/drafts/events', async (request, reply) => {
+    const parsedQuery = MessageDraftEventsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid message draft event query');
+    }
+
+    const target = parsedQuery.data;
+    let subscription: PgNotificationSubscription | null = null;
+    let cleanupStarted = false;
+    let keepAlive: NodeJS.Timeout | null = null;
+    let timeout: NodeJS.Timeout | null = null;
+
+    const cleanup = async () => {
+      if (cleanupStarted) {
+        return;
+      }
+      cleanupStarted = true;
+      if (keepAlive) {
+        clearInterval(keepAlive);
+      }
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (subscription) {
+        await subscription.close();
+      }
+    };
+
+    const closeWithEvent = (event: string, data: unknown) => {
+      writeSseEvent(reply, event, data);
+      if (!reply.raw.destroyed && !reply.raw.writableEnded) {
+        reply.raw.end();
+      }
+      void cleanup();
+    };
+
+    reply.hijack();
+    const streamHeaders: OutgoingHttpHeaders = {
+      ...(reply.getHeaders() as OutgoingHttpHeaders),
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    };
+    reply.raw.writeHead(200, streamHeaders);
+    reply.raw.write(': connected\n\n');
+
+    request.raw.on('close', () => {
+      void cleanup();
+    });
+
+    try {
+      subscription = await listenToPgChannel(
+        MESSAGE_DRAFT_EVENTS_CHANNEL,
+        (notification) => {
+          if (notification.channel !== MESSAGE_DRAFT_EVENTS_CHANNEL || !notification.payload) {
+            return;
+          }
+
+          let payload: unknown;
+          try {
+            payload = JSON.parse(notification.payload);
+          } catch {
+            return;
+          }
+
+          const parsedEvent = MessageDraftEventPayloadSchema.safeParse(payload);
+          if (!parsedEvent.success || !isMessageDraftEventTargetMatch(parsedEvent.data, target)) {
+            return;
+          }
+
+          closeWithEvent('message-draft', parsedEvent.data);
+        },
+        (error) => {
+          app.log.warn({ error }, 'Message draft event listener error');
+          closeWithEvent('error', { error: 'Message draft notifications are unavailable.' });
+        },
+      );
+
+      const existingDrafts = await service.listMessageDrafts({
+        leadId: target.leadId,
+        page: 1,
+        pageSize: 20,
+      });
+      const existingDraft = existingDrafts.items.find((draft) => isDraftEventTargetMatch(draft, target));
+      if (existingDraft) {
+        closeWithEvent('message-draft', {
+          type: 'message_draft',
+          status: 'CREATED',
+          leadId: existingDraft.leadId,
+          icpProfileId: existingDraft.icpProfileId,
+          draftId: existingDraft.id,
+          followUpNumber: existingDraft.followUpNumber,
+          createdAt: existingDraft.createdAt,
+        } satisfies MessageDraftEventPayload);
+        return;
+      }
+
+      keepAlive = setInterval(() => {
+        if (!reply.raw.destroyed && !reply.raw.writableEnded) {
+          reply.raw.write(': keepalive\n\n');
+        }
+      }, 15_000);
+      timeout = setTimeout(() => {
+        closeWithEvent('timeout', {
+          leadId: target.leadId,
+          message: 'Draft generation is still running.',
+        });
+      }, 120_000);
+    } catch (error: unknown) {
+      app.log.error({ error, leadId: target.leadId }, 'Failed to open message draft event stream');
+      closeWithEvent('error', { error: 'Message draft notifications are unavailable.' });
     }
   });
 

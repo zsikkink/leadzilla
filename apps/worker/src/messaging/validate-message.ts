@@ -57,6 +57,10 @@ const ALARMIST_SUBJECT_PATTERNS = [
 // eslint-disable-next-line no-misleading-character-class
 const EMOJI_REGEX = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{200D}\u{20E3}]/gu;
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function countEmojis(text: string): number {
   const matches = text.match(EMOJI_REGEX);
   return matches ? matches.length : 0;
@@ -95,9 +99,16 @@ function hasPlaceholders(text: string): boolean {
   });
 }
 
-function hasSpamWords(text: string): boolean {
-  const lower = text.toLowerCase();
-  return SPAM_TRIGGER_WORDS.some((word) => lower.includes(word));
+function findSpamWords(text: string): string[] {
+  return SPAM_TRIGGER_WORDS.filter((trigger) => {
+    const escaped = trigger
+      .trim()
+      .split(/\s+/)
+      .map(escapeRegExp)
+      .join('\\s+');
+    const pattern = new RegExp(`(?<![a-z0-9_-])${escaped}(?![a-z0-9_-])`, 'i');
+    return pattern.test(text);
+  });
 }
 
 const STUB_BODY = 'Message generation pending';
@@ -297,9 +308,15 @@ export function validateMessageVariant(
   }
 
   // Hard reject: spam trigger words
-  if (hasSpamWords(bodyText) || (subject && hasSpamWords(subject))) {
+  const spamWordMatches = Array.from(
+    new Set([
+      ...findSpamWords(bodyText),
+      ...(subject ? findSpamWords(subject) : []),
+    ]),
+  );
+  if (spamWordMatches.length > 0) {
     hardReject = true;
-    reasons.push('Contains spam trigger words');
+    reasons.push(`Contains spam trigger words: ${spamWordMatches.join(', ')}`);
   }
 
   // Hard reject: too short
@@ -391,13 +408,17 @@ export function validateMessageVariant(
 }
 
 /** Builds a stricter prompt suffix for retry attempts. */
-export function buildStricterPromptSuffix(channel: MessageChannel): string {
+export function buildStricterPromptSuffix(channel: MessageChannel, validationReasons: string[] = []): string {
   const limits = CHANNEL_LIMITS[channel];
   return [
     'IMPORTANT CONSTRAINTS:',
+    validationReasons.length > 0
+      ? `The previous draft failed validation for these exact reasons: ${validationReasons.join('; ')}. Fix every listed issue in the next draft.`
+      : null,
     `- Stay within ${limits.max} characters for the body.`,
     '- Do NOT use any placeholder patterns like {firstName}, {{company}}, [NAME], etc.',
-    '- Do NOT use spam words like FREE, ACT NOW, LIMITED TIME, GUARANTEED, etc.',
+    `- Do NOT use spam trigger words or phrases: ${SPAM_TRIGGER_WORDS.join(', ')}.`,
+    '- If the previous validation mentioned spam trigger words, remove the listed words entirely and do not replace them with pressure language.',
     `- Use at most ${limits.maxEmoji} emoji${limits.maxEmoji === 1 ? '' : 's'}.`,
     '- For email, write a fresh 2-6 word buyer-readable subject question tied to the prospect context. Do not copy example subjects verbatim.',
     '- Avoid vague feature-only email subjects such as "Milestone payments?" or generic product phrases with no buyer context.',
@@ -408,7 +429,7 @@ export function buildStricterPromptSuffix(channel: MessageChannel): string {
     '- Reference one safe personalization signal when available, not a stack of scraped facts.',
     '- End the message body with exactly: Best, then a new line, then Zbooni Team.',
     '- Write a professional, natural message.',
-  ].join(' ');
+  ].filter(Boolean).join(' ');
 }
 
 // ---------------------------------------------------------------------------

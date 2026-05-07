@@ -76,7 +76,8 @@ describe('handleApolloEnrichJob draft policy alignment', () => {
     vi.clearAllMocks();
 
     dbMock.prisma.leadScorePrediction.findUnique.mockResolvedValue({
-      blendedScore: 0.72,
+      blendedScore: 0.95,
+      reasonsJson: { scoreSource: 'llm' },
     });
     dbMock.prisma.lead.findUnique.mockResolvedValue({
       id: 'lead_1',
@@ -182,6 +183,87 @@ describe('handleApolloEnrichJob draft policy alignment', () => {
       },
     });
     expect(enqueueMessageGenerate).not.toHaveBeenCalled();
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
+  });
+
+  it('skips Apollo lookup when the AI score is not above 0.90', async () => {
+    const searchContactsByDomain = vi.fn(async () => ({
+      status: 'success' as const,
+      contacts: [
+        {
+          email: 'ada@example.com',
+          phone: null,
+          firstName: 'Ada',
+          lastName: 'Lovelace',
+          title: 'Founder',
+          companyName: 'Example Co',
+        },
+      ],
+    }));
+
+    dbMock.prisma.leadScorePrediction.findUnique.mockResolvedValueOnce({
+      blendedScore: 0.9,
+      reasonsJson: { scoreSource: 'llm' },
+    });
+
+    await handleApolloEnrichJob(
+      logger,
+      makeJob({
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        scorePredictionId: 'score_1',
+        runId: 'run_1',
+        scoreBand: 'HIGH',
+        apolloHasEmail: true,
+        apolloHasDirectPhone: true,
+      }),
+      {
+        apolloAdapter: {
+          searchContactsByDomain,
+          isConfigured: true,
+        },
+      },
+    );
+
+    expect(searchContactsByDomain).not.toHaveBeenCalled();
+    expect(dbMock.prisma.apolloRevealAttempt.create).not.toHaveBeenCalled();
+    expect(dbMock.prisma.lead.updateMany).not.toHaveBeenCalled();
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
+  });
+
+  it('skips Apollo lookup when the score is only deterministic fallback', async () => {
+    const searchContactsByDomain = vi.fn(async () => ({
+      status: 'success' as const,
+      contacts: [],
+    }));
+
+    dbMock.prisma.leadScorePrediction.findUnique.mockResolvedValueOnce({
+      blendedScore: 0.99,
+      reasonsJson: { scoreSource: 'deterministic_fallback' },
+    });
+
+    await handleApolloEnrichJob(
+      logger,
+      makeJob({
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        scorePredictionId: 'score_1',
+        runId: 'run_1',
+        scoreBand: 'HIGH',
+        apolloHasEmail: true,
+        apolloHasDirectPhone: true,
+      }),
+      {
+        apolloAdapter: {
+          searchContactsByDomain,
+          isConfigured: true,
+        },
+      },
+    );
+
+    expect(searchContactsByDomain).not.toHaveBeenCalled();
+    expect(dbMock.prisma.apolloRevealAttempt.create).not.toHaveBeenCalled();
+    expect(dbMock.prisma.lead.updateMany).not.toHaveBeenCalled();
     expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
   });
 

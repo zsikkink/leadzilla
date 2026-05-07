@@ -9,13 +9,12 @@ import type {
 import { isNonBusinessWebsiteDomain } from '@lead-flood/discovery';
 import type { Job, SendOptions } from 'pg-boss';
 
-import { RetryableError } from '../errors.js';
 import {
   DISCOVERY_ATTRIBUTION_PRIMARY_OUTCOME_CODES,
   recordDiscoveryAttributionPrimaryOutcome,
 } from '../utils/discovery-attribution.js';
 import { tryFinalizeDiscoveryRun, checkLeadTargetReached } from '../utils/discovery-run-tracker.js';
-import { isProviderWithinBudget, getScoreQualificationThreshold } from '../utils/pipeline-settings.js';
+import { getScoreQualificationThreshold } from '../utils/pipeline-settings.js';
 import {
   adjudicateDecisionMakerCandidates,
   extractDecisionMakers,
@@ -441,27 +440,6 @@ function isAmbiguousTopCandidates(
   const confidenceDiff = Math.abs((first.confidence ?? 0) - (second.confidence ?? 0));
   const seniorityDiff = Math.abs(seniorityRank(first.seniority) - seniorityRank(second.seniority));
   return confidenceDiff <= 0.08 && seniorityDiff <= 1 && first.name.toLowerCase() !== second.name.toLowerCase();
-}
-
-async function canSpendOnProviderForBusiness(input: {
-  provider: 'HUNTER' | 'APOLLO';
-  apiCallType: string;
-  businessId: string;
-  isHighValueBusiness: boolean;
-}): Promise<boolean> {
-  if (input.isHighValueBusiness) {
-    return true;
-  }
-
-  const priorCalls = await prisma.discoveryCostEvent.count({
-    where: {
-      businessId: input.businessId,
-      provider: input.provider,
-      apiCallType: input.apiCallType,
-    },
-  });
-
-  return priorCalls < 1;
 }
 
 export function calculateRecoveryEvidenceStrength(input: {
@@ -1305,7 +1283,7 @@ export async function handleBusinessConvertJob(
     withEmail: 0,
     outcome: 'pending' as string,
   };
-  let hunterContactJson: unknown = null;
+  const hunterContactJson: unknown = null;
   const costEvents: Array<{ provider: 'APOLLO' | 'HUNTER'; costCents: number; apiCallType: string }> = [];
   const recoveryAttempts: ContactRecoveryAttempt[] = [];
   const recoveryTelemetry: ContactRecoveryTelemetryState = {
@@ -1435,14 +1413,14 @@ export async function handleBusinessConvertJob(
     }
   }
 
-  let hunterRetryable = false;
   let isDraftedLead = false;
   let adjudication: CandidateAdjudicationResult | null = null;
   let winnerSelectionMethod: 'deterministic' | 'llm' = 'deterministic';
   const locality = [business.city, business.countryCode].filter(Boolean).join(', ') || null;
   const isHighValueBusiness = business.scoreBand === 'HIGH' || business.deterministicScore >= 0.75;
 
-  // 5d. Fallback to paid providers if no candidate has a valid email yet
+  // 5d. Paid contact providers are post-score only. Hunter used to run here
+  // as a pre-score fallback; keep conversion limited to scraped/free evidence.
   const hasValidEmail = allCandidates.some((candidate) =>
     candidate.email !== null && !isGenericEmail(candidate.email) && !isJunkPersonalEmail(candidate.email),
   );
@@ -1454,109 +1432,11 @@ export async function handleBusinessConvertJob(
     isCredibleNamedCandidate(candidate, business.name),
   );
   const identityThreshold = isHighValueBusiness ? 0.48 : 0.58;
-  // Hunter searches by domain — only needs prequalified + no valid email
-  const shouldSkipHunter = business.preQualified === false || hasValidEmail;
-
-  if (!shouldSkipHunter && !hasValidEmail) {
+  if (!hasValidEmail) {
     logger.info(
       { ...logCtx, identityConfidence, identityThreshold, hasCredibleNamedCandidate },
-      'No valid email from free sources — Hunter gate passed',
+      'No valid email from free sources — skipping Hunter until lead has post-score provider eligibility',
     );
-
-    // Hunter (cheaper) — check budget ceiling first
-    const hunterWithinBudget = await isProviderWithinBudget('HUNTER');
-    const hunterBusinessBudget = await canSpendOnProviderForBusiness({
-      provider: 'HUNTER',
-      apiCallType: 'domain_search',
-      businessId,
-      isHighValueBusiness,
-    });
-    if (!hunterWithinBudget) {
-      logger.warn(logCtx, 'Hunter daily budget ceiling exceeded — skipping paid lookup');
-    }
-    if (!hunterBusinessBudget) {
-      logger.info(logCtx, 'Per-business Hunter budget reached — skipping paid lookup');
-    }
-    if (deps.hunterAdapter.isConfigured && hunterWithinBudget && hunterBusinessBudget) {
-      const hunterResult = await deps.hunterAdapter.searchDomainContacts(domain);
-      if (hunterResult.status === 'success' && hunterResult.contacts.length > 0) {
-        hunterContactJson = hunterResult.contacts;
-        for (const hc of hunterResult.contacts) {
-          gateStats.hunterTotal++;
-          if (isGenericEmail(hc.email) || isJunkPersonalEmail(hc.email)) {
-            gateStats.hunterGenericDrop++;
-            continue;
-          }
-
-          // Skip emails Hunter marks as invalid
-          if (hc.verification === 'invalid') {
-            gateStats.hunterInvalidDrop++;
-            logger.info(
-              { ...logCtx, email: hc.email, hunterVerification: hc.verification },
-              'Skipping Hunter contact — marked invalid by Hunter',
-            );
-            continue;
-          }
-
-          // Skip low-confidence emails (likely pattern-guessed, unverified)
-          if (hc.confidence !== null && hc.confidence < 55) {
-            gateStats.hunterLowConfDrop++;
-            logger.info(
-              { ...logCtx, email: hc.email, hunterConfidence: hc.confidence },
-              'Skipping Hunter contact — confidence below 55',
-            );
-            continue;
-          }
-
-          // Trust Hunter's own verification — only SMTP-verify if Hunter didn't verify
-          if (hc.verification !== 'valid' && deps.smtpVerifier?.isConfigured) {
-            const smtpResult = await deps.smtpVerifier.verify(hc.email);
-            if (smtpResult.status !== 'valid' && smtpResult.status !== 'catch_all') {
-              gateStats.hunterSmtpDrop++;
-              logger.info(
-                { ...logCtx, email: hc.email, smtpStatus: smtpResult.status, hunterVerification: hc.verification },
-                'Hunter contact failed SMTP verification',
-              );
-              continue;
-            }
-          }
-
-          gateStats.hunterPass++;
-          allCandidates.push({
-            name: [hc.firstName ?? '', hc.lastName ?? ''].filter(Boolean).join(' ') || 'Unknown Contact',
-            title: hc.position,
-            email: hc.email,
-            phone: null,
-            linkedinUrl: null,
-            seniority: hc.position ? classifySeniorityLocal(hc.position) : 'other',
-            positionRank: 50,
-            source: 'hunter',
-            rawJson: hc,
-          });
-        }
-      } else if (hunterResult.status === 'retryable_error') {
-        hunterRetryable = true;
-      }
-      if (hunterResult.status === 'success') {
-        // Hunter Domain Search: $49/mo starter plan = 500 searches = ~$0.10/search = 10 cents.
-        // However, Hunter also has "one search = one request" model: $15/500 on Starter = ~3 cents.
-        // Using 3 cents: based on Hunter Starter plan ($49/mo for 500 email finder + domain search).
-        costEvents.push({ provider: 'HUNTER', costCents: 3, apiCallType: 'domain_search' });
-      }
-      logger.info(
-        { ...logCtx, hunterStatus: hunterResult.status, contactsFound: hunterResult.status === 'success' ? hunterResult.contacts.length : 0 },
-        'Hunter domain search completed (fallback)',
-      );
-      recoveryAttempts.push({
-        stage: 'contact_recovery',
-        provider: 'HUNTER',
-        mode: 'discover',
-        status: hunterResult.status,
-        resultCount: hunterResult.status === 'success' ? hunterResult.contacts.length : 0,
-        notes: [],
-      });
-    }
-
   }
 
   if (hasValidEmail) {
@@ -1736,13 +1616,6 @@ export async function handleBusinessConvertJob(
     if (seniorityRank(topCandidate.seniority) <= 1) {
       resolvedContact = topCandidate;
     }
-  }
-
-  // 6c. Hunter retryable with no resolved contact → throw to trigger pg-boss retry
-  if (!resolvedContact && !genericEmailFallbackCandidate && hunterRetryable) {
-    throw new RetryableError(
-      `Hunter returned retryable error for domain ${domain}`,
-    );
   }
 
   // ── 6d. Determine phoneSource (B4) ────────────────────────────────────

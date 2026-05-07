@@ -1,7 +1,7 @@
 'use client';
 
 import type { LeadDisplayScoreSource, LeadListSortBy, LeadScoreBand, LeadStatus } from '@lead-flood/contracts';
-import { AlertTriangle, Loader2, MessageSquare, RefreshCw, Undo2, X } from 'lucide-react';
+import { AlertTriangle, Loader2, MessageSquare, RefreshCw, Undo2, UserPlus, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -57,10 +57,13 @@ const SCORE_SOURCE_LABELS: Record<LeadDisplayScoreSource, string> = {
   NONE: '',
 };
 
-function buildMessageQueueHref(leadId: string, draftId?: string | null): string {
+function buildMessageQueueHref(leadId: string, draftId?: string | null, pollDraft = false): string {
   const params = new URLSearchParams({ leadId });
   if (draftId) {
     params.set('draftId', draftId);
+  }
+  if (pollDraft) {
+    params.set('pollDraft', '1');
   }
   return `/dashboard/messages?${params.toString()}`;
 }
@@ -249,6 +252,7 @@ export default function LeadsPage() {
   const [searchQuery, setSearchQuery] = useState(initialTableState.searchQuery);
   const [debouncedSearch, setDebouncedSearch] = useState(initialTableState.searchQuery);
   const [generatingForLead, setGeneratingForLead] = useState<string | null>(null);
+  const [enrichingLead, setEnrichingLead] = useState<string | null>(null);
   const [rejectingLead, setRejectingLead] = useState<string | null>(null);
   const thresholdLoadedRef = useRef(false);
   const searchResetReadyRef = useRef(false);
@@ -475,7 +479,7 @@ export default function LeadsPage() {
               ? `Draft regeneration queued for ${leadDisplayName}. Opening Message Queue for this lead.`
               : `Draft generation queued for ${leadDisplayName}. Opening Message Queue for this lead.`,
           );
-          router.push(buildMessageQueueHref(leadId));
+          router.push(buildMessageQueueHref(leadId, null, true));
           break;
         }
         case 'CREATED': {
@@ -501,6 +505,19 @@ export default function LeadsPage() {
       toast.error(err instanceof Error ? err.message : 'Failed to generate message');
     } finally {
       setGeneratingForLead(null);
+    }
+  };
+
+  const handleEnrichLead = async (leadId: string, displayName: string) => {
+    setEnrichingLead(leadId);
+    try {
+      await apiClient.enrichLead(leadId);
+      toast.success(`Hunter enrichment queued for ${displayName || 'this lead'}`);
+      leads.refetch();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to queue Hunter enrichment');
+    } finally {
+      setEnrichingLead(null);
     }
   };
 
@@ -771,6 +788,24 @@ export default function LeadsPage() {
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                 ) : (
                                   <RefreshCw className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                            )}
+                            {!lead.hunterEnrichmentUsed && (
+                              <button
+                                type="button"
+                                title="Enrich"
+                                disabled={enrichingLead === lead.id}
+                                className="rounded-md p-1.5 text-sky-300 transition-colors hover:bg-sky-400/15 disabled:opacity-50"
+                                onClick={() => {
+                                  const displayName = companyName || `${lead.firstName} ${lead.lastName}`.trim();
+                                  void handleEnrichLead(lead.id, displayName);
+                                }}
+                              >
+                                {enrichingLead === lead.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <UserPlus className="h-3.5 w-3.5" />
                                 )}
                               </button>
                             )}

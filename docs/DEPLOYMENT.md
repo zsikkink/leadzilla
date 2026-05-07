@@ -2,8 +2,8 @@
 
 Deployment is controlled by GitHub Actions.
 
-For the currently verified live production artifact and durable discovery proof,
-read `docs/CURRENT_STATE.md` first.
+For the latest production status and durable discovery proof, read
+`docs/CURRENT_STATE.md` first.
 
 For remote Postgres provider setup and SQL-first migration strategy, see `docs/PROD_REMOTE_DB_STRATEGY.md`.
 
@@ -82,16 +82,20 @@ File: `.github/workflows/deploy.yml`
   - do not assume the trigger alone selects the intended `production-<sha>` GHCR artifact
   - exact API/worker source selection is still a manual or out-of-band Railway service configuration concern
 
-## Current Verified Production Release
+## Current Production Status
 
-- Intended release artifact SHA: `ff41b7c9b5dc481538f94d88b5510d119e8183aa`
-- Active API deployment ID: `19bab67c-7880-44d9-9227-91b110ed1a89`
-- Active worker deployment ID: `02d5d30d-dac8-4958-840c-691b9e341a52`
-- API image: `ghcr.io/zsikkink/lead-flood-api:production-ff41b7c9b5dc481538f94d88b5510d119e8183aa` at `sha256:220159644d4112b0841e53bfa33b5e66ca529df9583d38354d82d11981d11c1b`
-- Worker image: `ghcr.io/zsikkink/lead-flood-worker:production-ff41b7c9b5dc481538f94d88b5510d119e8183aa` at `sha256:fcc7f08e8468493dd353dc85e1dc171491c5c5aadef0c28132be15ee16e7e3f1`
-- `/health` passed
-- `/ready` passed
-- Railway services are materially running these exact GHCR release images even if stale metadata such as `builder=DOCKERFILE` still appears on the deployment record
+Last verified: 2026-05-07.
+
+- Before the handoff push on 2026-05-07, local `main` matched `origin/main` at `6d31eefe20bb3a5c3d318b7b90bb58afcd3edb57`.
+- Latest local validation on 2026-05-07 passed `pnpm typecheck`, `pnpm lint`, targeted API/worker/provider tests for changed seams, `pnpm build`, Supabase production migration verification, and Docker builds for the API/worker/web runtime images.
+- `pnpm test:unit` was attempted, but the `@lead-flood/db` phase-1 query tests require the local disposable Postgres on `localhost:5434`; that local database was not running. Do not point those fixture-writing tests at production.
+- The production SQL migration chain has been applied through `20260504010000_restrict_lead_score_prediction_model_version_delete.sql`.
+- The GitHub Actions production deploy lane builds images and runs migrations, but the API/worker production deploy is not currently confirmed live.
+- Railway currently reports both `lead-flood-api` and `lead-flood-worker` as `FAILED` / `stopped`.
+- `https://lead-flood-production.up.railway.app/health` currently returns Railway `404 Application not found`.
+- A direct Railway deploy attempt was blocked by Railway account billing status: `Your trial has expired. Please select a plan to continue using Railway.`
+
+Do not treat any older March release artifact as live until Railway billing is restored, API/worker services are redeployed, `/ready` passes, and the production smoke checklist is rerun.
 
 ## Railway Services
 
@@ -115,8 +119,8 @@ Required runtime env on Railway:
 Current operating rules:
 
 - Do not assume repo-connected `main` or a bare deploy trigger is what is live in production.
-- The API and worker had to be materially switched onto the exact GHCR release images recorded above.
-- Future deploy automation and Railway source-selection cleanup are deferred work, not part of the current release record.
+- Do not assume Railway `environmentTriggersDeploy` selects the intended `production-<sha>` GHCR image; verify service source/image selection separately.
+- Restore Railway account billing before attempting another production API/worker deploy.
 - Keep the API healthcheck path on `/ready`.
 - Do not reuse the API `/ready` healthcheck on the worker.
 
@@ -190,7 +194,7 @@ Then sync Prisma locally so the DB-derived client matches the applied schema:
 pnpm db:prisma:sync
 ```
 
-## Durable Discovery Production Proof
+## Last Recorded Durable Discovery Production Proof
 
 - Proof run ID: `7373d5ba-79bd-4463-8144-fcb5f939258e`
 - `1` root `discovery.run` `JobExecution`
@@ -199,7 +203,7 @@ pnpm db:prisma:sync
 - counts aligned
 - `10` keyed `search_tasks`
 - root status `completed`
-- Treat this as the current repo-recorded proof that the durable discovery path is live in production.
+- This is a historical proof that the durable discovery path worked on 2026-03-26. It does not prove the current Railway API/worker services are live.
 
 ## Data Migration: Local -> Remote
 
@@ -259,5 +263,5 @@ Notes:
 Rollback is image-tag based.
 
 1. Repoint deployment target to previous known-good GHCR image tag.
-2. Re-trigger deployment webhook.
+2. Re-trigger the relevant Railway deploy path after confirming Railway billing/service source configuration.
 3. Run smoke checks.

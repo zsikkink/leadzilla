@@ -1,6 +1,8 @@
 # Lead-Flood: How It Works
 
-A complete walkthrough of how Lead-Flood finds businesses, qualifies them, discovers contacts, scores them, and sends personalized outreach — automatically.
+A walkthrough of how Lead-Flood finds businesses, qualifies them, discovers contacts, scores them, drafts outreach, and sends approved messages.
+
+Accuracy note added 2026-05-05: this document has been updated for the current SerpAPI-default discovery path, generic-contact handling, resolved score semantics, and manual draft-generation/approval flow. Code remains the source of truth.
 
 ---
 
@@ -8,16 +10,16 @@ A complete walkthrough of how Lead-Flood finds businesses, qualifies them, disco
 
 Lead-Flood is an **automated sales pipeline**. You tell it what kind of business you want to sell to, and it:
 
-1. **Finds** those businesses on Google Maps
+1. **Finds** those businesses through the configured discovery provider (SerpAPI by default; Google Places only when explicitly configured)
 2. **Filters** out the junk (parked websites, too-small businesses, wrong industry)
 3. **Researches** each business (scrapes their website, checks their Instagram, finds contacts)
 4. **Scores** each lead (how likely are they to buy?)
-5. **Writes** a personalized sales message using AI
-6. **Sends** that message via email or WhatsApp
+5. **Drafts** a sales message using AI when an operator triggers draft generation
+6. **Sends** that message via email or WhatsApp after approval, unless runtime auto-approval is explicitly enabled
 7. **Follows up** automatically if they don't reply
 8. **Learns** from what works and recommends improvements
 
-The whole thing runs without human intervention once you click "Start Discovery" — though you can review and approve messages manually if you prefer.
+Discovery, enrichment, scoring, recovery, and follow-up checks run as background jobs. Initial outreach is intentionally operator-visible: qualified leads wait for an operator/API action to generate a draft, then approval gates the send unless runtime auto-approval has been explicitly enabled.
 
 ---
 
@@ -78,7 +80,7 @@ Think of the ICP as a filter + scoring rubric combined. It drives every decision
 
 **Job**: `discovery.seed`
 
-The system takes your ICP's target industries and maps them to **Google Maps search categories**. For example:
+The system takes your ICP's target industries and maps them to **local/search categories** for the configured provider. For example:
 
 - ICP: "Restaurants in UAE"
 - Cities selected: Dubai, Abu Dhabi
@@ -101,13 +103,13 @@ The seed job then enqueues multiple parallel **run_search_task** workers (defaul
 
 ---
 
-### Step 3: Search Google Maps
+### Step 3: Search the Configured Discovery Provider
 
 **Job**: `discovery.run_search_task` (runs many in parallel)
 
-Each worker slot grabs the next `PENDING` search task from the pool (using a database lock to prevent two workers grabbing the same task), changes its status to `RUNNING`, and calls the **Google Places API**.
+Each worker slot grabs the next `PENDING` search task from the pool (using a database lock to prevent two workers grabbing the same task), changes its status to `RUNNING`, and calls the configured discovery provider. SerpAPI is the default (`DISCOVERY_SEARCH_PROVIDER=SERPAPI`); Google Places is supported only when explicitly selected.
 
-**What comes back from Google Places**:
+**What comes back from discovery**:
 - Business name, formatted address, address components
 - Website URL, Google Maps link
 - Phone number (national + international format)
@@ -121,14 +123,15 @@ Each worker slot grabs the next `PENDING` search task from the pool (using a dat
 
 If a match is found, signals are **merged** — the system takes the maximum values for numeric fields (reviews, ratings) and ORs boolean fields (hasWhatsapp, etc.). This means a business that appears in 3 different searches gets the best data from all 3.
 
-For each new business, the system also stores **BusinessEvidence** — the raw Google Places result linked to the search task that found it. This creates an audit trail: you can always trace back which search found which business.
+For each new business, the system also stores **BusinessEvidence** — the normalized/raw provider result linked to the search task that found it. This creates an audit trail: you can always trace back which search found which business.
 
 **Result hashing**: If a search task returns the exact same top-20 results as the previous attempt (hash comparison), it's marked as `DONE` with a `SKIPPED` flag — no point processing duplicates.
 
 **Early-stop mechanism**: After each batch of new businesses is created, the system calls `checkLeadTargetReached()`. This counts how many non-rejected leads already exist for this discovery run. If the count hits the requested lead limit, it sets a `leadTargetReached: true` flag on the run. From that point, every downstream job (prequalify, convert, and remaining search tasks) checks this flag and **skips** — they call `tryFinalizeDiscoveryRun()` instead. This prevents the system from continuing to burn API credits after the target is already met.
 
-**Google Places restrictions**:
-- Rate limit: 2 requests per second (with exponential backoff + jitter on errors)
+**Provider restrictions**:
+- SerpAPI is controlled by `DISCOVERY_RPS`, `DISCOVERY_CONCURRENCY`, task caps, and the curated SerpAPI-supported country/city list
+- Google Places has its own explicit rate limit setting and clamps paginated generation to page 1
 - Timeout: 30 seconds per request
 - Max 3 retry attempts on transient errors (429, 500, 502, 503, 504)
 - Permanent failures (402 billing, 403 auth) are not retried
@@ -248,8 +251,9 @@ Hunter is a **domain-based email finder**. You give it a domain (e.g., `acme.com
 
 **What Hunter returns**: Up to 5 contacts per domain, each with: first name, last name, email, position (title), confidence score (0-100), verification status.
 
-**Filtering applied to Hunter results**:
-- **Generic emails dropped**: Emails where the local part (before the @) is a generic prefix like `info`, `contact`, `hello`, `support`, `admin`, `sales`, `office`, `help`, `service`, `enquiry`, `inquiry`, `general`, `team`, `mail`, `noreply`, `no-reply`, `webmaster`, `postmaster`, `marketing`, `hr`, `finance`, `billing`, `accounts`, `reception`, `feedback`, `appointments`, `events`, `press`, `media`, `partnerships`, `careers`, `jobs`, `recruitment`, `booking`, `bookings`, `inquiries`, `reservations`, `care`, `customercare`, `customer-care`. These are role-based inboxes, not personal emails — we need to reach a specific person.
+**Filtering and fallback applied to Hunter/free-contact results**:
+- **Generic emails are not treated as decision makers**: Emails where the local part (before the @) is a generic prefix like `info`, `contact`, `hello`, `support`, `admin`, `sales`, `office`, `help`, `service`, `enquiry`, `inquiry`, `general`, `team`, `mail`, `noreply`, `no-reply`, `webmaster`, `postmaster`, `marketing`, `hr`, `finance`, `billing`, `accounts`, `reception`, `feedback`, `appointments`, `events`, `press`, `media`, `partnerships`, `careers`, `jobs`, `recruitment`, `booking`, `bookings`, `inquiries`, `reservations`, `care`, `customercare`, `customer-care` are role-based inboxes.
+- **Generic emails can still become business-level leads**: If no personal email is available, the converter keeps a generic business email as a lead fallback and the UI presents it as a generic/company contact instead of a named decision maker.
 - **Junk emails dropped**: Emails on known junk domains (`wixpress.com`, `sentry.wixpress.com`, `example.com`, `mysite.com`, `doe.com`) or with test prefixes (`example`, `test`, `demo`, `sample`).
 - **Low confidence dropped**: Contacts with Hunter confidence score below **55** are discarded (unless Hunter explicitly marked the email as verified).
 - **Invalid verification dropped**: If Hunter's own verification flagged the email as `invalid`, it's discarded.
@@ -301,7 +305,7 @@ Apollo is an **executive contact database**. It's more expensive than Hunter but
 Every candidate goes through strict name validation before being considered. The system rejects:
 
 - Names shorter than 2 or longer than 50 characters
-- "Unknown Contact" (placeholder from Instagram scrape)
+- "Unknown Contact" legacy/internal placeholders. The operator UI should display these as `Generic Contact` or as the business/team name where possible.
 - Placeholder names: "John Doe", "Jane Doe", "Test User", "Test Contact", "Example Person"
 - Generic web phrases: "Contact Us", "About Us", "Our Team", "Book Now"
 - All-uppercase names longer than 3 characters (usually company names, not people)
@@ -340,7 +344,7 @@ After ranking, one of three things happens:
 - Email (personal, verified), phone (if available)
 - Business email (generic fallback like info@company.com, if personal is different)
 - Decision maker title, seniority, phone
-- Source: `GOOGLE_PLACES_DISCOVERY` (tracking which provider found the original business)
+- Source: `SERPAPI_DISCOVERY`, `GOOGLE_PLACES_DISCOVERY`, or another evidence source value depending on which provider found the original business
 - Status: `new` (ready for feature extraction)
 - Up to 5 top candidates are stored as `BusinessContact` records (so you can see who else was found)
 - A `BusinessConversion` record links the Business → Lead with full metadata (Apollo/Hunter JSON, telemetry)
@@ -384,7 +388,7 @@ Every email discovered in this step is verified via SMTP before being trusted. H
 
 **Job**: `features.compute`
 
-Before scoring, the system extracts **43 measurable data points** (features) about each lead. These are the inputs to the scoring formula. The extractor pulls from multiple data sources in priority order: Apify scrape data (most reliable) → enrichment records (Apollo/Hunter) → discovery data (Google Places) → business record (fallback).
+Before scoring, the system extracts **43 measurable data points** (features) about each lead. These are the inputs to the scoring formula. The extractor pulls from multiple data sources in priority order: scrape data (most reliable) → enrichment records (Apollo/Hunter) → discovery provider data → business record (fallback).
 
 Here are all 43 features, grouped by what they measure:
 
@@ -407,6 +411,11 @@ Here are all 43 features, grouped by what they measure:
 | `recent_activity` | Has the business shown activity in the last 30 days? (posts, website updates, etc.) |
 
 #### E-Commerce & Payment Readiness
+
+The `apify_*` feature names are legacy field names. Current runtime scraping is
+custom website/Instagram scraping; the field prefix is retained for DB/API
+compatibility.
+
 | Feature | What It Measures |
 |---------|-----------------|
 | `accepts_online_payments` | Does the website accept any form of online payment? |
@@ -520,33 +529,28 @@ Each category needs ≥50% match rate to be considered "passed." Based on how ma
 
 The final score is clamped to [0, 1].
 
-#### 7B. Machine Learning Score (Trained Model)
+#### 7B. AI / Model Score
 
-A **logistic regression model** trained on actual outreach outcomes (who replied, who bounced, who went cold). It looks at all 43 features and produces a probability score.
+The deterministic score is always computed as a baseline and fallback. When OpenAI scoring or a trained model is available for the lead + ICP, that AI/model score becomes the persisted final score. The database column is still named `blendedScore` for compatibility, but current runtime behavior is not a 70/30 blend.
 
-- The model is only available after enough labeled data exists — at minimum 200 scored leads with feedback
-- When no model exists, the ML score defaults to 0 and the blend effectively becomes 100% rule-based
-- The model uses **class weights** (`total / (2 × classCount)`) to handle imbalanced data (most leads don't reply, so positive replies get higher weight during training)
-
-#### 7C. Blending the Two Scores
-
-The final score is a weighted average of the rule-based and ML scores:
+Current score resolution in scoring jobs:
 
 ```
-blendedScore = deterministicWeight × deterministicScore + aiWeight × mlScore
+final persisted score = AI/model score when one is produced
+final persisted score = deterministic score when AI/model scoring is unavailable or explicitly allowed to fall back
 ```
 
-The weights shift dynamically based on how good the ML model is:
+Operationally this means:
 
-| Condition | Rule Weight | ML Weight | Why |
-|-----------|-----------|----------|-----|
-| No model, or model AUC < 0.70 | 90% | 10% | ML hasn't proven itself yet — trust the rules |
-| AUC ≥ 0.70 AND 200+ labeled samples | 70% | 30% | Model is decent — start trusting it more |
-| AUC ≥ 0.80 AND 500+ labeled samples | 50% | 50% | Model is strong — equal partnership |
-
-**AUC** (Area Under the Curve) is a measure of how well the model distinguishes good leads from bad ones. 0.50 = random guessing, 1.00 = perfect. The thresholds above ensure the system only trusts the ML model after it's demonstrated real predictive power.
-
-**Manual override**: If you set the "Deterministic/ML blend" in settings, that overrides the dynamic calculation entirely.
+- `deterministicScore` is the rule-based business/lead baseline.
+- `logisticScore` stores the AI/model score when one was produced.
+- `blendedScore` is the persisted final score column name, but the UI should describe it as an AI/model score or fallback score rather than as a mathematical blend.
+- `scoreSource` records whether the final score came from `llm`, `trained_model`, or `deterministic_fallback`.
+- For the main Leads page, the API exposes a resolved display score:
+  1. latest `LeadScorePrediction.blendedScore` as `AI_SCORE`
+  2. legacy `_scoreInfo.blendedScore` as `LEGACY_SCORE`
+  3. `Business.deterministicScore` as `BUSINESS_SCORE`
+  4. no score as `NONE`
 
 #### 7D. Score Bands & What Happens Next
 
@@ -556,7 +560,7 @@ The weights shift dynamically based on how good the ML model is:
 | **MEDIUM** | 0.34 – 0.66 | Lead is **qualified**. Gets post-scoring Apollo enrichment (email only) and stays in the manual draft queue until an operator triggers message generation. |
 | **HIGH** | 0.67+ (67%) | Lead is **qualified**. Gets full Apollo enrichment (email + phone) and stays in the manual draft queue until an operator triggers message generation. Auto-approval still applies only after a draft exists and that setting is on. |
 
-The **qualification threshold** (minimum score to not be rejected) defaults to 0.40 but is configurable via pipeline settings. Note this is different from the band thresholds — a lead can be in the LOW band (below 0.34) but still above 0.40 if you've customized the settings.
+The **qualification threshold** (minimum score to not be rejected) defaults to 0.40 but is configurable via pipeline settings. This threshold uses the current final persisted score described above.
 
 ---
 
@@ -579,11 +583,11 @@ After enrichment, the system updates the lead's contact information and keeps th
 
 **Job**: `message.generate`
 
-When an operator explicitly triggers draft generation for a qualified lead, the system uses **GPT-4o** to write a personalized outreach message. Here's what the AI receives as context:
+When an operator explicitly triggers draft generation for a qualified lead, the system uses the configured `OPENAI_GENERATION_MODEL` to write a lightly personalized outreach draft. Here's what the AI receives as context:
 
 **Lead context**:
 - Contact name, email, company name, industry, country
-- Score band (LOW/MEDIUM/HIGH) and blended score
+- Score band (LOW/MEDIUM/HIGH) and the final persisted score column
 - All 43 features as structured data
 - Business intelligence from website scrape (tech stack, payment methods, etc.)
 - Instagram signals (followers, engagement, activity)
@@ -593,27 +597,33 @@ When an operator explicitly triggers draft generation for a qualified lead, the 
 - Sales hook and angle (the specific value proposition for this type of business)
 - Custom messaging instructions (if configured)
 
-**AI identity**: The AI writes as a senior SDR at Zbooni, using a peer-level consultant voice — professional warmth, direct, not pushy. It follows the **Acknowledge-Compliment-Ask (ACA)** framework:
-1. Acknowledge something specific about the business (from scrape data)
-2. Compliment a genuine strength
-3. Ask an open question that leads to a conversation
+**AI identity**: The AI writes as a senior SDR at Zbooni. Current prompt controls favor lightly personalized, professional outreach rather than deep scraped-data personalization. The draft should start with a greeting, then the Zbooni positioning sentence:
+
+> I’m reaching out from Zbooni. We help businesses turn customer messages into paid, trackable orders.
+
+When useful, it can continue with the cart/payment/tracking sentence from the prompt controls. It should reference at most one safe signal from the business context.
 
 **Hard rules for the AI**:
 - Never say: "to be honest", "decision-maker?", "jump on a call", "game-changer", "hope this finds you well"
 - Never mention competitors by name
 - No emojis
-- Position Zbooni as a "chat revenue layer" (not a payment link tool)
+- Position Zbooni as conversational commerce for WhatsApp/social/direct-chat selling, not just a payment gateway or payment-link tool
+- For decision-maker contacts, greet the named person professionally, e.g. `Hi Ann,`
+- For generic contacts, greet the company/team, e.g. `Hi LAADS team,`
+- End exactly with `Best,` followed by `Zbooni Team`
 
-**Output**: 2-3 message variants per channel, each with:
+**Output**: one selected draft variant with:
 - Subject line (2-6 word question, email only — null for WhatsApp)
-- Body text (40-120 words, plain text)
+- Body text (usually 70-140 words for email or 50-110 words for WhatsApp)
 - Call to action text (or null if embedded in body)
 
 Temperature is set to 0.7 (moderately creative — varied enough to feel natural, constrained enough to stay on-message).
 
 **Approval flow**:
-- If **auto-approve is enabled** AND the lead's blended score falls within the configured auto-approve range → message status = `AUTO_APPROVED`, and `message.send` is immediately enqueued
-- Otherwise → message status = `PENDING`, visible in the dashboard for manual review
+- Draft generation is operator/API-triggered for qualified leads.
+- If `manualApprovalOnly` is enabled, drafts remain `PENDING` until an operator approves them.
+- If runtime auto-approval is enabled and `manualApprovalOnly` is off, drafts whose score is inside the configured auto-approve range can be marked `AUTO_APPROVED` and `message.send` is enqueued.
+- Otherwise drafts remain `PENDING`, visible in the dashboard and lead detail page for review, edit, re-draft, approval, or rejection.
 
 **Follow-up messages**: When this job is triggered for a follow-up (not the initial outreach), it receives additional context: which features/angles were already pitched in previous messages, and a `v1-followup` prompt variant that avoids repeating the same pitch.
 
@@ -626,7 +636,7 @@ Temperature is set to 0.7 (moderately creative — varied enough to feel natural
 Delivers the approved message through the appropriate channel.
 
 **Pre-send checks** (applied to ALL sends):
-- **Suppression check**: Skip if the lead has ever had a `BOUNCED` or `UNSUBSCRIBED` feedback event, or if the lead has been soft-deleted
+- **Suppression check**: Skip if the lead has ever had a `BOUNCED`, `NOT_INTERESTED`, or legacy `UNSUBSCRIBED` feedback event, or if the lead has been soft-deleted
 - **Dedup check**: Skip if a `MessageSend` record with status `SENT` or `DELIVERED` already exists for this draft+variant (prevents double-sends on retries)
 - **Persisted claim**: Before any provider call, the worker atomically claims the send by moving `MessageSend.status` from `QUEUED` to `SENDING`. Retries that see `SENDING` no-op and do not replay the provider call.
 - **Operator quarantine**: Discovery-admin can move a stale `SENDING` send to `UNRESOLVED`. That state is admin-only, blocks replay like `SENDING`, and remains distinct from `FAILED` or `SENT`.
@@ -677,7 +687,7 @@ The system finds all sent messages that are due for a follow-up:
 **For each eligible message**:
 1. Clear `nextFollowUpAfter` (idempotency guard — prevents processing the same follow-up twice)
 2. Load the list of features/angles already pitched in previous messages (prevents repeating the same pitch)
-3. Check auto-approve eligibility based on the lead's latest blended score
+3. Check auto-approve eligibility based on the lead's latest final persisted score, unless `manualApprovalOnly` disables auto-approval
 4. Enqueue `message.generate` with the incremented follow-up number, parent message ID, and previously-pitched features
 
 **Default follow-up timing**:
@@ -703,9 +713,10 @@ When someone responds (or an email bounces), the system captures it and uses it 
 **What feedback means for the lead**:
 - `BOUNCED` → Lead is suppressed from all future sends. Email marked as invalid.
 - `REPLIED` → Lead status updates to `replied`. Great signal.
-- `UNSUBSCRIBED` → Lead suppressed. Marked for compliance.
+- `NOT_INTERESTED` / legacy `UNSUBSCRIBED` → Lead suppressed. Marked for compliance.
 - `MEETING_BOOKED` → Pipeline success. Tracked as conversion.
 - `DEAL_WON` → Pipeline success. Highest-value outcome.
+- `DEAL_LOST` → Negative deal outcome. Included in manager analysis.
 
 **Learning loop 1: ML Model Retraining** (`model.train` — runs on schedule)
 
@@ -718,7 +729,10 @@ The system accumulates labeled data over time: for each scored lead, it eventual
 5. If AUC ≥ model activation threshold (default 0.60) AND AUC ≥ current active model: deploy as the new active `ModelVersion`
 6. If AUC is worse: keep the old model. No regression allowed.
 
-The blend ratio (Step 7C) automatically adjusts based on the new model's AUC.
+The active model can be used as the AI/model scoring source when it passes the
+AUC gate. Current `scoring.compute` still resolves the persisted score as
+AI/model output when available, otherwise deterministic fallback; it does not
+use an operator-facing blend ratio.
 
 **Learning loop 2: Weekly Manager Analysis** (`manager.analyze`)
 
@@ -788,18 +802,18 @@ Finalization also saves the learned conversion rate and search efficiency for th
 
 ## What You Can Configure
 
-All of these are adjustable from the Settings page (`/dashboard/settings`):
+These are runtime pipeline settings. Prompt controls are operator-editable from `/dashboard/prompts`; some pipeline settings may still require API/admin/DB-level operations rather than a dedicated `/dashboard/settings` page.
 
 | Setting | What It Controls | Default | Impact |
 |---------|-----------------|---------|--------|
-| Auto-approve | Skip manual message review for high-scoring leads | Off | When on, HIGH leads get messaged immediately |
+| Manual approval only | Suppress auto-approval for outbound drafts | On in the honest/manual operating mode | Keeps sends operator-approved even when auto-approval settings exist |
+| Auto-approve | Skip manual message review for score-qualified drafts only when manual approval only is off | Off | When on and allowed, drafts in the configured score range can enqueue sends automatically |
 | Auto-approve score range | Min and max score for auto-approval | 100/100 (effectively disabled) | Set to e.g. 60/100 to auto-approve scores ≥60 |
-| Qualification threshold | Minimum blended score to qualify a lead | 0.40 | Lower = more leads (riskier). Higher = fewer leads (safer) |
+| Qualification threshold | Minimum final persisted score to qualify a lead | 0.40 | Lower = more leads (riskier). Higher = fewer leads (safer) |
 | Min review count | Ignore businesses with fewer Google reviews | 15 | Lower catches more small businesses. Higher filters for established ones |
 | Max follow-ups | How many times to follow up before giving up | 3 | More follow-ups = more persistent but can annoy |
 | Email daily limit | Max outreach emails per day | 100 | Protects sender reputation and stays within provider limits |
 | WhatsApp daily limit | Max WhatsApp messages per day | 50 | WhatsApp has strict anti-spam limits — exceeding can get the number blocked |
-| Deterministic/ML blend | How much to trust the ML model vs rules (0–100%) | Dynamic (auto) | Set manually to override the automatic AUC-based blend |
 | Score tier bands | Where to draw LOW/MEDIUM/HIGH boundaries | 0.34 / 0.67 | Adjusts how aggressively leads are classified |
 | Enrichment threshold | Minimum score for paid enrichment (Apollo) | 0.30 | Lower = spend more on enrichment. Higher = only enrich top leads |
 | Follow-up max count | Maximum follow-up messages per lead | 3 | More = persistent, fewer = conservative |
@@ -817,11 +831,12 @@ The system tracks every paid API call and its cost in `DiscoveryCostEvent` recor
 
 | Provider | What It's Used For | When It's Called | Cost | Rate Limit |
 |----------|-------------------|-----------------|------|-----------|
-| **Google Places** | Finding businesses on Maps | Step 3 (every search task) | Per search query | 2 requests/second |
+| **SerpAPI** | Default discovery provider for local/search tasks | Step 3 (when `DISCOVERY_SEARCH_PROVIDER=SERPAPI`) | Per search query | Controlled by `DISCOVERY_RPS` and `DISCOVERY_CONCURRENCY` |
+| **Google Places** | Explicit alternate discovery provider | Step 3 (only when `DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES`) | Per search query | Provider/rate settings |
 | **Hunter** | Finding email addresses by domain | Step 5 (only if no free email found) | ~$0.01 per domain search | 250ms between calls |
 | **Apollo (pre-screen)** | Checking if contacts exist | Step 4 (pre-qualification) | FREE | 250ms between calls |
 | **Apollo (full)** | Revealing executive contacts | Step 5 or 8 (only for qualified leads) | ~$0.01 per search | 250ms between calls, 30s on rate limit |
-| **OpenAI (GPT-4o)** | Writing personalized messages | Step 9 (per qualified lead) | Per token | No explicit limit |
+| **OpenAI** | AI scoring, business insights, reply classification, and draft generation | Scoring and messaging jobs when configured | Per token | Model/env dependent |
 | **Resend** | Sending emails | Step 10 (per approved message) | Per email sent | Daily ceiling (configurable) |
 | **Trengo** | Sending WhatsApp messages | Step 10 (per approved message) | Per message sent | 50/day + business hours only |
 | **Website scraper** | Reading business websites | Step 5 (per pre-qualified business) | Free (self-hosted) | Cached 7 days |
@@ -875,17 +890,18 @@ The system is designed to **not lose work**, even when things go wrong:
 |------|--------------|
 | **ICP** | Ideal Customer Profile — your description of the perfect customer (industry, country, scoring rules) |
 | **Discovery Run** | One batch execution of "go find me leads" — has its own lifecycle, budget, and metrics |
-| **Search Task** | A single Google Maps search query (e.g., "restaurants in Dubai") — the smallest unit of discovery |
-| **Business** | A company found on Google Maps. Not yet a lead — it's just a business listing until we find a person there |
+| **Search Task** | A single provider-backed local/search query (e.g., "restaurants in Dubai") — the smallest unit of discovery |
+| **Business** | A company found by the discovery provider. Not yet a lead — it's just a business listing until the converter creates a contactable lead or recovery item |
 | **Lead** | A specific person at a business that we want to contact. Has a name, email, score, and message history |
 | **Pre-qualification** | Quick, free filtering (DNS, parked domain, reviews) before expensive enrichment |
 | **Enrichment** | Researching a business — scraping website, checking Instagram, finding contacts via Hunter/Apollo |
 | **Feature** | A measurable data point about a lead. 43 total, covering contact quality, digital presence, payment readiness, etc. |
-| **Blended Score** | The final 0-100 quality score combining rule-based scoring and machine learning predictions |
-| **Score Band** | LOW (<34), MEDIUM (34-66), HIGH (67+) — determines how much enrichment and whether auto-approve kicks in |
+| **Final Persisted Score** | The score stored on `LeadScorePrediction.blendedScore`. The column name is legacy; current runtime uses AI/model score when available and deterministic fallback otherwise. |
+| **Business Score** | The deterministic business-level score on `Business.deterministicScore`; used as a display fallback for discovery-era leads without a lead score prediction. |
+| **Score Band** | LOW (<34), MEDIUM (34-66), HIGH (67+) — used for visual grouping and some enrichment decisions |
 | **Hard Filter** | A pass/fail qualification rule. Fail one and you're rejected regardless of score. Example: wrong country. |
 | **Weighted Rule** | A scoring rule that adds or subtracts points. Example: "Has WhatsApp" = +3 points. |
-| **Message Variant** | One version of a sales message. The system generates 2-3 per channel for A/B testing. |
+| **Message Variant** | One version of a sales message. Current draft generation creates a single `variant_a` draft; the name is retained for compatibility. |
 | **Contact Recovery** | When a promising business has no findable contacts — flagged for manual lookup with all available context |
 | **Identity Confidence** | A 0-1 score representing how certain the system is that it found a real, relevant person at the business |
 | **Outbox** | A reliability pattern — jobs are saved to the database first, then dispatched to the queue. Nothing is ever lost. |

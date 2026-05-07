@@ -15,19 +15,19 @@ Code is still the source of truth. This doc is the fastest orientation path for 
 - Schema authority: `supabase/migrations/` is the intended canonical schema source for production.
 - Current runtime reality: the repo is still mid-transition away from Prisma. Prisma remains in parts of runtime, local/bootstrap, CI, and tests.
 
-### Current production deploy truth as of 2026-03-26
+### Current production deploy truth as of 2026-05-07
 
-- Intended release artifact SHA: `ff41b7c9b5dc481538f94d88b5510d119e8183aa`
-- Active API deployment ID: `19bab67c-7880-44d9-9227-91b110ed1a89`
-- Active worker deployment ID: `02d5d30d-dac8-4958-840c-691b9e341a52`
-- Active API image: `ghcr.io/zsikkink/lead-flood-api:production-ff41b7c9b5dc481538f94d88b5510d119e8183aa` at `sha256:220159644d4112b0841e53bfa33b5e66ca529df9583d38354d82d11981d11c1b`
-- Active worker image: `ghcr.io/zsikkink/lead-flood-worker:production-ff41b7c9b5dc481538f94d88b5510d119e8183aa` at `sha256:fcc7f08e8468493dd353dc85e1dc171491c5c5aadef0c28132be15ee16e7e3f1`
-- `/health` passed for the live API deployment.
-- `/ready` passed for the live API deployment.
-- Railway services are materially running the exact GHCR release images above. Do not infer live production from `main`, repo HEAD, or Railway repo/source metadata alone.
-- `builder=DOCKERFILE` may still appear as stale, non-blocking metadata on these image-backed deployments.
+- Before the handoff push on 2026-05-07, local `main` matched `origin/main` at `6d31eefe20bb3a5c3d318b7b90bb58afcd3edb57`.
+- Latest local validation on 2026-05-07 passed `pnpm typecheck`, `pnpm lint`, targeted API/worker/provider tests for changed seams, `pnpm build`, Supabase production migration verification, and Docker builds for the API/worker/web runtime images.
+- `pnpm test:unit` was also attempted, but the `@lead-flood/db` phase-1 query tests require the local disposable Postgres on `localhost:5434`; that local database was not running. Do not point those fixture-writing tests at production.
+- Production SQL migrations have been applied through `20260504010000_restrict_lead_score_prediction_model_version_delete.sql`.
+- The latest GitHub Actions production deploy attempts built images and applied/no-oped migrations, but failed the production API readiness check.
+- Railway currently reports `lead-flood-api` and `lead-flood-worker` as `FAILED` / `stopped`.
+- `https://lead-flood-production.up.railway.app/health` currently returns Railway `404 Application not found`.
+- Direct Railway deployment is blocked by Railway account billing status: `Your trial has expired. Please select a plan to continue using Railway.`
+- Do not infer live production from `main`, repo HEAD, old release docs, or published GHCR images. Production API/worker readiness must be reverified after Railway billing is restored and the services are redeployed.
 
-### Current production durable discovery proof as of 2026-03-26
+### Last recorded production durable discovery proof as of 2026-03-26
 
 - Proof run ID: `7373d5ba-79bd-4463-8144-fcb5f939258e`
 - Result: `1` root `discovery.run` `JobExecution`
@@ -36,14 +36,14 @@ Code is still the source of truth. This doc is the fastest orientation path for 
 - Result: counts aligned
 - Result: `10` keyed `search_tasks`
 - Result: root status `completed`
-- Treat this as the current repo-recorded proof that the durable discovery path is live in production.
+- Treat this as historical proof that the durable discovery path worked on 2026-03-26. It does not prove the current Railway services are live.
 
-### Release handoff closure as of 2026-03-26
+### Historical release handoff closure as of 2026-03-26
 
 - GitHub default branch: `main`
 - GitHub default branch view was confirmed at `465f231a639a2325a71dcb38cb727061c6a520f6`
 - That default-branch tip includes the validated release commit `ff41b7c9b5dc481538f94d88b5510d119e8183aa`
-- Treat this as the final repo-recorded promotion confirmation for this release handoff.
+- Treat this only as the promotion confirmation for that March release handoff.
 
 ## 3. What is already true in code now
 
@@ -85,8 +85,8 @@ Code is still the source of truth. This doc is the fastest orientation path for 
 ## 5. Intended target state
 
 - `apps/web` runs on Vercel.
-- `apps/api` runs as a separately operated Railway API service.
-- `apps/worker` runs as a separately operated Railway worker service.
+- `apps/api` is intended to run as a separately operated Railway API service; it is currently blocked/stopped until Railway billing/deploy is fixed.
+- `apps/worker` is intended to run as a separately operated Railway worker service; it is currently blocked/stopped until Railway billing/deploy is fixed.
 - Supabase remains the external Postgres/Auth provider.
 - The API is the real user/admin operational boundary.
 - Browser-direct Supabase usage is limited primarily to auth/session and only explicit, documented exceptions.
@@ -149,7 +149,7 @@ Code is still the source of truth. This doc is the fastest orientation path for 
 - Preserve unrelated changes.
 - Do not assume Prisma schema is canonical.
 - Do not assume browser-direct Supabase reads are still the intended design.
-- Do not assume `main` or repo HEAD is what is live in production; check the live release record in this doc first.
+- Do not assume `main` or repo HEAD is what is live in production; verify Railway/Vercel status and API `/ready`.
 - Do not assume Railway `environmentTriggersDeploy` alone selects the intended GHCR release artifact; verify service source/image selection separately when exact release control matters.
 - Be conservative around worker, auth, and admin-boundary changes.
 

@@ -1,6 +1,8 @@
 # Developer Setup Guide
 
-Get running from a fresh clone. No Docker required.
+Get running from a fresh clone. The default path uses the shared cloud Supabase
+project. Docker is only needed for local disposable infra/bootstrap workflows or
+checks that explicitly call Docker.
 
 ## Prerequisites
 
@@ -50,7 +52,7 @@ For Railway runtime, `DATABASE_URL` can use the Supabase pooled host with `sslmo
 DATABASE_URL=postgresql://postgres:<PASSWORD>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
 DIRECT_URL=postgresql://postgres:<PASSWORD>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
 ```
-Discovery and enrichment API keys (Google Places, Hunter, OpenAI, etc.) are optional for basic dev work. Leave them blank unless you're working on the pipeline.
+Discovery and enrichment API keys (SerpAPI, Google Places, Hunter, OpenAI, etc.) are optional for basic dev work. Leave them blank unless you're working on the pipeline. SerpAPI is the default discovery provider; Google Places is available only when explicitly selected. To execute discovery queue workers locally, set the selected provider key and set `DISCOVERY_QUEUE_WORKERS_ENABLED=true`.
 
 ### apps/web/.env.local
 ```
@@ -86,7 +88,7 @@ If `certs/supabase-root-2021-ca.pem` exists, the API and worker dev scripts now 
 pnpm dev
 ```
 
-`npm run dev` also works from the repo root if you prefer npm’s script runner, but the repo itself is still pnpm-managed.
+Use `pnpm` for repo scripts. Do not use `npm install` or switch package managers.
 
 To verify just the API against remote Supabase before starting the full stack:
 
@@ -117,7 +119,7 @@ All four should pass with zero errors.
 Frontend (Next.js :3000)  →  API (Fastify :5050)  →  Worker (pg-boss queues)
          ↓                         ↓                         ↓
     Supabase Auth           Supabase Postgres          Discovery pipeline
-    (login/session)         (all app data)             (Google Places → scoring → messaging)
+    (login/session)         (all app data)             (SerpAPI/Google Places → scoring → messaging)
 ```
 
 - **API** handles REST endpoints, auth verification, and enqueues jobs via pg-boss

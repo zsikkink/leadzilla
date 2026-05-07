@@ -55,8 +55,14 @@ export type {
   DiscoveryPhase1HistoricalSearchInputCohortAssignmentsFilters,
 } from './discovery-phase1-historical-search-input-cohort-assignments-query.js';
 export { toInputJson } from './prisma-json.js';
-export { assertDatabaseConnection, getPgPool, query, withTransaction } from './postgres.js';
-export type { SqlQueryable } from './postgres.js';
+export {
+  assertDatabaseConnection,
+  getPgPool,
+  listenToPgChannel,
+  query,
+  withTransaction,
+} from './postgres.js';
+export type { PgNotificationPayload, PgNotificationSubscription, SqlQueryable } from './postgres.js';
 export { withPoolRetry } from './retry.js';
 export { checkPipelineSchemaHealth, checkWorkerSchemaHealth } from './schema-health.js';
 export type { PipelineSchemaHealth, PipelineSchemaHealthScope } from './schema-health.js';

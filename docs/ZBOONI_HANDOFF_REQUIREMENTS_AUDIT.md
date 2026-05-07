@@ -4,6 +4,12 @@ Date: 2026-03-25
 Scope: repo-grounded handoff-readiness and deployment-requirements audit for transferring Lead Flood to Zbooni so they can run it in their own environment.  
 Method: reviewed runtime code, env examples and validators, deploy scripts, Dockerfiles, migrations, worker jobs, API routes, web UI, and current-state docs. No product code was changed for this audit.
 
+Status note added 2026-05-05: this is a dated audit snapshot, not the current
+operational source of truth. Use `docs/CURRENT_STATE.md`, `docs/DEPLOYMENT.md`,
+and `docs/DISCOVERY_PROVIDER_STACK.md` for current production status and current
+discovery-provider configuration. Provider-specific claims below reflect the
+audit date unless explicitly updated.
+
 ## 1. Executive summary
 
 ### Bottom line
@@ -53,7 +59,7 @@ High confidence:
 
 High confidence:
 
-- **Minimum viable handoff**: Zbooni-owned compute + secrets + domains + Supabase + Google Places + OpenAI + Resend, with conservative budgets, manual message approval, and optional paid enrichment disabled initially.
+- **Minimum viable handoff**: Zbooni-owned compute + secrets + domains + Supabase + the configured discovery provider (SerpAPI by current default, Google Places if explicitly selected) + OpenAI + Resend, with conservative budgets, manual message approval, and optional paid enrichment disabled initially.
 - **Full-capacity handoff**: all of the above plus Hunter, Apollo, Trengo/WhatsApp, webhook ingress, human notification channels, stronger monitoring, and a new approval-before-paid-unlock flow.
 - **If Zbooni requires fully AWS-native DB/Auth from day one**, that is not a pure deployment task. It is a product engineering task because the current runtime explicitly validates for Supabase hosts and Supabase JWTs (`apps/api/src/env.ts`, `apps/api/src/index.ts`).
 
@@ -113,7 +119,7 @@ Inference, clearly labeled:
 | Postgres + auth setup compatible with current Supabase assumptions | API env validator rejects non-Supabase DB hosts outside tests; browser auth uses Supabase; admin bootstrap references `auth.users`. | Required | Required | High | `apps/api/src/env.ts`, `apps/web/src/lib/supabase-client.ts`, `supabase/migrations/20260314210837_lead_flood_dev_baseline.sql` |
 | Secret management | The app relies on many runtime secrets. | Required | Required | High | `apps/api/.env.example`, `apps/worker/.env.example`, `apps/web/.env.example` |
 | DNS + SSL/TLS | Web and API need trusted endpoints; CORS and webhooks depend on them. | Required | Required | High | `apps/api/.env.example`, `apps/web/.env.example`, `apps/api/src/server.ts` |
-| Outbound internet access from API/worker | Providers are external: Supabase, Google Places, Hunter, Apollo, OpenAI, Resend, Trengo, Instagram, Slack. | Required | Required | High | `apps/worker/src/index.ts`, `packages/providers/src/*` |
+| Outbound internet access from API/worker | Providers are external: Supabase, SerpAPI or Google Places, Hunter, Apollo, OpenAI, Resend, Trengo, Instagram, Slack. | Required | Required | High | `apps/worker/src/index.ts`, `packages/providers/src/*` |
 | Admin/operator user accounts | UI access depends on authenticated users; app admin routes require `app_admins` membership. | Required | Required | High | `apps/web/src/lib/auth-context.tsx`, `apps/api/src/auth/guard.ts`, `docs/PROD_REMOTE_DB_STRATEGY.md` |
 | At least one human notification channel | Interested or ambiguous replies are escalated via Slack, Trengo internal conversation, or email. | Recommended for MVP; required for safe live usage | Required | High | `apps/worker/src/jobs/notify.sales.job.ts`, `apps/worker/src/jobs/reply.classify.job.ts` |
 | Monitoring/logging destination | The repo has structured logs and health jobs, but no external observability backend. | Recommended | Required | High | `packages/observability/src/logger.ts`, `apps/worker/src/jobs/pipeline.health.job.ts` |
@@ -192,7 +198,7 @@ High confidence:
 
 - Email sending is wired to Resend, not Gmail (`packages/providers/src/email/resend.adapter.ts`, `apps/worker/src/jobs/message.send.job.ts`).
 - WhatsApp sending is wired to Trengo (`packages/providers/src/whatsapp/trengo.adapter.ts`, `apps/worker/src/jobs/message.send.job.ts`).
-- Discovery today needs Google Places for the current strict initial discovery path (`apps/worker/src/env.ts`, `apps/worker/src/index.ts`).
+- Discovery today needs the configured discovery provider. Current code defaults to SerpAPI and supports Google Places when explicitly selected (`apps/worker/src/env.ts`, `packages/discovery/src/config.ts`).
 - Paid enrichment today depends on Hunter and/or Apollo if Zbooni wants full intended contact discovery capacity (`apps/worker/src/jobs/business.convert.job.ts`, `apps/worker/src/jobs/apollo.enrich.job.ts`).
 
 #### Admin/operator access requirements
@@ -255,7 +261,7 @@ High confidence:
 
 - a cutover checklist for replacing:
   - `SUPABASE_PROJECT_REF=cbcgrzvqidtrtrtnzlso` in ops/docs examples
-  - current sender defaults like `noreply@leadflood.io`
+  - current sender defaults such as `zack@zboonisales.com` if Zbooni changes the mailbox/domain
   - any current deploy webhooks or smoke-test URLs tied to existing infra  
   Evidence: `docs/PROD_REMOTE_DB_STRATEGY.md`, `packages/providers/src/email/resend.adapter.ts`, `docs/DEPLOYMENT.md`
 
@@ -269,7 +275,8 @@ High confidence:
 | --- | --- | --- | --- | --- | --- | --- |
 | Supabase Postgres | Primary application DB | Required | Zbooni-owned Supabase Postgres project, or engineering work to remove current coupling | DB plan, connections, backup/restore, region | High | `apps/api/src/env.ts`, `docs/PROD_REMOTE_DB_STRATEGY.md`, `README.md` |
 | Supabase Auth | Browser auth and API JWT verification | Required | Zbooni-owned Supabase Auth project, users, anon/publishable key, JWT issuer/project ref | Auth/user management, external dependency | High | `apps/web/src/lib/supabase-client.ts`, `apps/api/src/index.ts`, `apps/api/src/auth/supabase.ts` |
-| Google Places API | Current strict initial discovery provider | Required for current automated discovery | `GOOGLE_PLACES_API_KEY` and billing-enabled Google project | Per-search API usage | High | `apps/worker/src/env.ts`, `apps/worker/src/index.ts` |
+| SerpAPI | Default current discovery provider | Required when `DISCOVERY_SEARCH_PROVIDER=SERPAPI` | `SERPAPI_API_KEY` and SerpAPI account | Per-search API usage | High | `apps/worker/src/env.ts`, `packages/discovery/src/config.ts`, `docs/DISCOVERY_PROVIDER_STACK.md` |
+| Google Places API | Explicit alternate discovery provider | Required only when `DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES` | `GOOGLE_PLACES_API_KEY` and billing-enabled Google project | Per-search API usage | High | `apps/worker/src/env.ts`, `packages/discovery/src/config.ts` |
 | OpenAI | Message generation, reply classification, business insights, AI scoring fallback | Optional for a degraded system; effectively required for intended AI capacity | `OPENAI_API_KEY` and approved model usage | Token usage, model choice, policy/compliance | High | `apps/worker/src/index.ts`, `packages/providers/src/ai/openai.adapter.ts`, `apps/worker/src/jobs/message.generate.job.ts`, `apps/worker/src/jobs/reply.classify.job.ts` |
 | Hunter | Paid domain contact discovery fallback | Optional; needed for stronger contact recovery/full capacity | `HUNTER_API_KEY` | Domain search/email lookup credits | High | `apps/worker/src/jobs/business.convert.job.ts`, `packages/providers/src/enrichment/hunter.adapter.ts`, `apps/worker/.env.example` |
 | Apollo | Free pre-screen + paid contact reveal/enrichment | Optional; needed for stronger contact recovery/full capacity | `APOLLO_API_KEY` | Contact search/export/reveal credits | High | `apps/worker/src/jobs/business.convert.job.ts`, `apps/worker/src/jobs/apollo.enrich.job.ts`, `packages/providers/src/discovery/apollo.adapter.ts` |
@@ -284,11 +291,7 @@ High confidence:
 
 High confidence:
 
-- **Discovery provider reality**: the worker currently enforces `DISCOVERY_SEARCH_PROVIDER='GOOGLE_PLACES'` and logs “Google Places only, strict initial discovery mode” (`apps/worker/src/env.ts`, `apps/worker/src/index.ts`).
-- **SerpAPI is inconsistent/stale in the repo**:
-  - it still appears in env examples and some docs (`apps/worker/.env.example`, `docs/DISCOVERY_PROVIDER_STACK.md`)
-  - but it is not the current strict discovery provider path enforced by `apps/worker/src/env.ts` and `apps/worker/src/index.ts`  
-  Confidence: High that SerpAPI is not the current required provider; Moderate on how much historical code still depends on it.
+- **Discovery provider reality updated after this audit**: current code accepts `DISCOVERY_SEARCH_PROVIDER=SERPAPI` or `DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES`; SerpAPI is the default in `apps/worker/src/env.ts` and `packages/discovery/src/config.ts`. Google Places is still supported when explicitly selected and configured.
 
 - **SMTP verification is built into the codebase and does not require a commercial provider account** (`packages/providers/src/enrichment/smtp-verifier.ts`).
 
@@ -300,7 +303,7 @@ High confidence:
 
 | Capability | Status | What exists today | Main gaps / limits | Confidence | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| Personalized drafting from crawled/research/enriched data | Implemented | Worker loads website intelligence, Instagram intelligence, business insights, ICP metadata, pipeline prompt settings, and can use OpenAI or fallback templates. | Initial drafts are operator-triggered from qualified leads rather than fully automatic. Quality depends on scraper and OpenAI availability. | High | `apps/worker/src/jobs/message.generate.job.ts`, `packages/providers/src/ai/openai.adapter.ts`, `packages/providers/src/scraping/website-scraper.adapter.ts`, `packages/providers/src/scraping/instagram-scraper.adapter.ts` |
+| Personalized drafting from crawled/research/enriched data | Implemented | Worker loads website intelligence, Instagram intelligence, business insights, ICP metadata, pipeline prompt settings, and uses OpenAI when configured. If generation fails validation, the current path records a visible draft-generation error and preserves any existing draft rather than silently sending a fallback template. | Initial drafts are operator-triggered from qualified leads rather than fully automatic. Quality depends on scraper and OpenAI availability. | High | `apps/worker/src/jobs/message.generate.job.ts`, `packages/providers/src/ai/openai.adapter.ts`, `packages/providers/src/scraping/website-scraper.adapter.ts`, `packages/providers/src/scraping/instagram-scraper.adapter.ts` |
 | Email sending | Implemented | Sends via Resend with idempotency key, suppression checks, daily rate limit, delivery/bounce webhook handling. | No Gmail backend. Sender domain ownership must move to Zbooni. | High | `apps/worker/src/jobs/message.send.job.ts`, `packages/providers/src/email/resend.adapter.ts`, `apps/api/src/modules/webhook/webhook.service.ts` |
 | WhatsApp / Trengo sending | Implemented | First contact uses Trengo template send; later messages can reuse prior conversation/ticket. | Requires full Trengo/WhatsApp setup and webhook ingress. | High | `apps/worker/src/jobs/message.send.job.ts`, `packages/providers/src/whatsapp/trengo.adapter.ts`, `apps/api/src/modules/webhook/webhook.service.ts` |
 | Follow-up generation | Implemented | Scheduled `followup.check` claims due sends and enqueues `message.generate`. | There is still a crash-loss window between claim and enqueue. | High | `apps/worker/src/jobs/followup.check.job.ts`, `docs/CURRENT_STATE.md` |
@@ -327,7 +330,7 @@ High confidence:
 | AI message generation | Implemented | OpenAI-based personalized message generation with role/prompt overrides and validation/retry logic | None beyond provider dependency and quality control | High | `packages/providers/src/ai/openai.adapter.ts`, `apps/worker/src/jobs/message.generate.job.ts` |
 | AI reply classification | Implemented | OpenAI classifies replies into four operational buckets | No richer multi-turn reply agent | High | `packages/providers/src/ai/openai.adapter.ts`, `apps/worker/src/jobs/reply.classify.job.ts` |
 | AI business insights from crawled data | Implemented | Worker can derive business insights and LLM extraction from website/about/team text | Depends on scrape success and OpenAI | High | `apps/worker/src/jobs/business.convert.job.ts`, `apps/worker/src/utils/llm-extraction.ts` |
-| AI scoring fallback | Implemented | If no trained model is active, worker can use AI-assisted scoring fallback | Still blended with deterministic logic; depends on OpenAI | High | `apps/worker/src/jobs/scoring.compute.job.ts` |
+| AI scoring fallback | Implemented | If no trained model is active, worker can use AI-assisted scoring fallback | Current `scoring.compute` persists the AI/model score as final when produced and falls back to deterministic score otherwise; the DB column is still legacy-named `blendedScore`. Depends on OpenAI for AI scoring. | High | `apps/worker/src/jobs/scoring.compute.job.ts` |
 | Trained scoring model lifecycle | Partial | Jobs exist for training, evaluation, drift, and model activation by AUC | Operational maturity and handoff docs are limited | High | `apps/worker/src/jobs/model.train.job.ts`, `apps/worker/src/jobs/model.evaluate.job.ts`, `apps/worker/src/jobs/model.drift.job.ts`, `apps/worker/src/schedules.ts` |
 | General AI-agent/plugin architecture | Missing | Some UI copy says “AI agent,” but runtime is a set of specific jobs and adapters | No plugin registry, no agent execution framework, no tenant-pluggable agent layer | Moderate | `apps/worker/src/index.ts`, `packages/providers/src/ai/openai.adapter.ts`, `apps/web/app/dashboard/recommendations/page.tsx` |
 
@@ -478,7 +481,7 @@ High confidence:
 | --- | --- | --- | --- |
 | No Gmail sending integration | If Zbooni wants Gmail/Workspace specifically, current code does not support it. | High | repo-wide search; current send path is Resend in `apps/worker/src/jobs/message.send.job.ts` |
 | Trengo/WhatsApp setup is non-trivial | Requires channel, template, webhook, and optional internal conversation setup. | High | `packages/providers/src/whatsapp/trengo.adapter.ts`, `apps/api/src/modules/webhook/webhook.routes.ts` |
-| Discovery provider docs are inconsistent | SerpAPI appears in env/docs, but Google Places is the enforced discovery provider. This can derail setup. | High | `apps/worker/.env.example`, `apps/worker/src/env.ts`, `apps/worker/src/index.ts`, `docs/DISCOVERY_PROVIDER_STACK.md` |
+| Discovery provider docs were inconsistent at audit time | This has since been corrected in current docs: SerpAPI is default, Google Places is explicit alternate. Reverify runtime env before handoff. | Historical / resolved in docs | `apps/worker/.env.example`, `apps/worker/src/env.ts`, `packages/discovery/src/config.ts`, `docs/DISCOVERY_PROVIDER_STACK.md` |
 | No general agent/plugin architecture | Zbooni asked whether AI agents can be plugged in; that is not a ready-made extension point today. | Moderate | `apps/worker/src/index.ts`, `packages/providers/src/ai/openai.adapter.ts` |
 
 ### 4. Blockers to maintainable handoff
@@ -520,7 +523,7 @@ High confidence:
 | 2 | Zbooni | Provide target compute environment, deployment access, DNS/SSL ownership path, and secret-management path. | Needed before any install. |
 | 3 | Zbooni | Provision a Zbooni-owned Supabase project, or explicitly accept temporary use of current external DB/Auth until migration. | Current code requires this path. |
 | 4 | We | Produce and execute a concrete deployment procedure for `web`, `api`, and `worker` using the existing Dockerfiles or equivalent process supervisor. | Repo has pieces; handoff needs a single supported path. |
-| 5 | Zbooni | Provision core phase-1 credentials: `GOOGLE_PLACES_API_KEY`, `OPENAI_API_KEY`, `RESEND_API_KEY`, sending domain, public web/API URLs. | These are enough for discovery + drafting + email. |
+| 5 | Zbooni | Provision core phase-1 credentials: the configured discovery provider key (`SERPAPI_API_KEY` by current default, or `GOOGLE_PLACES_API_KEY` if explicitly selected), `OPENAI_API_KEY`, `RESEND_API_KEY`, sending domain, public web/API URLs. | These are enough for discovery + drafting + email. |
 | 6 | We | Apply canonical schema, bootstrap first admin, and verify auth/runtime connectivity. | DB/auth bootstrap is repo-specific. |
 | 7 | We | Seed Zbooni ICP data if needed via the existing seed path. | The repo already includes a Zbooni-specific ICP seed path. |
 | 8 | Both | Set conservative runtime settings: manual approval only, low send limits, low provider budget ceiling, optionally `followUpMaxCount=0` for first live tests. | Minimizes spend and operator risk. |
@@ -560,7 +563,7 @@ Enable the intended high-capacity operating model:
 | Step | Owner | Action | Why it matters |
 | --- | --- | --- | --- |
 | 1 | Both | Decide the long-term platform boundary: keep Supabase as an external managed dependency, or fund a move to AWS-native DB/Auth. | This affects handoff scope, timeline, and ownership. |
-| 2 | Zbooni | Provision all intended production providers: Google Places, OpenAI, Resend, Trengo, Hunter, Apollo, notification channel(s). | Full discovery and outreach capacity depends on them. |
+| 2 | Zbooni | Provision all intended production providers: configured discovery provider (SerpAPI by default or Google Places if selected), OpenAI, Resend, Trengo, Hunter, Apollo, notification channel(s). | Full discovery and outreach capacity depends on them. |
 | 3 | We | Add or scope a real approval-before-paid-unlock flow. | This is the missing control Zbooni explicitly asked for. |
 | 4 | We | Finish a supported production deployment blueprint for their environment. | Avoid mixed Vercel/Railway/Docker ambiguity. |
 | 5 | Both | Enable and test all webhooks in the client environment. | Delivery, bounce, unsubscribe, and reply handling depend on them. |
@@ -627,7 +630,7 @@ Repo-grounded assessment:
 
 ### Data provider / enrichment credits
 
-- Which provider accounts do you want Zbooni to own for contact discovery: Google Places, Hunter, Apollo, or all three?
+- Which provider accounts do you want Zbooni to own for discovery and contact enrichment: SerpAPI or Google Places for discovery, plus Hunter/Apollo if contact enrichment is enabled?
 - What daily or monthly spend limits do you want for discovery and enrichment?
 - Do you require explicit human approval before any paid contact unlock, or is a strict capped automated mode acceptable temporarily?
 
@@ -776,13 +779,13 @@ Repo-grounded assessment:
 | Variable(s) | App | Classification | Notes |
 | --- | --- | --- | --- |
 | `DISCOVERY_ENABLED` | Worker | Optional capability | Master discovery enable switch. |
-| `DISCOVERY_SEARCH_PROVIDER` | Worker | Required for current discovery path | Current parser only accepts `GOOGLE_PLACES`. |
-| `GOOGLE_PLACES_ENABLED`, `GOOGLE_PLACES_API_KEY`, `GOOGLE_PLACES_BASE_URL`, `GOOGLE_PLACES_RATE_LIMIT_MS` | Worker | Required for current automated discovery | Current strict initial discovery provider. |
+| `DISCOVERY_SEARCH_PROVIDER` | Worker | Required for current discovery path | Current parser accepts `SERPAPI` and `GOOGLE_PLACES`; SerpAPI is the default. |
+| `DISCOVERY_SEARCH_PROVIDER`, `SERPAPI_DISCOVERY_ENABLED`, `SERPAPI_API_KEY`, `SERPAPI_WEB_SEARCH_ENABLED` | Worker | Required for default automated discovery when provider is SerpAPI | Current default discovery provider path. |
+| `GOOGLE_PLACES_ENABLED`, `GOOGLE_PLACES_API_KEY`, `GOOGLE_PLACES_BASE_URL`, `GOOGLE_PLACES_RATE_LIMIT_MS` | Worker | Required only when `DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES` | Explicit alternate discovery provider. |
 | `DISCOVERY_COUNTRIES`, `DISCOVERY_LANGUAGES`, `DISCOVERY_MAX_PAGES_PER_QUERY`, `DISCOVERY_REFRESH_BUCKET`, `DISCOVERY_RPS`, `DISCOVERY_CONCURRENCY`, `DISCOVERY_ENABLE_CACHE`, `DISCOVERY_MAPS_ZOOM`, `DISCOVERY_MAX_TASK_ATTEMPTS`, `DISCOVERY_BACKOFF_BASE_SECONDS`, `DISCOVERY_RUN_MAX_TASKS` | Worker | Optional tuning, but operationally important | Discovery volume and performance controls. |
 | `DISCOVERY_BOOTSTRAP_ON_START`, `DISCOVERY_QUEUE_WORKERS_ENABLED`, `WORKER_ENABLE_SCHEDULES`, `DISCOVERY_SCHEDULE_ENABLED`, `DISCOVERY_STALE_JOB_MINUTES` | Worker | Deployment/ops controls | Scheduler and queue worker ownership. |
 | `JOB_REQUEST_POLL_MS`, `JOB_REQUEST_MAX_PER_TICK`, `JOB_REQUEST_WORKER_ID` | Worker | Optional / legacy-control-plane related | Evidence of unresolved discovery control-plane split. |
 | `DISCOVERY_SEED_PROFILE`, `DISCOVERY_SEED_MAX_TASKS`, `DISCOVERY_SEED_MAX_PAGES`, `DISCOVERY_SEED_COUNTRIES`, `DISCOVERY_SEED_LANGUAGES`, `DISCOVERY_SEED_TASK_TYPES`, `DISCOVERY_SEED_BUCKET` | Worker env example | Optional seed tuning | Present in example; relevant for seed operations. |
-| `SERPAPI_DISCOVERY_ENABLED`, `SERPAPI_API_KEY`, `SERPAPI_WEB_SEARCH_ENABLED` | Worker | Stale / uncertain | Present in env example, but not current strict discovery provider path. |
 | `BRAVE_SEARCH_ENABLED`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_BASE_URL`, `BRAVE_SEARCH_RATE_LIMIT_MS` | Worker | Optional / unclear current use | Parsed but not evidenced as primary current discovery path. |
 | `GOOGLE_CUSTOM_SEARCH_API_KEY`, `GOOGLE_CUSTOM_SEARCH_ENGINE_ID` | Worker | Parsed but legacy-adjacent | Current env loader also rejects older Google CSE keys. |
 | `COMPANY_SEARCH_ENABLED`, `COMPANY_SEARCH_BASE_URL` | Worker | Optional helper capability | Free company autocomplete helper path. |
@@ -801,7 +804,7 @@ Repo-grounded assessment:
 | Variable(s) | App | Classification | Notes |
 | --- | --- | --- | --- |
 | `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_GENERATION_MODEL`, `OPENAI_SCORING_MODEL` | Worker | Optional in code; effectively required for intended AI capacity | Drives message generation, classification, insights, AI scoring fallback. |
-| `SCORING_DETERMINISTIC_WEIGHT`, `SCORING_AI_WEIGHT` | Worker | Optional tuning | Runtime score blending envs. |
+| `SCORING_DETERMINISTIC_WEIGHT`, `SCORING_AI_WEIGHT` | Worker | Legacy / partially unused tuning | Env parser still accepts these, but current `scoring.compute` does not present or use a production 70/30 blend as the final lead score. |
 | `MESSAGING_ENABLED` | Worker | Optional capability | Global messaging switch. |
 | `WHATSAPP_DAILY_SEND_LIMIT`, `EMAIL_DAILY_SEND_LIMIT` | Worker | Deployment/runtime tuning | Hard daily send caps. |
 
@@ -837,7 +840,7 @@ High confidence evidence:
 
 Important keys evidenced in code/UI:
 
-- `deterministicAiBlend`
+- `deterministicAiBlend` (legacy/simulator-adjacent; not the current final-score blend in `scoring.compute`)
 - `scoreQualificationThreshold`
 - `enrichmentThreshold`
 - `min_review_count`

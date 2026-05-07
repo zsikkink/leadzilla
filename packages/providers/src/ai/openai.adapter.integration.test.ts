@@ -326,6 +326,41 @@ describe('OpenAiAdapter integration', () => {
       expect(result.data.reasoning).toHaveLength(2);
     });
 
+    it('scores overall Zbooni fit rather than only ICP category fit', async () => {
+      const fetchMock = vi.fn(async () => {
+        return new Response(
+          makeOpenAiResponse(JSON.stringify(VALID_SCORING_RESPONSE)),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      });
+
+      const adapter = new OpenAiAdapter({
+        apiKey: 'sk-test',
+        fetchImpl: fetchMock as unknown as typeof fetch,
+      });
+
+      const result = await adapter.evaluateLeadScore(SCORING_CONTEXT);
+
+      expect(result.status).toBe('success');
+
+      const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+      const payload = JSON.parse(String(requestInit?.body ?? '{}')) as {
+        messages?: Array<{ role: string; content: string }>;
+      };
+      const systemPrompt = payload.messages?.find((msg) => msg.role === 'system')?.content ?? '';
+      const userPrompt = payload.messages?.find((msg) => msg.role === 'user')?.content ?? '';
+
+      expect(systemPrompt).toContain('Score how good this business is for Zbooni overall');
+      expect(systemPrompt).toContain('not merely how closely it matches the ICP search category');
+      expect(systemPrompt).toContain('marketing activity and customer acquisition');
+      expect(systemPrompt).toContain('online payment readiness');
+      expect(systemPrompt).toContain('Contactability is separate from business fit');
+      expect(systemPrompt).toContain('eCommerce, professional services, food and beverage, sports and fitness, education and training, and retail');
+      expect(userPrompt).toContain('Deterministic baseline score: 0.7500');
+      expect(userPrompt).toContain('ICP context: UAE fintech company with 10-200 employees');
+      expect(userPrompt).toContain('Business feature evidence:');
+    });
+
     it('returns terminal_error when API key is missing', async () => {
       const adapter = new OpenAiAdapter({
         apiKey: undefined,

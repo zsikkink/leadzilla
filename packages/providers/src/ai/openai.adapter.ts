@@ -409,16 +409,24 @@ export class OpenAiAdapter {
     }
 
     const systemPrompt = [
-      'You are an expert lead scoring analyst for Zbooni, a UAE fintech company.',
-      'Evaluate the lead quality based on the feature vector and ICP criteria.',
-      'Return a score between 0 and 1 (0 = poor fit, 1 = perfect fit) and a list of reasoning strings.',
-      'Consider the deterministic score as a baseline and adjust based on qualitative factors.',
+      'You are an expert lead qualification analyst for Zbooni.',
+      'Score how good this business is for Zbooni overall, not merely how closely it matches the ICP search category.',
+      'Zbooni helps businesses turn WhatsApp, Instagram, social, and direct customer conversations into paid, structured, trackable orders.',
+      'A strong lead already acquires customers, communicates with customers, sells products or services, and has enough transaction volume or customer engagement for Zbooni to matter.',
+      'Use the ICP description as context, but do not overfit to it. If the ICP category is imperfect but the business shows strong Zbooni-fit signals, score it highly. If the ICP category matches but the business lacks Zbooni-fit signals, score it lower.',
+      'Prioritize these signals in order: 1) marketing activity and customer acquisition, including active social media, recent posts, campaigns, events, visible promotions, physical customer engagement, or offline/physical-world sales activity; 2) online presence, chat presence, and reputation, especially WhatsApp, Instagram, websites, apps, recent activity, ratings, and reviews; 3) online payment readiness, because businesses already accepting online payments have lower adoption friction; 4) fit with Zbooni-served verticals: eCommerce, professional services, food and beverage, sports and fitness, education and training, and retail; 5) expected volume, estimated from reviews, social following, branch/location signals, catalog depth, activity level, and repeat customer interactions.',
+      'Do not score based on whether a named decision-maker was found. Contactability is separate from business fit. Generic business email, generic forms, or WhatsApp contact information should not reduce fit.',
+      'Do not over-penalize thin website data if the business has strong Instagram, WhatsApp, reviews, or other customer-facing activity.',
+      'Do not invent facts or use outside knowledge. If evidence is missing, say so and lower confidence.',
+      'Penalize businesses that appear inactive, low-volume, irrelevant to Zbooni’s served verticals, purely informational, government-like, non-commercial, or unlikely to sell through customer conversations.',
+      'Score calibration: 0.90-1.00 = excellent Zbooni fit; 0.75-0.89 = strong fit; 0.55-0.74 = plausible fit; 0.40-0.54 = weak fit; 0.00-0.39 = poor fit.',
+      'Return a score between 0 and 1 and a short list of concise reasoning strings tied to observed evidence.',
     ].join(' ');
 
     const userPrompt = [
-      `Deterministic score: ${context.deterministicScore.toFixed(4)}`,
-      `ICP description: ${context.icpDescription}`,
-      `Features: ${JSON.stringify(context.featuresJson)}`,
+      `Deterministic baseline score: ${context.deterministicScore.toFixed(4)}`,
+      `ICP context: ${context.icpDescription}`,
+      `Business feature evidence: ${JSON.stringify(context.featuresJson)}`,
     ].join('\n');
 
     return this.callChatCompletion<AiScoreResult>(

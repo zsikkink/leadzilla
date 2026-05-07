@@ -1,5 +1,10 @@
 # Dead Code Audit — March 30, 2026
 
+Historical note added 2026-05-05: this audit is preserved as a point-in-time
+dead-code snapshot. Some runtime/provider conclusions may have changed since
+March 30; use current source code and current operational docs before acting on
+any finding.
+
 **Tool**: OpenAI Codex CLI v0.115.0 (gpt-5.4, full-auto mode)
 **Verification**: rg + `pnpm exec tsc --noUnusedLocals --noUnusedParameters`, spot-checked with grep
 **Scope**: apps/api/src, apps/web/src, apps/web/app, apps/worker/src, packages/contracts/src, packages/db/src, packages/discovery/src, packages/providers/src

@@ -136,7 +136,7 @@ Create a setup doc with two explicit onboarding paths.
    - Set valid `SUPABASE_JWT_ISSUER=https://<ref>.supabase.co/auth/v1`, or
    - keep `SUPABASE_PROJECT_REF` and remove blank `SUPABASE_JWT_ISSUER` line.
 3. Worker discovery config:
-   - If running discovery queue workers, provide required discovery key(s) (notably `GOOGLE_PLACES_API_KEY`).
+   - If running discovery queue workers, provide the required configured discovery provider key (`SERPAPI_API_KEY` by current default, or `GOOGLE_PLACES_API_KEY` if explicitly selected).
    - Otherwise set `DISCOVERY_QUEUE_WORKERS_ENABLED=false` for non-discovery local work.
 4. `DIRECT_URL` should be the direct DB host (non-pooler) for migration/introspection workflows.
 

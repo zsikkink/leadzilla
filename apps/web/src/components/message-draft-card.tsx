@@ -10,7 +10,6 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 
 import { useAuth } from '../hooks/use-auth.js';
-import { useQueuedRefresh } from '../hooks/use-queued-refresh.js';
 import type { ApiClient } from '../lib/api-client.js';
 
 interface MessageDraftCardProps {
@@ -20,6 +19,7 @@ interface MessageDraftCardProps {
   initialSend?: MessageSendResponse | null;
   initialSendLoaded?: boolean | undefined;
   onAction: () => void;
+  onQueuedRegenerate?: ((draft: MessageDraftResponse) => void) | undefined;
 }
 
 function getApprovalBadge(draft: MessageDraftResponse): { label: string; className: string } {
@@ -387,7 +387,7 @@ function VariantEditor({
               onClick={() => onApprove(variant.id)}
               className="inline-flex items-center gap-1 rounded-lg bg-zbooni-green/20 px-3 py-1.5 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/30 disabled:opacity-50"
             >
-              <Check className="h-3 w-3" /> Approve
+              <Send className="h-3 w-3" /> Send
             </button>
           ) : null}
           {sendActionLabel ? (
@@ -413,6 +413,7 @@ export function MessageDraftCard({
   initialSend = null,
   initialSendLoaded = false,
   onAction,
+  onQueuedRegenerate,
 }: MessageDraftCardProps) {
   const { apiClient, user } = useAuth();
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
@@ -421,7 +422,6 @@ export function MessageDraftCard({
 
   const userId = user?.id ?? 'unknown';
   const primaryChannel = draft.variants[0]?.channel ?? 'EMAIL';
-  const scheduleQueuedRefreshes = useQueuedRefresh(onAction);
 
   const handleApprove = async (variantId?: string | undefined) => {
     setActionInProgress('approve');
@@ -433,7 +433,7 @@ export function MessageDraftCard({
       });
       onAction();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Approve failed');
+      setError(err instanceof Error ? err.message : 'Send failed');
     } finally {
       setActionInProgress(null);
     }
@@ -487,7 +487,7 @@ export function MessageDraftCard({
 
       if (result.status === 'QUEUED') {
         toast.success('Re-draft queued. The current draft will be replaced after generation succeeds.');
-        scheduleQueuedRefreshes();
+        onQueuedRegenerate?.(draft);
       } else if (result.status === 'CREATED') {
         toast.success('New draft created');
       } else {

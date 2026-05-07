@@ -118,6 +118,10 @@ export function registerWebhookRoutes(
     try {
       const raw = (body as Buffer).toString();
       (req as unknown as { rawBody: string }).rawBody = raw;
+      if (raw.trim().length === 0) {
+        done(null, {});
+        return;
+      }
       const json = JSON.parse(raw) as unknown;
       done(null, json);
     } catch (err) {

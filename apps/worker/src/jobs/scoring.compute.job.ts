@@ -23,6 +23,7 @@ import {
 } from '../utils/pipeline-settings.js';
 
 export const SCORING_COMPUTE_JOB_NAME = 'scoring.compute';
+const POST_SCORE_PROVIDER_MIN_AI_SCORE = 0.9;
 /** Batch/API-triggered scoring singleton key. Per-lead scoring (from features.compute) uses a 3-part key: scoring.compute:${runId}:${leadId}:${icpProfileId} */
 export const SCORING_COMPUTE_IDEMPOTENCY_KEY_PATTERN = 'scoring.compute:${runId}';
 
@@ -428,8 +429,13 @@ export async function handleScoringComputeJob(
 
         if (!isRejected) {
           // Keep discovery leads in `qualified` until a human explicitly starts draft generation.
-          // Apollo reveal can still run to enrich contact data, but drafting is manual.
-          if (deps?.enqueueApolloEnrich) {
+          // Paid/contact provider reveal is only allowed after an AI/model score clears
+          // the strict post-score threshold. Drafting remains manual.
+          if (
+            deps?.enqueueApolloEnrich
+            && usedAiScore
+            && blendedScore > POST_SCORE_PROVIDER_MIN_AI_SCORE
+          ) {
             const primaryBusinessId = leadBusinessIdMap.get(targetLeadId) ?? null;
             // Look up BusinessConversion for apolloHasEmail/apolloHasDirectPhone
             const businessConversion = primaryBusinessId
@@ -457,6 +463,18 @@ export async function handleScoringComputeJob(
             logger.info(
               { jobId: job.id, leadId: targetLeadId, icpProfileId: targetIcpId, blendedScore, scoreBand },
               'Enqueued apollo.enrich for qualifying lead',
+            );
+          } else if (deps?.enqueueApolloEnrich) {
+            logger.info(
+              {
+                jobId: job.id,
+                leadId: targetLeadId,
+                icpProfileId: targetIcpId,
+                blendedScore,
+                scoreSource,
+                minimumAiScore: POST_SCORE_PROVIDER_MIN_AI_SCORE,
+              },
+              'Skipped provider enrichment because lead lacks an AI score above the post-score threshold',
             );
           }
         }

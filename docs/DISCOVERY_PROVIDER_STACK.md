@@ -2,7 +2,7 @@
 
 ## Current Production Path
 
-Canonical discovery today is the SerpAPI search-task pipeline:
+Canonical discovery today is the SerpAPI search-task pipeline by default:
 
 - Seed tasks into `search_tasks`
 - Execute tasks with SerpAPI engines (`SERP_GOOGLE_LOCAL`, `SERP_MAPS_LOCAL`, optionally other `SERP_*` task types)
@@ -16,6 +16,7 @@ Worker runtime file: `apps/worker/.env.local`
 
 ```bash
 # Canonical discovery pipeline
+DISCOVERY_SEARCH_PROVIDER=SERPAPI
 SERPAPI_DISCOVERY_ENABLED=true
 SERPAPI_API_KEY=
 DISCOVERY_COUNTRIES=JO,SA,AE,EG
@@ -40,14 +41,19 @@ DISCOVERY_SEED_TASK_TYPES=SERP_MAPS_LOCAL,SERP_GOOGLE_LOCAL
 DISCOVERY_SEED_BUCKET=
 ```
 
-## Optional Future Provider Flags (Not Canonical Today)
+## Optional Provider / Legacy Flags
 
-The legacy adapter-based `discovery.run` pipeline remains behind feature flags for future experimentation:
+Google Places is still supported by code when explicitly selected with
+`DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES` and `GOOGLE_PLACES_API_KEY`, but it is
+not the dashboard bulk-run default. The remaining flags below are optional or
+legacy-adjacent and should not be treated as the canonical production discovery
+path unless the runtime provider is deliberately changed:
 
 ```bash
 DISCOVERY_ENABLED=false
 BRAVE_SEARCH_ENABLED=false
 GOOGLE_PLACES_ENABLED=false
+GOOGLE_PLACES_API_KEY=
 LINKEDIN_SCRAPE_ENABLED=false
 COMPANY_SEARCH_ENABLED=true
 APOLLO_ENABLED=false

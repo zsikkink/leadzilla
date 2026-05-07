@@ -1,5 +1,10 @@
 # Lead-Flood Handoff: Technical Requirements for Zbooni
 
+Historical note added 2026-05-05: this handoff artifact is preserved for
+client-planning context. For current production status, provider defaults, and
+operator workflow, use `docs/CURRENT_STATE.md`, `docs/DEPLOYMENT.md`,
+`docs/DISCOVERY_PROVIDER_STACK.md`, and the current pipeline walkthrough.
+
 ## Current Architecture
 
 The platform currently runs as three separate services:
@@ -96,7 +101,7 @@ To stand the system up in your environment, we would need:
 
 ### Provider Accounts for Phase 1
 
-- Google Places API
+- Configured discovery provider API: SerpAPI by current default, or Google Places if explicitly selected
 - OpenAI API
 - Resend account + verified sending domain
 - Hunter API (for contact discovery with controlled usage)
@@ -189,7 +194,7 @@ So for phase 1:
 ### 5. Discovery / Enrichment Providers
 
 13. Which provider accounts do you want to use in phase 1:
-   - Google Places
+   - SerpAPI by current default, or Google Places if explicitly selected
    - Hunter
    - OpenAI
    - Resend

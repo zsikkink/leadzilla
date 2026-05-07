@@ -168,7 +168,7 @@ function createBusiness(overrides: Record<string, unknown> = {}) {
         {
           name: 'Ada Lovelace',
           title: 'Founder',
-          email: null,
+          email: 'ada@acme.example',
           phone: null,
           linkedinUrl: 'https://linkedin.com/in/ada-lovelace',
           seniority: 'executive',
@@ -568,6 +568,37 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
     expect(txMock.lead.create).not.toHaveBeenCalled();
   });
 
+  it('does not call Hunter before a lead receives an eligible AI score', async () => {
+    const deps = makeDeps();
+    dbMock.prisma.business.findUnique.mockResolvedValueOnce(
+      createBusiness({
+        apifyWebsiteScrapeJson: {
+          ...createBusiness().apifyWebsiteScrapeJson,
+          decisionMakers: [],
+          contactInfo: {
+            emails: [],
+            phones: [],
+            addresses: [],
+          },
+        },
+      }),
+    );
+
+    await handleBusinessConvertJob(
+      logger,
+      makeJob({
+        businessId: 'business_1',
+        discoveryRunId: 'run_old',
+        icpProfileId: 'icp_1',
+      }),
+      deps,
+    );
+
+    expect(deps.hunterAdapter.searchDomainContacts).not.toHaveBeenCalled();
+    expect(dbMock.prisma.contactRecoveryItem.upsert).toHaveBeenCalledTimes(1);
+    expect(txMock.lead.create).not.toHaveBeenCalled();
+  });
+
   it('creates a lead from a generic business email instead of opening contact recovery', async () => {
     const enqueueFeaturesCompute = vi.fn();
     txMock.lead.findFirst.mockResolvedValueOnce(null);
@@ -964,7 +995,18 @@ describe('handleBusinessConvertJob features handoff behavior', () => {
         discoveryRunId: 'run_1',
         apifyWebsiteScrapeJson: {
           ...createBusiness().apifyWebsiteScrapeJson,
-          decisionMakers: [],
+          decisionMakers: [
+            {
+              name: 'Ada Lovelace',
+              title: 'Founder',
+              email: 'ada@acme.example',
+              phone: null,
+              linkedinUrl: 'https://linkedin.com/in/ada-lovelace',
+              seniority: 'executive',
+              positionRank: 1,
+              source: 'about_page',
+            },
+          ],
           contactInfo: { emails: [], phones: [], addresses: [] },
         },
       }),

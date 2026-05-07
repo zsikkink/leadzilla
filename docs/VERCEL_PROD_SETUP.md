@@ -2,6 +2,11 @@
 
 The web app runs on Vercel and calls the API. Do not run Postgres on Vercel.
 
+Current production note: as of 2026-05-05 the intended Railway API/worker
+services are stopped/failed because Railway deployment is blocked by account
+billing status. Vercel settings alone cannot make the production app usable
+until the backend API domain returns `/ready`.
+
 ## 1) Vercel Project Settings
 
 - Framework preset: `Next.js`

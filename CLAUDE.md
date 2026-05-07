@@ -1,15 +1,21 @@
 # Lead-Flood: Zbooni Sales OS
 
+Current authority note added 2026-05-05: `AGENTS.md`, `README.md`, and
+`docs/CURRENT_STATE.md` are the current operational sources of truth. This file
+is a Claude-oriented aide-memoire and must not override the repo's SQL-first
+production rules or current deployment status.
+
 Enterprise AI-powered sales OS. First client: Zbooni (UAE fintech).
 Pipeline: discovery → enrichment → scoring → messaging → follow-ups → learning.
 
 ## Dev Commands
 ```bash
 pnpm install            # Install dependencies
-pnpm dev:infra          # Start PostgreSQL (Docker)
-pnpm db:migrate         # Apply migrations
-pnpm db:seed            # Seed test data
-pnpm dev                # Start all apps (API :5050, Web :3000, Worker)
+pnpm bootstrap          # Full local bootstrap path when Docker/local infra is needed
+pnpm dev:infra          # Start local Docker Postgres for local-infra workflows
+pnpm db:migrate         # Local Prisma migration path only; not production schema authority
+pnpm db:seed            # Seed test data for local/dev workflows
+pnpm dev                # Start all apps (API :5050, Web :3000, Worker) once env/infra are ready
 ```
 
 Quality: `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
@@ -22,15 +28,15 @@ Quality: `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
 - **Agent teams skip hard work**: Parallel agent teams cherry-pick easy greenfield tasks and skip integration/wiring. For UI plans: (1) one objective per task — never compound bullets, (2) verify agent output against the full plan item-by-item, (3) visual QA is mandatory — typecheck/build passing does NOT mean UI is correct or complete
 - **Zero file overlap in parallel sessions**: When running multiple sessions concurrently, each session MUST own exclusive files. No two sessions may touch the same file. Restructure task grouping to eliminate overlap entirely — the merge conflict risk is never worth the time saved. Plan file ownership before writing prompts.
 - **Discovery button is the core product**: The "Start Discovery" flow requires UI → API POST /v1/discovery/runs → pg-boss discovery.seed job. Verify it works end-to-end after any discovery-related changes
-- **Dual DB — ALWAYS sync both**: API uses Supabase Postgres at `:54322` (apps/api/.env.local), Prisma CLI uses Docker at `:5434` (packages/db/.env). After ANY migration change: (1) `pnpm db:migrate` applies to Docker, (2) manually apply the same SQL to Supabase via `docker exec -i supabase_db_cbcgrzvqidtrtrtnzlso psql -U postgres -d postgres < migration.sql`. Verify counts match: `SELECT count(*) FROM _prisma_migrations` on both. Mismatches cause runtime crashes that look like "Unable to reach API"
+- **Production DB is SQL-first**: Supabase SQL migrations under `supabase/migrations` are canonical for production. Prisma remains a runtime/client/type tool, but Prisma migrations are not the production source of truth. Use `pnpm db:migrate:prod` and `pnpm db:verify:prod` for linked Supabase migration operations.
 - **PATH for pnpm scripts** — Child processes need `/bin` in PATH. Use: `export PATH="/Users/os_architect/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"`. Without `/bin`, pnpm scripts fail with `spawn sh ENOENT`
 - **TypeScript `||` and `??` mixing** — `A || B ?? C` is a compile error (TS5076). Always wrap: `A || (B ?? C)`
 - **Apify is NOT used** — Variables named `apify` remain in the codebase but Apify the service is not used. Do not rename them (too many references). The website/Instagram scrapers are custom-built, not Apify actors
-- **Never re-validate upstream decisions** — If Google Maps returned a business for our search query, don't re-check industry relevance with a weaker word-matching filter. Trust the search origin. Only add filters for things the upstream system DOESN'T check (country, minimum reviews, etc.)
+- **Never re-validate upstream decisions** — If the configured discovery provider returned a business for our search query, don't re-check industry relevance with a weaker word-matching filter. Trust the search origin. Only add filters for things the upstream system does not check (country, minimum reviews, etc.)
 - **Always give maximum effort**: Don't build MVP when comprehensive is feasible. Ask "how can this be better?" before calling anything done. Half-measures cost more in rework than doing it right the first time.
 - **Frontend agent**: Always spawn `frontend-designer` agent for UI tasks involving new pages, component redesigns, or layout overhauls. Direct edits OK for single-property CSS fixes.
 - **Ripple-effect check**: Before completing any change, ask: "What other components/pages display the same data or are affected by this change?" Check sibling pages, shared components, API consumers, and settings displays. Don't just make the change — think about what it touches.
-- **Supabase must be running**: API and Worker connect to Supabase at `:54322`, NOT the Docker postgres at `:5434`. Run `supabase status` to verify. If dead, `supabase start` before doing anything.
+- **Local Supabase only when using that workflow**: API and Worker connect to whatever `DATABASE_URL`/Supabase env points at. For local Supabase workflows, verify `supabase status`; for cloud Supabase or disposable SQL bootstrap flows, do not assume a local Supabase container is required.
 
 ## Parallel Execution — Worktree Freshness (NEVER SKIP)
 - **Squash merge commits before launching parallel sessions.** Long merge chains from prior parallel runs cause worktree tools to branch from old ancestors, guaranteeing merge conflicts.
@@ -96,7 +102,7 @@ After any correction or mistake: update CLAUDE.md or module CLAUDE.md so the err
 ## References
 - **PRD.md** — Product requirements, feature blocks, pipeline architecture
 - **ICP and Offerings.pdf** — Zbooni scoring criteria, segments A-H
-- **docs/api-gotchas.md** — Provider-specific API gotchas (Apollo, Apify, OpenAI, Trengo, Hunter, Instagram, SerpAPI)
+- **docs/api-gotchas.md** — Provider-specific API gotchas (Apollo, custom website/Instagram scraping, OpenAI, Trengo, Hunter, SerpAPI)
 - **docs/audits/** — Previous audit findings and remediation
 - **apps/api/CLAUDE.md** — API route, auth, outbox conventions
 - **apps/worker/CLAUDE.md** — Job structure, error classification, chaining

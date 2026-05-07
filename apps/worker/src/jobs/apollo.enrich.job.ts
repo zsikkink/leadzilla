@@ -10,6 +10,7 @@ import {
 
 // ── Constants ──────────────────────────────────────────────────────────
 export const APOLLO_ENRICH_JOB_NAME = 'apollo.enrich';
+const POST_SCORE_PROVIDER_MIN_AI_SCORE = 0.9;
 
 export const APOLLO_ENRICH_RETRY_OPTIONS: Pick<
   SendOptions,
@@ -67,6 +68,15 @@ export interface ApolloEnrichLogger {
   error: (object: Record<string, unknown>, message: string) => void;
 }
 
+function predictionUsesAiScore(reasonsJson: unknown): boolean {
+  if (!reasonsJson || typeof reasonsJson !== 'object' || Array.isArray(reasonsJson)) {
+    return false;
+  }
+
+  const scoreSource = (reasonsJson as { scoreSource?: unknown }).scoreSource;
+  return scoreSource === 'llm' || scoreSource === 'trained_model';
+}
+
 // ── Handler ─────────────────────────────────────────────────────────────
 export async function handleApolloEnrichJob(
   logger: ApolloEnrichLogger,
@@ -99,9 +109,28 @@ export async function handleApolloEnrichJob(
   // Load blended score for gating and finalization.
   const scorePrediction = await prisma.leadScorePrediction.findUnique({
     where: { id: scorePredictionId },
-    select: { blendedScore: true },
+    select: { blendedScore: true, reasonsJson: true },
   });
   const blendedScore = scorePrediction?.blendedScore ?? 0;
+  const hasAiScore = predictionUsesAiScore(scorePrediction?.reasonsJson);
+
+  if (!hasAiScore) {
+    logger.info(
+      { ...logCtx, blendedScore },
+      'No AI score present — skipping Apollo provider lookup',
+    );
+    await tryFinalizeDiscoveryRun(runId, logger);
+    return;
+  }
+
+  if (blendedScore <= POST_SCORE_PROVIDER_MIN_AI_SCORE) {
+    logger.info(
+      { ...logCtx, aiScore: blendedScore, minimumAiScore: POST_SCORE_PROVIDER_MIN_AI_SCORE },
+      'AI score below post-score provider threshold — skipping Apollo provider lookup',
+    );
+    await tryFinalizeDiscoveryRun(runId, logger);
+    return;
+  }
 
   // Load lead data up-front so Apollo can enrich contact data while keeping
   // qualified leads in the manual draft-generation flow.

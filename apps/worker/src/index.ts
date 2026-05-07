@@ -140,6 +140,11 @@ import {
   type ApolloEnrichJobPayload,
 } from './jobs/apollo.enrich.job.js';
 import {
+  HUNTER_ENRICH_JOB_NAME,
+  handleHunterEnrichJob,
+  type HunterEnrichJobPayload,
+} from './jobs/hunter.enrich.job.js';
+import {
   SCORING_BATCH_JOB_NAME,
   handleScoringBatchJob,
   type ScoringBatchJobPayload,
@@ -737,6 +742,18 @@ async function main(): Promise<void> {
             singletonKey: `message.generate:${payload.leadId}:${payload.icpProfileId}`,
             ...MESSAGE_GENERATE_RETRY_OPTIONS,
           });
+        },
+      }),
+  );
+  await registerWorker<HunterEnrichJobPayload>(
+    boss,
+    logger,
+    HUNTER_ENRICH_JOB_NAME,
+    (jobLogger, job) =>
+      handleHunterEnrichJob(jobLogger, job, {
+        hunterAdapter: {
+          searchDomainContacts: (domain: string) => hunterAdapter.searchDomainContacts(domain),
+          isConfigured: env.HUNTER_ENABLED && Boolean(env.HUNTER_API_KEY),
         },
       }),
   );

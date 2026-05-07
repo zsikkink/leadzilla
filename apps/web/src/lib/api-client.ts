@@ -15,6 +15,7 @@ import type {
   FunnelQuery,
   FunnelResponse,
   GenerateMessageDraftResponse,
+  EnrichLeadResponse,
   GetLeadResponse,
   IcpPerformanceResponse,
   IcpProfileResponse,
@@ -39,6 +40,8 @@ import type {
   ListMessageSendsResponse,
   ListRejectedLeadsQuery,
   ListRejectedLeadsResponse,
+  MessageDraftEventPayload,
+  MessageDraftEventsQuery,
   MessageDraftResponse,
   MessageVariantResponse,
   ModelMetricsResponse,
@@ -82,14 +85,11 @@ export class ApiClient {
 
   private async request<T>(path: string, options?: RequestInit): Promise<T> {
     const token = this.getToken();
-    const method = (options?.method ?? 'GET').toUpperCase();
     const hasBody = options?.body !== undefined && options?.body !== null;
     const headers: Record<string, string> = {
       // Only set content-type for requests that have a body — Fastify rejects
       // empty bodies when content-type is application/json.
-      ...(hasBody || (method !== 'DELETE' && method !== 'GET' && method !== 'HEAD')
-        ? { 'content-type': 'application/json' }
-        : {}),
+      ...(hasBody ? { 'content-type': 'application/json' } : {}),
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     };
 
@@ -130,6 +130,110 @@ export class ApiClient {
     }
 
     return response.json() as Promise<T>;
+  }
+
+  subscribeMessageDraftEvents(
+    query: MessageDraftEventsQuery,
+    handlers: {
+      onDraftCreated: (event: MessageDraftEventPayload) => void;
+      onTimeout?: (() => void) | undefined;
+      onError?: ((error: Error) => void) | undefined;
+    },
+  ): () => void {
+    const token = this.getToken();
+    const controller = new AbortController();
+
+    if (!token) {
+      queueMicrotask(() => {
+        handlers.onError?.(new ApiError(401, 'Session expired — please log in again'));
+      });
+      return () => controller.abort();
+    }
+
+    const parseEventBlock = (block: string) => {
+      let eventName = 'message';
+      const dataLines: string[] = [];
+
+      for (const line of block.split(/\r?\n/)) {
+        if (!line || line.startsWith(':')) {
+          continue;
+        }
+        if (line.startsWith('event:')) {
+          eventName = line.slice('event:'.length).trim();
+          continue;
+        }
+        if (line.startsWith('data:')) {
+          dataLines.push(line.slice('data:'.length).trimStart());
+        }
+      }
+
+      if (dataLines.length === 0) {
+        return;
+      }
+
+      const rawData = dataLines.join('\n');
+      if (eventName === 'message-draft') {
+        handlers.onDraftCreated(JSON.parse(rawData) as MessageDraftEventPayload);
+      } else if (eventName === 'timeout') {
+        handlers.onTimeout?.();
+      } else if (eventName === 'error') {
+        const parsed = JSON.parse(rawData) as { error?: string };
+        handlers.onError?.(new Error(parsed.error ?? 'Message draft notifications are unavailable.'));
+      }
+    };
+
+    const qs = toSearchParams(query as Record<string, unknown>);
+    void fetch(`${this.baseUrl}/v1/messaging/drafts/events?${qs}`, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new ApiError(response.status, 'Message draft notifications are unavailable.');
+        }
+        if (!response.body) {
+          throw new ApiError(503, 'Message draft notifications are unavailable.');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          let separatorIndex = buffer.indexOf('\n\n');
+          while (separatorIndex >= 0) {
+            const block = buffer.slice(0, separatorIndex);
+            buffer = buffer.slice(separatorIndex + 2);
+            parseEventBlock(block);
+            separatorIndex = buffer.indexOf('\n\n');
+          }
+        }
+
+        if (buffer.trim().length > 0) {
+          parseEventBlock(buffer);
+        }
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+        handlers.onError?.(
+          error instanceof Error
+            ? error
+            : new Error('Message draft notifications are unavailable.'),
+        );
+      });
+
+    return () => controller.abort();
   }
 
   // ── Leads ─────────────────────────────────────────
@@ -294,6 +398,12 @@ export class ApiClient {
     return this.request('/v1/messaging/drafts/generate', {
       method: 'POST',
       body: JSON.stringify(data),
+    });
+  }
+
+  enrichLead(leadId: string): Promise<EnrichLeadResponse> {
+    return this.request(`/v1/leads/${leadId}/enrich`, {
+      method: 'POST',
     });
   }
 

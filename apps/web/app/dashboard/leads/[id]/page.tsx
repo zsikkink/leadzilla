@@ -52,6 +52,7 @@ import { LeadStatusBadge } from '../../../../src/components/lead-status-badge.js
 import { MessageDraftCard } from '../../../../src/components/message-draft-card.js';
 import { ScoreBandBadge } from '../../../../src/components/score-band-badge.js';
 import { ScoringBreakdown } from '../../../../src/components/scoring-breakdown.js';
+import { useDraftCompletionNotifier } from '../../../../src/hooks/use-draft-completion-notifier.js';
 import {
   getSocialPlatformLabel,
   normalizeSocialPlatform,
@@ -60,7 +61,6 @@ import {
 } from '../../../../src/components/social-link-icon.js';
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
-import { useQueuedRefresh } from '../../../../src/hooks/use-queued-refresh.js';
 import { countryName } from '../../../../src/lib/countries.js';
 import { getTeamMemberTier, sortTeamMembers } from '../../../../src/lib/team-members.js';
 
@@ -1881,7 +1881,10 @@ export default function LeadDetailPage() {
     sends.refetch();
     lead.refetch();
   }, [lead.refetch, messageDrafts.refetch, sends.refetch]);
-  const scheduleQueuedRefreshes = useQueuedRefresh(refreshMessagingData);
+  const waitForDraftCompletion = useDraftCompletionNotifier({
+    apiClient,
+    onCompleted: refreshMessagingData,
+  });
 
   const handleGenerateDraft = useCallback(async () => {
     if (!l) return;
@@ -1903,7 +1906,10 @@ export default function LeadDetailPage() {
       switch (result.status) {
         case 'QUEUED':
           toast.success('Draft generation queued for this lead.');
-          scheduleQueuedRefreshes();
+          waitForDraftCompletion({
+            leadId: l.id,
+            afterMs: Date.now() - 5_000,
+          });
           break;
         case 'CREATED':
           toast.success('Draft created for this lead.');
@@ -1919,7 +1925,7 @@ export default function LeadDetailPage() {
     } finally {
       setIsGeneratingDraft(false);
     }
-  }, [apiClient, draftIcpProfileId, draftScorePredictionId, l, refreshMessagingData, scheduleQueuedRefreshes]);
+  }, [apiClient, draftIcpProfileId, draftScorePredictionId, l, refreshMessagingData, waitForDraftCompletion]);
 
   if (lead.error) {
     return <p className="text-sm text-destructive">{lead.error}</p>;
@@ -2440,14 +2446,14 @@ export default function LeadDetailPage() {
           </div>
         ) : null}
 
-        {messageDrafts.isLoading ? (
+        {messageDrafts.isLoading && !messageDrafts.data ? (
           <div className="flex items-center gap-2 rounded-2xl border border-border/50 bg-card p-5 text-sm text-muted-foreground shadow-sm">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
             Loading outreach drafts...
           </div>
         ) : null}
 
-        {!messageDrafts.isLoading && !messageDrafts.error && sortedMessageDrafts.length === 0 ? (
+        {messageDrafts.data && !messageDrafts.error && sortedMessageDrafts.length === 0 ? (
           <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
             <p className="text-sm font-medium text-foreground">No outreach draft yet.</p>
             <p className="mt-1 text-sm text-muted-foreground/60">
@@ -2466,6 +2472,14 @@ export default function LeadDetailPage() {
               initialSend={draft.followUpNumber === 0 ? initialSendByDraftId[draft.id] ?? null : null}
               initialSendLoaded={draft.followUpNumber > 0 || (!sends.isLoading && sends.error === null)}
               onAction={refreshMessagingData}
+              onQueuedRegenerate={(queuedDraft) => {
+                waitForDraftCompletion({
+                  leadId: queuedDraft.leadId,
+                  afterMs: Date.now() - 5_000,
+                  excludeDraftId: queuedDraft.id,
+                  forceRegenerate: true,
+                });
+              }}
             />
           ))}
         </div>
