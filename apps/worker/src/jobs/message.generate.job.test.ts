@@ -110,7 +110,7 @@ function buildSuccessfulOpenAiAdapter() {
     generateMessageVariants: vi.fn(async () => ({
       status: 'success' as const,
       data: {
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini',
         message: {
           subject: 'Track chat-driven orders?',
           bodyText:
@@ -401,7 +401,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
       generateMessageVariants: vi.fn(async () => ({
         status: 'success' as const,
         data: {
-          model: 'gpt-4o',
+          model: 'gpt-4o-mini',
           message: {
             subject: 'Track chat orders?',
             bodyText:
@@ -448,7 +448,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
       generateMessageVariants: vi.fn(async () => ({
         status: 'success' as const,
         data: {
-          model: 'gpt-4o',
+          model: 'gpt-4o-mini',
           message: {
             subject: 'Track customer orders?',
             bodyText:
@@ -502,7 +502,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
         .mockResolvedValueOnce({
           status: 'success' as const,
           data: {
-            model: 'gpt-4o',
+            model: 'gpt-4o-mini',
             message: {
               subject: 'Track customer orders?',
               bodyText:
@@ -515,7 +515,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
         .mockResolvedValueOnce({
           status: 'success' as const,
           data: {
-            model: 'gpt-4o',
+            model: 'gpt-4o-mini',
             message: {
               subject: 'Track customer orders?',
               bodyText:
@@ -568,7 +568,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
         .mockResolvedValueOnce({
           status: 'success' as const,
           data: {
-            model: 'gpt-4o',
+            model: 'gpt-4o-mini',
             message: {
               subject: 'Act now?',
               bodyText:
@@ -581,7 +581,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
         .mockResolvedValueOnce({
           status: 'success' as const,
           data: {
-            model: 'gpt-4o',
+            model: 'gpt-4o-mini',
             message: {
               subject: 'Track project payments?',
               bodyText:
@@ -594,7 +594,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
         .mockResolvedValueOnce({
           status: 'success' as const,
           data: {
-            model: 'gpt-4o',
+            model: 'gpt-4o-mini',
             message: {
               subject: 'Track project payments?',
               bodyText:
@@ -664,7 +664,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
       generateMessageVariants: vi.fn(async () => ({
         status: 'success' as const,
         data: {
-          model: 'gpt-4o',
+          model: 'gpt-4o-mini',
           message: {
             subject: 'Act now?',
             bodyText:
