@@ -97,11 +97,9 @@ interface RegisterWorkerSchedulesOptions {
   } | undefined;
 }
 
-export async function registerWorkerSchedules(
+export async function registerWorkerHeartbeatSchedule(
   boss: Pick<PgBoss, 'schedule'>,
-  options: RegisterWorkerSchedulesOptions = {},
 ): Promise<void> {
-
   await boss.schedule(
     HEARTBEAT_QUEUE_NAME,
     '*/1 * * * *',
@@ -111,6 +109,13 @@ export async function registerWorkerSchedules(
       ...HEARTBEAT_RETRY_OPTIONS,
     },
   );
+}
+
+export async function registerWorkerSchedules(
+  boss: Pick<PgBoss, 'schedule'>,
+  options: RegisterWorkerSchedulesOptions = {},
+): Promise<void> {
+  await registerWorkerHeartbeatSchedule(boss);
 
   const discoveryScheduleEnabled = options.discoveryScheduleEnabled ?? true;
   if (discoveryScheduleEnabled) {

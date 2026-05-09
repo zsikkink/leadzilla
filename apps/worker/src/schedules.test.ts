@@ -1,6 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { registerWorkerSchedules } from './schedules.js';
+import { registerWorkerHeartbeatSchedule, registerWorkerSchedules } from './schedules.js';
+
+describe('registerWorkerHeartbeatSchedule', () => {
+  it('registers only the worker heartbeat schedule', async () => {
+    const schedule = vi.fn(async () => null);
+
+    await registerWorkerHeartbeatSchedule({ schedule } as never);
+
+    expect(schedule).toHaveBeenCalledTimes(1);
+    expect(schedule).toHaveBeenCalledWith(
+      'system.heartbeat',
+      '*/1 * * * *',
+      { source: 'scheduler' },
+      expect.objectContaining({
+        singletonKey: 'system.heartbeat',
+      }),
+    );
+  });
+});
 
 describe('registerWorkerSchedules', () => {
   it('skips discovery.seed schedule when discovery schedule kill switch is disabled', async () => {
