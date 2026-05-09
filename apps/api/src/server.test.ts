@@ -216,6 +216,29 @@ describe('buildServer', () => {
     expect(response.headers['access-control-allow-origin']).toBe('https://www.zboonisales.com');
   });
 
+  it('preserves rate-limit errors as 429 responses', async () => {
+    const server = buildServer(makeDefaultOptions());
+    server.get('/__test/rate-limit-error', async () => {
+      const error = new Error('Rate limit exceeded, retry in 3 seconds') as Error & {
+        statusCode: number;
+      };
+      error.statusCode = 429;
+      throw error;
+    });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'GET',
+      url: '/__test/rate-limit-error',
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toEqual({
+      error: 'Rate limit exceeded, retry in 3 seconds',
+      requestId: expect.any(String),
+    });
+  });
+
   it('returns not_ready when schema health fails', async () => {
     const server = buildServer({
       ...makeDefaultOptions(),
