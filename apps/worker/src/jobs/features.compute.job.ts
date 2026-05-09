@@ -583,6 +583,27 @@ function extractDomain(url: string): string {
     .trim();
 }
 
+const NON_BUSINESS_EMAIL_DOMAINS = new Set([
+  'lead-flood.invalid',
+  'gmail.com',
+  'googlemail.com',
+  'yahoo.com',
+  'hotmail.com',
+  'outlook.com',
+  'live.com',
+  'icloud.com',
+  'aol.com',
+  'msn.com',
+  'mail.com',
+  'proton.me',
+  'protonmail.com',
+  'yandex.com',
+]);
+
+function isComparableBusinessEmailDomain(domain: string | null): domain is string {
+  return Boolean(domain && domain.includes('.') && !NON_BUSINESS_EMAIL_DOMAINS.has(domain));
+}
+
 /**
  * Compute a weighted cross-source data alignment score.
  *
@@ -591,13 +612,14 @@ function extractDomain(url: string): string {
  *  2. Brand consistency: website domain vs Instagram username (weight: 0.25)
  *  3. Geographic consistency: SerpAPI/enrichment country vs website detected country (weight: 0.25)
  *  4. Contact consistency: decision maker email domain == business domain (weight: 0.20)
+ *     only when the email domain is a comparable business domain
  *
  * Thresholds:
- *  - < 0.3: flag as hard filter (data sources likely describe different entities)
+ *  - < 0.3 with 2+ checks: flag as hard filter (data sources likely describe different entities)
  *  - 0.3-0.5: low confidence, stored as weighted feature
  *  - > 0.5: proceed normally
  */
-function computeDataAlignmentScore(params: {
+export function computeDataAlignmentScore(params: {
   serpApiName: string | null;
   websiteTitle: string | null;
   websiteDomain: string | null;
@@ -642,7 +664,7 @@ function computeDataAlignmentScore(params: {
   }
 
   // 4. Contact consistency: lead email domain == business website domain
-  if (params.leadEmailDomain && params.websiteDomain) {
+  if (isComparableBusinessEmailDomain(params.leadEmailDomain) && params.websiteDomain) {
     const emailDomain = params.leadEmailDomain.toLowerCase();
     const siteDomain = params.websiteDomain.toLowerCase();
     // Exact match or subdomain match
@@ -652,8 +674,9 @@ function computeDataAlignmentScore(params: {
     totalWeight += 0.20;
   }
 
-  // If no checks could be performed, return neutral score (0.5)
-  if (totalWeight === 0) {
+  // If fewer than two checks could be performed, return a neutral score. A single
+  // weak signal like a generic website title is not enough evidence to hard-filter.
+  if (totalWeight === 0 || Object.keys(checks).length < 2) {
     return { score: 0.5, checks };
   }
 

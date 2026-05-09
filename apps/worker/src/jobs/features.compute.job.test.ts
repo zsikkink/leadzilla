@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  computeDataAlignmentScore,
   computeFeatureVectorHash,
   FEATURE_KEYS,
   stableStringify,
@@ -52,6 +53,68 @@ describe('features.compute helpers', () => {
     expect(toEmployeeSizeBucket(100)).toBe('medium');
     expect(toEmployeeSizeBucket(600)).toBe('large');
     expect(toEmployeeSizeBucket(5000)).toBe('enterprise');
+  });
+
+  it('does not treat synthetic or free email domains as data alignment mismatches', () => {
+    const synthetic = computeDataAlignmentScore({
+      serpApiName: null,
+      websiteTitle: null,
+      websiteDomain: 'example.com',
+      instagramUsername: null,
+      serpApiCountry: null,
+      websiteCountry: null,
+      leadEmailDomain: 'lead-flood.invalid',
+    });
+    const freeMailbox = computeDataAlignmentScore({
+      serpApiName: null,
+      websiteTitle: null,
+      websiteDomain: 'example.com',
+      instagramUsername: null,
+      serpApiCountry: null,
+      websiteCountry: null,
+      leadEmailDomain: 'gmail.com',
+    });
+
+    expect(synthetic).toEqual({ score: 0.5, checks: {} });
+    expect(freeMailbox).toEqual({ score: 0.5, checks: {} });
+  });
+
+  it('keeps contact consistency for comparable business email domains', () => {
+    const match = computeDataAlignmentScore({
+      serpApiName: 'Example Store',
+      websiteTitle: 'Example Store',
+      websiteDomain: 'example.com',
+      instagramUsername: null,
+      serpApiCountry: null,
+      websiteCountry: null,
+      leadEmailDomain: 'sales.example.com',
+    });
+    const mismatch = computeDataAlignmentScore({
+      serpApiName: 'Example Store',
+      websiteTitle: 'Other Business',
+      websiteDomain: 'example.com',
+      instagramUsername: null,
+      serpApiCountry: null,
+      websiteCountry: null,
+      leadEmailDomain: 'other-business.com',
+    });
+
+    expect(match).toEqual({ score: 1, checks: { domain_consistency: 1, contact_consistency: 1 } });
+    expect(mismatch).toEqual({ score: 0, checks: { domain_consistency: 0, contact_consistency: 0 } });
+  });
+
+  it('does not hard-score data alignment from one weak check', () => {
+    const result = computeDataAlignmentScore({
+      serpApiName: 'Example Store',
+      websiteTitle: 'Other Business',
+      websiteDomain: null,
+      instagramUsername: null,
+      serpApiCountry: null,
+      websiteCountry: null,
+      leadEmailDomain: null,
+    });
+
+    expect(result).toEqual({ score: 0.5, checks: { domain_consistency: 0 } });
   });
 
   it('exposes the required feature keys (67 total)', () => {

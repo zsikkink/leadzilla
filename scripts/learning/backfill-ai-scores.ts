@@ -11,6 +11,7 @@ interface BackfillArgs {
   limit?: number;
   leadIds: string[];
   onlyMissingPredictions: boolean;
+  refreshFeatureSnapshots: boolean;
   skipFeatureBackfill: boolean;
   allowRemote: boolean;
 }
@@ -43,6 +44,7 @@ function parseArgs(argv: string[]): BackfillArgs {
     dryRun: false,
     leadIds: [],
     onlyMissingPredictions: false,
+    refreshFeatureSnapshots: false,
     skipFeatureBackfill: false,
     allowRemote: false,
   };
@@ -87,6 +89,10 @@ function parseArgs(argv: string[]): BackfillArgs {
     }
     if (value === '--only-missing-predictions') {
       args.onlyMissingPredictions = true;
+      continue;
+    }
+    if (value === '--refresh-feature-snapshots') {
+      args.refreshFeatureSnapshots = true;
       continue;
     }
     if (value === '--skip-feature-backfill') {
@@ -378,6 +384,7 @@ async function run(): Promise<void> {
     const missingSnapshotTargets = selectedTargets.filter(
       (target) => !latestSnapshotByLeadIcp.has(snapshotKey(target.leadId, target.icpProfileId)),
     );
+    const featureBackfillTargets = args.refreshFeatureSnapshots ? selectedTargets : missingSnapshotTargets;
 
     const targetSourceCounts = selectedTargets.reduce<Record<string, number>>((acc, target) => {
       acc[target.source] = (acc[target.source] ?? 0) + 1;
@@ -392,10 +399,12 @@ async function run(): Promise<void> {
         selectedTargets: selectedTargets.length,
         unresolvedLeads: unresolvedLeadIds.length,
         missingSnapshotsForSelectedTargets: missingSnapshotTargets.length,
+        featureBackfillTargets: featureBackfillTargets.length,
         targetSourceCounts,
         batchSize: args.batchSize,
         concurrency: args.concurrency,
         onlyMissingPredictions: args.onlyMissingPredictions,
+        refreshFeatureSnapshots: args.refreshFeatureSnapshots,
         dryRun: args.dryRun,
       },
       'Prepared AI score backfill targets',
@@ -413,11 +422,12 @@ async function run(): Promise<void> {
     }
 
     const handlerLogger = buildHandlerLogger(logger);
-    let featureBackfillFailures = 0;
+    const failedFeatureKeys = new Set<string>();
 
-    if (!args.skipFeatureBackfill && missingSnapshotTargets.length > 0) {
+    if (!args.skipFeatureBackfill && featureBackfillTargets.length > 0) {
       const featureRunId = `backfill.ai-scores.features:${Date.now()}`;
-      for (const target of missingSnapshotTargets) {
+      let refreshedFeatureSnapshotCount = 0;
+      await runPool(featureBackfillTargets, args.concurrency, async (target) => {
         const payload: FeaturesComputeJobPayload = {
           runId: featureRunId,
           leadId: target.leadId,
@@ -440,40 +450,31 @@ async function run(): Promise<void> {
               enqueueScoring: false,
             },
           );
+          refreshedFeatureSnapshotCount += 1;
+          if (
+            refreshedFeatureSnapshotCount % 100 === 0 ||
+            refreshedFeatureSnapshotCount === featureBackfillTargets.length
+          ) {
+            logger.info(
+              {
+                refreshedFeatureSnapshots: refreshedFeatureSnapshotCount,
+                totalFeatureBackfillTargets: featureBackfillTargets.length,
+              },
+              'Refreshed feature snapshot batch',
+            );
+          }
         } catch (error: unknown) {
-          featureBackfillFailures += 1;
+          failedFeatureKeys.add(snapshotKey(target.leadId, target.icpProfileId));
           logger.error(
             {
               leadId: target.leadId,
               icpProfileId: target.icpProfileId,
               error: error instanceof Error ? error.message : String(error),
             },
-            'Failed to compute missing feature snapshot',
+            'Failed to compute feature snapshot',
           );
         }
-      }
-    }
-
-    const failedFeatureKeys = new Set<string>();
-    if (featureBackfillFailures > 0) {
-      const refreshedSnapshots = await prisma.leadFeatureSnapshot.findMany({
-        where: {
-          OR: missingSnapshotTargets.map((target) => ({
-            leadId: target.leadId,
-            icpProfileId: target.icpProfileId,
-          })),
-        },
-        select: { leadId: true, icpProfileId: true },
       });
-      const refreshedKeys = new Set(
-        refreshedSnapshots.map((snapshot) => snapshotKey(snapshot.leadId, snapshot.icpProfileId)),
-      );
-      for (const target of missingSnapshotTargets) {
-        const key = snapshotKey(target.leadId, target.icpProfileId);
-        if (!refreshedKeys.has(key)) {
-          failedFeatureKeys.add(key);
-        }
-      }
     }
 
     const scorableTargets = selectedTargets.filter(
