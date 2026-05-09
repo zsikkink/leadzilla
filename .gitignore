@@ -47,3 +47,4 @@ scripts/backups/
 supabase/.temp/
 supabase/.branches/
 **/supabase/.temp/
+.vercel
