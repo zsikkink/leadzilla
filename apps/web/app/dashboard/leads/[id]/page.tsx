@@ -82,7 +82,7 @@ interface ScoreInfo {
   qualificationPath?: string | undefined;
   predictedAt?: string | undefined;
   usedTrainedModel?: boolean | undefined;
-  scoreSource: 'AI_SCORE' | 'LEGACY_SCORE';
+  scoreSource: 'AI_SCORE' | 'MODEL_SCORE' | 'RULE_BASED_SCORE' | 'LEGACY_SCORE';
 }
 
 interface BusinessDiscoveryScoreInfo {
@@ -274,24 +274,28 @@ function extractScoreInfo(
 ): ScoreInfo | null {
   const predictionReasons = readRecord(prediction?.reasonsJson);
   if (prediction) {
+    const predictionScoreSource = readOptionalString(predictionReasons?.scoreSource);
+    const reasoning = readStringArray(predictionReasons?.aiReasoning);
+    const isAiScore = predictionScoreSource === 'llm' || reasoning.length > 0;
+    const isModelScore = predictionScoreSource === 'trained_model'
+      || readOptionalBoolean(predictionReasons?.usedTrainedModel) === true;
+
     return {
       score: (
-        readOptionalString(predictionReasons?.scoreSource) === 'llm'
-        || readOptionalString(predictionReasons?.scoreSource) === 'trained_model'
-        || readStringArray(predictionReasons?.aiReasoning).length > 0
-        || readOptionalBoolean(predictionReasons?.usedTrainedModel) === true
+        isAiScore
+        || isModelScore
       )
         ? prediction.logisticScore
         : prediction.blendedScore,
       deterministicScore: prediction.deterministicScore,
       logisticScore: prediction.logisticScore,
       scoreBand: prediction.scoreBand as LeadScoreBand,
-      reasoning: readStringArray(predictionReasons?.aiReasoning),
+      reasoning,
       reasonCodes: readStringArray(predictionReasons?.reasonCodes),
       qualificationPath: readOptionalString(predictionReasons?.qualificationPath) ?? undefined,
       predictedAt: prediction.predictedAt,
       usedTrainedModel: readOptionalBoolean(predictionReasons?.usedTrainedModel) ?? undefined,
-      scoreSource: 'AI_SCORE',
+      scoreSource: isAiScore ? 'AI_SCORE' : isModelScore ? 'MODEL_SCORE' : 'RULE_BASED_SCORE',
     };
   }
 
@@ -337,7 +341,10 @@ function extractBusinessDiscoveryScore(
 }
 
 function getLeadScoreLabel(scoreInfo: ScoreInfo): string {
-  return scoreInfo.scoreSource === 'LEGACY_SCORE' ? 'Legacy Lead Score' : 'AI Lead Score';
+  if (scoreInfo.scoreSource === 'AI_SCORE') return 'AI Lead Score';
+  if (scoreInfo.scoreSource === 'MODEL_SCORE') return 'Model Lead Score';
+  if (scoreInfo.scoreSource === 'LEGACY_SCORE') return 'Legacy Lead Score';
+  return 'Rule-Based Lead Score';
 }
 
 function getWebsiteScrapeRecord(businessProfile: Record<string, unknown> | null): Record<string, unknown> | null {
