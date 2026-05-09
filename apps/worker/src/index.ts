@@ -188,7 +188,7 @@ import {
   sweepStaleDiscoveryPipelineJobs,
 } from './utils/discovery-run-tracker.js';
 import { ensureWorkerQueues, HEARTBEAT_QUEUE_NAME } from './queues.js';
-import { registerWorkerSchedules } from './schedules.js';
+import { registerWorkerHeartbeatSchedule, registerWorkerSchedules } from './schedules.js';
 
 interface WorkerLogger {
   info: (object: Record<string, unknown>, message: string) => void;
@@ -293,6 +293,7 @@ async function main(): Promise<void> {
       logger,
     });
   } else {
+    await registerWorkerHeartbeatSchedule(boss);
     logger.info(
       {
         workerSchedulesEnabled,
