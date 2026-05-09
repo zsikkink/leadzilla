@@ -58,6 +58,10 @@ function channelBadge(channel: string): string {
     : 'bg-blue-500/15 text-blue-400';
 }
 
+function isProblemSendStatus(status: MessageSendResponse['status']): boolean {
+  return status === 'FAILED' || status === 'BOUNCED' || status === 'UNRESOLVED';
+}
+
 function activityTimestampMs(timestamp: string | null | undefined): number {
   return timestamp ? new Date(timestamp).getTime() : 0;
 }
@@ -370,9 +374,7 @@ export default function InboxPage() {
         ? latestReply.channel ?? latest.channel
         : latest.channel;
       const leadDetails = leadDetailsMap[leadId];
-      const hasProblem = leadSends.some((send) =>
-        send.status === 'FAILED' || send.status === 'BOUNCED' || send.status === 'UNRESOLVED',
-      );
+      const hasProblem = isProblemSendStatus(latest.status);
 
       result.push({
         leadId,
