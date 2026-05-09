@@ -221,7 +221,7 @@ export function registerMessagingRoutes(
     }
   });
 
-  app.get('/v1/messaging/drafts/events', async (request, reply) => {
+  app.get('/v1/messaging/drafts/events', { config: { rateLimit: false } }, async (request, reply) => {
     const parsedQuery = MessageDraftEventsQuerySchema.safeParse(request.query);
     if (!parsedQuery.success) {
       return sendValidationError(reply, request.id, 'Invalid message draft event query');

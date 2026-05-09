@@ -318,7 +318,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
   });
 
   app.register(rateLimit, {
-    max: 100,
+    max: 600,
     timeWindow: '1 minute',
     allowList: ['127.0.0.1'],
   });
@@ -1352,9 +1352,27 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
   });
 
   app.setErrorHandler((error, request, reply) => {
-    request.log.error({ err: error }, 'Unhandled API error');
+    const statusCode =
+      typeof error === 'object' &&
+      error !== null &&
+      'statusCode' in error &&
+      typeof error.statusCode === 'number'
+        ? error.statusCode
+        : undefined;
 
     if (!reply.sent) {
+      if (statusCode === 429) {
+        request.log.warn({ err: error }, 'API rate limit exceeded');
+        reply.status(429).send(
+          ErrorResponseSchema.parse({
+            error: error instanceof Error ? error.message : 'Rate limit exceeded',
+            requestId: request.id,
+          }),
+        );
+        return;
+      }
+
+      request.log.error({ err: error }, 'Unhandled API error');
       reply.status(500).send(
         ErrorResponseSchema.parse({
           error: 'Internal server error',
