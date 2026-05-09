@@ -1,11 +1,6 @@
 name: Deploy
 
 on:
-  workflow_run:
-    workflows:
-      - CI
-    types:
-      - completed
   workflow_dispatch:
     inputs:
       environment:
@@ -21,16 +16,12 @@ permissions:
   contents: read
   packages: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-staging-images:
-    if: >-
-      ${{
-        (github.event_name == 'workflow_run' &&
-         github.event.workflow_run.conclusion == 'success' &&
-         github.event.workflow_run.event == 'push' &&
-         github.event.workflow_run.head_branch == 'main') ||
-        (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
-      }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'staging' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -43,7 +34,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
+          ref: ${{ github.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -66,14 +57,7 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/lead-flood-${{ matrix.service }}:staging-latest
 
   migrate-staging-db:
-    if: >-
-      ${{
-        (github.event_name == 'workflow_run' &&
-         github.event.workflow_run.conclusion == 'success' &&
-         github.event.workflow_run.event == 'push' &&
-         github.event.workflow_run.head_branch == 'main') ||
-        (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
-      }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'staging' }}
     runs-on: ubuntu-latest
     needs: build-staging-images
     environment: staging
@@ -85,7 +69,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
+          ref: ${{ github.sha }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -110,14 +94,7 @@ jobs:
         run: pnpm db:migrate:prod
 
   deploy-staging:
-    if: >-
-      ${{
-        (github.event_name == 'workflow_run' &&
-         github.event.workflow_run.conclusion == 'success' &&
-         github.event.workflow_run.event == 'push' &&
-         github.event.workflow_run.head_branch == 'main') ||
-        (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
-      }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'staging' }}
     runs-on: ubuntu-latest
     needs: [build-staging-images, migrate-staging-db]
     environment: staging
@@ -150,47 +127,10 @@ jobs:
         if: ${{ env.STAGING_SMOKE_URL != '' }}
         run: curl -fsS "$STAGING_SMOKE_URL"
 
-  build-production-images:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'production' }}
-    needs: verify-production-main-ref
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        service:
-          - api
-          - web
-          - worker
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push production image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: infra/docker/Dockerfile.${{ matrix.service }}
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/lead-flood-${{ matrix.service }}:production-${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/lead-flood-${{ matrix.service }}:production-latest
-
   migrate-production-db:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'production' }}
     runs-on: ubuntu-latest
-    needs: build-production-images
+    needs: verify-production-main-ref
     environment: production
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -227,10 +167,11 @@ jobs:
   deploy-production:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'production' }}
     runs-on: ubuntu-latest
-    needs: [build-production-images, migrate-production-db]
+    needs: migrate-production-db
     environment: production
     env:
-      RAILWAY_PROJECT_TOKEN: ${{ secrets.RAILWAY_PROJECT_TOKEN }}
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_PROJECT_TOKEN }}
+      RAILWAY_PROJECT_ID: 30c6dd11-3c75-4f69-835d-60b53a0d99d5
       PRODUCTION_API_READY_URL: ${{ secrets.PRODUCTION_API_READY_URL }}
       PRODUCTION_SMOKE_URL: ${{ secrets.PRODUCTION_SMOKE_URL }}
       SMOKE_WEB_BASE_URL: ${{ secrets.PRODUCTION_SMOKE_WEB_BASE_URL }}
@@ -242,53 +183,26 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      - name: Trigger lead-flood-api deployment
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli@4.35.0
+
+      - name: Deploy lead-flood-api from source
         run: |
-          response="$(
-            curl --fail --silent --show-error \
-              --request POST \
-              --url https://backboard.railway.com/graphql/v2 \
-              --header "Content-Type: application/json" \
-              --header "Authorization: Bearer ${RAILWAY_PROJECT_TOKEN}" \
-              --data '{"query":"mutation environmentTriggersDeploy($input: EnvironmentTriggersDeployInput!) { environmentTriggersDeploy(input: $input) }","variables":{"input":{"projectId":"30c6dd11-3c75-4f69-835d-60b53a0d99d5","environmentId":"2d87fd16-66c4-43b9-98dc-d738548704b0","serviceId":"5c509bb0-634b-45a8-a18d-8fbe2ba24a7f"}}}'
-          )"
-          RESPONSE="$response" python - <<'PY'
-          import json
-          import os
-          import sys
+          railway up \
+            --project "$RAILWAY_PROJECT_ID" \
+            --environment production \
+            --service lead-flood-api \
+            --ci \
+            --message "Deploy production ${GITHUB_SHA}"
 
-          response = json.loads(os.environ["RESPONSE"])
-          if response.get("errors"):
-              print(json.dumps(response["errors"]), file=sys.stderr)
-              sys.exit(1)
-          if response.get("data", {}).get("environmentTriggersDeploy") is not True:
-              print(json.dumps(response), file=sys.stderr)
-              sys.exit(1)
-          PY
-
-      - name: Trigger lead-flood-worker deployment
+      - name: Deploy lead-flood-worker from source
         run: |
-          response="$(
-            curl --fail --silent --show-error \
-              --request POST \
-              --url https://backboard.railway.com/graphql/v2 \
-              --header "Content-Type: application/json" \
-              --header "Authorization: Bearer ${RAILWAY_PROJECT_TOKEN}" \
-              --data '{"query":"mutation environmentTriggersDeploy($input: EnvironmentTriggersDeployInput!) { environmentTriggersDeploy(input: $input) }","variables":{"input":{"projectId":"30c6dd11-3c75-4f69-835d-60b53a0d99d5","environmentId":"2d87fd16-66c4-43b9-98dc-d738548704b0","serviceId":"112c1d20-c841-42b8-9e88-ce56c05398e1"}}}'
-          )"
-          RESPONSE="$response" python - <<'PY'
-          import json
-          import os
-          import sys
-
-          response = json.loads(os.environ["RESPONSE"])
-          if response.get("errors"):
-              print(json.dumps(response["errors"]), file=sys.stderr)
-              sys.exit(1)
-          if response.get("data", {}).get("environmentTriggersDeploy") is not True:
-              print(json.dumps(response), file=sys.stderr)
-              sys.exit(1)
-          PY
+          railway up \
+            --project "$RAILWAY_PROJECT_ID" \
+            --environment production \
+            --service lead-flood-worker \
+            --ci \
+            --message "Deploy production ${GITHUB_SHA}"
 
       - name: Run production API readiness check
         run: |
