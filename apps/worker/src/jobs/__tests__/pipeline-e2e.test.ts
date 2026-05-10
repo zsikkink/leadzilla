@@ -93,7 +93,7 @@ function makeOpenAiGenerateFetch(): typeof fetch {
       new Response(
         JSON.stringify({
           id: 'chatcmpl-test',
-          model: 'gpt-4o',
+          model: 'gpt-4o-mini',
           choices: [
             {
               index: 0,
@@ -124,7 +124,7 @@ function makeOpenAiClassifyFetch(classification: string, confidence: number): ty
     new Response(
       JSON.stringify({
         id: 'chatcmpl-classify',
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini',
         choices: [
           {
             index: 0,

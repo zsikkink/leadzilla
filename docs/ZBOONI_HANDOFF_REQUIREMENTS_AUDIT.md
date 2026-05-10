@@ -261,7 +261,7 @@ High confidence:
 
 - a cutover checklist for replacing:
   - `SUPABASE_PROJECT_REF=cbcgrzvqidtrtrtnzlso` in ops/docs examples
-  - current sender defaults such as `zack@zboonisales.com` if Zbooni changes the mailbox/domain
+  - current sender defaults such as `gino@zboonisales.com` if Zbooni changes the mailbox/domain
   - any current deploy webhooks or smoke-test URLs tied to existing infra  
   Evidence: `docs/PROD_REMOTE_DB_STRATEGY.md`, `packages/providers/src/email/resend.adapter.ts`, `docs/DEPLOYMENT.md`
 
@@ -812,7 +812,7 @@ Repo-grounded assessment:
 
 | Variable(s) | App | Classification | Notes |
 | --- | --- | --- | --- |
-| `RESEND_API_KEY`, `RESEND_FROM_EMAIL` | Worker | Required for email outreach | `RESEND_FROM_EMAIL` defaults to `zack@zboonisales.com` if not set. |
+| `RESEND_API_KEY`, `RESEND_FROM_EMAIL` | Worker | Required for email outreach | `RESEND_FROM_EMAIL` defaults to `gino@zboonisales.com` if not set. |
 | `TRENGO_API_KEY`, `TRENGO_BASE_URL`, `TRENGO_CHANNEL_ID`, `TRENGO_TEMPLATE_ID` | Worker | Required for WhatsApp outreach | Trengo send path. |
 | `TRENGO_INTERNAL_CONVERSATION_ID` | Worker | Optional but useful | Internal Trengo notification target. |
 | `SLACK_WEBHOOK_URL`, `SALES_NOTIFICATION_EMAIL` | Worker | Optional but recommended | Human handoff / notification channels. |

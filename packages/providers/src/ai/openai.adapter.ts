@@ -121,8 +121,8 @@ const ClassificationResponseSchema = z.object({
 
 // ---------- Defaults ----------
 
-const DEFAULT_GENERATION_MODEL = 'gpt-4o';
-const DEFAULT_SCORING_MODEL = 'gpt-4o';
+const DEFAULT_GENERATION_MODEL = 'gpt-4o-mini';
+const DEFAULT_SCORING_MODEL = 'gpt-4o-mini';
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const ZBOONI_OUTREACH_OPENING =

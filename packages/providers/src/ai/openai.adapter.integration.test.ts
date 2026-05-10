@@ -6,7 +6,7 @@ function makeOpenAiResponse(content: string) {
   return JSON.stringify({
     id: 'chatcmpl-abc123',
     object: 'chat.completion',
-    model: 'gpt-4o-2024-08-06',
+    model: 'gpt-4o-mini',
     choices: [
       {
         index: 0,
@@ -52,21 +52,28 @@ const SCORING_CONTEXT = {
 describe('OpenAiAdapter integration', () => {
   describe('generateMessageVariants', () => {
     it('returns parsed single message on success', async () => {
-      const fetchImpl = vi.fn(async () => {
+      const fetchMock = vi.fn(async () => {
         return new Response(
           makeOpenAiResponse(JSON.stringify(VALID_GENERATION_RESPONSE)),
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
-      }) as unknown as typeof fetch;
+      });
 
-      const adapter = new OpenAiAdapter({ apiKey: 'sk-test', fetchImpl });
+      const adapter = new OpenAiAdapter({
+        apiKey: 'sk-test',
+        fetchImpl: fetchMock as unknown as typeof fetch,
+      });
       const result = await adapter.generateMessageVariants(GENERATION_CONTEXT);
 
       expect(result.status).toBe('success');
       if (result.status !== 'success') throw new Error('Expected success');
-      expect(result.data.model).toBe('gpt-4o');
+      expect(result.data.model).toBe('gpt-4o-mini');
       expect(result.data.message.subject).toBe('Boost your fintech payments');
       expect(result.data.message.bodyText).toContain('Sara');
+
+      const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+      const payload = JSON.parse(String(requestInit?.body ?? '{}')) as { model?: string };
+      expect(payload.model).toBe('gpt-4o-mini');
     });
 
     it('strips markdown fences from response', async () => {
@@ -310,20 +317,27 @@ describe('OpenAiAdapter integration', () => {
 
   describe('evaluateLeadScore', () => {
     it('returns parsed score result on success', async () => {
-      const fetchImpl = vi.fn(async () => {
+      const fetchMock = vi.fn(async () => {
         return new Response(
           makeOpenAiResponse(JSON.stringify(VALID_SCORING_RESPONSE)),
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
-      }) as unknown as typeof fetch;
+      });
 
-      const adapter = new OpenAiAdapter({ apiKey: 'sk-test', fetchImpl });
+      const adapter = new OpenAiAdapter({
+        apiKey: 'sk-test',
+        fetchImpl: fetchMock as unknown as typeof fetch,
+      });
       const result = await adapter.evaluateLeadScore(SCORING_CONTEXT);
 
       expect(result.status).toBe('success');
       if (result.status !== 'success') throw new Error('Expected success');
       expect(result.data.score).toBe(0.82);
       expect(result.data.reasoning).toHaveLength(2);
+
+      const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+      const payload = JSON.parse(String(requestInit?.body ?? '{}')) as { model?: string };
+      expect(payload.model).toBe('gpt-4o-mini');
     });
 
     it('scores overall Zbooni fit rather than only ICP category fit', async () => {

@@ -39,7 +39,7 @@ import { useAuth } from '../../../src/hooks/use-auth.js';
 import { useDraftCompletionNotifier } from '../../../src/hooks/use-draft-completion-notifier.js';
 
 // Mirrors the worker/provider default until the API exposes runtime sender config.
-const OUTBOUND_EMAIL = 'zack@zboonisales.com';
+const OUTBOUND_EMAIL = 'gino@zboonisales.com';
 const INBOX_MESSAGE_TRASH_STORAGE_KEY = 'lead-flood:inbox:trashed-messages';
 
 // ── Classification badge colors ────────────────────
@@ -56,6 +56,10 @@ function channelBadge(channel: string): string {
   return channel === 'WHATSAPP'
     ? 'bg-emerald-500/15 text-emerald-400'
     : 'bg-blue-500/15 text-blue-400';
+}
+
+function isProblemSendStatus(status: MessageSendResponse['status']): boolean {
+  return status === 'FAILED' || status === 'BOUNCED' || status === 'UNRESOLVED';
 }
 
 function activityTimestampMs(timestamp: string | null | undefined): number {
@@ -370,9 +374,7 @@ export default function InboxPage() {
         ? latestReply.channel ?? latest.channel
         : latest.channel;
       const leadDetails = leadDetailsMap[leadId];
-      const hasProblem = leadSends.some((send) =>
-        send.status === 'FAILED' || send.status === 'BOUNCED' || send.status === 'UNRESOLVED',
-      );
+      const hasProblem = isProblemSendStatus(latest.status);
 
       result.push({
         leadId,

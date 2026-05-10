@@ -15,6 +15,7 @@ const HOP_BY_HOP_HEADERS = new Set([
 
 const ALLOWED_ADMIN_ROOT_SEGMENTS = new Set([
   'businesses',
+  'discovery-admin',
   'jobs',
   'leads',
   'search-tasks',
@@ -51,6 +52,14 @@ function buildTargetUrl(request: NextRequest, pathSegments: string[]): string {
 
   const encodedPath = pathSegments.map((segment) => encodeURIComponent(segment)).join('/');
   const search = request.nextUrl.search ?? '';
+  if (rootSegment === 'discovery-admin') {
+    const discoveryAdminPath = pathSegments.slice(1).map((segment) => encodeURIComponent(segment)).join('/');
+    if (!discoveryAdminPath) {
+      throw new AdminProxyRouteError('Missing discovery admin route path', 400);
+    }
+    return `${sanitizeBaseUrl(apiBaseUrl)}/v1/discovery-admin/${discoveryAdminPath}${search}`;
+  }
+
   return `${sanitizeBaseUrl(apiBaseUrl)}/v1/admin/${encodedPath}${search}`;
 }
 
