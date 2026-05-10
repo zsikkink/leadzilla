@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
-import { GET } from '../../app/api/admin/[...path]/route.js';
+import { GET, POST } from '../../app/api/admin/[...path]/route.js';
 
 const originalApiBaseUrl = process.env.API_BASE_URL;
 const originalAdminApiKey = process.env.ADMIN_API_KEY;
@@ -72,5 +72,34 @@ describe('web admin proxy route', () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true });
     expect(response.headers.get('x-upstream')).toBe('yes');
+  });
+
+  it('forwards discovery-admin paths to the discovery-admin API prefix', async () => {
+    process.env.API_BASE_URL = 'https://api.example.com';
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: true }), { status: 201 }),
+    );
+
+    const request = new NextRequest('https://web.example.com/api/admin/discovery-admin/recovery/recovery_1/approve', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer user-token',
+      },
+    });
+    const response = await POST(request, {
+      params: Promise.resolve({ path: ['discovery-admin', 'recovery', 'recovery_1', 'approve'] }),
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe('https://api.example.com/v1/discovery-admin/recovery/recovery_1/approve');
+
+    const headers = new Headers((init as RequestInit | undefined)?.headers);
+    expect(headers.get('authorization')).toBe('Bearer user-token');
+    expect(headers.get('x-admin-key')).toBe('test-admin-key');
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual({ ok: true });
   });
 });

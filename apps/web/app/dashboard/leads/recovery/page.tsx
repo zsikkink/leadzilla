@@ -28,7 +28,6 @@ import { useAuth } from '@/hooks/use-auth.js';
 import { cn } from '@/lib/utils.js';
 import { countryName } from '@/lib/countries.js';
 import { fetchAdminBusinessDetail } from '@/lib/discovery-admin.js';
-import { getWebEnv } from '@/lib/env.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -716,7 +715,7 @@ export default function ContactRecoveryPage() {
       const headers: Record<string, string> = {};
       if (token) headers.authorization = `Bearer ${token}`;
       const res = await fetch(
-        `${getWebEnv().NEXT_PUBLIC_API_BASE_URL}/v1/discovery-admin/recovery/${item.id}/approve`,
+        `/api/admin/discovery-admin/recovery/${item.id}/approve`,
         { method: 'POST', headers },
       );
 
