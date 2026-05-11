@@ -219,9 +219,15 @@ const ICP_FEATURES = ['Payment Links', 'WhatsApp Commerce', 'Order Management', 
 // Helper: extract boss.send payload for a specific queue
 // ---------------------------------------------------------------------------
 
-function extractBossPayload<T>(queueName: string): T {
+function extractBossPayload<T>(queueName: string, predicate?: (payload: T) => boolean): T {
   const call = bossSendSpy.mock.calls.find(
-    (c: unknown[]) => c[0] === queueName,
+    (c: unknown[]) => {
+      if (c[0] !== queueName) {
+        return false;
+      }
+
+      return predicate ? predicate(c[1] as T) : true;
+    },
   );
   if (!call) {
     throw new Error(`No boss.send call found for queue '${queueName}'`);
@@ -524,7 +530,10 @@ describe('pipeline full lifecycle', () => {
     await handleFollowupCheckJob(noopLogger, makeJob(payload, 'followup.check'), deps);
 
     // followup.check should have enqueued message.generate with followUpNumber=1
-    const generatePayload = extractBossPayload<MessageGenerateJobPayload>('message.generate');
+    const generatePayload = extractBossPayload<MessageGenerateJobPayload>(
+      'message.generate',
+      (payload) => payload.leadId === LEAD_ID && payload.followUpNumber === 1,
+    );
     expect(generatePayload.leadId).toBe(LEAD_ID);
     expect(generatePayload.followUpNumber).toBe(1);
     expect(generatePayload.channel).toBe('EMAIL');
@@ -640,7 +649,10 @@ describe('pipeline full lifecycle', () => {
       deps,
     );
 
-    const generatePayload = extractBossPayload<MessageGenerateJobPayload>('message.generate');
+    const generatePayload = extractBossPayload<MessageGenerateJobPayload>(
+      'message.generate',
+      (payload) => payload.leadId === LEAD_ID && payload.followUpNumber === 2,
+    );
     expect(generatePayload.followUpNumber).toBe(2);
     expect(generatePayload.parentMessageSendId).toBe(fu1Send!.id);
   });
@@ -732,7 +744,10 @@ describe('pipeline full lifecycle', () => {
       deps,
     );
 
-    const generatePayload = extractBossPayload<MessageGenerateJobPayload>('message.generate');
+    const generatePayload = extractBossPayload<MessageGenerateJobPayload>(
+      'message.generate',
+      (payload) => payload.leadId === LEAD_ID && payload.followUpNumber === 3,
+    );
     expect(generatePayload.followUpNumber).toBe(3);
     expect(generatePayload.parentMessageSendId).toBe(fu2Send!.id);
   });
