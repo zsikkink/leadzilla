@@ -52,7 +52,7 @@ const SCORING_CONTEXT = {
 describe('OpenAiAdapter integration', () => {
   describe('generateMessageVariants', () => {
     it('returns parsed single message on success', async () => {
-      const fetchMock = vi.fn(async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => {
         return new Response(
           makeOpenAiResponse(JSON.stringify(VALID_GENERATION_RESPONSE)),
           { status: 200, headers: { 'content-type': 'application/json' } },
@@ -94,7 +94,7 @@ describe('OpenAiAdapter integration', () => {
     });
 
     it('sends icpHook as a mandatory system instruction when provided', async () => {
-      const fetchMock = vi.fn(async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => {
         return new Response(
           makeOpenAiResponse(JSON.stringify(VALID_GENERATION_RESPONSE)),
           { status: 200, headers: { 'content-type': 'application/json' } },
@@ -127,7 +127,7 @@ describe('OpenAiAdapter integration', () => {
     });
 
     it('uses custom role, replaces default system prompt, and appends user instructions', async () => {
-      const fetchMock = vi.fn(async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => {
         return new Response(
           makeOpenAiResponse(JSON.stringify(VALID_GENERATION_RESPONSE)),
           { status: 200, headers: { 'content-type': 'application/json' } },
@@ -163,7 +163,7 @@ describe('OpenAiAdapter integration', () => {
     });
 
     it('passes channel and contact-type context into the user prompt', async () => {
-      const fetchMock = vi.fn(async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => {
         return new Response(
           makeOpenAiResponse(JSON.stringify(VALID_GENERATION_RESPONSE)),
           { status: 200, headers: { 'content-type': 'application/json' } },
@@ -199,7 +199,7 @@ describe('OpenAiAdapter integration', () => {
     });
 
     it('passes operator re-draft feedback into the user prompt', async () => {
-      const fetchMock = vi.fn(async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => {
         return new Response(
           makeOpenAiResponse(JSON.stringify(VALID_GENERATION_RESPONSE)),
           { status: 200, headers: { 'content-type': 'application/json' } },
@@ -317,7 +317,7 @@ describe('OpenAiAdapter integration', () => {
 
   describe('evaluateLeadScore', () => {
     it('returns parsed score result on success', async () => {
-      const fetchMock = vi.fn(async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => {
         return new Response(
           makeOpenAiResponse(JSON.stringify(VALID_SCORING_RESPONSE)),
           { status: 200, headers: { 'content-type': 'application/json' } },
@@ -341,7 +341,7 @@ describe('OpenAiAdapter integration', () => {
     });
 
     it('scores overall Zbooni fit rather than only ICP category fit', async () => {
-      const fetchMock = vi.fn(async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => {
         return new Response(
           makeOpenAiResponse(JSON.stringify(VALID_SCORING_RESPONSE)),
           { status: 200, headers: { 'content-type': 'application/json' } },
