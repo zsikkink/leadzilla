@@ -1,18 +1,20 @@
 'use client';
 
 import Image from 'next/image';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 
 import { useAuth } from '../../src/hooks/use-auth.js';
 
+const DEMO_EMAIL = 'demo@example.com';
+const DEMO_PASSWORD = 'password';
+
 export default function LoginPage() {
   const { login, isAuthenticated } = useAuth();
   const router = useRouter();
 
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState(DEMO_EMAIL);
+  const [password, setPassword] = useState(DEMO_PASSWORD);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -67,20 +69,30 @@ export default function LoginPage() {
         <div className="mb-8 text-center">
           <div className="mb-4 inline-block">
             <Image
-              src="/zbooni-logo-dark.png"
-              alt="Zbooni"
-              width={200}
-              height={200}
+              src="/brand/leadzilla-wordmark.svg"
+              alt="Leadzilla"
+              width={220}
+              height={50}
               priority
-              className="mx-auto invert"
+              className="mx-auto h-auto w-[190px]"
             />
           </div>
-          <h1 className="text-2xl font-extrabold tracking-tight">Sales OS</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Sign in to your pipeline</p>
+          <h1 className="text-2xl font-extrabold tracking-tight">Leadzilla Demo</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Public sandbox for an AI-assisted outbound sales platform
+          </p>
         </div>
 
         {/* Card */}
         <div className="rounded-2xl border border-border/50 bg-card p-8 shadow-xl shadow-black/20">
+          <div className="mb-5 rounded-xl border border-zbooni-teal/25 bg-zbooni-teal/10 px-4 py-3 text-sm leading-relaxed text-muted-foreground">
+            <p className="font-semibold text-foreground">Public demo access is prefilled.</p>
+            <p className="mt-1">
+              This sandbox is read-focused. Discovery, enrichment, messaging, outbound sends,
+              and worker-backed jobs are disabled, and demo data may be reset.
+            </p>
+          </div>
+
           <form onSubmit={handleLogin} className="space-y-5">
             <div className="space-y-2">
               <label htmlFor="email" className="text-sm font-medium text-muted-foreground">
@@ -93,7 +105,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className={inputClassName}
-                placeholder="you@zbooni.com"
+                placeholder={DEMO_EMAIL}
               />
             </div>
 
@@ -127,23 +139,15 @@ export default function LoginPage() {
                   Signing in...
                 </span>
               ) : (
-                'Sign in'
+                'Enter demo'
               )}
             </button>
 
             <p className="rounded-xl border border-border/70 bg-secondary/20 px-4 py-3 text-sm leading-relaxed text-muted-foreground">
-              Need access? This workspace is invite-only. Contact your administrator to request an account.
+              Credentials: <span className="font-medium text-foreground">{DEMO_EMAIL}</span> /{' '}
+              <span className="font-medium text-foreground">{DEMO_PASSWORD}</span>
             </p>
           </form>
-        </div>
-
-        <div className="mt-4 text-center">
-          <Link
-            href="/forgot-password"
-            className="text-sm text-muted-foreground/60 hover:text-foreground transition-colors"
-          >
-            Forgot password?
-          </Link>
         </div>
       </div>
     </div>

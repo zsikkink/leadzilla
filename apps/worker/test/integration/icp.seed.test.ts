@@ -61,7 +61,7 @@ describe('icp.seed', () => {
     await cleanupSeededIcps();
   });
 
-  it('creates four active Zbooni ICPs with stable wide-net rules and supports idempotent reruns', async () => {
+  it('creates four active Leadzilla ICPs with stable wide-net rules and supports idempotent reruns', async () => {
     runSeedScript();
 
     for (const icpName of ZBOONI_ICP_NAMES) {

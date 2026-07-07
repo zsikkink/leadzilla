@@ -25,7 +25,7 @@ export const QUALIFICATION_CATEGORIES = {
 export type QualificationCategory = (typeof QUALIFICATION_CATEGORIES)[keyof typeof QUALIFICATION_CATEGORIES];
 
 /**
- * Maps feature field keys to Zbooni qualification categories.
+ * Maps feature field keys to Leadzilla qualification categories.
  * Rules with fieldKeys not in this map fall under GENERAL.
  */
 const FIELD_KEY_CATEGORY_MAP: Record<string, QualificationCategory> = {
@@ -358,7 +358,7 @@ export function evaluateDeterministicScore(
     });
   }
 
-  // --- Category-based scoring (Zbooni qualification checklist) ---
+  // --- Category-based scoring (Leadzilla qualification checklist) ---
   const categoryBuckets = new Map<string, { matched: number; total: number }>();
 
   for (const evaluation of ruleEvaluation) {
@@ -395,7 +395,7 @@ export function evaluateDeterministicScore(
   const hasSalesMotion = passedCategories.has(QUALIFICATION_CATEGORIES.SALES_MOTION_FIT);
   const hasPaymentComplexity = passedCategories.has(QUALIFICATION_CATEGORIES.PAYMENT_COMPLEXITY);
 
-  // Zbooni Decision Guide:
+  // Leadzilla Decision Guide:
   // PROCEED: Sales + Payment + 1 other -> base 0.75
   // SELECTIVE: 2+ categories passed -> base 0.50
   // DISQUALIFY: < 2 categories -> base 0.25

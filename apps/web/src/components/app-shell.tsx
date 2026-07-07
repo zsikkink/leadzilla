@@ -53,6 +53,11 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header />
         <main id="main-content" className={cn('flex-1 overflow-auto p-6', contentClassName)}>
+          <div className="mb-5 rounded-lg border border-zbooni-teal/25 bg-zbooni-teal/10 px-4 py-3 text-sm leading-relaxed text-muted-foreground">
+            <span className="font-semibold text-foreground">Leadzilla demo sandbox.</span>{' '}
+            This is a read-focused public demo. Discovery, enrichment, messaging,
+            outbound sends, and worker-backed jobs are disabled; demo data may be reset.
+          </div>
           {children}
         </main>
       </div>

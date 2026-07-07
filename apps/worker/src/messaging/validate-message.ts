@@ -112,9 +112,9 @@ function findSpamWords(text: string): string[] {
 }
 
 const STUB_BODY = 'Message generation pending';
-const ZBOONI_TEAM_SIGNOFF_PATTERN = /(?:^|\n)\s*Best,?\s*\n\s*Zbooni Team\s*$/i;
+const ZBOONI_TEAM_SIGNOFF_PATTERN = /(?:^|\n)\s*Best,?\s*\n\s*Leadzilla Team\s*$/i;
 const ZBOONI_INTRO_PATTERN =
-  /^(?:I’m|I'm) reaching out from Zbooni\. We help businesses turn customer messages into paid, trackable orders\./i;
+  /^(?:I’m|I'm) reaching out from Leadzilla\. We help businesses turn customer messages into paid, trackable orders\./i;
 
 function normalizeForComparison(value: string): string {
   return value.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -267,9 +267,9 @@ export function ensureZbooniTeamSignoff<T extends {
     return content;
   }
 
-  const bodyText = `${content.bodyText.trimEnd()}\n\nBest,\nZbooni Team`;
+  const bodyText = `${content.bodyText.trimEnd()}\n\nBest,\nLeadzilla Team`;
   const bodyHtml = content.bodyHtml
-    ? `${content.bodyHtml.trimEnd()}\n<p>Best,<br />Zbooni Team</p>`
+    ? `${content.bodyHtml.trimEnd()}\n<p>Best,<br />Leadzilla Team</p>`
     : content.bodyHtml;
 
   return {
@@ -337,12 +337,12 @@ export function validateMessageVariant(
 
   if (qualityOptions.requireZbooniIntroAfterGreeting && !hasZbooniIntroAfterGreeting(bodyText)) {
     hardReject = true;
-    reasons.push('Missing Zbooni intro after greeting');
+    reasons.push('Missing Leadzilla intro after greeting');
   }
 
   if (qualityOptions.requireZbooniTeamSignoff && !hasZbooniTeamSignoff(bodyText)) {
     hardReject = true;
-    reasons.push('Missing Zbooni Team sign-off');
+    reasons.push('Missing Leadzilla Team sign-off');
   }
 
   if (channel === 'EMAIL' && hasVagueFeatureOnlySubject(subject)) {
@@ -424,17 +424,17 @@ export function buildStricterPromptSuffix(channel: MessageChannel, validationRea
     '- Avoid vague feature-only email subjects such as "Milestone payments?" or generic product phrases with no buyer context.',
     '- Avoid alarmist email subjects such as "Failed payments on big deals?", "Lost revenue?", or other negative scare hooks.',
     '- Start with a professional greeting like "Hi Ann," or "Hi LAADS team,".',
-    '- Immediately after the greeting, include: "I’m reaching out from Zbooni. We help businesses turn customer messages into paid, trackable orders."',
+    '- Immediately after the greeting, include: "I’m reaching out from Leadzilla. We help businesses turn customer messages into paid, trackable orders."',
     '- Include the low-friction CTA question inside the message body.',
     '- Reference one safe personalization signal when available, not a stack of scraped facts.',
-    '- End the message body with exactly: Best, then a new line, then Zbooni Team.',
+    '- End the message body with exactly: Best, then a new line, then Leadzilla Team.',
     '- Write a professional, natural message.',
   ].filter(Boolean).join(' ');
 }
 
 // ---------------------------------------------------------------------------
-// Negative keyword filter — Zbooni ICP disqualification signals
-// These terms misrepresent Zbooni's offering and must not appear in outreach.
+// Negative keyword filter — product disqualification signals
+// These terms misrepresent Leadzilla's offering and must not appear in outreach.
 // ---------------------------------------------------------------------------
 
 export const NEGATIVE_KEYWORDS: string[] = [
@@ -454,7 +454,7 @@ export interface NegativeKeywordResult {
   matches: string[];
 }
 
-/** Check a variant's bodyText for any Zbooni-disqualifying negative keywords. */
+/** Check a variant's bodyText for any Leadzilla-disqualifying negative keywords. */
 export function checkNegativeKeywords(bodyText: string): NegativeKeywordResult {
   const lower = bodyText.toLowerCase();
   const matches = NEGATIVE_KEYWORDS.filter((kw) => lower.includes(kw.toLowerCase()));
@@ -466,7 +466,7 @@ export function buildNegativeKeywordPromptSuffix(foundKeywords: string[]): strin
   return [
     'CRITICAL — DO NOT mention the following terms or concepts in the message:',
     ...foundKeywords.map((kw) => `- "${kw}"`),
-    'These do not represent what Zbooni offers. Zbooni is a conversation-first commerce platform,',
+    'These do not represent what Leadzilla offers. Leadzilla is a conversation-first commerce platform,',
     'not a subscription, web-checkout, or low-price competitor.',
   ].join('\n');
 }

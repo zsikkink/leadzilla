@@ -108,7 +108,7 @@ describe('OpenAiAdapter integration', () => {
 
       const result = await adapter.generateMessageVariants({
         ...GENERATION_CONTEXT,
-        icpHook: 'Zbooni helps luxury hotels increase repeat bookings through WhatsApp-based ordering',
+        icpHook: 'Leadzilla helps luxury hotels increase repeat bookings through WhatsApp-based ordering',
       });
 
       expect(result.status).toBe('success');
@@ -122,7 +122,7 @@ describe('OpenAiAdapter integration', () => {
 
       expect(systemPrompt).toContain('MANDATORY ICP HOOK INSTRUCTION');
       expect(systemPrompt).toContain('You MUST incorporate the following sales hook as the core angle of your message');
-      expect(systemPrompt).toContain('Zbooni helps luxury hotels increase repeat bookings through WhatsApp-based ordering');
+      expect(systemPrompt).toContain('Leadzilla helps luxury hotels increase repeat bookings through WhatsApp-based ordering');
       expect(userPrompt).not.toContain('ICP hook (use as opening line)');
     });
 
@@ -141,7 +141,7 @@ describe('OpenAiAdapter integration', () => {
 
       const result = await adapter.generateMessageVariants({
         ...GENERATION_CONTEXT,
-        customRole: 'Senior Enterprise Account Executive at Zbooni',
+        customRole: 'Senior Enterprise Account Executive at Leadzilla',
         customSystemPrompt: 'Write one concise line and sign off as an enterprise AE.',
         messagingInstructions: "Never use the word 'leverage'.",
       });
@@ -154,12 +154,12 @@ describe('OpenAiAdapter integration', () => {
       };
       const systemPrompt = payload.messages?.find((msg) => msg.role === 'system')?.content ?? '';
 
-      expect(systemPrompt).toContain('Senior Enterprise Account Executive at Zbooni');
+      expect(systemPrompt).toContain('Senior Enterprise Account Executive at Leadzilla');
       expect(systemPrompt).toContain('Write one concise line and sign off as an enterprise AE.');
       expect(systemPrompt).toContain("Additional instructions from the user: Never use the word 'leverage'.");
-      expect(systemPrompt).toContain('I’m reaching out from Zbooni. We help businesses turn customer messages into paid, trackable orders.');
+      expect(systemPrompt).toContain('I’m reaching out from Leadzilla. We help businesses turn customer messages into paid, trackable orders.');
       expect(systemPrompt).not.toContain('## ZBOONI POSITIONING');
-      expect(systemPrompt).not.toContain('You are a senior sales development representative at Zbooni');
+      expect(systemPrompt).not.toContain('You are a senior sales development representative at Leadzilla');
     });
 
     it('passes channel and contact-type context into the user prompt', async () => {
@@ -340,7 +340,7 @@ describe('OpenAiAdapter integration', () => {
       expect(payload.model).toBe('gpt-4o-mini');
     });
 
-    it('scores overall Zbooni fit rather than only ICP category fit', async () => {
+    it('scores overall Leadzilla fit rather than only ICP category fit', async () => {
       const fetchMock = vi.fn<typeof fetch>(async () => {
         return new Response(
           makeOpenAiResponse(JSON.stringify(VALID_SCORING_RESPONSE)),
@@ -364,7 +364,7 @@ describe('OpenAiAdapter integration', () => {
       const systemPrompt = payload.messages?.find((msg) => msg.role === 'system')?.content ?? '';
       const userPrompt = payload.messages?.find((msg) => msg.role === 'user')?.content ?? '';
 
-      expect(systemPrompt).toContain('Score how good this business is for Zbooni overall');
+      expect(systemPrompt).toContain('Score how good this business is for Leadzilla overall');
       expect(systemPrompt).toContain('not merely how closely it matches the ICP search category');
       expect(systemPrompt).toContain('marketing activity and customer acquisition');
       expect(systemPrompt).toContain('online payment readiness');

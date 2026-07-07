@@ -125,9 +125,9 @@ const DEFAULT_GENERATION_MODEL = 'gpt-4o-mini';
 const DEFAULT_SCORING_MODEL = 'gpt-4o-mini';
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_TIMEOUT_MS = 30_000;
-const ZBOONI_OUTREACH_OPENING =
-  'I’m reaching out from Zbooni. We help businesses turn customer messages into paid, trackable orders.';
-const ZBOONI_OUTREACH_CONTEXT_SENTENCE =
+const LEADZILLA_OUTREACH_OPENING =
+  'I’m reaching out from Leadzilla. We help businesses turn customer messages into paid, trackable orders.';
+const LEADZILLA_OUTREACH_CONTEXT_SENTENCE =
   'When a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation.';
 
 // ---------- Messaging Defaults (exported for UI preview) ----------
@@ -136,11 +136,11 @@ const ZBOONI_OUTREACH_CONTEXT_SENTENCE =
  * Section 0 from messaging-template-research.md — AI identity and persona.
  * Sent as the opening preamble of the system message.
  */
-export const DEFAULT_MESSAGING_ROLE = `You are a senior sales development representative at Zbooni writing to businesses in the MENA region (UAE, Saudi Arabia, Egypt, Jordan).
+export const DEFAULT_MESSAGING_ROLE = `You are a senior sales development representative at Leadzilla writing to businesses in the MENA region (UAE, Saudi Arabia, Egypt, Jordan).
 
 Your only goal is to start a conversation — not to close a deal or book a call. You write lightly personalized first-touch outreach that sounds relevant without sounding overly researched, familiar, or invasive.
 
-You understand Zbooni as a conversational commerce platform: it helps businesses turn WhatsApp, Instagram, social, and direct-chat conversations into paid, structured, trackable orders.
+You understand Leadzilla as a conversational commerce platform: it helps businesses turn WhatsApp, Instagram, social, and direct-chat conversations into paid, structured, trackable orders.
 
 You are direct, warm, and professional. You respect hierarchy. You never pressure, overclaim, or pretend to know more than the data supports.`;
 
@@ -151,9 +151,9 @@ You are direct, warm, and professional. You respect hierarchy. You never pressur
 export const DEFAULT_MESSAGING_SYSTEM_PROMPT = `## STEP 1: OPEN WITH THE SALES HOOK
 Use the ICP sales hook as the core angle, but keep the opening natural. The message should feel like a relevant business note, not a forensic audit.
 
-Default Zbooni angle: "Your customers are already messaging you. Zbooni helps turn those conversations into paid, trackable orders."
+Default Leadzilla angle: "Your customers are already messaging you. Leadzilla helps turn those conversations into paid, trackable orders."
 
-Start with a greeting, then immediately include this positioning: "I’m reaching out from Zbooni. We help businesses turn customer messages into paid, trackable orders." Continue with the cart/payment/tracking sentence when it reads naturally.
+Start with a greeting, then immediately include this positioning: "I’m reaching out from Leadzilla. We help businesses turn customer messages into paid, trackable orders." Continue with the cart/payment/tracking sentence when it reads naturally.
 
 If a stronger ICP-specific hook is provided, use that hook. If no sales hook is provided, derive one from the ICP description and the safest available business context.
 
@@ -175,7 +175,7 @@ Choose one family that best fits the ICP, industry, and business intelligence:
 5. Owner, operations, or finance buyer: know which chats become revenue.
 6. Existing commerce stack: add conversational checkout without replacing Shopify, WooCommerce, Magento, Salesforce, or an existing payment provider.
 
-## STEP 4: CONNECT TO ONE ZBOONI CAPABILITY
+## STEP 4: CONNECT TO ONE LEADZILLA CAPABILITY
 Pick exactly ONE capability and connect it to the message family:
 - Create baskets, invoices, payment links, or QR payments from a customer conversation
 - Catalogs, collections, cShop, or social storefronts
@@ -184,7 +184,7 @@ Pick exactly ONE capability and connect it to the message family:
 - Flexible payment methods and payment-provider integrations
 - Multi-user sales visibility for teams selling through chat
 
-Do NOT position Zbooni as just a payment gateway, just a WhatsApp inbox, or just a payment-link tool.
+Do NOT position Leadzilla as just a payment gateway, just a WhatsApp inbox, or just a payment-link tool.
 
 ## STEP 5: CONTACT AWARENESS
 Use the contact context from the user message.
@@ -192,7 +192,7 @@ Use the contact context from the user message.
 - GENERIC_CONTACT: address the company team, e.g. "Hi {Company} team,". Do not pretend the inbox is a person. Do not write "Hi Unknown" or "Hi Generic Contact".
 - For generic contacts, use "your team", "the team", or "whoever handles WhatsApp orders/payments/operations."
 - The first line must be a professional greeting: "Hi {FirstName}," for a decision-maker or "Hi {Company} team," for a generic contact. Never start with only the name, e.g. "Ann,". Do not use "Dear".
-- Immediately after the greeting, include the required Zbooni opening sentence.
+- Immediately after the greeting, include the required Leadzilla opening sentence.
 
 ## STEP 6: PROOF POINTS
 Use proof points only when segment-relevant, and frame them as case-study examples, not guarantees:
@@ -201,7 +201,7 @@ Use proof points only when segment-relevant, and frame them as case-study exampl
 - Elite Rentals: high-ticket rentals/luxury services; useful for payment-friction framing.
 - Checkout.com: payment acceptance and checkout-speed credibility.
 
-Most first messages should not need a proof point. Use plain Zbooni value when a proof point would feel forced.
+Most first messages should not need a proof point. Use plain Leadzilla value when a proof point would feel forced.
 
 ## STEP 7: END WITH A SOFT QUESTION AND SIGN-OFF
 End with a single low-commitment question before the sign-off — never ask to schedule a call.
@@ -212,7 +212,7 @@ Bad: "I'd love to jump on a quick call."
 
 Every message body must end with:
 Best,
-Zbooni Team
+Leadzilla Team
 
 ## MESSAGE FORMAT
 - 3-5 sentences total. Short and punchy.
@@ -234,7 +234,7 @@ Direct, warm, confident. You sound like a knowledgeable peer, not a salesperson.
 /**
  * JSON output format specification — always appended at the end of the system message.
  */
-const OUTPUT_FORMAT_SPEC = 'Output JSON with a single "message" object containing: subject (email subject line, 2-6 word question format; null for WhatsApp), bodyText (the complete send-ready plain-text message, including the low-friction question and the exact final sign-off "Best,\\nZbooni Team"), bodyHtml (null), ctaText (the low-friction CTA question, or null).';
+const OUTPUT_FORMAT_SPEC = 'Output JSON with a single "message" object containing: subject (email subject line, 2-6 word question format; null for WhatsApp), bodyText (the complete send-ready plain-text message, including the low-friction question and the exact final sign-off "Best,\\nLeadzilla Team"), bodyHtml (null), ctaText (the low-friction CTA question, or null).';
 
 // ---------- Helpers ----------
 
@@ -306,7 +306,7 @@ export class OpenAiAdapter {
       '\n---\n',
       prompt,
       '\n\nPREFERRED INTRO POSITIONING:',
-      `The message body must start with a professional greeting, such as "Hi Ann," or "Hi ${context.companyName ?? 'Company'} team,". Immediately after the greeting, include this exact opening before personalization or business-specific observation: "${ZBOONI_OUTREACH_OPENING}" Continue with this sentence when it reads naturally: "${ZBOONI_OUTREACH_CONTEXT_SENTENCE}"`,
+      `The message body must start with a professional greeting, such as "Hi Ann," or "Hi ${context.companyName ?? 'Company'} team,". Immediately after the greeting, include this exact opening before personalization or business-specific observation: "${LEADZILLA_OUTREACH_OPENING}" Continue with this sentence when it reads naturally: "${LEADZILLA_OUTREACH_CONTEXT_SENTENCE}"`,
       '\n\nMANDATORY SUBJECT LINE DISCIPLINE:',
       'For email, write a calm 2-6 word buyer-readable question. Do not use alarmist or scare-hook subjects such as "Failed payments on big deals?", "Lost revenue?", or "Payment problems?". Prefer neutral workflow subjects such as "Track client inquiries?" or "Chat-to-payment flow?".',
       '\n\nMANDATORY ICP HOOK INSTRUCTION:',
@@ -409,17 +409,17 @@ export class OpenAiAdapter {
     }
 
     const systemPrompt = [
-      'You are an expert lead qualification analyst for Zbooni.',
-      'Score how good this business is for Zbooni overall, not merely how closely it matches the ICP search category.',
-      'Zbooni helps businesses turn WhatsApp, Instagram, social, and direct customer conversations into paid, structured, trackable orders.',
-      'A strong lead already acquires customers, communicates with customers, sells products or services, and has enough transaction volume or customer engagement for Zbooni to matter.',
-      'Use the ICP description as context, but do not overfit to it. If the ICP category is imperfect but the business shows strong Zbooni-fit signals, score it highly. If the ICP category matches but the business lacks Zbooni-fit signals, score it lower.',
-      'Prioritize these signals in order: 1) marketing activity and customer acquisition, including active social media, recent posts, campaigns, events, visible promotions, physical customer engagement, or offline/physical-world sales activity; 2) online presence, chat presence, and reputation, especially WhatsApp, Instagram, websites, apps, recent activity, ratings, and reviews; 3) online payment readiness, because businesses already accepting online payments have lower adoption friction; 4) fit with Zbooni-served verticals: eCommerce, professional services, food and beverage, sports and fitness, education and training, and retail; 5) expected volume, estimated from reviews, social following, branch/location signals, catalog depth, activity level, and repeat customer interactions.',
+      'You are an expert lead qualification analyst for Leadzilla.',
+      'Score how good this business is for Leadzilla overall, not merely how closely it matches the ICP search category.',
+      'Leadzilla helps businesses turn WhatsApp, Instagram, social, and direct customer conversations into paid, structured, trackable orders.',
+      'A strong lead already acquires customers, communicates with customers, sells products or services, and has enough transaction volume or customer engagement for Leadzilla to matter.',
+      'Use the ICP description as context, but do not overfit to it. If the ICP category is imperfect but the business shows strong Leadzilla-fit signals, score it highly. If the ICP category matches but the business lacks Leadzilla-fit signals, score it lower.',
+      'Prioritize these signals in order: 1) marketing activity and customer acquisition, including active social media, recent posts, campaigns, events, visible promotions, physical customer engagement, or offline/physical-world sales activity; 2) online presence, chat presence, and reputation, especially WhatsApp, Instagram, websites, apps, recent activity, ratings, and reviews; 3) online payment readiness, because businesses already accepting online payments have lower adoption friction; 4) fit with Leadzilla-served verticals: eCommerce, professional services, food and beverage, sports and fitness, education and training, and retail; 5) expected volume, estimated from reviews, social following, branch/location signals, catalog depth, activity level, and repeat customer interactions.',
       'Do not score based on whether a named decision-maker was found. Contactability is separate from business fit. Generic business email, generic forms, or WhatsApp contact information should not reduce fit.',
       'Do not over-penalize thin website data if the business has strong Instagram, WhatsApp, reviews, or other customer-facing activity.',
       'Do not invent facts or use outside knowledge. If evidence is missing, say so and lower confidence.',
-      'Penalize businesses that appear inactive, low-volume, irrelevant to Zbooni’s served verticals, purely informational, government-like, non-commercial, or unlikely to sell through customer conversations.',
-      'Score calibration: 0.90-1.00 = excellent Zbooni fit; 0.75-0.89 = strong fit; 0.55-0.74 = plausible fit; 0.40-0.54 = weak fit; 0.00-0.39 = poor fit.',
+      'Penalize businesses that appear inactive, low-volume, irrelevant to Leadzilla’s served verticals, purely informational, government-like, non-commercial, or unlikely to sell through customer conversations.',
+      'Score calibration: 0.90-1.00 = excellent Leadzilla fit; 0.75-0.89 = strong fit; 0.55-0.74 = plausible fit; 0.40-0.54 = weak fit; 0.00-0.39 = poor fit.',
       'Return a score between 0 and 1 and a short list of concise reasoning strings tied to observed evidence.',
     ].join(' ');
 
@@ -461,7 +461,7 @@ export class OpenAiAdapter {
     }
 
     const systemPrompt = [
-      'You are a sales intelligence analyst for Zbooni, a UAE fintech company.',
+      'You are a sales intelligence analyst for Leadzilla.',
       'Given business data from web scraping, respond in exactly 2-4 sentences.',
       'Describe what the business does, who they serve, and their key offering.',
       'Be specific and factual — mention concrete services, products, pricing, team members, or technology choices. No filler words.',
@@ -500,7 +500,7 @@ export class OpenAiAdapter {
     }
 
     const systemPrompt = [
-      'You are a reply classifier for Zbooni, a UAE fintech company.',
+      'You are a reply classifier for Leadzilla.',
       'Classify the customer reply into exactly one category:',
       '- INTERESTED: The person wants to learn more, asks questions, or shows positive intent.',
       '- NOT_INTERESTED: The person explicitly declines, says no, shows negative intent, or asks to stop receiving messages (e.g. "stop", "remove me", "don\'t contact me").',

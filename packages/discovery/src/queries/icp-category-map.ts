@@ -26,7 +26,7 @@ import { categoryTaxonomyEN } from './seeds.js';
  * 4. Previously unmapped industries now have direct mappings
  *
  * Last audited: 2026-03-06 — verified against 8 active ICP profiles in DB
- * and Zbooni ICP & Offerings PDF (segments A-H).
+ * and Leadzilla ICP & Offerings PDF (segments A-H).
  */
 export const ICP_INDUSTRY_CATEGORY_MAP: Record<string, string[]> = {
   // ── ICP A: Luxury & High-Ticket Services ────────────────────────────

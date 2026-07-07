@@ -86,7 +86,7 @@ const mockBoss = { send: bossSendSpy };
 // ---------------------------------------------------------------------------
 
 const APOLLO_PERSON_ID = `apollo-${randomUUID()}`;
-const DISCOVERED_EMAIL = `${TEST_PREFIX}@zbooni-fullchain.test`;
+const DISCOVERED_EMAIL = `${TEST_PREFIX}@leadzilla-fullchain.test`;
 const DISCOVERED_FIRST_NAME = 'Khalid';
 const DISCOVERED_LAST_NAME = 'Al-Rashidi';
 
@@ -125,12 +125,12 @@ function makeOpenAiGenerateFetch(): typeof fetch {
   const emailBodyA = [
     'Hi Khalid,',
     '',
-    'I’m reaching out from Zbooni. We help businesses turn customer messages into paid, trackable orders. When a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation.',
+    'I’m reaching out from Leadzilla. We help businesses turn customer messages into paid, trackable orders. When a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation.',
     '',
     'For FullChain Test Corp, that can make customer follow-up and payment status easier to manage from one place. Would it be useful to compare this with how your team handles customer conversations today?',
     '',
     'Best,',
-    'Zbooni Team',
+    'Leadzilla Team',
   ].join('\n');
   const ctaA = 'Would it be useful to compare this with how your team handles customer conversations today?';
 

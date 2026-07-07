@@ -990,9 +990,9 @@ export async function handleMessageGenerateJob(
 
     if (followUpNumber > 0 && pitchedFeature) {
       systemPromptOverride = [
-        'You are an expert B2B sales copywriter for Zbooni, a UAE fintech company.',
+        'You are an expert B2B sales copywriter for Leadzilla.',
         `This is follow-up message #${followUpNumber} to a lead who has not replied.`,
-        `Pitch this specific Zbooni feature: ${pitchedFeature}`,
+        `Pitch this specific Leadzilla feature: ${pitchedFeature}`,
         previouslyPitchedFeatures.length > 0
           ? `Previous messages pitched: ${previouslyPitchedFeatures.join(', ')}. Do NOT repeat these.`
           : '',
@@ -1140,7 +1140,7 @@ export async function handleMessageGenerateJob(
     messageContent = validation.cleaned;
 
     // -----------------------------------------------------------------------
-    // Negative keyword filter — catch Zbooni ICP disqualification signals
+    // Negative keyword filter — catch Leadzilla ICP disqualification signals
     // Runs after validation/cleaning, before persisting to DB.
     // -----------------------------------------------------------------------
     const nkCheck = checkNegativeKeywords(messageContent.bodyText);

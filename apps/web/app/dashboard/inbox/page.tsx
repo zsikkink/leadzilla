@@ -39,7 +39,7 @@ import { useAuth } from '../../../src/hooks/use-auth.js';
 import { useDraftCompletionNotifier } from '../../../src/hooks/use-draft-completion-notifier.js';
 
 // Mirrors the worker/provider default until the API exposes runtime sender config.
-const OUTBOUND_EMAIL = 'gino@zboonisales.com';
+const OUTBOUND_EMAIL = 'outbound@leadzilla.example';
 const INBOX_MESSAGE_TRASH_STORAGE_KEY = 'lead-flood:inbox:trashed-messages';
 
 // ── Classification badge colors ────────────────────

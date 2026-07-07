@@ -50,7 +50,7 @@ const UNIVERSAL_RULES: QualificationRuleDef[] = [
   { name: 'C-suite decision maker found', fieldKey: 'found_csuite_decision_maker', operator: 'EQ', expectedValue: true, isRequired: false, weight: 2, orderIndex: 17 },
 ];
 
-// ── 8 ICP Segments from Zbooni Sales Onboarding Deck ──────────
+// ── 8 ICP Segments from Leadzilla Sales Onboarding Deck ──────────
 const ICP_SEGMENTS = [
   {
     name: 'Luxury & High-Ticket Services',
@@ -58,11 +58,11 @@ const ICP_SEGMENTS = [
 
 Core Pain Points: Failed payments on high-value transactions (Amex/ApplePay declines kill bookings), single-MID dependency causing transaction failures, reliance on bank transfers with poor UX, manual reconciliation and poor visibility per agent or project, delayed settlements impacting cash flow, slow PSP onboarding killing deal momentum, difficulty collecting deposits or partial payments from international clients.
 
-Why Zbooni: Chat-based payments with no integrations needed, multiple payment methods and smart routing via 20+ MIDs, branded links with instant confirmation, faster cash collection and higher approval rates, clear reconciliation and auditable reporting, hands-on human support aligned with their high-touch workflow.
+Why Leadzilla: Chat-based payments with no integrations needed, multiple payment methods and smart routing via 20+ MIDs, branded links with instant confirmation, faster cash collection and higher approval rates, clear reconciliation and auditable reporting, hands-on human support aligned with their high-touch workflow.
 
 Buying Triggers: Growth in WhatsApp or Instagram inquiries, seasonal volume spikes, complaints about failed payments or blocked funds, expansion into international markets, finance pushback on reconciliation complexity.
 
-Objections to Overcome: "We already have a PSP" — Zbooni runs alongside, not instead of. Focus on the deals that fail today. "Our clients prefer bank transfers" — Zbooni branded links feel premium, not like a downgrade. International clients actually prefer card. "It's too expensive" — a single recovered failed payment covers months of Zbooni fees.
+Objections to Overcome: "We already have a PSP" — Leadzilla runs alongside, not instead of. Focus on the deals that fail today. "Our clients prefer bank transfers" — Leadzilla branded links feel premium, not like a downgrade. International clients actually prefer card. "It's too expensive" — a single recovered failed payment covers months of Leadzilla fees.
 
 Deal Structure: Average ticket AED 5,000–100,000. Short sales cycle. Medium ops complexity. Very high revenue potential. P1 priority segment.`,
     targetIndustries: ['Luxury Services', 'Yacht Charter', 'Private Aviation', 'Luxury Travel', 'Personal Shopping'],
@@ -79,18 +79,18 @@ Deal Structure: Average ticket AED 5,000–100,000. Short sales cycle. Medium op
 
 Core Pain Points: Seasonal volume spikes overwhelm manual processes, multiple agents handling sales with no centralized tracking, quoting and revisions happening in WhatsApp with no payment linkage, deposits and balance payments required but hard to track, promo code and discount management is manual, difficulty scaling during peak periods (Ramadan, National Day, Valentine's, corporate year-end).
 
-Why Zbooni: Catalog (CShop) to pre-list services and share directly via chat, live payment link editing without creating new links (updates reflected instantly), in-app discount and promo code creation, WhatsApp marketing campaigns for customer acquisition (via Zbooni verified number or merchant's number), multiple payment methods for frictionless checkout, centralized tracking across all agents.
+Why Leadzilla: Catalog (CShop) to pre-list services and share directly via chat, live payment link editing without creating new links (updates reflected instantly), in-app discount and promo code creation, WhatsApp marketing campaigns for customer acquisition (via Leadzilla verified number or merchant's number), multiple payment methods for frictionless checkout, centralized tracking across all agents.
 
 Buying Triggers: Approaching seasonal peak (Ramadan, National Day, Valentine's, Mother's Day), complaints about lost orders during busy periods, multiple agents/staff with no unified view, expansion into corporate B2B gifting contracts.
 
-Objections to Overcome: "We only get busy a few times a year" — that's exactly when you can't afford payment friction. One lost bulk order = months of Zbooni fees. "We use Instagram DMs" — Zbooni connects your Instagram flow to actual payments. No copy-pasting bank details. "Our volumes are small" — your PEAK volumes aren't. Prepare infrastructure for the spike.
+Objections to Overcome: "We only get busy a few times a year" — that's exactly when you can't afford payment friction. One lost bulk order = months of Leadzilla fees. "We use Instagram DMs" — Leadzilla connects your Instagram flow to actual payments. No copy-pasting bank details. "Our volumes are small" — your PEAK volumes aren't. Prepare infrastructure for the spike.
 
 Deal Structure: Average ticket Medium–High. High volume (seasonal). Short–Medium sales cycle. Medium ops complexity. High revenue potential. P1 priority.`,
     targetIndustries: ['Corporate Gifting', 'Florists', 'Gift Boxes', 'Experience Platforms', 'Bespoke Events'],
     targetCountries: MENA_COUNTRIES,
     minCompanySize: 5,
     maxCompanySize: 300,
-    featureList: ['Catalog (CShop) for pre-listing services', 'Live payment link editing', 'In-app discount creation', 'Promo code management', 'WhatsApp marketing campaigns via Zbooni verified number', 'Multiple payment methods'],
+    featureList: ['Catalog (CShop) for pre-listing services', 'Live payment link editing', 'In-app discount creation', 'Promo code management', 'WhatsApp marketing campaigns via Leadzilla verified number', 'Multiple payment methods'],
     metadataJson: { priority: 'P1', avgTicket: 'Medium–High', volumePotential: 'High (seasonal)', salesCycle: 'Short–Medium', opsComplexity: 'Medium', revenuePotential: 'High', hook: 'We work with brands handling seasonal spikes, bulk orders, and multiple agents selling at once.', angle: ['Catalog + payment links inside WhatsApp', 'Promo codes & campaigns for peak periods', 'Centralized tracking across agents'] },
     rules: UNIVERSAL_RULES,
   },
@@ -100,7 +100,7 @@ Deal Structure: Average ticket Medium–High. High volume (seasonal). Short–Me
 
 Core Pain Points: Large upfront deposits (30–70%) with multiple stakeholders paying from different locations, revenue attribution by event/agent/project is nearly impossible, time-sensitive payments with zero tolerance for delays (venues, vendors, performers all need instant confirmation), fragmented payment collection across vendors and clients, manual reconciliation across multiple payment sources, no centralized view of who paid what for which event.
 
-Why Zbooni: End-to-end event marketing management via WhatsApp using Zbooni data, ticketing solution to issue/manage/track event entry tickets, Catalog (CShop) to pre-list products or services and share directly via chat or QR code, QR-based food ordering and payment solution (reduce queues, route orders to vendors), POS machine for in-person card acceptance, customer database for tracking and re-engagement in future editions, master organizer dashboard for sales and performance across all vendors, promo code creation and management.
+Why Leadzilla: End-to-end event marketing management via WhatsApp using Leadzilla data, ticketing solution to issue/manage/track event entry tickets, Catalog (CShop) to pre-list products or services and share directly via chat or QR code, QR-based food ordering and payment solution (reduce queues, route orders to vendors), POS machine for in-person card acceptance, customer database for tracking and re-engagement in future editions, master organizer dashboard for sales and performance across all vendors, promo code creation and management.
 
 Buying Triggers: Upcoming major event with complex payment requirements, expansion into multi-vendor events, complaints about delayed payments disrupting event logistics, need for ticketing + payment in one solution.
 
@@ -121,11 +121,11 @@ Deal Structure: Average ticket High. High volume (event-based). Medium sales cyc
 
 Core Pain Points: Proposal-based selling with milestone & staged payments that are difficult to manage, heavy WhatsApp coordination for project updates and payment collection, poor reconciliation with bank transfers (hard to track what was paid by whom for which project), clients paying remotely with no clean digital payment experience, VAT tracking and receipt generation is manual, difficulty collecting deposits or progress payments without friction.
 
-Why Zbooni: Support for large one-off payments on a single link (up to AED 1M per link), customizable milestone-based payment links allowing partial payments based on project stages with ability to add images and descriptions, easy reconciliation to track payments/customers/VAT, customizable instant customer receipt generation, Catalog (CShop) to pre-list services and share directly via chat, CRM to track customer order history and add internal notes, in-app discount creation.
+Why Leadzilla: Support for large one-off payments on a single link (up to AED 1M per link), customizable milestone-based payment links allowing partial payments based on project stages with ability to add images and descriptions, easy reconciliation to track payments/customers/VAT, customizable instant customer receipt generation, Catalog (CShop) to pre-list services and share directly via chat, CRM to track customer order history and add internal notes, in-app discount creation.
 
 Buying Triggers: Finance pushback on reconciliation complexity, complaints about delayed bank transfers affecting project timelines, expansion into higher-value projects requiring structured payment collection, international clients requesting card payment options.
 
-Objections to Overcome: "Our clients pay by bank transfer" — Zbooni doesn't replace bank transfers; it gives you a faster option when timing matters. Milestone links are cleaner than chasing wire confirmations. "We're not a tech company" — that's the point. Zbooni requires zero integration. Share a link in WhatsApp, get paid. "Our projects take months" — even better. Milestone payments with automatic receipts and reconciliation save hours per project.
+Objections to Overcome: "Our clients pay by bank transfer" — Leadzilla doesn't replace bank transfers; it gives you a faster option when timing matters. Milestone links are cleaner than chasing wire confirmations. "We're not a tech company" — that's the point. Leadzilla requires zero integration. Share a link in WhatsApp, get paid. "Our projects take months" — even better. Milestone payments with automatic receipts and reconciliation save hours per project.
 
 Deal Structure: Average ticket High. Medium volume. Medium–Long sales cycle. Medium ops complexity. High revenue potential. P1 priority.`,
     targetIndustries: ['Interior Design', 'Renovation', 'Architecture', 'Contracting', 'Landscape Design'],
@@ -142,11 +142,11 @@ Deal Structure: Average ticket High. Medium volume. Medium–Long sales cycle. M
 
 Core Pain Points: High-value bookings with deposits and balance payments that are hard to collect remotely, international guests paying from abroad with unreliable bank transfer UX, heavy WhatsApp communication pre-arrival for booking confirmations and add-ons, add-on services sold before and during the stay are tracked manually, no centralized guest history across properties, reconciliation across multiple properties and payment sources is spreadsheet-based.
 
-Why Zbooni: Support for large one-off payments on a single link (up to AED 1M per link), customizable payment links for partial payments (deposit/balance/add-ons), international card acceptance for guests worldwide, multiple payment methods (Amex, Apple Pay, Google Pay, PayPal, etc.), instant customer receipt generation, easy reconciliation to track payments/customers/VAT, Catalog (CShop) to pre-list services and upsells and share via chat or QR code, CRM to track guest history/preferences and add internal notes.
+Why Leadzilla: Support for large one-off payments on a single link (up to AED 1M per link), customizable payment links for partial payments (deposit/balance/add-ons), international card acceptance for guests worldwide, multiple payment methods (Amex, Apple Pay, Google Pay, PayPal, etc.), instant customer receipt generation, easy reconciliation to track payments/customers/VAT, Catalog (CShop) to pre-list services and upsells and share via chat or QR code, CRM to track guest history/preferences and add internal notes.
 
 Buying Triggers: Seasonal booking spikes (winter season, holidays), complaints about failed international card payments, expansion into new properties needing unified payment, guests requesting modern payment options beyond bank transfer, finance pushback on manual reconciliation per property.
 
-Objections to Overcome: "We use Airbnb/Booking.com" — Zbooni handles the direct bookings and add-ons that OTAs don't cover. Your margin is better on direct. "Our guests prefer bank transfers" — international guests don't. Multi-currency card payment with instant confirmation converts better. "We already have a PMS" — Zbooni doesn't replace your PMS. It handles the payment collection that your PMS can't do via WhatsApp.
+Objections to Overcome: "We use Airbnb/Booking.com" — Leadzilla handles the direct bookings and add-ons that OTAs don't cover. Your margin is better on direct. "Our guests prefer bank transfers" — international guests don't. Multi-currency card payment with instant confirmation converts better. "We already have a PMS" — Leadzilla doesn't replace your PMS. It handles the payment collection that your PMS can't do via WhatsApp.
 
 Deal Structure: Average ticket Medium–High. High volume. Short sales cycle. Medium ops complexity. High revenue potential. P1 priority.`,
     targetIndustries: ['Boutique Hotels', 'Holiday Homes', 'Serviced Residences', 'Property Management', 'Hospitality'],
@@ -163,11 +163,11 @@ Deal Structure: Average ticket Medium–High. High volume. Short sales cycle. Me
 
 Core Pain Points: High-ticket treatment packages requiring deposits to secure appointments, international and medical-tourism clients needing reliable cross-border payment options, need for trust/confirmation/smooth payment experience (clinics can't afford payment failures mid-treatment plan), compliance requirements for medical billing and receipts, managing package-based pricing with multiple sessions, patient CRM scattered across systems with no unified view.
 
-Why Zbooni: Customizable payment links allowing staged or package-based payments (pay per session or full package upfront), multiple payment methods (Amex, Apple Pay, Google Pay, PayPal, Tabby, Tamara etc.) including BNPL for high-ticket packages, CRM to track patient history/purchases and internal notes, promo code and discount creation for campaigns or referrals, WhatsApp marketing campaigns to promote services and re-engage past patients, instant customer receipt generation, international card acceptance for medical tourism clients.
+Why Leadzilla: Customizable payment links allowing staged or package-based payments (pay per session or full package upfront), multiple payment methods (Amex, Apple Pay, Google Pay, PayPal, Tabby, Tamara etc.) including BNPL for high-ticket packages, CRM to track patient history/purchases and internal notes, promo code and discount creation for campaigns or referrals, WhatsApp marketing campaigns to promote services and re-engage past patients, instant customer receipt generation, international card acceptance for medical tourism clients.
 
 Buying Triggers: Growth in medical tourism inquiries requiring international payments, complaints about failed payments or slow confirmations disrupting appointment flow, expansion into new treatment packages needing structured payment collection, seasonal promotions requiring discount/promo infrastructure.
 
-Objections to Overcome: "We use our clinic management system for payments" — most CMS tools don't handle WhatsApp-based collection, international cards, or BNPL. Zbooni fills the gap. "Our patients pay at reception" — your medical tourism patients don't. Remote deposits and package payments need a better solution than bank transfers. "We need healthcare-specific compliance" — Zbooni provides instant receipts, audit trails, and reconciliation that meet standard compliance needs.
+Objections to Overcome: "We use our clinic management system for payments" — most CMS tools don't handle WhatsApp-based collection, international cards, or BNPL. Leadzilla fills the gap. "Our patients pay at reception" — your medical tourism patients don't. Remote deposits and package payments need a better solution than bank transfers. "We need healthcare-specific compliance" — Leadzilla provides instant receipts, audit trails, and reconciliation that meet standard compliance needs.
 
 Deal Structure: Average ticket High. Medium volume. Medium sales cycle. High ops complexity (compliance). Medium–High revenue potential. P2 priority.`,
     targetIndustries: ['Wellness Clinics', 'Aesthetic Medicine', 'Longevity', 'IV Therapy', 'Medical Tourism'],
@@ -184,11 +184,11 @@ Deal Structure: Average ticket High. Medium volume. Medium sales cycle. High ops
 
 Core Pain Points: High-ticket programs and retainers collected via WhatsApp conversations with no clean payment flow, deposits/instalments/milestone-based payments are awkward to manage manually, relationship-driven sales process that needs personal touch (not a checkout page), international clients paying across borders with unreliable bank transfers, no unified CRM view of client enrollment/payment history across programs, difficulty re-engaging past clients for new programs or cohorts.
 
-Why Zbooni: Customizable payment links allowing partial or staged payments (deposits, installments, milestone-based), international card acceptance for global client base, multiple payment methods (Amex, Apple Pay, Google Pay, PayPal, Tabby, Tamara etc.), instant customer receipt generation, CRM to track client history/program enrollment and notes, promo code and discount creation for cohorts or referrals, WhatsApp marketing campaigns to re-engage past clients for new programs.
+Why Leadzilla: Customizable payment links allowing partial or staged payments (deposits, installments, milestone-based), international card acceptance for global client base, multiple payment methods (Amex, Apple Pay, Google Pay, PayPal, Tabby, Tamara etc.), instant customer receipt generation, CRM to track client history/program enrollment and notes, promo code and discount creation for cohorts or referrals, WhatsApp marketing campaigns to re-engage past clients for new programs.
 
 Buying Triggers: Launch of a new high-ticket program or mastermind, growth in international client inquiries, complaints about manual payment tracking across clients, expansion from 1:1 coaching to group programs needing structured payments.
 
-Objections to Overcome: "I just send bank details in WhatsApp" — and then you chase confirmations for days. A branded payment link closes in seconds and confirms instantly. "My ticket size is too high for card" — Zbooni supports up to AED 1M per link. Even retainers at AED 25K+ work smoothly. "I don't need technology" — you don't need technology. You need to stop losing deals to payment friction. Zbooni is as simple as sharing a WhatsApp message.
+Objections to Overcome: "I just send bank details in WhatsApp" — and then you chase confirmations for days. A branded payment link closes in seconds and confirms instantly. "My ticket size is too high for card" — Leadzilla supports up to AED 1M per link. Even retainers at AED 25K+ work smoothly. "I don't need technology" — you don't need technology. You need to stop losing deals to payment friction. Leadzilla is as simple as sharing a WhatsApp message.
 
 Deal Structure: Average ticket Medium–High. Medium volume. Short sales cycle. Low ops complexity. Medium revenue potential. P2 priority.`,
     targetIndustries: ['Executive Coaching', 'Business Advisory', 'Masterminds', 'Memberships', 'Consulting'],
@@ -205,11 +205,11 @@ Deal Structure: Average ticket Medium–High. Medium volume. Short sales cycle. 
 
 Core Pain Points: Package-based pricing and cohorts requiring deposits to secure seats, multiple students paying remotely (often parents paying for children), strong need for reconciliation and tracking (who paid, for which course, installment status), promo codes and early-bird discounts managed manually, difficulty promoting new cohorts and intakes to past students, no unified view of student enrollment/payment status across programs.
 
-Why Zbooni: Multiple payment methods (Amex, Apple Pay, Google Pay, PayPal, Tabby, Tamara etc.) — critical for parent payments and installments, inventory limits to limit attendance of service (seat caps), instant customer receipt generation for institutional records, easy reconciliation to track payments/students/VAT, CRM to track student enrollment/payment status and notes, promo code creation for early-bird or partner discounts, WhatsApp marketing campaigns to promote new cohorts and intakes.
+Why Leadzilla: Multiple payment methods (Amex, Apple Pay, Google Pay, PayPal, Tabby, Tamara etc.) — critical for parent payments and installments, inventory limits to limit attendance of service (seat caps), instant customer receipt generation for institutional records, easy reconciliation to track payments/students/VAT, CRM to track student enrollment/payment status and notes, promo code creation for early-bird or partner discounts, WhatsApp marketing campaigns to promote new cohorts and intakes.
 
 Buying Triggers: Launch of new courses or certification programs needing payment infrastructure, growth in enrollment requiring structured payment collection, complaints about manual tracking of student payments and installments, expansion into new markets or online delivery requiring remote payment capability.
 
-Objections to Overcome: "We use our LMS for payments" — most LMS payment modules don't support WhatsApp collection, partial payments, or BNPL. Zbooni handles what your LMS can't. "Students pay by bank transfer" — parents and international students want modern payment options. BNPL (Tabby/Tamara) significantly increases enrollment conversion. "Our class sizes are small" — perfect. High-ticket programs with small cohorts mean every lost enrollment hurts. Frictionless payments = higher conversion.
+Objections to Overcome: "We use our LMS for payments" — most LMS payment modules don't support WhatsApp collection, partial payments, or BNPL. Leadzilla handles what your LMS can't. "Students pay by bank transfer" — parents and international students want modern payment options. BNPL (Tabby/Tamara) significantly increases enrollment conversion. "Our class sizes are small" — perfect. High-ticket programs with small cohorts mean every lost enrollment hurts. Frictionless payments = higher conversion.
 
 Deal Structure: Average ticket Medium. High volume (cohorts). Medium sales cycle. Medium ops complexity. Medium revenue potential. P2 priority.`,
     targetIndustries: ['Private Education', 'Professional Training', 'Bootcamps', 'Certifications', 'Cohort Programs'],
@@ -430,8 +430,8 @@ async function main(): Promise<void> {
             channel,
             subject: channel === 'EMAIL' ? `${leadData.firstName}, quick question about ${company}'s payment flow` : null,
             bodyText: channel === 'WHATSAPP'
-              ? `Hi ${leadData.firstName}! I'm from Zbooni — we help businesses like ${company} collect payments directly through WhatsApp conversations. Would love to show you how it works. Free for a quick chat?`
-              : `Hi ${leadData.firstName},\n\nI noticed ${company} is doing great work in ${leadData.enrichmentData.industry}. We help businesses like yours collect payments faster through WhatsApp — branded links, instant confirmations, and multi-currency support.\n\nWould you be open to a 15-minute call this week?\n\nBest,\nZbooni Sales Team`,
+              ? `Hi ${leadData.firstName}! I'm from Leadzilla — we help businesses like ${company} collect payments directly through WhatsApp conversations. Would love to show you how it works. Free for a quick chat?`
+              : `Hi ${leadData.firstName},\n\nI noticed ${company} is doing great work in ${leadData.enrichmentData.industry}. We help businesses like yours collect payments faster through WhatsApp — branded links, instant confirmations, and multi-currency support.\n\nWould you be open to a 15-minute call this week?\n\nBest,\nLeadzilla Sales Team`,
             bodyHtml: null,
             ctaText: channel === 'EMAIL' ? 'Book a Demo' : null,
             qualityScore: 0.78 + Math.random() * 0.15,

@@ -93,7 +93,7 @@ describe('webhook service SENDING quarantine tolerance', () => {
     const fetchResendReceivedEmail = vi.fn().mockResolvedValue({
       id: 'received_1',
       from: 'Ada <ada@example.com>',
-      to: ['gino@zboonisales.com'],
+      to: ['outbound@leadzilla.example'],
       subject: 'Re: Hello',
       text: 'Yes, tell me more.',
       html: null,
@@ -111,7 +111,7 @@ describe('webhook service SENDING quarantine tolerance', () => {
           data: {
             email_id: 'received_1',
             from: 'Ada <ada@example.com>',
-            to: ['gino@zboonisales.com'],
+            to: ['outbound@leadzilla.example'],
             subject: 'Re: Hello',
             created_at: '2026-05-04T20:00:00.000Z',
           },
@@ -195,7 +195,7 @@ describe('webhook service SENDING quarantine tolerance', () => {
     const fetchResendReceivedEmail = vi.fn().mockResolvedValue({
       id: 'received_1',
       from: 'ada@example.com',
-      to: ['gino@zboonisales.com'],
+      to: ['outbound@leadzilla.example'],
       subject: 'Re: Hello',
       text: 'Yes, tell me more.',
       html: null,
@@ -212,7 +212,7 @@ describe('webhook service SENDING quarantine tolerance', () => {
       data: {
         email_id: 'received_1',
         from: 'ada@example.com',
-        to: ['gino@zboonisales.com'],
+        to: ['outbound@leadzilla.example'],
         subject: 'Re: Hello',
         created_at: '2026-05-04T20:00:00.000Z',
       },

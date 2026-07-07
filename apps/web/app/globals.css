@@ -56,7 +56,7 @@
   }
 }
 
-/* ── Zbooni-branded dark theme (default) ──────────────────────── */
+/* ── Dark theme (default) ─────────────────────────────────────── */
 @layer base {
   :root {
     --background: 240 15% 9%;
@@ -109,7 +109,7 @@
   }
 }
 
-/* ── Zbooni signature gradient utility ─────────────────────────── */
+/* ── Signature gradient utility ────────────────────────────────── */
 .zbooni-gradient-text {
   background: linear-gradient(135deg, #7BFF6B 0%, #3CC8E0 100%);
   -webkit-background-clip: text;

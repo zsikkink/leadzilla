@@ -80,12 +80,12 @@ function makeOpenAiGenerateFetch(): typeof fetch {
   const bodyA = [
     'Hi Pipeline,',
     '',
-    'I’m reaching out from Zbooni. We help businesses turn customer messages into paid, trackable orders. When a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation.',
+    'I’m reaching out from Leadzilla. We help businesses turn customer messages into paid, trackable orders. When a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation.',
     '',
-    'For Zbooni Test Corp, that can make customer follow-up and payment status easier to manage from one place. Would it be useful to compare this with how your team handles customer conversations today?',
+    'For Leadzilla Test Corp, that can make customer follow-up and payment status easier to manage from one place. Would it be useful to compare this with how your team handles customer conversations today?',
     '',
     'Best,',
-    'Zbooni Team',
+    'Leadzilla Team',
   ].join('\n');
   const ctaA = 'Would it be useful to compare this with how your team handles customer conversations today?';
   return vi.fn().mockImplementation(() =>
@@ -205,7 +205,7 @@ function makeTrengoAdapter(): TrengoAdapter {
 // Seed data IDs
 // ---------------------------------------------------------------------------
 
-const LEAD_EMAIL = `${TEST_PREFIX}@zbooni.test`;
+const LEAD_EMAIL = `${TEST_PREFIX}@leadzilla.test`;
 const ICP_ID = randomUUID();
 const LEAD_ID = randomUUID();
 const DISCOVERY_RECORD_ID = randomUUID();
@@ -301,7 +301,7 @@ describe('pipeline full lifecycle', () => {
         status: 'DISCOVERED',
         rawPayload: {
           source: 'e2e-test',
-          companyName: 'Zbooni Test Corp',
+          companyName: 'Leadzilla Test Corp',
           industry: 'Financial Services',
           country: 'AE',
         },

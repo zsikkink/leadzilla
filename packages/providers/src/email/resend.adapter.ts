@@ -27,7 +27,7 @@ export type ResendSendResult =
   | { status: 'indeterminate_error'; failure: ResendFailure }
   | { status: 'terminal_error'; failure: ResendFailure };
 
-const DEFAULT_FROM_EMAIL = 'gino@zboonisales.com';
+const DEFAULT_FROM_EMAIL = 'outbound@leadzilla.example';
 const DEFAULT_BASE_URL = 'https://api.resend.com';
 const DEFAULT_TIMEOUT_MS = 15_000;
 

@@ -21,7 +21,7 @@ describe('TrengoAdapter integration', () => {
 
       const result = await adapter.sendTemplateMessage({
         recipientPhoneNumber: '+971501234567',
-        params: ['Sara', 'Hello from Zbooni'],
+        params: ['Sara', 'Hello from Leadzilla'],
       });
 
       expect(result.status).toBe('success');
@@ -38,7 +38,7 @@ describe('TrengoAdapter integration', () => {
       expect(body.channel_id).toBe('ch-123');
       expect(body.recipient_phone_number).toBe('+971501234567');
       expect(body.hsm_id).toBe('tmpl-456');
-      expect(body.params).toEqual(['Sara', 'Hello from Zbooni']);
+      expect(body.params).toEqual(['Sara', 'Hello from Leadzilla']);
     });
 
     it('returns terminal_error when API key is missing', async () => {

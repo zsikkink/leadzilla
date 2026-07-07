@@ -102,7 +102,7 @@ const logger = {
 };
 
 const ZBOONI_INTRO =
-  'I’m reaching out from Zbooni. We help businesses turn customer messages into paid, trackable orders. When a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation.';
+  'I’m reaching out from Leadzilla. We help businesses turn customer messages into paid, trackable orders. When a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation.';
 
 function buildSuccessfulOpenAiAdapter() {
   return {
@@ -114,7 +114,7 @@ function buildSuccessfulOpenAiAdapter() {
         message: {
           subject: 'Track chat-driven orders?',
           bodyText:
-            `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor a team handling trust-heavy customer conversations, that can make follow-up and payment status easier to manage without changing how you already sell today. Would it be useful to compare this with your current conversation-to-order flow?\n\nBest,\nZbooni Team`,
+            `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor a team handling trust-heavy customer conversations, that can make follow-up and payment status easier to manage without changing how you already sell today. Would it be useful to compare this with your current conversation-to-order flow?\n\nBest,\nLeadzilla Team`,
           bodyHtml: null,
           ctaText: 'Would it be useful to compare this with your current conversation-to-order flow?',
         },
@@ -405,7 +405,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
           message: {
             subject: 'Track chat orders?',
             bodyText:
-              `Hi Rady Interior team,\n\n${ZBOONI_INTRO}\n\nFor a service business like Rady Interior, that can make WhatsApp follow-up, order details, and payment status easier to manage from one place. Would it be useful to compare this with how your team handles chat-driven orders today?\n\nBest,\nZbooni Team`,
+              `Hi Rady Interior team,\n\n${ZBOONI_INTRO}\n\nFor a service business like Rady Interior, that can make WhatsApp follow-up, order details, and payment status easier to manage from one place. Would it be useful to compare this with how your team handles chat-driven orders today?\n\nBest,\nLeadzilla Team`,
             bodyHtml: null,
             ctaText: 'Would it be useful to compare this with how your team handles chat-driven orders today?',
           },
@@ -479,7 +479,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
             create: [
               expect.objectContaining({
                 bodyText: expect.stringMatching(
-                  /Would it be useful to compare this with your current handoff from conversation to order\?\s+Best,\s+Zbooni Team/,
+                  /Would it be useful to compare this with your current handoff from conversation to order\?\s+Best,\s+Leadzilla Team/,
                 ),
               }),
             ],
@@ -519,7 +519,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
             message: {
               subject: 'Track customer orders?',
               bodyText:
-                `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status and customer follow-up easier to track from the same conversation. Would a quick comparison with your current order flow be useful?\n\nBest,\nZbooni Team`,
+                `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status and customer follow-up easier to track from the same conversation. Would a quick comparison with your current order flow be useful?\n\nBest,\nLeadzilla Team`,
               bodyHtml: null,
               ctaText: 'Would a quick comparison with your current order flow be useful?',
             },
@@ -572,7 +572,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
             message: {
               subject: 'Act now?',
               bodyText:
-                `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status easier to track from the same conversation. Act now if this is useful? \n\nBest,\nZbooni Team`,
+                `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status easier to track from the same conversation. Act now if this is useful? \n\nBest,\nLeadzilla Team`,
               bodyHtml: null,
               ctaText: null,
             },
@@ -585,7 +585,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
             message: {
               subject: 'Track project payments?',
               bodyText:
-                `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status easier to track from the same conversation.\n\nBest,\nZbooni Team`,
+                `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status easier to track from the same conversation.\n\nBest,\nLeadzilla Team`,
               bodyHtml: null,
               ctaText: null,
             },
@@ -598,7 +598,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
             message: {
               subject: 'Track project payments?',
               bodyText:
-                `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status easier to track from the same conversation. Would it be useful to compare this with your current order flow?\n\nBest,\nZbooni Team`,
+                `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status easier to track from the same conversation. Would it be useful to compare this with your current order flow?\n\nBest,\nLeadzilla Team`,
               bodyHtml: null,
               ctaText: 'Would it be useful to compare this with your current order flow?',
             },
@@ -668,7 +668,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
           message: {
             subject: 'Act now?',
             bodyText:
-              `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status easier to track from the same conversation. Act now if this is useful?\n\nBest,\nZbooni Team`,
+              `Hi Ada,\n\n${ZBOONI_INTRO}\n\nFor project-based sales, that can make payment status easier to track from the same conversation. Act now if this is useful?\n\nBest,\nLeadzilla Team`,
             bodyHtml: null,
             ctaText: null,
           },

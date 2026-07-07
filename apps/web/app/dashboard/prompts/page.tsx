@@ -27,7 +27,7 @@ const PROMPT_SETTING_LABELS: Record<string, string> = {
 };
 
 const LOCKED_OUTPUT_FORMAT =
-  'Output JSON with a single "message" object containing subject, bodyText, bodyHtml, and ctaText. The bodyText must include the final sign-off "Best,\\nZbooni Team".';
+  'Output JSON with a single "message" object containing subject, bodyText, bodyHtml, and ctaText. The bodyText must include the final sign-off "Best,\\nLeadzilla Team".';
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {

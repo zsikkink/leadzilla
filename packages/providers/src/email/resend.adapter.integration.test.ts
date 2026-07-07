@@ -33,7 +33,7 @@ describe('ResendAdapter integration', () => {
     expect((options as RequestInit).method).toBe('POST');
 
     const body = JSON.parse((options as RequestInit).body as string) as Record<string, unknown>;
-    expect(body.from).toBe('gino@zboonisales.com');
+    expect(body.from).toBe('outbound@leadzilla.example');
     expect(body.to).toEqual(['sara@acme.com']);
     expect(body.subject).toBe('Boost your payments');
     expect(body.html).toBe('<p>Hi Sara, I noticed Acme...</p>');
@@ -142,7 +142,7 @@ describe('ResendAdapter integration', () => {
 
     const adapter = new ResendAdapter({
       apiKey: 're_test',
-      fromEmail: 'sales@zbooni.com',
+      fromEmail: 'sales@leadzilla.example',
       baseUrl: 'https://custom.resend.dev',
       fetchImpl,
     });
@@ -155,7 +155,7 @@ describe('ResendAdapter integration', () => {
     const body = JSON.parse(
       (fetchImpl.mock.calls[0]![1] as RequestInit).body as string,
     ) as Record<string, unknown>;
-    expect(body.from).toBe('sales@zbooni.com');
+    expect(body.from).toBe('sales@leadzilla.example');
   });
 
   describe('isConfigured', () => {

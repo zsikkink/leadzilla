@@ -198,7 +198,7 @@ describe('buildServer', () => {
       ...makeDefaultOptions(),
       env: {
         ...env,
-        CORS_ORIGIN: 'https://zboonisales.com',
+        CORS_ORIGIN: 'https://leadzilla.example',
       },
     });
     servers.push(server);
@@ -207,13 +207,13 @@ describe('buildServer', () => {
       method: 'OPTIONS',
       url: '/health',
       headers: {
-        origin: 'https://www.zboonisales.com',
+        origin: 'https://www.leadzilla.example',
         'access-control-request-method': 'GET',
       },
     });
 
     expect(response.statusCode).toBe(204);
-    expect(response.headers['access-control-allow-origin']).toBe('https://www.zboonisales.com');
+    expect(response.headers['access-control-allow-origin']).toBe('https://www.leadzilla.example');
   });
 
   it('preserves rate-limit errors as 429 responses', async () => {

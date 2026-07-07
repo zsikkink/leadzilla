@@ -71,14 +71,18 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             collapsed ? 'px-0 justify-center w-full' : 'px-5 flex-1 min-w-0',
           )}
         >
-          <Image
-            src="/zbooni-icon.png"
-            alt="Zbooni"
-            width={32}
-            height={32}
-            className="shrink-0 rounded-lg"
+          <span
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-zbooni-teal/25 bg-zbooni-teal/10"
             aria-hidden="true"
-          />
+          >
+            <Image
+              src="/brand/L-logo.svg"
+              alt=""
+              width={24}
+              height={24}
+              className="h-6 w-6 object-contain"
+            />
+          </span>
           <div
             className={cn(
               'flex flex-col overflow-hidden transition-[opacity,max-width] duration-250 ease-[cubic-bezier(0.4,0,0.2,1)]',
@@ -86,10 +90,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             )}
           >
             <span className="truncate text-[15px] font-bold leading-tight tracking-tight text-sidebar-foreground">
-              Zbooni
+              Leadzilla
             </span>
             <span className="truncate text-[11px] font-medium leading-tight text-muted-foreground">
-              Sales OS
+              Demo workspace
             </span>
           </div>
         </div>

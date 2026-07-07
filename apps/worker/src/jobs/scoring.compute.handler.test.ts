@@ -296,7 +296,7 @@ describe('handleScoringComputeJob primary business conversion anchoring', () => 
       ruleEvaluation: [],
     });
     dbMock.prisma.icpProfile.findUnique.mockResolvedValue({
-      description: 'Zbooni ICP',
+      description: 'Leadzilla ICP',
     });
     const openAiAdapter = {
       isConfigured: true,

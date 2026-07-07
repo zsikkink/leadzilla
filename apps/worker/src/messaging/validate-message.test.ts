@@ -47,7 +47,7 @@ describe('validateMessageVariant', () => {
     const result = validateMessageVariant('EMAIL', {
       ...base,
       bodyText:
-        'Hi Ann, Zbooni helps teams create a friction-free chat-to-payment flow for customer conversations. Would it be useful to compare this with how your team handles chat-driven orders today?\n\nBest,\nZbooni Team',
+        'Hi Ann, Leadzilla helps teams create a friction-free chat-to-payment flow for customer conversations. Would it be useful to compare this with how your team handles chat-driven orders today?\n\nBest,\nLeadzilla Team',
     });
     expect(result.reasons).not.toEqual(
       expect.arrayContaining([expect.stringContaining('Contains spam trigger words')]),
@@ -62,7 +62,7 @@ describe('validateMessageVariant', () => {
   });
 
   it('soft-truncates long WhatsApp messages', () => {
-    const longBody = 'This is a sentence about Zbooni. '.repeat(20);
+    const longBody = 'This is a sentence about Leadzilla. '.repeat(20);
     const result = validateMessageVariant('WHATSAPP', { ...base, bodyText: longBody });
     expect(result.valid).toBe(true);
     expect(result.hardReject).toBe(false);
@@ -70,15 +70,15 @@ describe('validateMessageVariant', () => {
     expect(result.reasons.length).toBeGreaterThan(0);
   });
 
-  it('preserves Zbooni Team sign-off when truncating long email messages', () => {
+  it('preserves Leadzilla Team sign-off when truncating long email messages', () => {
     const body = [
       'Hi Ann,',
       '',
-      'This is a long note about Zbooni and conversational commerce. '.repeat(18),
+      'This is a long note about Leadzilla and conversational commerce. '.repeat(18),
       'Would it be useful to compare this with how your team handles chat-driven orders today?',
       '',
       'Best,',
-      'Zbooni Team',
+      'Leadzilla Team',
     ].join('\n');
     const result = validateMessageVariant(
       'EMAIL',
@@ -92,7 +92,7 @@ describe('validateMessageVariant', () => {
 
     expect(result.valid).toBe(true);
     expect(result.cleaned.bodyText.length).toBeLessThanOrEqual(900);
-    expect(result.cleaned.bodyText).toMatch(/Best,\nZbooni Team$/);
+    expect(result.cleaned.bodyText).toMatch(/Best,\nLeadzilla Team$/);
     expect(result.cleaned.bodyText).not.toMatch(/you can$/i);
   });
 
@@ -102,7 +102,7 @@ describe('validateMessageVariant', () => {
       {
         ...base,
         bodyText:
-          'Ann, Zbooni helps turn WhatsApp conversations into trackable orders. Would it be useful to compare this with how your team handles chat-driven orders today?\n\nBest,\nZbooni Team',
+          'Ann, Leadzilla helps turn WhatsApp conversations into trackable orders. Would it be useful to compare this with how your team handles chat-driven orders today?\n\nBest,\nLeadzilla Team',
       },
       { requireProfessionalGreeting: true },
     );
@@ -112,14 +112,14 @@ describe('validateMessageVariant', () => {
     expect(result.reasons).toContain('Missing professional greeting');
   });
 
-  it('allows the required Zbooni intro immediately after the greeting', () => {
+  it('allows the required Leadzilla intro immediately after the greeting', () => {
     const result = validateMessageVariant(
       'EMAIL',
       {
         ...base,
         subject: 'Track client inquiries?',
         bodyText:
-          'Hi Zack,\n\nI’m reaching out from Zbooni. We help businesses turn customer messages into paid, trackable orders. When a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation. Would it be useful to compare this with how your team handles client conversations today?\n\nBest,\nZbooni Team',
+          'Hi Zack,\n\nI’m reaching out from Leadzilla. We help businesses turn customer messages into paid, trackable orders. When a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation. Would it be useful to compare this with how your team handles client conversations today?\n\nBest,\nLeadzilla Team',
       },
       {
         requireProfessionalGreeting: true,
@@ -132,14 +132,14 @@ describe('validateMessageVariant', () => {
     expect(result.hardReject).toBe(false);
   });
 
-  it('hard-rejects drafts missing the Zbooni intro after the greeting when required', () => {
+  it('hard-rejects drafts missing the Leadzilla intro after the greeting when required', () => {
     const result = validateMessageVariant(
       'EMAIL',
       {
         ...base,
         subject: 'Track client inquiries?',
         bodyText:
-          'Hi Zack,\n\nWhen a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation. Would it be useful to compare this with how your team handles client conversations today?\n\nBest,\nZbooni Team',
+          'Hi Zack,\n\nWhen a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation. Would it be useful to compare this with how your team handles client conversations today?\n\nBest,\nLeadzilla Team',
       },
       {
         requireProfessionalGreeting: true,
@@ -150,7 +150,7 @@ describe('validateMessageVariant', () => {
 
     expect(result.valid).toBe(false);
     expect(result.hardReject).toBe(true);
-    expect(result.reasons).toContain('Missing Zbooni intro after greeting');
+    expect(result.reasons).toContain('Missing Leadzilla intro after greeting');
   });
 
   it('hard-rejects vague feature-only email subjects', () => {
@@ -158,7 +158,7 @@ describe('validateMessageVariant', () => {
       ...base,
       subject: 'Milestone payments?',
       bodyText:
-        'Hi Ann, Zbooni helps turn WhatsApp conversations into trackable orders and cleaner payment follow-up for project-based teams. Would it be useful to compare this with how your team handles chat-driven orders today?\n\nBest,\nZbooni Team',
+        'Hi Ann, Leadzilla helps turn WhatsApp conversations into trackable orders and cleaner payment follow-up for project-based teams. Would it be useful to compare this with how your team handles chat-driven orders today?\n\nBest,\nLeadzilla Team',
     });
 
     expect(result.valid).toBe(false);
@@ -171,7 +171,7 @@ describe('validateMessageVariant', () => {
       ...base,
       subject: 'Failed payments on big deals?',
       bodyText:
-        'Hi Zack, I’m reaching out from Zbooni. We help businesses turn customer messages into paid, trackable orders. When a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation. Would it be useful to compare this with how your team handles chat-driven inquiries today?\n\nBest,\nZbooni Team',
+        'Hi Zack, I’m reaching out from Leadzilla. We help businesses turn customer messages into paid, trackable orders. When a customer asks about a product, your team can send a cart, collect payment, and track the sale from the same conversation. Would it be useful to compare this with how your team handles chat-driven inquiries today?\n\nBest,\nLeadzilla Team',
     });
 
     expect(result.valid).toBe(false);
@@ -186,7 +186,7 @@ describe('validateMessageVariant', () => {
         ...base,
         subject: 'Chat payment workflow?',
         bodyText:
-          'Hi Ann, Zbooni helps project teams collect staged card payments inside customer conversations. Would it be useful if I sent a quick example of how this works?\n\nBest,\nZbooni Team',
+          'Hi Ann, Leadzilla helps project teams collect staged card payments inside customer conversations. Would it be useful if I sent a quick example of how this works?\n\nBest,\nLeadzilla Team',
       },
       {
         redraftFeedback:
@@ -205,7 +205,7 @@ describe('validateMessageVariant', () => {
     const result = validateMessageVariant('EMAIL', {
       ...base,
       bodyText:
-        'Hi Ann, Zbooni helps turn WhatsApp conversations into trackable orders and cleaner payment follow-up for project-based teams. Would it be useful to compare this with how your team handles chat-driven orders today? 😊\n\nBest,\nZbooni Team',
+        'Hi Ann, Leadzilla helps turn WhatsApp conversations into trackable orders and cleaner payment follow-up for project-based teams. Would it be useful to compare this with how your team handles chat-driven orders today? 😊\n\nBest,\nLeadzilla Team',
     });
 
     expect(result.valid).toBe(true);
@@ -223,7 +223,7 @@ describe('validateMessageVariant', () => {
   });
 
   it('passes a clean message through', () => {
-    const body = 'Hi Sarah, I came across your business and thought Zbooni could help streamline your sales operations. Would you be open to a quick chat?';
+    const body = 'Hi Sarah, I came across your business and thought Leadzilla could help streamline your sales operations. Would you be open to a quick chat?';
     const result = validateMessageVariant('WHATSAPP', { ...base, bodyText: body });
     expect(result.valid).toBe(true);
     expect(result.hardReject).toBe(false);
@@ -255,26 +255,26 @@ describe('validateMessageVariant', () => {
     expect(result.bodyText).toBe(body);
   });
 
-  it('inserts ctaText before the Zbooni Team sign-off when returned separately', () => {
+  it('inserts ctaText before the Leadzilla Team sign-off when returned separately', () => {
     const result = mergeCtaIntoBody({
       ...base,
-      bodyText: 'Hi Rady Interior team, Zbooni helps turn WhatsApp chats into trackable orders.\n\nBest,\nZbooni Team',
+      bodyText: 'Hi Rady Interior team, Leadzilla helps turn WhatsApp chats into trackable orders.\n\nBest,\nLeadzilla Team',
       ctaText: 'Would it be useful to compare this with your current flow?',
     });
 
     expect(result.bodyText).toBe(
-      'Hi Rady Interior team, Zbooni helps turn WhatsApp chats into trackable orders.\n\nWould it be useful to compare this with your current flow?\n\nBest,\nZbooni Team',
+      'Hi Rady Interior team, Leadzilla helps turn WhatsApp chats into trackable orders.\n\nWould it be useful to compare this with your current flow?\n\nBest,\nLeadzilla Team',
     );
   });
 
-  it('appends the Zbooni Team sign-off when it is missing', () => {
+  it('appends the Leadzilla Team sign-off when it is missing', () => {
     const result = ensureZbooniTeamSignoff({
       ...base,
-      bodyText: 'Hi Rady Interior team, Zbooni helps turn WhatsApp chats into trackable orders. Would it be useful to compare this with your current flow?',
+      bodyText: 'Hi Rady Interior team, Leadzilla helps turn WhatsApp chats into trackable orders. Would it be useful to compare this with your current flow?',
     });
 
     expect(result.bodyText).toBe(
-      'Hi Rady Interior team, Zbooni helps turn WhatsApp chats into trackable orders. Would it be useful to compare this with your current flow?\n\nBest,\nZbooni Team',
+      'Hi Rady Interior team, Leadzilla helps turn WhatsApp chats into trackable orders. Would it be useful to compare this with your current flow?\n\nBest,\nLeadzilla Team',
     );
   });
 
@@ -283,7 +283,7 @@ describe('validateMessageVariant', () => {
       'EMAIL',
       {
         ...base,
-        bodyText: 'I noticed Rady Interior has tiered pricing and Square payments. Zbooni helps firms collect clean staged card payments.',
+        bodyText: 'I noticed Rady Interior has tiered pricing and Square payments. Leadzilla helps firms collect clean staged card payments.',
       },
       { requireClosingQuestion: true },
     );
@@ -298,7 +298,7 @@ describe('validateMessageVariant', () => {
       'EMAIL',
       {
         ...base,
-        bodyText: 'I noticed Rady Interior handles project work, and Zbooni can help with staged card payments. Would a quick example be useful?',
+        bodyText: 'I noticed Rady Interior handles project work, and Leadzilla can help with staged card payments. Would a quick example be useful?',
       },
       {
         businessSignalTerms: ['Square', 'tiered pricing'],
@@ -317,7 +317,7 @@ describe('validateMessageVariant', () => {
       {
         ...base,
         bodyText:
-          'Hi Rady Interior team, many service businesses handle customer questions and payment follow-up through WhatsApp. Zbooni helps turn those conversations into structured orders, payment links, receipts, and trackable sales without forcing customers through a full ecommerce flow. Would it be useful to compare this with how your team handles chat-driven orders today?\n\nBest,\nZbooni Team',
+          'Hi Rady Interior team, many service businesses handle customer questions and payment follow-up through WhatsApp. Leadzilla helps turn those conversations into structured orders, payment links, receipts, and trackable sales without forcing customers through a full ecommerce flow. Would it be useful to compare this with how your team handles chat-driven orders today?\n\nBest,\nLeadzilla Team',
       },
       {
         requireClosingQuestion: true,
@@ -332,20 +332,20 @@ describe('validateMessageVariant', () => {
     expect(result.hardReject).toBe(false);
   });
 
-  it('hard-rejects missing Zbooni Team sign-off when required', () => {
+  it('hard-rejects missing Leadzilla Team sign-off when required', () => {
     const result = validateMessageVariant(
       'EMAIL',
       {
         ...base,
         bodyText:
-          'Hi Rady Interior team, many service businesses handle customer questions and payment follow-up through WhatsApp. Zbooni helps turn those conversations into structured orders and trackable sales. Would it be useful to compare this with how your team handles chat-driven orders today?',
+          'Hi Rady Interior team, many service businesses handle customer questions and payment follow-up through WhatsApp. Leadzilla helps turn those conversations into structured orders and trackable sales. Would it be useful to compare this with how your team handles chat-driven orders today?',
       },
       { requireZbooniTeamSignoff: true },
     );
 
     expect(result.valid).toBe(false);
     expect(result.hardReject).toBe(true);
-    expect(result.reasons).toContain('Missing Zbooni Team sign-off');
+    expect(result.reasons).toContain('Missing Leadzilla Team sign-off');
   });
 });
 
@@ -354,7 +354,7 @@ describe('buildStricterPromptSuffix', () => {
     const suffix = buildStricterPromptSuffix('WHATSAPP');
     expect(suffix).toContain('300');
     expect(suffix).toContain('placeholder');
-    expect(suffix).toContain('Zbooni Team');
+    expect(suffix).toContain('Leadzilla Team');
   });
 
   it('returns a string with character limit for Email', () => {

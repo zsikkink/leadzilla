@@ -1,8 +1,12 @@
 # Supabase CLI project configuration
-# Canonical production project ref can be overridden with SUPABASE_PROJECT_REF.
-project_id = "cbcgrzvqidtrtrtnzlso"
+# Demo Supabase project. Do not point this demo checkout at a legacy
+# production project.
+project_id = "pjeezkwvsxyiuzaglwck"
 
 [db]
 # Local database port used only when running Supabase local stack.
 port = 54322
 major_version = 17
+
+[functions.api]
+verify_jwt = false

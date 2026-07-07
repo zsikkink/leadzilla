@@ -21,7 +21,7 @@ describe('OpenAiAdapter.classifyReply', () => {
       choices: [{ message: { content: JSON.stringify({ classification: 'INTERESTED', confidence: 0.95 }) } }],
     });
 
-    const result = await adapter.classifyReply('Yes, I would love to learn more about Zbooni!');
+    const result = await adapter.classifyReply('Yes, I would love to learn more about Leadzilla!');
 
     expect(result.status).toBe('success');
     if (result.status === 'success') {
