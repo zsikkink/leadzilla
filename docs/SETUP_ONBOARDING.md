@@ -54,6 +54,17 @@ DIRECT_URL=postgresql://postgres:<PASSWORD>@db.<project-ref>.supabase.co:5432/po
 ```
 Discovery and enrichment API keys (SerpAPI, Google Places, Hunter, OpenAI, etc.) are optional for basic dev work. Leave them blank unless you're working on the pipeline. SerpAPI is the default discovery provider; Google Places is available only when explicitly selected. To execute discovery queue workers locally, set the selected provider key and set `DISCOVERY_QUEUE_WORKERS_ENABLED=true`.
 
+### Leadzilla demo messaging boundary
+
+For the current Leadzilla demo target:
+
+- Set `OPENAI_API_KEY` only when you need AI scoring or message drafting.
+- Leave `RESEND_API_KEY`, `TRENGO_API_KEY`, `TRENGO_CHANNEL_ID`, and `TRENGO_TEMPLATE_ID` unset in demo environments.
+- Keep runtime auto-approval disabled and use manual draft review only.
+- Do not rely on `MESSAGING_ENABLED=false` as a send-only kill switch; outbound delivery is disabled by API and worker code for the demo.
+
+Before calling a deployed demo safe, verify the disabled boundary in that environment: approval should not create/send delivery jobs, direct send requests should return the demo-disabled error, and worker/outbox paths should not publish `message.send`.
+
 ### apps/web/.env.local
 ```
 NEXT_PUBLIC_API_BASE_URL=http://localhost:5050
@@ -119,11 +130,11 @@ All four should pass with zero errors.
 Frontend (Next.js :3000)  →  API (Fastify :5050)  →  Worker (pg-boss queues)
          ↓                         ↓                         ↓
     Supabase Auth           Supabase Postgres          Discovery pipeline
-    (login/session)         (all app data)             (SerpAPI/Google Places → scoring → messaging)
+    (login/session)         (all app data)             (SerpAPI/Google Places → scoring → drafting)
 ```
 
 - **API** handles REST endpoints, auth verification, and enqueues jobs via pg-boss
-- **Worker** processes background jobs: discovery, enrichment, scoring, messaging
+- **Worker** processes background jobs: discovery, enrichment, scoring, and message drafting. Outbound sending is outside the current Leadzilla demo scope and must remain disabled.
 - **Web** is the dashboard — displays leads, discovery runs, analytics, settings
 - **Database** is a shared cloud Supabase Postgres instance (no local DB needed)
 

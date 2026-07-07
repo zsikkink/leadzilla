@@ -1,10 +1,35 @@
-# `lead-flood` Current State
+# Leadzilla Current State
 
 ## 1. Purpose of this document
 
 This is the authoritative high-level current-state and handoff document for the active architecture, boundary work, and migration status in this repository.
 
 Code is still the source of truth. This doc is the fastest orientation path for a new agent, and stale or historical docs are called out explicitly below.
+
+## 1.1 Leadzilla demo target as of 2026-07-07
+
+This repository is being re-oriented as Leadzilla: a demo-hosted version of the outbound / lead-generation platform originally built for Zbooni.
+
+The intended demo slice is intentionally narrow:
+
+- Small, bounded discovery jobs should be functional.
+- Scoring should be functional enough to qualify or reject discovered/demo leads.
+- Message drafting should be functional for qualified leads.
+- Outbound message sending must remain disabled.
+- Existing Zbooni-discovered leads may remain as demo data.
+- Zbooni-specific ICPs, prompts, and copy may be rewritten into Leadzilla-neutral demo profiles.
+- Bug removal and UI/UX simplification are in scope.
+- New features are out of scope unless explicitly approved.
+
+Confirmed current implementation facts from this onboarding pass:
+
+- The worker has real discovery, scoring, `message.generate`, and `message.send` handlers.
+- API approval now records draft approval only; it does not create or enqueue `MessageSend`.
+- Direct API send requests reject with the Leadzilla demo outbound-disabled error.
+- Worker `message.send`, auto-approved draft enqueue, manual approval recovery, queued-send recovery, and `message.send` outbox replay are blocked for the demo.
+- `apps/worker/src/env.ts` still defines `MESSAGING_ENABLED`, but the demo send-disabled boundary is enforced in code rather than by that env var.
+
+For demo work, keep outbound provider credentials unset unless the product scope explicitly changes. The current demo contract is draft review only: no email or WhatsApp delivery.
 
 ## 2. Current architecture truth
 
@@ -75,7 +100,10 @@ Code is still the source of truth. This doc is the fastest orientation path for 
    - The recent hardening reduced stale/duplicate follow-up generation risk, but it did not close this crash-loss window.
    - Closing the gap safely would require a broader persisted handoff surface or an extension of the existing outbox pattern.
 
-6. `message.send` is now duplicate-prevention-first, not self-healing
+6. `message.send` is now demo-disabled, with historical duplicate-prevention context retained
+   - For the Leadzilla demo, active send creation/enqueue/delivery paths are blocked in API and worker code.
+   - Historical send records can still exist in demo data and may appear in the UI as delivery-disabled or previous-delivery records.
+   - The full production send implementation remains in the codebase for reference, but it is not an active demo capability.
    - `message.send` now atomically claims `MessageSend.status` from `QUEUED` to `SENDING` before any provider call, and only the claim winner is allowed to send.
    - Retries that see `SENDING` now no-op, which closes the earlier crash/retry duplicate-send replay window, especially for WhatsApp via Trengo.
    - Email via Resend still benefits from a provider-side `Idempotency-Key`, but the core duplicate-prevention boundary is now the persisted `SENDING` claim.
@@ -84,6 +112,10 @@ Code is still the source of truth. This doc is the fastest orientation path for 
 
 ## 5. Intended target state
 
+- Leadzilla runs as a demo version of the original Zbooni platform.
+- The demo supports bounded discovery/scoring and message drafting.
+- Outbound sending is disabled by a hard runtime guard, not just by missing provider credentials.
+- Existing Zbooni-discovered leads may remain as demo data, while Zbooni-specific ICPs/copy should move toward Leadzilla-neutral language.
 - `apps/web` runs on Vercel.
 - `apps/api` is intended to run as a separately operated Railway API service; it is currently blocked/stopped until Railway billing/deploy is fixed.
 - `apps/worker` is intended to run as a separately operated Railway worker service; it is currently blocked/stopped until Railway billing/deploy is fixed.
@@ -94,30 +126,32 @@ Code is still the source of truth. This doc is the fastest orientation path for 
 
 ## 6. Recommended engineering order from here
 
-1. Analytics/debug/business browser-direct read containment
-   - What: move the remaining browser-direct operational reads behind existing API or proxy boundaries where those boundaries already exist.
-   - Why in this order: this is now the largest remaining boundary risk after the discovery/admin cleanup.
-   - Do not combine with yet: broader analytics migration, worker changes, or auth redesign.
+The Leadzilla demo goal now takes precedence over older full-production handoff sequencing.
 
-2. Low-risk remaining direct-read cleanup such as `/dashboard/discover`
-   - What: clean up smaller leftover direct-read surfaces like the `pipeline_settings` browser read in `apps/web/app/dashboard/discover/page.tsx`.
-   - Why in this order: these are narrower follow-ons once the higher-risk browser data-plane issues are contained.
-   - Do not combine with yet: discovery control-plane changes or broad UI rewrites.
+1. Verify the send-disabled boundary in the target demo environment
+   - What: confirm approval records review only, direct send requests return disabled, and worker/outbox paths do not publish `message.send`.
+   - Why in this order: the demo explicitly allows drafts but not delivery, and this must remain true after deployment.
+   - Do not combine with yet: provider rewrites, reply handling, follow-up changes, or UI redesign.
 
-3. Broader Prisma-to-SQL migration continuation
-   - What: continue slice-based runtime conversion away from Prisma, especially isolated API read surfaces and other low-risk shared DB seams.
-   - Why in this order: boundary cleanup should come first so browser/API/server responsibilities are clearer before deeper repository work.
-   - Do not combine with yet: discovery orchestration convergence or cross-cutting refactors.
+2. Verify a small discovery and scoring slice
+   - What: run a bounded discovery/scoring path against demo-safe settings and confirm durable operator-visible state.
+   - Why in this order: discovery/scoring is the core demo workflow before draft generation.
+   - Do not combine with yet: broad discovery control-plane convergence or schema rewrites.
 
-4. Discovery control-plane convergence
-   - What: choose the canonical backend path between `job_requests` and direct `jobRun` + pg-boss execution, then converge carefully.
-   - Why in this order: it is correctness-sensitive and higher blast radius than the current boundary work.
-   - Do not combine with yet: browser cleanup, admin auth changes, or opportunistic SQL migration slices.
+3. Verify message drafting only
+   - What: confirm qualified leads can produce drafts, review/reject/redraft works, and no send is created or deliverable under demo settings.
+   - Why in this order: drafting is in scope, but sending is not.
+   - Do not combine with yet: outbound delivery, follow-up automation, or new messaging channels.
 
-5. Docs alignment / stale doc cleanup as needed
-   - What: keep docs aligned after the higher-risk runtime and boundary work settles.
-   - Why in this order: some docs are already partially historical, but rewriting them too early risks chasing moving code.
-   - Do not combine with yet: major runtime edits in the same patch.
+4. Rewrite Zbooni-specific ICPs/copy where needed
+   - What: convert Zbooni-specific ICPs, prompts, and labels into Leadzilla-neutral demo language while preserving useful discovered lead data.
+   - Why in this order: demo data can remain useful, but the product framing should not look like a client handoff.
+   - Do not combine with yet: seed/schema changes unless the existing seed path cannot support the copy change.
+
+5. Remove bugs and simplify UI/UX
+   - What: fix concrete defects and simplify operator workflows around the already-supported demo slice.
+   - Why in this order: polish should make the existing demo path clearer, not expand scope.
+   - Do not combine with yet: new features, architecture rewrites, or unrelated cleanup.
 
 ## 7. Read these first
 

@@ -32,3 +32,13 @@ export class MessagingSendIneligibleError extends Error {
     this.name = 'MessagingSendIneligibleError';
   }
 }
+
+export const OUTBOUND_SENDS_DISABLED_MESSAGE =
+  'Outbound sending is disabled for the Leadzilla demo. Drafts can be reviewed and approved, but email and WhatsApp delivery are blocked.';
+
+export class MessagingOutboundDisabledError extends Error {
+  constructor(message = OUTBOUND_SENDS_DISABLED_MESSAGE) {
+    super(message);
+    this.name = 'MessagingOutboundDisabledError';
+  }
+}

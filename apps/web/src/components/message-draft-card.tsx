@@ -5,7 +5,7 @@ import type {
   MessageSendResponse,
   MessageVariantResponse,
 } from '@lead-flood/contracts';
-import { Check, ChevronDown, ChevronUp, Loader2, Pencil, RefreshCw, Send, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Loader2, Pencil, RefreshCw, X } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -62,7 +62,7 @@ function getInitialSendBadge(
       draft.approvalStatus === 'AUTO_APPROVED'
     ) {
       return {
-        label: 'No Send Record Yet',
+        label: 'Draft Only',
         className: 'bg-muted/20 text-muted-foreground',
       };
     }
@@ -77,26 +77,34 @@ function getInitialSendBadge(
     };
   }
 
+  if (initialSend.status === 'FAILED' && initialSend.failureCode === 'OUTBOUND_DISABLED') {
+    return {
+      label: 'Delivery Disabled',
+      className: 'bg-amber-500/15 text-amber-300',
+      detail: initialSend.failureReason ?? undefined,
+    };
+  }
+
   switch (initialSend.status) {
     case 'QUEUED':
       return {
-        label: 'Queued To Send',
-        className: 'bg-blue-500/15 text-blue-300',
+        label: 'Delivery Disabled',
+        className: 'bg-amber-500/15 text-amber-300',
       };
     case 'SENDING':
       return {
-        label: 'Sending',
-        className: 'bg-blue-500/15 text-blue-300',
+        label: 'Delivery Disabled',
+        className: 'bg-amber-500/15 text-amber-300',
       };
     case 'UNRESOLVED':
       return {
-        label: 'Send Unresolved',
+        label: 'Delivery Unresolved',
         className: 'bg-amber-500/15 text-amber-300',
         detail: initialSend.failureReason ?? undefined,
       };
     case 'SENT':
       return {
-        label: 'Sent',
+        label: 'Previously Sent',
         className: 'bg-zbooni-green/15 text-zbooni-green',
       };
     case 'DELIVERED':
@@ -126,44 +134,11 @@ function getInitialSendBadge(
   return null;
 }
 
-function getSendActionLabel(
-  draft: MessageDraftResponse,
-  initialSend: MessageSendResponse | null,
-  initialSendLoaded: boolean,
-): string | null {
-  const isApproved =
-    draft.approvalStatus === 'APPROVED' || draft.approvalStatus === 'AUTO_APPROVED';
-
-  if (!isApproved) {
-    return null;
-  }
-
-  if (draft.followUpNumber !== 0) {
-    return 'Send';
-  }
-
-  if (!initialSendLoaded) {
-    return null;
-  }
-
-  if (!initialSend) {
-    return 'Send';
-  }
-
-  if (initialSend.status === 'FAILED' && initialSend.failureCode !== 'SUPPRESSED') {
-    return 'Retry Send';
-  }
-
-  return null;
-}
-
 function VariantEditor({
   variant,
   isPending,
-  sendActionLabel,
   actionInProgress,
   onApprove,
-  onSend,
   onRegenerate,
   regenerateDisabledReason,
   apiClient,
@@ -171,10 +146,8 @@ function VariantEditor({
 }: {
   variant: MessageVariantResponse;
   isPending: boolean;
-  sendActionLabel: string | null;
   actionInProgress: string | null;
   onApprove: (variantId: string) => void;
-  onSend: (variantId: string) => void;
   onRegenerate?: ((feedback: string) => Promise<void> | void) | undefined;
   regenerateDisabledReason?: string | null | undefined;
   apiClient: ApiClient;
@@ -387,17 +360,7 @@ function VariantEditor({
               onClick={() => onApprove(variant.id)}
               className="inline-flex items-center gap-1 rounded-lg bg-zbooni-green/20 px-3 py-1.5 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/30 disabled:opacity-50"
             >
-              <Send className="h-3 w-3" /> Send
-            </button>
-          ) : null}
-          {sendActionLabel ? (
-            <button
-              type="button"
-              disabled={!!actionInProgress}
-              onClick={() => onSend(variant.id)}
-              className="zbooni-gradient-bg inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold text-zbooni-dark transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              <Send className="h-3 w-3" /> {sendActionLabel}
+              <Check className="h-3 w-3" /> Approve Draft
             </button>
           ) : null}
         </div>
@@ -431,26 +394,10 @@ export function MessageDraftCard({
         approvedByUserId: userId,
         selectedVariantId: variantId,
       });
+      toast.success('Draft approved. No message was sent.');
       onAction();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Send failed');
-    } finally {
-      setActionInProgress(null);
-    }
-  };
-
-  const handleSend = async (variantId: string) => {
-    setActionInProgress('send');
-    setError(null);
-    try {
-      await apiClient.sendMessage({
-        messageDraftId: draft.id,
-        messageVariantId: variantId,
-        idempotencyKey: `ui:${draft.id}:${variantId}:${Date.now()}`,
-      });
-      onAction();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Send failed');
+      setError(err instanceof Error ? err.message : 'Approval failed');
     } finally {
       setActionInProgress(null);
     }
@@ -507,7 +454,6 @@ export function MessageDraftCard({
   const isPending = draft.approvalStatus === 'PENDING';
   const approvalBadge = getApprovalBadge(draft);
   const initialSendBadge = getInitialSendBadge(draft, initialSend, initialSendLoaded);
-  const sendActionLabel = getSendActionLabel(draft, initialSend, initialSendLoaded);
   const isInitialDraft = draft.followUpNumber === 0;
   const regenerateDisabledReason = !isInitialDraft
     ? 'Only initial outreach drafts can be re-drafted from this queue.'
@@ -578,6 +524,9 @@ export function MessageDraftCard({
       {/* Expanded content */}
       {expanded ? (
         <div className="border-t border-border/30 p-5 pt-4">
+          <div className="mb-4 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2 text-xs text-amber-100/90">
+            Draft-only demo: approval records review, but outbound email and WhatsApp delivery are disabled.
+          </div>
           {initialSendBadge?.detail ? (
             <div className="mb-4 rounded-xl border border-border/40 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
               {initialSendBadge.detail}
@@ -589,10 +538,8 @@ export function MessageDraftCard({
                 key={variant.id}
                 variant={variant}
                 isPending={isPending}
-                sendActionLabel={sendActionLabel}
                 actionInProgress={actionInProgress}
                 onApprove={handleApprove}
-                onSend={handleSend}
                 onRegenerate={isInitialDraft ? handleRegenerate : undefined}
                 regenerateDisabledReason={regenerateDisabledReason}
                 apiClient={apiClient}

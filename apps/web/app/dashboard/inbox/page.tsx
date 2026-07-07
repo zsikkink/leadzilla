@@ -911,7 +911,7 @@ export default function InboxPage() {
                     Write a reply
                   </div>
                   <p className="mt-0.5 text-xs text-muted-foreground/60">
-                    Saves an approved email draft for {selectedLeadDetails?.email ?? 'this lead'}; send it from the draft card.
+                    Saves an approved email draft for {selectedLeadDetails?.email ?? 'this lead'}; outbound delivery is disabled for the demo.
                   </p>
                 </div>
                 {!selectedIcpProfileId ? (
@@ -936,7 +936,7 @@ export default function InboxPage() {
                 />
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-[11px] text-muted-foreground/55">
-                    The draft uses the normal message queue when you send it.
+                    The draft is saved for review only; outbound delivery is disabled for the demo.
                   </p>
                   <button
                     type="button"

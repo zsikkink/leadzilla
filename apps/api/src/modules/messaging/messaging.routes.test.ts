@@ -32,6 +32,7 @@ import {
   MessagingDraftGenerationIneligibleError,
   MessagingDraftGenerationUnavailableError,
   MessagingNotFoundError,
+  MessagingOutboundDisabledError,
   MessagingSendIneligibleError,
 } from './messaging.errors.js';
 import { registerMessagingRoutes } from './messaging.routes.js';
@@ -381,9 +382,9 @@ describe('messaging.routes generate draft rejection handling', () => {
     });
   });
 
-  it('returns 422 when an initial draft is not approved for sending', async () => {
+  it('returns 403 when direct sending is disabled for the demo', async () => {
     routeMocks.service.sendMessage.mockRejectedValue(
-      new MessagingSendIneligibleError('Initial draft must be approved before it can be sent.'),
+      new MessagingOutboundDisabledError(),
     );
 
     const response = await app.inject({
@@ -396,9 +397,10 @@ describe('messaging.routes generate draft rejection handling', () => {
       },
     });
 
-    expect(response.statusCode).toBe(422);
+    expect(response.statusCode).toBe(403);
     expect(response.json()).toEqual({
-      error: 'Initial draft must be approved before it can be sent.',
+      error:
+        'Outbound sending is disabled for the Leadzilla demo. Drafts can be reviewed and approved, but email and WhatsApp delivery are blocked.',
       requestId: expect.any(String),
     });
   });

@@ -14,6 +14,8 @@ import {
 import {
   MESSAGE_SEND_JOB_NAME,
   MESSAGE_SEND_RETRY_OPTIONS,
+  OUTBOUND_DISABLED_FAILURE_CODE,
+  OUTBOUND_DISABLED_FAILURE_REASON,
   type MessageSendJobPayload,
 } from './jobs/message.send.job.js';
 import {
@@ -410,6 +412,40 @@ export async function dispatchPendingOutboxEvents(
             messageSendStatus: targetMessageSend.status,
           },
           'Marked outbox event as sent without publish to avoid duplicate work',
+        );
+        continue;
+      }
+
+      if (event.type === MESSAGE_SEND_JOB_NAME) {
+        await prisma.messageSend.updateMany({
+          where: {
+            id: targetMessageSend.id,
+            status: 'QUEUED',
+          },
+          data: {
+            status: 'FAILED',
+            failureCode: OUTBOUND_DISABLED_FAILURE_CODE,
+            failureReason: OUTBOUND_DISABLED_FAILURE_REASON,
+          },
+        });
+        await prisma.outboxEvent.update({
+          where: { id: event.id },
+          data: {
+            status: 'sent',
+            attempts: {
+              increment: 1,
+            },
+            lastError: 'Skipped publish because outbound sending is disabled for the Leadzilla demo',
+            nextAttemptAt: null,
+            processedAt: now,
+          },
+        });
+        logger.warn(
+          {
+            outboxEventId: event.id,
+            messageSendId: targetMessageSend.id,
+          },
+          'Marked message.send outbox event as sent without publish because outbound sending is disabled',
         );
         continue;
       }

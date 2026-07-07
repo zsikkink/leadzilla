@@ -10,6 +10,7 @@ const {
   buildServerOptionsRef,
   buildServerMock,
   loggerMock,
+  messageSendUpdateManyMock,
   outboxEventUpdateMock,
   prismaDisconnectMock,
   processOnMock,
@@ -28,6 +29,7 @@ const {
     warn: vi.fn(),
     error: vi.fn(),
   };
+  const messageSendUpdateManyMock = vi.fn(async () => ({ count: 1 }));
   const outboxEventUpdateMock = vi.fn(async () => undefined);
   const prismaDisconnectMock = vi.fn(async () => undefined);
   const processOnMock = vi.fn(() => process);
@@ -49,6 +51,7 @@ const {
     buildServerOptionsRef,
     buildServerMock,
     loggerMock,
+    messageSendUpdateManyMock,
     outboxEventUpdateMock,
     prismaDisconnectMock,
     processOnMock,
@@ -68,6 +71,9 @@ vi.mock('@lead-flood/db', () => ({
   assertDatabaseConnection: vi.fn(async () => undefined),
   checkPipelineSchemaHealth: vi.fn(async () => ({ status: 'pass', missingTables: [], missingEnumValues: [] })),
   prisma: {
+    messageSend: {
+      updateMany: messageSendUpdateManyMock,
+    },
     outboxEvent: {
       update: outboxEventUpdateMock,
     },
@@ -113,11 +119,7 @@ function getEnqueueMessageSend(): (payload: MessagingSendJobPayload) => Promise<
   return enqueueMessageSend;
 }
 
-function getBossSendOptions(): Record<string, unknown> | undefined {
-  return vi.mocked(bossSendMock).mock.calls.at(0)?.[2];
-}
-
-describe('publishMessageSend scheduling', () => {
+describe('publishMessageSend disabled boundary', () => {
   let restoreProcessOn: (() => void) | null = null;
 
   beforeAll(async () => {
@@ -141,6 +143,7 @@ describe('publishMessageSend scheduling', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-03-29T12:00:00.000Z'));
     outboxEventUpdateMock.mockResolvedValue(undefined);
+    messageSendUpdateManyMock.mockResolvedValue({ count: 1 });
     bossSendMock.mockResolvedValue(undefined);
   });
 
@@ -148,7 +151,7 @@ describe('publishMessageSend scheduling', () => {
     vi.useRealTimers();
   });
 
-  it('defers no-outbox re-enqueue publishes when scheduledAt is in the future', async () => {
+  it('blocks no-outbox message.send publishes when scheduledAt is in the future', async () => {
     await getEnqueueMessageSend()({
       runId: 'send_existing',
       sendId: 'send_existing',
@@ -159,24 +162,18 @@ describe('publishMessageSend scheduling', () => {
       scheduledAt: '2026-03-29T12:05:00.000Z',
     });
 
-    expect(bossSendMock).toHaveBeenCalledWith(
-      'message.send',
-      expect.objectContaining({
-        runId: 'send_existing',
-        sendId: 'send_existing',
+    expect(bossSendMock).not.toHaveBeenCalled();
+    expect(messageSendUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: 'send_existing', status: 'QUEUED' },
+      data: expect.objectContaining({
+        status: 'FAILED',
+        failureCode: 'OUTBOUND_DISABLED',
       }),
-      expect.objectContaining({
-        singletonKey: 'message.send:send_existing',
-        retryLimit: 5,
-        retryDelay: 90,
-        retryBackoff: true,
-        startAfter: new Date('2026-03-29T12:05:00.000Z'),
-      }),
-    );
+    });
     expect(outboxEventUpdateMock).not.toHaveBeenCalled();
   });
 
-  it('keeps no-outbox publishes immediate when scheduledAt is absent', async () => {
+  it('blocks no-outbox message.send publishes when scheduledAt is absent', async () => {
     await getEnqueueMessageSend()({
       runId: 'send_existing',
       sendId: 'send_existing',
@@ -186,18 +183,18 @@ describe('publishMessageSend scheduling', () => {
       channel: 'EMAIL',
     });
 
-    const sendOptions = getBossSendOptions();
-    expect(sendOptions).toMatchObject({
-      singletonKey: 'message.send:send_existing',
-      retryLimit: 5,
-      retryDelay: 90,
-      retryBackoff: true,
+    expect(bossSendMock).not.toHaveBeenCalled();
+    expect(messageSendUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: 'send_existing', status: 'QUEUED' },
+      data: expect.objectContaining({
+        status: 'FAILED',
+        failureCode: 'OUTBOUND_DISABLED',
+      }),
     });
-    expect(sendOptions).not.toHaveProperty('startAfter');
     expect(outboxEventUpdateMock).not.toHaveBeenCalled();
   });
 
-  it('defers outbox-backed publishes when scheduledAt is in the future', async () => {
+  it('marks outbox-backed message.send publishes skipped when scheduledAt is in the future', async () => {
     await getEnqueueMessageSend()({
       runId: 'message.send:send_new',
       sendId: 'send_new',
@@ -209,29 +206,24 @@ describe('publishMessageSend scheduling', () => {
       scheduledAt: '2026-03-29T12:05:00.000Z',
     });
 
-    expect(bossSendMock).toHaveBeenCalledWith(
-      'message.send',
-      expect.objectContaining({
-        runId: 'message.send:send_new',
-        sendId: 'send_new',
+    expect(bossSendMock).not.toHaveBeenCalled();
+    expect(messageSendUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: 'send_new', status: 'QUEUED' },
+      data: expect.objectContaining({
+        status: 'FAILED',
+        failureCode: 'OUTBOUND_DISABLED',
       }),
-      expect.objectContaining({
-        singletonKey: 'message.send:send_new',
-        retryLimit: 5,
-        retryDelay: 90,
-        retryBackoff: true,
-        startAfter: new Date('2026-03-29T12:05:00.000Z'),
-      }),
-    );
+    });
     expect(outboxEventUpdateMock).toHaveBeenCalledWith({
       where: { id: 'outbox_1' },
       data: expect.objectContaining({
         status: 'sent',
+        lastError: 'Skipped publish because outbound sending is disabled for the Leadzilla demo',
       }),
     });
   });
 
-  it('keeps outbox-backed publishes immediate when scheduledAt is not in the future', async () => {
+  it('marks outbox-backed message.send publishes skipped when scheduledAt is not in the future', async () => {
     await getEnqueueMessageSend()({
       runId: 'message.send:send_new',
       sendId: 'send_new',
@@ -243,18 +235,19 @@ describe('publishMessageSend scheduling', () => {
       scheduledAt: '2026-03-29T11:55:00.000Z',
     });
 
-    const sendOptions = getBossSendOptions();
-    expect(sendOptions).toMatchObject({
-      singletonKey: 'message.send:send_new',
-      retryLimit: 5,
-      retryDelay: 90,
-      retryBackoff: true,
+    expect(bossSendMock).not.toHaveBeenCalled();
+    expect(messageSendUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: 'send_new', status: 'QUEUED' },
+      data: expect.objectContaining({
+        status: 'FAILED',
+        failureCode: 'OUTBOUND_DISABLED',
+      }),
     });
-    expect(sendOptions).not.toHaveProperty('startAfter');
     expect(outboxEventUpdateMock).toHaveBeenCalledWith({
       where: { id: 'outbox_1' },
       data: expect.objectContaining({
         status: 'sent',
+        lastError: 'Skipped publish because outbound sending is disabled for the Leadzilla demo',
       }),
     });
   });

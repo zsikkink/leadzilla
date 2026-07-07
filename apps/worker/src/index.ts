@@ -826,6 +826,7 @@ async function main(): Promise<void> {
         rateLimiter: whatsAppRateLimiter,
         emailRateLimiter,
         boss,
+        outboundSendsEnabled: false,
       }),
   );
   await registerWorker<MessageApprovalRecoveryJobPayload>(

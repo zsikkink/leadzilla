@@ -25,7 +25,6 @@ import {
   buildNegativeKeywordPromptSuffix,
   type MessageQualityOptions,
 } from '../messaging/validate-message.js';
-import { MESSAGE_SEND_JOB_NAME, MESSAGE_SEND_RETRY_OPTIONS, type MessageSendJobPayload } from './message.send.job.js';
 
 export const MESSAGE_GENERATE_JOB_NAME = 'message.generate';
 export const MESSAGE_GENERATE_IDEMPOTENCY_KEY_PATTERN =
@@ -611,61 +610,13 @@ export async function handleMessageGenerateJob(
         }>;
       },
     ): Promise<void> => {
-      if (draft.approvalStatus !== 'AUTO_APPROVED' || !deps?.boss) {
+      if (draft.approvalStatus !== 'AUTO_APPROVED') {
         return;
       }
 
-      const selectedVariant = draft.variants.find((variant) => variant.isSelected) ?? draft.variants[0];
-      if (!selectedVariant) {
-        return;
-      }
-
-      const existingSendForDraft = await prisma.messageSend.findFirst({
-        where: { messageDraftId: draft.id },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      });
-      if (existingSendForDraft) {
-        logger.info(
-          { jobId: job.id, sendId: existingSendForDraft.id, draftId: draft.id },
-          'MessageSend already exists for draft, skipping',
-        );
-        return;
-      }
-
-      const sendRecord = await prisma.messageSend.create({
-        data: {
-          leadId,
-          messageDraftId: draft.id,
-          messageVariantId: selectedVariant.id,
-          channel: selectedVariant.channel,
-          provider: selectedVariant.channel === 'WHATSAPP' ? 'TRENGO' : 'RESEND',
-          status: 'QUEUED',
-          idempotencyKey: `followup:${leadId}:${draft.id}:${selectedVariant.id}`,
-          followUpNumber,
-        },
-      });
-
-      await deps.boss.send(
-        MESSAGE_SEND_JOB_NAME,
-        {
-          runId: `message.send:${sendRecord.id}`,
-          sendId: sendRecord.id,
-          messageDraftId: draft.id,
-          messageVariantId: selectedVariant.id,
-          idempotencyKey: sendRecord.idempotencyKey,
-          channel: selectedVariant.channel,
-          followUpNumber,
-          correlationId: correlationId ?? job.id,
-        } satisfies MessageSendJobPayload,
-        {
-          singletonKey: `message.send:${sendRecord.id}`,
-          ...MESSAGE_SEND_RETRY_OPTIONS,
-        },
-      );
-
-      logger.info(
-        { jobId: job.id, draftId: draft.id, sendId: sendRecord.id, followUpNumber },
-        'Auto-approved draft, enqueued message.send',
+      logger.warn(
+        { jobId: job.id, draftId: draft.id, leadId, followUpNumber },
+        'Auto-approved draft retained without enqueueing message.send because outbound sending is disabled',
       );
     };
 

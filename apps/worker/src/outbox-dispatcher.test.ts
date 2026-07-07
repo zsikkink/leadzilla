@@ -3,6 +3,10 @@ import { prisma } from '@lead-flood/db';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { dispatchPendingOutboxEvents } from './outbox-dispatcher.js';
+import {
+  OUTBOUND_DISABLED_FAILURE_CODE,
+  OUTBOUND_DISABLED_FAILURE_REASON,
+} from './jobs/message.send.job.js';
 
 describe('dispatchPendingOutboxEvents', () => {
   const createdOutboxIds: string[] = [];
@@ -324,7 +328,7 @@ describe('dispatchPendingOutboxEvents', () => {
     expect(updated?.attempts).toBe(1);
   });
 
-  it('dispatches pending message.send outbox rows using the queued MessageSend gate', async () => {
+  it('marks pending message.send outbox rows handled without publish while outbound is disabled', async () => {
     const fixture = await createMessageSendDispatchFixture();
     const event = await prisma.outboxEvent.create({
       data: {
@@ -355,23 +359,8 @@ describe('dispatchPendingOutboxEvents', () => {
 
     const count = await dispatchPendingOutboxEvents(boss as unknown as Pick<PgBoss, 'send'>, logger);
 
-    expect(count).toBe(1);
-    expect(boss.send).toHaveBeenCalledWith(
-      'message.send',
-      expect.objectContaining({
-        runId: `message.send:${fixture.sendId}`,
-        sendId: fixture.sendId,
-        messageDraftId: fixture.messageDraftId,
-        messageVariantId: fixture.messageVariantId,
-      }),
-      expect.objectContaining({
-        singletonKey: `message.send:${fixture.sendId}`,
-        retryLimit: 5,
-        retryDelay: 90,
-        retryBackoff: true,
-        deadLetter: 'message.send.dead_letter',
-      }),
-    );
+    expect(count).toBe(0);
+    expect(boss.send).not.toHaveBeenCalled();
 
     const updated = await prisma.outboxEvent.findUnique({
       where: { id: event.id },
@@ -379,6 +368,14 @@ describe('dispatchPendingOutboxEvents', () => {
     expect(updated?.status).toBe('sent');
     expect(updated?.attempts).toBe(1);
     expect(updated?.processedAt).not.toBeNull();
+    expect(updated?.lastError).toBe('Skipped publish because outbound sending is disabled for the Leadzilla demo');
+
+    const send = await prisma.messageSend.findUnique({
+      where: { id: fixture.sendId },
+    });
+    expect(send?.status).toBe('FAILED');
+    expect(send?.failureCode).toBe(OUTBOUND_DISABLED_FAILURE_CODE);
+    expect(send?.failureReason).toBe(OUTBOUND_DISABLED_FAILURE_REASON);
   });
 
   it('marks tracked features.compute runs running after publish and suppresses replay once already running', async () => {
@@ -483,7 +480,7 @@ describe('dispatchPendingOutboxEvents', () => {
     expect(updated?.lastError).toContain('queue unavailable');
   });
 
-  it('replays failed message.send outbox rows through the dispatcher instead of treating them as invalid', async () => {
+  it('marks failed message.send outbox rows handled without publish while outbound is disabled', async () => {
     const scheduledAt = new Date(Date.now() + 60_000);
     const fixture = await createMessageSendDispatchFixture({ scheduledAt });
     const event = await prisma.outboxEvent.create({
@@ -517,18 +514,8 @@ describe('dispatchPendingOutboxEvents', () => {
 
     const count = await dispatchPendingOutboxEvents(boss as unknown as Pick<PgBoss, 'send'>, logger);
 
-    expect(count).toBe(1);
-    expect(boss.send).toHaveBeenCalledTimes(1);
-
-    const sendOptions = vi.mocked(boss.send).mock.calls.at(0)?.[2];
-    expect(sendOptions).toMatchObject({
-      singletonKey: `message.send:${fixture.sendId}`,
-      retryLimit: 5,
-      retryDelay: 90,
-      retryBackoff: true,
-      deadLetter: 'message.send.dead_letter',
-    });
-    expect(sendOptions?.startAfter).toEqual(scheduledAt);
+    expect(count).toBe(0);
+    expect(boss.send).not.toHaveBeenCalled();
 
     const updated = await prisma.outboxEvent.findUnique({
       where: { id: event.id },
@@ -536,6 +523,14 @@ describe('dispatchPendingOutboxEvents', () => {
     expect(updated?.status).toBe('sent');
     expect(updated?.attempts).toBe(1);
     expect(updated?.nextAttemptAt).toBeNull();
+    expect(updated?.lastError).toBe('Skipped publish because outbound sending is disabled for the Leadzilla demo');
+
+    const send = await prisma.messageSend.findUnique({
+      where: { id: fixture.sendId },
+    });
+    expect(send?.status).toBe('FAILED');
+    expect(send?.failureCode).toBe(OUTBOUND_DISABLED_FAILURE_CODE);
+    expect(send?.failureReason).toBe(OUTBOUND_DISABLED_FAILURE_REASON);
   });
 
   it('uses database time to gate failed retries and stale processing reclaim', async () => {

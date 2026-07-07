@@ -1068,7 +1068,7 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
     expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
   });
 
-  it('heals a missing send for a reused auto-approved draft without regenerating content', async () => {
+  it('reuses an auto-approved draft without creating or enqueueing a send while outbound is disabled', async () => {
     dbMock.prisma.lead.findUnique.mockResolvedValue({
       id: 'lead_1',
       firstName: 'Ada',
@@ -1097,11 +1097,6 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
         },
       ],
     });
-    dbMock.prisma.messageSend.create.mockResolvedValue({
-      id: 'send_existing',
-      idempotencyKey: 'followup:lead_1:draft_existing:variant_existing',
-    });
-
     const openAiAdapter = {
       isConfigured: true,
       generateMessageVariants: vi.fn(),
@@ -1126,30 +1121,14 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
 
     expect(openAiAdapter.generateMessageVariants).not.toHaveBeenCalled();
     expect(pipelineSettingsMock.loadAutoApproveConfig).not.toHaveBeenCalled();
-    expect(dbMock.prisma.messageSend.create).toHaveBeenCalledWith({
-      data: {
-        leadId: 'lead_1',
-        messageDraftId: 'draft_existing',
-        messageVariantId: 'variant_existing',
-        channel: 'WHATSAPP',
-        provider: 'TRENGO',
-        status: 'QUEUED',
-        idempotencyKey: 'followup:lead_1:draft_existing:variant_existing',
-        followUpNumber: 1,
-      },
-    });
-    expect(boss.send).toHaveBeenCalledWith(
-      'message.send',
+    expect(dbMock.prisma.messageSend.create).not.toHaveBeenCalled();
+    expect(boss.send).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
-        sendId: 'send_existing',
-        messageDraftId: 'draft_existing',
-        messageVariantId: 'variant_existing',
-        channel: 'WHATSAPP',
+        draftId: 'draft_existing',
         followUpNumber: 1,
       }),
-      expect.objectContaining({
-        singletonKey: 'message.send:send_existing',
-      }),
+      'Auto-approved draft retained without enqueueing message.send because outbound sending is disabled',
     );
     expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith('run_1', logger);
   });

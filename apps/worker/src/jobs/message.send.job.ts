@@ -43,11 +43,15 @@ export interface MessageSendJobDependencies {
   rateLimiter?: WhatsAppRateLimiter | undefined;
   emailRateLimiter?: EmailRateLimiter | undefined;
   boss?: Pick<PgBoss, 'send'> | undefined;
+  outboundSendsEnabled?: boolean | undefined;
 }
 
 const LEAD_STATUSES_BEFORE_FIRST_SEND = ['qualified', 'drafted'] as const;
 const SEND_STATUSES_RECOVERABLE_AFTER_PROVIDER_SUCCESS = ['DELIVERED', 'REPLIED', 'BOUNCED'] as const;
 const POST_CLAIM_INDETERMINATE_FAILURE_CODE = 'POST_CLAIM_INDETERMINATE';
+export const OUTBOUND_DISABLED_FAILURE_CODE = 'OUTBOUND_DISABLED';
+export const OUTBOUND_DISABLED_FAILURE_REASON =
+  'Outbound sending is disabled for the Leadzilla demo. Drafts can be reviewed and approved, but email and WhatsApp delivery are blocked.';
 const SUPPRESSION_EVENT_TYPES = new Set(['BOUNCED', 'NOT_INTERESTED', 'UNSUBSCRIBED']);
 
 function isRecoverablePostSuccessStatus(
@@ -91,6 +95,18 @@ export async function handleMessageSendJob(
 
     if (!send) {
       logger.error({ jobId: job.id, sendId }, 'MessageSend not found');
+      return;
+    }
+
+    if (deps?.outboundSendsEnabled !== true) {
+      if (send.status === 'QUEUED') {
+        await markFailedIfQueued(sendId, OUTBOUND_DISABLED_FAILURE_CODE, OUTBOUND_DISABLED_FAILURE_REASON);
+      }
+
+      logger.warn(
+        { jobId: job.id, sendId, status: send.status },
+        'Outbound send blocked because sending is disabled',
+      );
       return;
     }
 

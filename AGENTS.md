@@ -2,461 +2,207 @@
 
 ## Purpose
 
-This repository is a production-oriented AI-assisted outbound / lead-generation platform.
+Leadzilla is the demo-oriented continuation of the Lead-Flood outbound and lead-generation platform. This repo supports lead discovery, enrichment, scoring, operator review, message drafting, async job execution, and historical outbound delivery paths.
 
-When working in Lead-Flood, optimize in this order:
+Current Leadzilla demo safety invariant: small discovery/scoring jobs and message drafting may function, but outbound email/WhatsApp sending must remain disabled in code and clearly communicated in the UI. Do not re-enable sends, follow-up delivery, provider delivery calls, or `message.send` publishing unless the user explicitly requests that safety boundary change.
+
+Optimize in this order:
 
 1. production reliability
 2. data integrity
-3. security / auth correctness
+3. security and auth correctness
 4. durable async execution
 5. operator-visible truth
 6. clean architectural boundaries
 7. small, safe, verifiable changes
 
-Do not optimize for cleverness, large refactors, framework purity, or broad cleanup unless explicitly asked.
+## Repository Orientation
 
----
+- `apps/web` - Next.js operator UI. App routes live in `apps/web/app`; shared components, hooks, auth helpers, API client, and UI utilities live in `apps/web/src`. `apps/web/app/api/admin/[...path]/route.ts` is the web admin proxy boundary.
+- `apps/api` - Fastify API. Runtime entrypoints are `apps/api/src/index.ts` and `apps/api/src/server.ts`. Domain modules live under `apps/api/src/modules/*` with route/service/repository patterns. Auth helpers live in `apps/api/src/auth`.
+- `apps/worker` - pg-boss worker, schedules, recovery jobs, durable job handlers, rate limiters, scoring helpers, and outbox dispatcher. Queue definitions live in `apps/worker/src/queues.ts`; worker startup is `apps/worker/src/index.ts`; outbox dispatch is `apps/worker/src/outbox-dispatcher.ts`.
+- `packages/contracts` - shared Zod contracts and exported API/job payload types.
+- `packages/db` - Prisma schema/client generation, `pg` helpers, runtime database policies, schema-health checks, seed scripts, and DB utility tests. Prisma schema is `packages/db/prisma/schema.prisma`.
+- `packages/discovery` - discovery providers, search-task generation, normalization, dedupe, and discovery seeding CLI.
+- `packages/providers` - external provider adapters for AI, discovery, enrichment, email, scraping, and WhatsApp.
+- `packages/observability`, `packages/testkit`, `packages/ui`, `packages/config` - shared logging, test helpers, UI package, and config package.
+- `supabase/migrations` - active production SQL migration chain. This is the production schema authority.
+- `supabase/migrations-archived/pre-reconciliation` - historical migration chain kept for auditability only.
+- `supabase/functions/api` - Supabase Edge Function demo API adapter. It is read-only for worker-backed/mutating demo actions.
+- `scripts` - bootstrap, preflight, DB migration/validation, discovery, ICP, learning, release, and reset utilities.
+- `infra/docker` - local/docker deployment artifacts for API, web, worker, and local compose.
+- Tests live beside code as `*.test.ts`, with API integration/e2e tests under `apps/api/test` and worker integration tests under `apps/worker/test`.
+- `docs` contains current-state, setup, deployment, workflow, audit, schema-history, and handoff material. Read docs after code; if docs and code disagree, trust code and call out the drift.
 
-## What this repo is
+## Package Manager And Commands
 
-Lead-Flood is a pnpm monorepo with:
+Use Node 22+ and pnpm only. The repo pins `pnpm@10.14.0` in `package.json` and Node `22` in `.nvmrc`. Do not run `npm install` or switch package managers.
 
-- `apps/web` - operator UI
-- `apps/api` - backend API
-- `apps/worker` - pg-boss job runner / recovery / scheduled work
-- `packages/*` - shared packages such as contracts, db, discovery, providers, observability, config, testkit, and UI
-- `supabase/migrations` - canonical production schema changes
-- `supabase/migrations-archived/*` - archived migration history for auditability, not the active production chain
+Common commands:
 
-The system is async-heavy. Production safety depends on:
+- Install: `corepack enable && pnpm install`
+- Web-only dev: `pnpm dev`
+- Full local app/API/worker dev: `pnpm dev:local-stack`
+- Docker local infra only when needed: `pnpm dev:infra`; stop with `pnpm dev:infra:down`
+- Full bootstrap: `pnpm bootstrap` or `bash scripts/bootstrap.sh`
+- Preflight with Docker checks: `pnpm doctor`
+- Typecheck all packages: `pnpm typecheck`
+- Lint all packages: `pnpm lint`
+- Unit/integration test fanout: `pnpm test`
+- Unit tests only: `pnpm test:unit`
+- Integration tests only: `pnpm test:integration`
+- E2E tests: `pnpm test:e2e`
+- Build all packages/apps: `pnpm build`
+- Contracts build check: `pnpm contracts:check`
 
-- correct queue submission semantics
-- idempotent job handling
-- safe retries and recovery
-- clear job / outbox / operator state
-- consistency between runtime code and SQL-first schema evolution
+Targeted commands:
 
----
+- Web: `pnpm --filter @lead-flood/web typecheck`, `pnpm --filter @lead-flood/web lint`, `pnpm --filter @lead-flood/web test:unit`, `pnpm --filter @lead-flood/web build`
+- API: `pnpm --filter @lead-flood/api typecheck`, `pnpm --filter @lead-flood/api lint`, `pnpm --filter @lead-flood/api test:unit`, `pnpm --filter @lead-flood/api test:integration`, `pnpm --filter @lead-flood/api test:e2e`, `pnpm --filter @lead-flood/api build`
+- Worker: `pnpm --filter @lead-flood/worker typecheck`, `pnpm --filter @lead-flood/worker lint`, `pnpm --filter @lead-flood/worker test:unit`, `pnpm --filter @lead-flood/worker test:integration`, `pnpm --filter @lead-flood/worker build`
+- DB package: `pnpm --filter @lead-flood/db typecheck`, `pnpm --filter @lead-flood/db test:unit`, `pnpm --filter @lead-flood/db build`
+- Provider integration tests: `pnpm --filter @lead-flood/providers test:integration`
 
-## Read this first
+Database and migration commands:
 
-Before changing anything:
+- Generate Prisma client: `pnpm db:generate`
+- Production SQL migrations: `pnpm db:migrate:prod`
+- Production migration verification: `pnpm db:verify:prod`
+- SQL bootstrap validation: `pnpm db:validate:sql-bootstrap`
+- API-scoped SQL bootstrap validation: `pnpm db:validate:sql-bootstrap:api`
+- Worker-scoped SQL bootstrap validation: `pnpm db:validate:sql-bootstrap:worker`
+- Runtime service validation: `pnpm db:validate:runtime-services`
+- API runtime DB validation: `pnpm db:validate:runtime-services:api`
+- Worker runtime DB validation: `pnpm db:validate:runtime-services:worker`
+- Prisma sync after reviewed SQL changes: `pnpm db:prisma:sync`
+- Drift capture for review: `pnpm db:pull:drift -- --confirm`
+- Disposable SQL bootstrap: `pnpm db:bootstrap:sql:disposable`
 
-1. Read this file fully.
-2. Read the exact code path you are changing.
-3. Read nearby tests.
-4. Read the runtime entrypoint for the surface you are touching.
-5. Read docs only after you understand the code.
-6. If docs and code disagree, trust code and call out the drift explicitly.
+The root `pnpm db:migrate` command intentionally fails because it is ambiguous. Use `pnpm db:migrate:prod` for production Supabase SQL migrations. Use `pnpm db:migrate:dev` only for local Prisma development workflows after confirming it is appropriate.
 
-Do not assume a documented architecture is actually implemented.
+## Architecture Rules
 
----
+### Database And Schema
 
-## Non-negotiable change boundaries
+- Production schema changes are SQL-first. `supabase/migrations` is canonical; Prisma migrations are not the production source of truth.
+- Keep `supabase/migrations`, `packages/db/prisma/schema.prisma`, generated Prisma client expectations, `packages/db/src/schema-health.ts`, application queries, and tests aligned.
+- Treat migrations as production-sensitive. Prefer additive, reversible migrations. Do not rewrite migration history, run `supabase migration repair`, or push destructive schema/data changes unless explicitly requested and planned.
+- `supabase/migrations-archived/pre-reconciliation` is audit history, not the active chain.
+- The repo has known drift-sensitive seams around the active SQL chain, Prisma schema, legacy `public."User"` / `public."Session"` dependencies, `ManagerAnalysis`, browser-role revokes, Supabase Auth assumptions, and schema-health guards. Inspect both SQL and runtime code before changing those areas.
+- Never recommend `prisma migrate` as a production workflow. `packages/db/prisma/migrations` can exist for local/client workflows, but production authority remains SQL-first.
 
-- Default to minimal, surgical edits.
-- Never refactor unrelated code.
-- Never rename, move, or delete files unless explicitly instructed.
-- Never introduce new dependencies without approval.
-- Preserve existing public APIs and database schemas unless explicitly instructed.
-- Prefer extending existing structures over creating new abstractions.
-- Follow established folder structure, naming, and command patterns.
-- After any structural change, validate TypeScript types, imports/exports, runtime behavior, and any affected migration / worker compatibility.
+### API And Auth
 
----
+- Preserve Fastify route/service/repository boundaries in `apps/api/src/modules/*`.
+- Do not weaken JWT verification, app-admin checks, discovery-admin checks, `x-admin-key` boundaries, validation, rate limits, webhook authenticity, or provider error handling.
+- Do not move privileged writes, queue submission, admin operations, or service-role behavior into browser-side code.
+- Preserve public API route names, request/response contracts, env var names, webhook contracts, and status codes unless explicitly requested.
+- Keep `packages/contracts` synchronized with API behavior when contracts are affected.
 
-## Repository truths you must respect
+### Worker, Queue, And Outbox
 
-### 1. Production DB authority is SQL-first
-
-For production, Supabase SQL migrations are canonical.
-
-- `supabase/migrations` is the production schema authority.
-- Prisma is still used at runtime and for client/types, but Prisma migrations are not the production source of truth.
-- Never introduce a production workflow that depends on Prisma being canonical.
-- Never recommend `prisma migrate` in production context.
-- If schema behavior is unclear, inspect both:
-  - `supabase/migrations`
-  - runtime assumptions in `packages/db` and consuming services
-
-### 2. Web must not bypass privileged backend boundaries
-
-The web app is an operator surface, not a privileged backend.
-
-- Prefer server/API boundaries for privileged actions.
-- Do not move sensitive writes, queue submission, or admin-only operations into browser-side code.
-- Treat direct browser access to privileged tables or workflows as suspicious unless clearly intended and safely constrained.
-
-### 3. Async work must be durable before side effects
-
-Lead-Flood is job-driven. Favor durable submission over direct fragile execution.
-
-- Queue submission, outbox semantics, retry state, and recovery behavior matter more than local code neatness.
-- Do not add direct provider side effects when a durable outbox / queue path should exist.
-- Do not bypass retry / recovery machinery for convenience.
-- Preserve singleton keys, deduplication, and idempotency where already present.
-- If a job can retry, the handler must be safe under repeated execution.
-
-### 4. Operator-visible truth matters
-
-The UI must reflect real system state, not optimistic assumptions.
-
-- Do not mark work complete before durable state says it is complete.
-- Avoid silent failure paths.
-- Prefer explicit status transitions and actionable errors.
-- If an operator can trigger something, they should be able to observe the real outcome.
-
-### 5. Small safe scope beats broad cleanup
-
-This repo has multiple operational seams. Avoid mixing concerns.
-
-- One bounded objective per change.
-- One failure mode at a time.
-- Do not combine runtime fixes, test rewrites, refactors, and cleanup in one step unless explicitly requested.
-
----
-
-## Default operating modes
-
-Use these modes deliberately:
-
-- `AUDIT` - inspect and map before changing
-- `VERIFY` - prove whether a claim or prior change is actually correct
-- `IMPLEMENT` - make one bounded change
-- `REPAIR` - fix a flawed or incomplete prior change
-- `HARDEN` - add safeguards, tests, or validation around an already-correct path
-- `HANDOFF` - summarize cleanly and stop
-
-### Decision rule
-
-- If correctness is uncertain, prefer `VERIFY` before more `IMPLEMENT`.
-- If the problem is poorly scoped, prefer `AUDIT`.
-- If the prior step is mostly right but risky, prefer `HARDEN`.
-- If the thread is messy, stale, or anchor-heavy, prefer a fresh chat.
-- If the task is operational repo-state work, keep it operational. Do not drift into feature work.
-
----
-
-## High-priority production concerns in this repo
-
-When auditing or changing Lead-Flood, check these first:
-
-### API
-
-- auth and role boundaries
-- admin-only endpoints and privileged operations
-- env validation
-- queue submission semantics
-- durable outbox usage
-- webhook authenticity and replay safety
-- state transitions for leads, scoring, messaging, and recovery flows
-
-### Worker
-
-- job registration
-- retry options
-- singleton keys
-- recovery jobs
-- startup recovery behavior
-- stale-run / stale-job cleanup
-- outbox dispatch
-- provider-side effects
-- whether retries can duplicate external actions
-
-### Database / schema
-
-- SQL-first production migration flow
-- runtime assumptions in `packages/db`
-- schema health checks
-- enum/table drift
-- JSON payload assumptions
-- transactional boundaries around durable submission
+- Durable state must happen before external side effects. Preserve pg-boss queue submission, outbox semantics, singleton keys, retry options, dead-letter behavior, recovery jobs, and idempotency.
+- If a handler can retry, it must be safe to run more than once.
+- Do not bypass outbox/recovery paths with direct provider calls.
+- Do not rename queue names, job names, outbox event types, singleton-key formats, or job payload contracts without explicit approval and matching migrations/tests.
+- For the Leadzilla demo, keep all outbound delivery paths disabled: direct API send, auto-approved draft enqueue, approval recovery, queued-send recovery, outbox replay, and worker `message.send` provider calls.
 
 ### Web
 
-- whether browser code reaches into privileged data paths
-- whether UI state reflects durable backend truth
-- whether operator actions go through the intended backend boundary
-- whether admin-only flows are truly admin-only
+- The web app is an operator surface. It should reflect durable backend truth and actionable errors, not optimistic assumptions.
+- Preserve Supabase browser auth assumptions in `apps/web/src/lib/supabase-client.ts` and `apps/web/src/lib/auth-context.tsx` unless the task is explicitly auth migration work.
+- UI changes must preserve loading, empty, error, disabled, and permission-denied states.
+- Demo messaging UI must clearly say that approval saves drafts for review only and outbound delivery is disabled.
 
-### External providers
+### External Providers And Secrets
 
-- failure handling
-- timeout / rate-limit behavior
-- partial success handling
-- missing credentials behavior
-- idempotency around retries
-- observability of provider failures
+- Provider adapters live in `packages/providers` and discovery runtime logic lives in `packages/discovery`. Preserve timeouts, rate limits, idempotency keys, suppression checks, and provider-error observability.
+- Never print or commit secret values. Name env vars only.
+- Do not add provider side effects in tests unless they are explicitly integration tests and credentials are intentionally configured.
 
----
+## Coding Conventions
 
-## Absolute rules for changes
+- Match the existing TypeScript style: strict types, ESM/NodeNext imports, local Zod validation patterns, and existing route/service/repository organization.
+- Prefer extending existing helpers over introducing new abstractions.
+- Avoid unrelated formatting, broad cleanup, file moves, renames, or dependency changes.
+- Keep changes small and reviewable. Preserve public behavior unless the task explicitly asks to change it.
+- Add comments only when they clarify non-obvious operational logic.
+- Do not create new dependencies without approval.
 
-### Do not do these unless explicitly asked
+## Working Style
 
-- broad refactors
-- mass renames
-- unrelated cleanup
-- architecture rewrites
-- schema rewrites
-- moving logic across app/api/worker boundaries without a concrete reason
-- deleting "unused" code without proving it is actually unused
-- replacing durable flows with simpler direct calls
+- Start non-trivial tasks with `git status --short --branch`.
+- Read the relevant code path, runtime entrypoint, and nearby tests before editing.
+- Read docs after code. Do not assume roadmap, audit, or handoff docs describe implemented runtime behavior.
+- For risky database, auth, worker/outbox, provider, or architecture work, state the short plan and exact files in scope before editing.
+- Make the smallest safe change that solves the requested problem.
+- If the worktree is dirty, distinguish pre-existing user changes from agent changes. Never revert changes you did not make.
+- Do not use destructive git commands unless explicitly requested.
+- If asked to commit, keep commits focused and validated. Do not push unless asked.
 
-### Always do these
+## Parallel Agent Coordination
 
-- read the code path you are touching
-- read nearby tests
-- preserve existing safety mechanisms unless you can prove they are wrong
-- keep change scope narrow
-- validate proportionally to risk
-- explain concrete failure modes, not vibes
+Actively look for safe parallelism on non-trivial tasks. Use read-only explorer agents for codebase research, dependency tracing, migration/schema audits, test discovery, and risk assessment. Use worker agents only for bounded implementation tasks with explicit file ownership. The parent agent remains responsible for the plan, critical-path work, integration, review, validation, and final handoff.
 
----
+Before spawning worker agents, define:
 
-## Repo-state safety rules
+- exact goal
+- file or directory ownership
+- files that are off-limits
+- expected behavior changes
+- behavior that must be preserved
+- validation commands to run
+- what the worker must report back
 
-If the repo is dirty, diverged, or operationally risky:
+Prefer several small parallel units over one broad worker prompt. Do not use sub-agents for tiny single-file edits, unclear requirements, tightly coupled changes, or work where all safe slices touch the same hotspot.
 
-1. Separate these questions explicitly:
-   - Is local `HEAD` contained in `origin/main`?
-   - Is the index clean?
-   - Is the worktree clean?
-2. Never recommend destructive cleanup before preservation if local-only work may exist.
-3. Prefer:
-   - preservation branch
-   - patch artifact for tracked diffs
-   - archive for untracked files
-   - clean replay worktree / clean promotion clone
-4. Do not use a dirty main branch for risky replay or promotion work.
-5. Distinguish:
-   - preserved work
-   - promoted work
-   - discarded residue
+Do not run parallel write agents against the same files, migrations, schema definitions, generated clients, auth/security helpers, worker/outbox code, API contract hotspots, package config, or deployment scripts. Use exactly one database/migration/schema owner at a time.
 
-Preserved does not mean ready to merge.
+Repo-specific no-overlap hotspots:
 
----
+- `supabase/migrations/**`, `supabase/migrations-archived/**`, `supabase/functions/**`, and `supabase/config.toml`
+- `packages/db/prisma/schema.prisma`, `packages/db/prisma/migrations/**`, `packages/db/prisma/seed.ts`, `packages/db/src/schema-health.ts`, `packages/db/src/postgres.ts`, and runtime DB policy helpers
+- `apps/api/src/auth/**`, `apps/api/src/server.ts`, `apps/api/src/index.ts`, `apps/api/src/modules/*/*.routes.ts`, and admin/security modules under `apps/api/src/modules/discovery-admin`
+- `packages/contracts/src/**`
+- `apps/worker/src/queues.ts`, `apps/worker/src/schedules.ts`, `apps/worker/src/outbox-dispatcher.ts`, `apps/worker/src/jobs/**`, `apps/worker/src/messaging/**`, and `apps/worker/src/job-requests/**`
+- `packages/providers/src/**` and provider-facing discovery code in `packages/discovery/src/providers/**`
+- `apps/web/src/lib/supabase-client.ts`, `apps/web/src/lib/auth-context.tsx`, `apps/web/app/api/**`, and operator messaging surfaces under `apps/web/app/dashboard/messages`, `apps/web/app/dashboard/inbox`, and `apps/web/src/components/message-draft-card.tsx`
+- `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `turbo.json`, root `tsconfig*.json`, `.github/workflows/**`, `scripts/**`, and `infra/docker/**`
 
-## Commit discipline
+After meaningful worker-agent code changes, use verifier agents when safe. Verifiers should inspect the diff, relevant code paths, nearby tests, and validation results for regressions, security/privacy leaks, auth/RLS weakening, schema drift, migration mistakes, public contract breakage, worker/outbox/idempotency regressions, brittle abstractions, missing tests, and over-broad changes.
 
-Commit often, but only after a slice is real.
+Verifier findings must be triaged by the parent:
 
-### Good commit discipline
+- apply now: small, safe, clearly improves correctness, security, readability, tests, or maintainability
+- defer: useful but too large, risky, or out of scope
+- reject: incorrect, inconsistent with local patterns, or not worth the tradeoff
 
-- Keep each commit focused on one bounded change.
-- Validate before committing.
-- Commit once a slice is working and proven.
-- Prefer several clean commits over one giant commit.
-- Preserve unfinished or risky work before cleanup.
-- Use scratch clones / scratch branches for replay and promotion work.
+Do not mark a verifier finding handled unless the fix was made and validated, or it is listed in the final response as deferred or rejected with rationale.
 
-### Bad commit discipline
+## Testing Expectations
 
-- giant mixed-purpose commits
-- committing speculative fixes
-- mixing refactor + behavior change + cleanup
-- "checkpoint" commits on shared branches with broken runtime behavior
-- pushing unverified operational changes
+- Validation must match risk. Do not claim tests passed unless they were actually run.
+- Bug fixes should include regression tests where practical.
+- API behavior changes should include route/service/repository tests for the changed module and integration tests for auth, queue submission, webhooks, or lifecycle behavior when affected.
+- Worker/outbox changes should test idempotency, retries, dead-letter/failure handling, singleton keys, recovery behavior, and provider-call blocking where practical.
+- Database/schema changes should include migration inspection plus validation that SQL migrations, Prisma schema/client expectations, schema-health checks, and runtime queries remain aligned.
+- UI changes should include targeted component/utility tests where present and preserve accessibility, loading, empty, disabled, permission, and error states.
+- Provider changes should use unit tests by default and integration tests only when credentials and external calls are intentionally in scope.
+- If tests cannot be run, explain why and list the exact commands the user should run manually.
 
-If a change is not yet trustworthy, preserve it safely rather than pretending it is ready.
+## Final Response Requirements
 
----
+Finish code-work handoffs with:
 
-## Validation rules
+- What changed
+- Files modified
+- Validation commands run with pass/fail status
+- Assumptions made
+- Risks or limitations
+- Skipped tests and why
+- Deferred or rejected verifier findings, if verifier agents were used
+- Recommended follow-up work, if any
 
-Validation must match risk.
+For audits or reviews, lead with findings ranked by production impact, cite exact files/functions, separate `CONFIRMED`, `LIKELY`, and `UNVERIFIED`, and name the real failure mode. Keep summaries secondary.
 
-### For low-risk changes
-
-Use the narrowest meaningful check.
-
-Examples:
-
-- targeted unit test
-- targeted typecheck
-- targeted lint
-- single integration test around the changed seam
-
-### For medium/high-risk changes
-
-Use stronger proof.
-
-Examples:
-
-- targeted integration test
-- replay in clean clone / clean worktree
-- queue / outbox / recovery validation
-- env/bootstrap verification
-- schema health check
-- production-like bootstrap or smoke check when relevant
-
-### Never use as sole proof
-
-- "it compiled"
-- "tests passed" without naming which tests
-- "small diff"
-- "docs say so"
-- "it worked once locally"
-
----
-
-## Workspace / bootstrap discipline
-
-This monorepo uses workspace packages that export built artifacts.
-
-- A clean clone may require package builds for exported `dist/*` entrypoints before certain targeted tests run.
-- If a clean environment fails to resolve a workspace package like `@lead-flood/db`, `@lead-flood/contracts`, or `@lead-flood/discovery`, inspect that package's `package.json` first.
-- Prefer the smallest metadata-backed bootstrap needed for the exact failing surface.
-- Prefer repo script aliases over ad-hoc setup commands when an existing script already covers the flow.
-- Do not jump straight to a broad workspace build unless the package metadata or scripts prove it is required.
-
-### Local environment expectations
-
-- Node 22+
-- pnpm
-- Docker only when using local infra/bootstrap or other disposable local-database flows
-- use the repo's existing bootstrap / preflight scripts where appropriate
-- use pnpm only; do not use `npm install` or `yarn`
-
-### Preferred setup paths
-
-- `pnpm doctor` or `bash scripts/preflight.sh --with-docker` before local infra/bootstrap work
-- `pnpm bootstrap` or `bash scripts/bootstrap.sh` for the full local bootstrap flow
-
-Docker is not a default requirement for every task in this repo. Use it when the chosen workflow actually depends on local infra.
-
-Do not invent a parallel setup flow unless the existing one is broken and you can prove why.
-
----
-
-## Testing guidance by surface
-
-### API changes
-
-Prefer:
-
-- module-level unit tests
-- integration tests for auth, queue submission, webhook handling, or lead lifecycle changes
-
-### Worker changes
-
-Prefer:
-
-- targeted job tests
-- targeted outbox / recovery / retry tests
-- integration tests for exactly the touched queue / handler path
-
-### DB / schema changes
-
-Prefer:
-
-- schema health validation
-- migration inspection
-- runtime validation in affected services
-- SQL-first production compatibility checks
-
-### Web changes
-
-Prefer:
-
-- targeted component / utility tests
-- route-level checks
-- proof that privileged operations still flow through intended backend boundaries
-
-Do not claim "more tests needed" without naming the dangerous seam.
-
----
-
-## How to reason about changes
-
-When proposing or reviewing a change, explicitly think through:
-
-1. Entry point
-   - How does this code path start?
-2. State transition
-   - What durable state changes?
-   - In what order?
-3. External side effects
-   - Are emails, WhatsApp sends, provider calls, or other side effects involved?
-4. Retry behavior
-   - What happens if this runs twice?
-5. Recovery behavior
-   - If the process crashes halfway through, how does the system recover?
-6. Operator truth
-   - What will the UI/operator see if this fails?
-7. Production safety
-   - What is the real failure mode if this is wrong?
-
-If you cannot answer these, you do not understand the change well enough yet.
-
----
-
-## Output requirements for audits and code work
-
-When asked to audit or verify:
-
-- separate `CONFIRMED`, `LIKELY`, and `UNVERIFIED`
-- cite exact files and functions
-- name the real failure mode
-- rank issues by production impact
-- prefer top blockers over exhaustive lists
-
-When asked to implement:
-
-- state exact scope
-- name files in bounds
-- name what must not be touched
-- validate the changed seam
-- stop at a clean boundary
-
-When blocked:
-
-- report the exact blocker
-- report what you proved
-- report what you intentionally did not do
-- do not bluff completion
-
----
-
-## Lead-Flood-specific heuristics
-
-### Good changes usually:
-
-- strengthen queue durability
-- improve idempotency
-- clarify auth/admin boundaries
-- reduce schema/runtime drift
-- make failures more observable
-- improve recovery correctness
-- preserve operator-visible truth
-
-### Suspicious changes usually:
-
-- move privileged work into the web layer
-- add direct external side effects outside durable flows
-- skip recovery / outbox / retry semantics
-- rely on docs instead of code
-- assume Prisma is production schema authority
-- hide failure state from operators
-- broaden scope "while we're here"
-
----
-
-## If you are unsure
-
-Bias toward:
-
-- smaller scope
-- more evidence
-- code over docs
-- durable semantics over convenience
-- recovery correctness over speed
-- preserving state before cleanup
-- stopping honestly over fake completion
-
-The goal is not to make the repo prettier.
-
-The goal is to make Lead-Flood safer to operate in production.
+Do not bluff completion. If blocked, report the exact blocker, what was proved, and what was intentionally not done.

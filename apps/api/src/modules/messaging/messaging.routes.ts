@@ -34,6 +34,7 @@ import {
   MessagingDraftGenerationUnavailableError,
   MessagingNotFoundError,
   MessagingNotImplementedError,
+  MessagingOutboundDisabledError,
   MessagingSendIneligibleError,
 } from './messaging.errors.js';
 import { requireAppAdminAccess } from '../../auth/guard.js';
@@ -151,6 +152,16 @@ function handleModuleError(error: unknown, request: FastifyRequest, reply: Fasti
 
   if (error instanceof MessagingSendIneligibleError) {
     reply.status(422).send(
+      ErrorResponseSchema.parse({
+        error: error.message,
+        requestId: request.id,
+      }),
+    );
+    return true;
+  }
+
+  if (error instanceof MessagingOutboundDisabledError) {
+    reply.status(403).send(
       ErrorResponseSchema.parse({
         error: error.message,
         requestId: request.id,

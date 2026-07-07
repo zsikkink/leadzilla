@@ -1,8 +1,10 @@
-# LEAD-FLOOD Documentation
+# LEADZILLA Documentation
+
+This repository is being oriented toward Leadzilla: a demo-hosted version of the original Zbooni lead-generation platform. The current demo goal is bounded discovery/scoring, working message drafting, disabled outbound sending, retained Zbooni-discovered demo leads, rewritten Leadzilla-neutral ICPs where needed, bug fixes, and UI/UX simplification without new feature development.
 
 ## Current Canonical Docs
 
-1. `docs/CURRENT_STATE.md` — Authoritative high-level current-state and handoff doc for active architecture, boundaries, sequencing, and the latest verified production status
+1. `docs/CURRENT_STATE.md` — Authoritative high-level current-state and handoff doc for active architecture, demo goals, boundaries, sequencing, and the latest verified production status
 2. `docs/PROD_REMOTE_DB_STRATEGY.md` — Canonical DB/schema workflow and operator commands
 3. `docs/RUNTIME_DB_ACCESS_STATUS.md` — Current Prisma-to-Postgres runtime migration status
 4. `docs/SETUP_ONBOARDING.md` — Fresh-clone setup and local runtime expectations
@@ -11,7 +13,7 @@
 
 ## Supporting References
 
-- `lead-flood-system-walkthrough.md` (repo root) — Pipeline walkthrough; current for the corrected scoring, messaging, discovery-provider, and contact-handling behavior called out at the top of the file
+- `lead-flood-system-walkthrough.md` (repo root) — Pipeline walkthrough; current for the corrected scoring, messaging, discovery-provider, and contact-handling behavior called out at the top of the file. Treat send-flow sections as historical/full-production implementation reference, not demo scope.
 - `docs/PROCESS-FLOW.md` — Mirror of the pipeline walkthrough kept for docs discoverability
 - `docs/pipeline-workflow.md` — Operator-oriented pipeline overview
 - `docs/api-gotchas.md` — Provider-specific API quirks

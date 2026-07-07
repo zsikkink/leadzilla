@@ -6,7 +6,7 @@ import type {
   MessageDraftResponse,
   MessageSendResponse,
 } from '@lead-flood/contracts';
-import { AlertTriangle, Check, Minus, Send, Square, X, XCircle } from 'lucide-react';
+import { AlertTriangle, Check, Minus, Square, X, XCircle } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -445,14 +445,14 @@ export default function MessagesPage() {
 
       if (allPending.length === 0) {
         toast.dismiss(toastId);
-        toast.info('No pending drafts to send');
+        toast.info('No pending drafts to approve');
         setApproving(false);
         return;
       }
 
       let approved = 0;
       let failed = 0;
-      toast.loading(`Sending... 0 of ${allPending.length}`, { id: toastId });
+      toast.loading(`Approving... 0 of ${allPending.length}`, { id: toastId });
 
       for (const draft of allPending) {
         try {
@@ -465,14 +465,14 @@ export default function MessagesPage() {
         } catch {
           failed++;
         }
-        toast.loading(`Sending... ${approved + failed} of ${allPending.length}`, { id: toastId });
+        toast.loading(`Approving... ${approved + failed} of ${allPending.length}`, { id: toastId });
       }
 
       toast.dismiss(toastId);
       if (failed === 0) {
-        toast.success(`Queued all ${approved} pending drafts to send`);
+        toast.success(`Approved all ${approved} pending drafts. No messages were sent.`);
       } else {
-        toast.error(`Queued ${approved} of ${allPending.length} drafts to send (${failed} failed)`);
+        toast.error(`Approved ${approved} of ${allPending.length} drafts. No messages were sent. ${failed} failed.`);
       }
 
       refreshQueueData();
@@ -514,9 +514,9 @@ export default function MessagesPage() {
     const failed = results.filter((r) => r.status === 'rejected').length;
 
     if (failed === 0) {
-      toast.success(`Queued ${succeeded} draft${succeeded !== 1 ? 's' : ''} to send`);
+      toast.success(`Approved ${succeeded} draft${succeeded !== 1 ? 's' : ''}. No messages were sent.`);
     } else {
-      toast.error(`Queued ${succeeded} of ${targets.length} drafts to send (${failed} failed)`);
+      toast.error(`Approved ${succeeded} of ${targets.length} drafts. No messages were sent. ${failed} failed.`);
     }
 
     clearSelection();
@@ -578,7 +578,7 @@ export default function MessagesPage() {
       return {
         badge: 'Loading approval mode',
         badgeClass: 'bg-muted/20 text-muted-foreground',
-        body: 'Loading runtime approval settings for initial outbound drafts.',
+        body: 'Loading draft review settings. Outbound delivery remains disabled for this demo.',
       };
     }
 
@@ -594,7 +594,7 @@ export default function MessagesPage() {
       return {
         badge: 'Manual approval only',
         badgeClass: 'bg-amber-500/15 text-amber-300',
-        body: 'Runtime override is on. Initial drafts require explicit approval, and auto-approval is currently suppressed.',
+        body: 'Draft-only demo is active. Approving records review only; no email or WhatsApp message is sent.',
       };
     }
 
@@ -606,7 +606,7 @@ export default function MessagesPage() {
       return {
         badge: 'Auto-approval active',
         badgeClass: 'bg-zbooni-green/15 text-zbooni-green',
-        body: `Initial drafts auto-approve and queue their send when score is between ${formatPercent(approvalMode.autoApproveScoreMin)} and ${formatPercent(approvalMode.autoApproveScoreMax)}. Drafts outside that range stay pending approval.`,
+        body: `Auto-approval is configured for scores between ${formatPercent(approvalMode.autoApproveScoreMin)} and ${formatPercent(approvalMode.autoApproveScoreMax)}, but outbound sending is disabled in code. Approved drafts remain review records only.`,
       };
     }
 
@@ -614,14 +614,14 @@ export default function MessagesPage() {
       return {
         badge: 'Auto-approve misconfigured',
         badgeClass: 'bg-amber-500/15 text-amber-300',
-        body: 'Auto-approve is enabled, but the score range is unavailable here. Treat initial drafts as pending approval until that setting is corrected.',
+        body: 'Auto-approve is enabled, but the score range is unavailable here. Outbound sending is still disabled in code.',
       };
     }
 
     return {
       badge: 'Manual approval',
       badgeClass: 'bg-blue-500/15 text-blue-300',
-      body: 'Auto-approve is off. Initial drafts stay pending until an operator approves them, then the initial send is queued automatically.',
+      body: 'Outbound sending is disabled in code. Pending drafts can be approved for review tracking only.',
     };
   }, [approvalMode]);
 
@@ -635,12 +635,12 @@ export default function MessagesPage() {
   return (
     <div className="space-y-5 pb-24">
       <div>
-        <h1 className="text-2xl font-extrabold tracking-tight">Message Queue</h1>
+        <h1 className="text-2xl font-extrabold tracking-tight">Message Drafts</h1>
         <p className="mt-0.5 text-sm text-muted-foreground">
           {drafts.data ? `${drafts.data.total} drafts` : 'Loading...'}
         </p>
         <p className="mt-1 text-xs text-muted-foreground/60">
-          Drafts appear here only after an operator triggers generation from a qualified lead. Review them here, then approve or reject; approved initial drafts queue their send automatically unless auto-approval already handled it.
+          Drafts appear here after generation from a qualified lead. Review, edit, approve, or reject them here; approving never sends email or WhatsApp in the Leadzilla demo.
         </p>
       </div>
 
@@ -712,7 +712,7 @@ export default function MessagesPage() {
               ) : null}
             </div>
             <p className="mt-1.5 text-[11px] text-muted-foreground/60">
-              These messages could not be delivered. Check the lead&apos;s email address and retry or try a different contact.
+              These are historical delivery records. New outbound delivery is disabled for the demo, so retrying sends is not available.
             </p>
           </div>
         );
@@ -747,8 +747,8 @@ export default function MessagesPage() {
               onClick={handleAutoApproveAll}
               className="inline-flex items-center gap-1.5 rounded-lg bg-zbooni-green/20 px-3.5 py-2 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/30 disabled:opacity-50"
             >
-              <Send className="h-3.5 w-3.5" />
-              {approving ? 'Sending...' : `Send all (${pendingCount})`}
+              <Check className="h-3.5 w-3.5" />
+              {approving ? 'Approving...' : `Approve all (${pendingCount})`}
             </button>
           ) : null}
           <CustomSelect
@@ -940,10 +940,10 @@ export default function MessagesPage() {
                 onClick={handleBulkApprove}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-zbooni-green/20 px-3.5 py-2 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/30 disabled:opacity-50"
               >
-                <Send className="h-3.5 w-3.5" />
+                <Check className="h-3.5 w-3.5" />
                 {bulkAction === 'approve'
-                  ? 'Sending...'
-                  : `Send all (${selectedPendingCount})`}
+                  ? 'Approving...'
+                  : `Approve (${selectedPendingCount})`}
               </button>
 
               <button

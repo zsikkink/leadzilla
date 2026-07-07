@@ -1,25 +1,27 @@
-# Lead-Flood: How It Works
+# Leadzilla: How It Works
 
-A walkthrough of how Lead-Flood finds businesses, qualifies them, discovers contacts, scores them, drafts outreach, and sends approved messages.
+A walkthrough of how the platform finds businesses, qualifies them, discovers contacts, scores them, drafts outreach, and, in the full historical implementation, sends approved messages.
 
 Accuracy note added 2026-05-05: this document has been updated for the current SerpAPI-default discovery path, generic-contact handling, resolved score semantics, and manual draft-generation/approval flow. Code remains the source of truth.
+
+Leadzilla demo note added 2026-07-07: the demo scope stops at bounded discovery/scoring and message drafting. Outbound email/WhatsApp delivery is disabled in API and worker code for the demo. Treat send and follow-up sections below as historical/full-production implementation reference only.
 
 ---
 
 ## The Big Picture
 
-Lead-Flood is an **automated sales pipeline**. You tell it what kind of business you want to sell to, and it:
+Leadzilla is a demo-oriented lead discovery and drafting pipeline. You tell it what kind of business you want to evaluate, and it:
 
 1. **Finds** those businesses through the configured discovery provider (SerpAPI by default; Google Places only when explicitly configured)
 2. **Filters** out the junk (parked websites, too-small businesses, wrong industry)
 3. **Researches** each business (scrapes their website, checks their Instagram, finds contacts)
 4. **Scores** each lead (how likely are they to buy?)
 5. **Drafts** a sales message using AI when an operator triggers draft generation
-6. **Sends** that message via email or WhatsApp after approval, unless runtime auto-approval is explicitly enabled
-7. **Follows up** automatically if they don't reply
-8. **Learns** from what works and recommends improvements
+6. **Stops before outbound delivery** in the demo; sending remains historical/full-production implementation reference
+7. **Follows up** automatically only in the historical/full-production implementation
+8. **Learns** from what works where the learning loop is explicitly enabled
 
-Discovery, enrichment, scoring, recovery, and follow-up checks run as background jobs. Initial outreach is intentionally operator-visible: qualified leads wait for an operator/API action to generate a draft, then approval gates the send unless runtime auto-approval has been explicitly enabled.
+Discovery, enrichment, scoring, recovery, and follow-up checks run as background jobs. In the Leadzilla demo, qualified leads wait for an operator/API action to generate a draft, and the demo must not deliver outbound messages.
 
 ---
 
@@ -622,7 +624,7 @@ Temperature is set to 0.7 (moderately creative — varied enough to feel natural
 **Approval flow**:
 - Draft generation is operator/API-triggered for qualified leads.
 - If `manualApprovalOnly` is enabled, drafts remain `PENDING` until an operator approves them.
-- If runtime auto-approval is enabled and `manualApprovalOnly` is off, drafts whose score is inside the configured auto-approve range can be marked `AUTO_APPROVED` and `message.send` is enqueued.
+- If runtime auto-approval is enabled and `manualApprovalOnly` is off, drafts whose score is inside the configured auto-approve range can be marked `AUTO_APPROVED`; in the Leadzilla demo, no `message.send` delivery is enqueued.
 - Otherwise drafts remain `PENDING`, visible in the dashboard and lead detail page for review, edit, re-draft, approval, or rejection.
 
 **Follow-up messages**: When this job is triggered for a follow-up (not the initial outreach), it receives additional context: which features/angles were already pitched in previous messages, and a `v1-followup` prompt variant that avoids repeating the same pitch.
@@ -643,11 +645,13 @@ Delivers the approved message through the appropriate channel.
 - **Provider idempotency**: Email via Resend also carries an `Idempotency-Key`. WhatsApp via Trengo does not have an equivalent provider token, so the persisted `SENDING` claim is the primary duplicate-prevention boundary there.
 
 #### Email (via Resend)
+- Leadzilla demo note: outbound delivery is disabled in code; this section is historical/full-production reference.
 - **Daily limit**: Configurable (`emailDailyLimit` setting, default 10/day). The rate limiter tracks sends per 24-hour rolling window.
 - **When rate-limited**: The job doesn't fail — it re-enqueues itself with a `startAfter` timestamp set to when the next sending window opens. This means emails smoothly spread across days instead of piling up.
 - **Bounce handling**: Resend sends webhook events when emails bounce. These create `FeedbackEvent` records with type `BOUNCED`. Bounced leads are suppressed from all future sends.
 
 #### WhatsApp (via Trengo)
+- Leadzilla demo note: outbound delivery is disabled in code; this section is historical/full-production reference.
 - **Daily limit**: 50 messages/day (configurable via `whatsappDailyLimit` setting)
 - **Business hours only**: Messages are only sent during UAE business hours (9:00 AM – 6:00 PM Gulf Standard Time). Jobs that arrive outside this window are re-enqueued for the next business day morning.
 - **First contact**: Must use a **template message** — WhatsApp requires pre-approved templates for initiating conversations. The template ID is configured per Trengo channel.
@@ -807,7 +811,7 @@ These are runtime pipeline settings. Prompt controls are operator-editable from 
 | Setting | What It Controls | Default | Impact |
 |---------|-----------------|---------|--------|
 | Manual approval only | Suppress auto-approval for outbound drafts | On in the honest/manual operating mode | Keeps sends operator-approved even when auto-approval settings exist |
-| Auto-approve | Skip manual message review for score-qualified drafts only when manual approval only is off | Off | When on and allowed, drafts in the configured score range can enqueue sends automatically |
+| Auto-approve | Skip manual message review for score-qualified drafts only when manual approval only is off | Off | Historical/full-production send execution only; Leadzilla demo delivery remains disabled |
 | Auto-approve score range | Min and max score for auto-approval | 100/100 (effectively disabled) | Set to e.g. 60/100 to auto-approve scores ≥60 |
 | Qualification threshold | Minimum final persisted score to qualify a lead | 0.40 | Lower = more leads (riskier). Higher = fewer leads (safer) |
 | Min review count | Ignore businesses with fewer Google reviews | 15 | Lower catches more small businesses. Higher filters for established ones |

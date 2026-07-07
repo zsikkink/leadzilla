@@ -43,6 +43,10 @@ import {
 } from './server.js';
 import type { ResendReceivedEmail } from './modules/webhook/webhook.service.js';
 
+const OUTBOUND_DISABLED_FAILURE_CODE = 'OUTBOUND_DISABLED';
+const OUTBOUND_DISABLED_FAILURE_REASON =
+  'Outbound sending is disabled for the Leadzilla demo. Drafts can be reviewed and approved, but email and WhatsApp delivery are blocked.';
+
 function toDayStart(value: string): Date {
   const source = new Date(value);
   return new Date(Date.UTC(source.getUTCFullYear(), source.getUTCMonth(), source.getUTCDate()));
@@ -660,72 +664,51 @@ async function main(): Promise<void> {
   };
 
   const publishMessageSend = async (payload: MessagingSendJobPayload): Promise<void> => {
-    const { outboxEventId, ...bossPayload } = payload;
-    const startAfter = resolveMessageSendStartAfter(payload);
-    const bossSendOptions = {
-      singletonKey: `message.send:${payload.sendId}`,
-      retryLimit: 5,
-      retryDelay: 90,
-      retryBackoff: true,
-      ...(startAfter ? { startAfter } : {}),
-    };
-
-    if (!outboxEventId) {
-      await boss.send('message.send', bossPayload, bossSendOptions);
-      return;
-    }
-
     try {
-      await boss.send('message.send', bossPayload, bossSendOptions);
-    } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Failed to enqueue message.send job';
-      logger.error(
-        { error, sendId: payload.sendId, outboxEventId },
-        'Immediate queue publish failed; queued MessageSend recovery will handle dispatch',
-      );
-
-      try {
-        await prisma.outboxEvent.update({
-          where: { id: outboxEventId },
-          data: {
-            status: 'failed',
-            attempts: {
-              increment: 1,
-            },
-            lastError: errorMessage,
-            nextAttemptAt: new Date(Date.now() + 5000),
-          },
-        });
-      } catch (updateError: unknown) {
-        logger.error(
-          { error: updateError, sendId: payload.sendId, outboxEventId },
-          'Failed to mark message.send outbox event for retry after publish failure',
-        );
-      }
-
-      return;
-    }
-
-    try {
-      await prisma.outboxEvent.update({
-        where: { id: outboxEventId },
+      await prisma.messageSend.updateMany({
+        where: {
+          id: payload.sendId,
+          status: 'QUEUED',
+        },
         data: {
-          status: 'sent',
-          attempts: {
-            increment: 1,
-          },
-          processedAt: new Date(),
-          nextAttemptAt: null,
-          lastError: null,
+          status: 'FAILED',
+          failureCode: OUTBOUND_DISABLED_FAILURE_CODE,
+          failureReason: OUTBOUND_DISABLED_FAILURE_REASON,
         },
       });
     } catch (error: unknown) {
       logger.error(
-        { error, sendId: payload.sendId, outboxEventId },
-        'Immediate message.send publish succeeded but failed to mark outbox event as sent',
+        { error, sendId: payload.sendId },
+        'Failed to mark MessageSend failed after blocking outbound publish',
       );
     }
+
+    if (payload.outboxEventId) {
+      try {
+        await prisma.outboxEvent.update({
+          where: { id: payload.outboxEventId },
+          data: {
+            status: 'sent',
+            attempts: {
+              increment: 1,
+            },
+            processedAt: new Date(),
+            nextAttemptAt: null,
+            lastError: 'Skipped publish because outbound sending is disabled for the Leadzilla demo',
+          },
+        });
+      } catch (updateError: unknown) {
+        logger.error(
+          { error: updateError, sendId: payload.sendId, outboxEventId: payload.outboxEventId },
+          'Failed to mark message.send outbox event as skipped after blocking outbound publish',
+        );
+      }
+    }
+
+    logger.warn(
+      { sendId: payload.sendId, outboxEventId: payload.outboxEventId },
+      'Skipped message.send publish because outbound sending is disabled for the Leadzilla demo',
+    );
   };
 
   const triggerDiscoverySeedJob = async (

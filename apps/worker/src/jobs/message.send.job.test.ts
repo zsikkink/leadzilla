@@ -35,6 +35,8 @@ vi.mock('../utils/pipeline-settings.js', () => ({
 }));
 
 import {
+  OUTBOUND_DISABLED_FAILURE_CODE,
+  OUTBOUND_DISABLED_FAILURE_REASON,
   handleMessageSendJob,
   type MessageSendJobDependencies,
   type MessageSendJobPayload,
@@ -93,6 +95,7 @@ function makeDeps(sendEmail: () => Promise<{
       sendMessage: vi.fn(),
       sendTemplateMessage: vi.fn(),
     } as unknown as MessageSendJobDependencies['trengoAdapter'],
+    outboundSendsEnabled: true,
   };
 }
 
@@ -128,6 +131,55 @@ describe('handleMessageSendJob stale retry safety', () => {
     dbMock.prisma.lead.updateMany.mockResolvedValue({ count: 1 });
   });
 
+  it('fails queued sends before provider calls when outbound sending is disabled', async () => {
+    const sendEmail = vi.fn(async () => ({
+      status: 'success' as const,
+      providerMessageId: 'provider_msg_1',
+    }));
+    const deps = {
+      resendAdapter: {
+        isConfigured: true,
+        sendEmail,
+      } as unknown as MessageSendJobDependencies['resendAdapter'],
+      trengoAdapter: {
+        isConfigured: true,
+        sendMessage: vi.fn(),
+        sendTemplateMessage: vi.fn(),
+      } as unknown as MessageSendJobDependencies['trengoAdapter'],
+    };
+
+    await handleMessageSendJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        sendId: 'send_1',
+        messageDraftId: 'draft_1',
+        messageVariantId: 'variant_1',
+        idempotencyKey: 'idem_1',
+        channel: 'EMAIL',
+      }),
+      deps,
+    );
+
+    expect(dbMock.prisma.messageSend.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'send_1',
+        status: 'QUEUED',
+      },
+      data: {
+        status: 'FAILED',
+        failureCode: OUTBOUND_DISABLED_FAILURE_CODE,
+        failureReason: OUTBOUND_DISABLED_FAILURE_REASON,
+      },
+    });
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(deps.trengoAdapter.sendTemplateMessage).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ sendId: 'send_1', status: 'QUEUED' }),
+      'Outbound send blocked because sending is disabled',
+    );
+  });
+
   it('skips stale success writes when the send row advanced after the initial fetch', async () => {
     const sendEmail = vi.fn(async () => ({
       status: 'success' as const,
@@ -143,6 +195,7 @@ describe('handleMessageSendJob stale retry safety', () => {
         sendMessage: vi.fn(),
         sendTemplateMessage: vi.fn(),
       } as unknown as MessageSendJobDependencies['trengoAdapter'],
+      outboundSendsEnabled: true,
     };
 
     dbMock.prisma.messageSend.updateMany
@@ -305,6 +358,7 @@ describe('handleMessageSendJob stale retry safety', () => {
         sendMessage: vi.fn(),
         sendTemplateMessage: vi.fn(),
       } as unknown as MessageSendJobDependencies['trengoAdapter'],
+      outboundSendsEnabled: true,
     };
 
     await handleMessageSendJob(
@@ -405,6 +459,7 @@ describe('handleMessageSendJob stale retry safety', () => {
           ticketId: 'ticket_42',
         })),
       } as unknown as MessageSendJobDependencies['trengoAdapter'],
+      outboundSendsEnabled: true,
     };
 
     await handleMessageSendJob(
@@ -630,6 +685,7 @@ describe('handleMessageSendJob stale retry safety', () => {
         sendMessage: vi.fn(),
         sendTemplateMessage: vi.fn(),
       } as unknown as MessageSendJobDependencies['trengoAdapter'],
+      outboundSendsEnabled: true,
     };
 
     dbMock.prisma.messageSend.updateMany
@@ -768,6 +824,7 @@ describe('handleMessageSendJob stale retry safety', () => {
           },
         })),
       } as unknown as MessageSendJobDependencies['trengoAdapter'],
+      outboundSendsEnabled: true,
     };
 
     await expect(handleMessageSendJob(
@@ -850,6 +907,7 @@ describe('handleMessageSendJob stale retry safety', () => {
           },
         })),
       } as unknown as MessageSendJobDependencies['trengoAdapter'],
+      outboundSendsEnabled: true,
     };
 
     await handleMessageSendJob(

@@ -22,6 +22,7 @@ import {
   MessagingDraftGenerationIneligibleError,
   MessagingDraftGenerationUnavailableError,
   MessagingNotFoundError,
+  MessagingOutboundDisabledError,
 } from './messaging.errors.js';
 
 export interface MessagingSendJobPayload {
@@ -104,30 +105,6 @@ async function loadVerifiedQualificationThreshold(): Promise<number> {
   }
 
   return threshold;
-}
-
-function buildMessageSendJobPayload(
-  input: {
-    id: string;
-    messageDraftId: string;
-    messageVariantId: string;
-    idempotencyKey: string;
-    channel: 'EMAIL' | 'WHATSAPP';
-    scheduledAt: string | null;
-  },
-  runId: string,
-  outboxEventId?: string,
-): MessagingSendJobPayload {
-  return {
-    runId,
-    sendId: input.id,
-    messageDraftId: input.messageDraftId,
-    messageVariantId: input.messageVariantId,
-    idempotencyKey: input.idempotencyKey,
-    channel: input.channel,
-    scheduledAt: input.scheduledAt ?? undefined,
-    ...(outboxEventId ? { outboxEventId } : {}),
-  };
 }
 
 export function buildMessagingService(
@@ -216,44 +193,15 @@ export function buildMessagingService(
       return repository.createManualMessageDraft(input);
     },
     async approveMessageDraft(draftId, input) {
-      const existingInitialSend = await repository.getExistingInitialSendForDraft(draftId);
-      if (existingInitialSend) {
-        if (existingInitialSend.status === 'QUEUED') {
-          await dependencies.enqueueMessageSend(
-            buildMessageSendJobPayload(existingInitialSend, `message.send:${existingInitialSend.id}`),
-          );
-        }
-
-        return repository.getMessageDraft(draftId);
-      }
-
       const approval = await repository.approveMessageDraft(draftId, input);
-
-      if (approval.initialSend?.send.status === 'QUEUED') {
-        await dependencies.enqueueMessageSend(
-          buildMessageSendJobPayload(
-            approval.initialSend.send,
-            `message.send:${approval.initialSend.send.id}`,
-            approval.initialSend.outboxEventId,
-          ),
-        );
-      }
-
       return approval.draft;
     },
     async rejectMessageDraft(draftId, input) {
       return repository.rejectMessageDraft(draftId, input);
     },
     async sendMessage(input) {
-      const result = await repository.sendMessage(input);
-
-      if (result.send.status === 'QUEUED') {
-        await dependencies.enqueueMessageSend(
-          buildMessageSendJobPayload(result.send, result.send.id, result.outboxEventId),
-        );
-      }
-
-      return result.send;
+      void input;
+      throw new MessagingOutboundDisabledError();
     },
     async listMessageSends(query) {
       return repository.listMessageSends(query);

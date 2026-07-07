@@ -20,7 +20,6 @@ vi.mock('@lead-flood/db', () => ({
 
 import {
   handleMessageSendRecoveryJob,
-  STALE_QUEUED_MESSAGE_SEND_THRESHOLD_MS,
   type MessageSendRecoveryJobPayload,
 } from './message.send.recovery.job.js';
 
@@ -49,35 +48,8 @@ describe('handleMessageSendRecoveryJob', () => {
     vi.useRealTimers();
   });
 
-  it('queries only aged QUEUED sends and republishes them immediately', async () => {
-    dbMock.prisma.messageSend.findMany
-      .mockResolvedValueOnce([
-        {
-          id: 'send_initial',
-          messageDraftId: 'draft_initial',
-          messageVariantId: 'variant_initial',
-          idempotencyKey: 'idem_initial',
-          channel: 'EMAIL',
-          scheduledAt: null,
-        },
-        {
-          id: 'send_approval',
-          messageDraftId: 'draft_approval',
-          messageVariantId: 'variant_approval',
-          idempotencyKey: 'idem_approval',
-          channel: 'WHATSAPP',
-          scheduledAt: new Date('2026-03-22T14:25:00.000Z'),
-        },
-        {
-          id: 'send_auto',
-          messageDraftId: 'draft_auto',
-          messageVariantId: 'variant_auto',
-          idempotencyKey: 'idem_auto',
-          channel: 'EMAIL',
-          scheduledAt: null,
-        },
-      ])
-      .mockResolvedValueOnce([]);
+  it('skips queued send replay while outbound sending is disabled', async () => {
+    dbMock.prisma.messageSend.findMany.mockResolvedValueOnce([]);
 
     const boss = {
       send: vi.fn().mockResolvedValue(undefined),
@@ -91,114 +63,16 @@ describe('handleMessageSendRecoveryJob', () => {
       { boss },
     );
 
-    expect(dbMock.prisma.messageSend.findMany).toHaveBeenNthCalledWith(1, {
-      where: {
-        status: 'QUEUED',
-        updatedAt: {
-          lt: new Date(Date.now() - STALE_QUEUED_MESSAGE_SEND_THRESHOLD_MS),
-        },
-      },
-      orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
-      take: 100,
-      select: {
-        id: true,
-        messageDraftId: true,
-        messageVariantId: true,
-        idempotencyKey: true,
-        channel: true,
-        scheduledAt: true,
-      },
-    });
-    expect(dbMock.prisma.messageSend.findMany).toHaveBeenNthCalledWith(2, {
-      where: {
-        status: 'SENDING',
-        updatedAt: {
-          lt: new Date(Date.now() - STALE_QUEUED_MESSAGE_SEND_THRESHOLD_MS),
-        },
-      },
-      orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
-      take: 100,
-      select: {
-        id: true,
-        updatedAt: true,
-      },
-    });
-
-    expect(boss.send).toHaveBeenCalledTimes(3);
+    expect(boss.send).not.toHaveBeenCalled();
     expect(dbMock.prisma.messageSend.updateMany).not.toHaveBeenCalled();
-    expect(boss.send).toHaveBeenNthCalledWith(
-      1,
-      'message.send',
-      {
-        runId: 'message.send:send_initial',
-        sendId: 'send_initial',
-        messageDraftId: 'draft_initial',
-        messageVariantId: 'variant_initial',
-        idempotencyKey: 'idem_initial',
-        channel: 'EMAIL',
-      },
-      {
-        singletonKey: 'message.send:send_initial',
-        retryLimit: 5,
-        retryDelay: 90,
-        retryBackoff: true,
-        deadLetter: 'message.send.dead_letter',
-      },
-    );
-    expect(boss.send).toHaveBeenNthCalledWith(
-      2,
-      'message.send',
-      {
-        runId: 'message.send:send_approval',
-        sendId: 'send_approval',
-        messageDraftId: 'draft_approval',
-        messageVariantId: 'variant_approval',
-        idempotencyKey: 'idem_approval',
-        channel: 'WHATSAPP',
-        scheduledAt: '2026-03-22T14:25:00.000Z',
-      },
-      {
-        singletonKey: 'message.send:send_approval',
-        retryLimit: 5,
-        retryDelay: 90,
-        retryBackoff: true,
-        deadLetter: 'message.send.dead_letter',
-      },
-    );
-    expect(boss.send).toHaveBeenNthCalledWith(
-      3,
-      'message.send',
-      {
-        runId: 'message.send:send_auto',
-        sendId: 'send_auto',
-        messageDraftId: 'draft_auto',
-        messageVariantId: 'variant_auto',
-        idempotencyKey: 'idem_auto',
-        channel: 'EMAIL',
-      },
-      {
-        singletonKey: 'message.send:send_auto',
-        retryLimit: 5,
-        retryDelay: 90,
-        retryBackoff: true,
-        deadLetter: 'message.send.dead_letter',
-      },
+    expect(logger.warn).toHaveBeenCalledWith(
+      {},
+      'Skipping stale queued MessageSend recovery because outbound sending is disabled for the Leadzilla demo',
     );
   });
 
-  it('preserves future scheduled sends with startAfter', async () => {
-    dbMock.prisma.messageSend.findMany
-      .mockResolvedValueOnce([
-        {
-          id: 'send_scheduled',
-          messageDraftId: 'draft_scheduled',
-          messageVariantId: 'variant_scheduled',
-          idempotencyKey: 'idem_scheduled',
-          channel: 'EMAIL',
-          scheduledAt: new Date('2026-03-22T15:00:00.000Z'),
-        },
-      ])
-      .mockResolvedValueOnce([]);
+  it('does not replay future scheduled sends while outbound sending is disabled', async () => {
+    dbMock.prisma.messageSend.findMany.mockResolvedValueOnce([]);
 
     const boss = {
       send: vi.fn().mockResolvedValue(undefined),
@@ -212,32 +86,12 @@ describe('handleMessageSendRecoveryJob', () => {
       { boss },
     );
 
-    expect(boss.send).toHaveBeenCalledWith(
-      'message.send',
-      {
-        runId: 'message.send:send_scheduled',
-        sendId: 'send_scheduled',
-        messageDraftId: 'draft_scheduled',
-        messageVariantId: 'variant_scheduled',
-        idempotencyKey: 'idem_scheduled',
-        channel: 'EMAIL',
-        scheduledAt: '2026-03-22T15:00:00.000Z',
-      },
-      {
-        singletonKey: 'message.send:send_scheduled',
-        retryLimit: 5,
-        retryDelay: 90,
-        retryBackoff: true,
-        deadLetter: 'message.send.dead_letter',
-        startAfter: new Date('2026-03-22T15:00:00.000Z'),
-      },
-    );
+    expect(boss.send).not.toHaveBeenCalled();
     expect(dbMock.prisma.messageSend.updateMany).not.toHaveBeenCalled();
   });
 
   it('quarantines aged SENDING sends without replaying them', async () => {
     dbMock.prisma.messageSend.findMany
-      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
         {
           id: 'send_stale',

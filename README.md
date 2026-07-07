@@ -1,6 +1,17 @@
-# LEAD-FLOOD
+# LEADZILLA
 
-AI-powered lead discovery, enrichment, and scoring pipeline for B2B sales.
+Demo-oriented AI-assisted lead discovery, enrichment, scoring, and message-drafting platform for B2B sales.
+
+This checkout is being prepared as Leadzilla: a demo-hosted version of the platform originally built for Zbooni. The demo target is intentionally narrow:
+
+- small, bounded discovery and scoring jobs should work end to end
+- message drafting should work for qualified leads
+- outbound message sending must remain disabled
+- existing Zbooni-discovered leads can remain as demo data
+- Zbooni-specific ICPs and copy can be rewritten into Leadzilla-neutral demo profiles
+- bug removal and UI/UX simplification are in scope; new feature development is not
+
+Code is still the source of truth. Outbound delivery is currently disabled in API and worker code for the Leadzilla demo; approvals are review records and do not send email or WhatsApp.
 
 ## Stack
 
@@ -77,7 +88,7 @@ pnpm dev
 - Worker: Railway
 - Database/Auth: Supabase
 
-## Discovery Pipeline
+## Demo Pipeline Target
 
 The current discovery system defaults to SerpAPI-backed local/search tasks and can still be configured to use Google Places explicitly. The dashboard bulk path seeds SerpAPI-compatible local-map tasks against curated SerpAPI-supported cities. The pipeline runs as background jobs through pg-boss:
 
@@ -86,7 +97,7 @@ The current discovery system defaults to SerpAPI-backed local/search tasks and c
 3. **Pre-qualify** — filters results against minimum criteria (reviews, country)
 4. **Convert** — enriches qualified businesses into leads (website scraping, contact discovery)
 5. **Score** — deterministic baseline plus AI/model score when available; the persisted DB column is still named `blendedScore`, but the UI treats it as the resolved AI/model/fallback score
-6. **Message** — operators trigger draft generation for qualified leads, and manual approval gates sending unless runtime auto-approval is explicitly enabled
+6. **Message drafting** — operators trigger draft generation for qualified leads; outbound sending is out of scope for the demo and must remain disabled
 
 Required worker env for discovery:
 

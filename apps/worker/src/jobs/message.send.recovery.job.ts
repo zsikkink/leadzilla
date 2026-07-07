@@ -2,12 +2,6 @@ import { prisma } from '@lead-flood/db';
 import type PgBoss from 'pg-boss';
 import type { Job, SendOptions } from 'pg-boss';
 
-import {
-  MESSAGE_SEND_JOB_NAME,
-  MESSAGE_SEND_RETRY_OPTIONS,
-  type MessageSendJobPayload,
-} from './message.send.job.js';
-
 export const MESSAGE_SEND_RECOVERY_JOB_NAME = 'message.send.recovery';
 
 export const MESSAGE_SEND_RECOVERY_RETRY_OPTIONS: Pick<
@@ -37,32 +31,9 @@ export interface MessageSendRecoveryJobDependencies {
   boss: Pick<PgBoss, 'send'>;
 }
 
-interface RecoverableQueuedMessageSend {
-  id: string;
-  messageDraftId: string;
-  messageVariantId: string;
-  idempotencyKey: string;
-  channel: 'EMAIL' | 'WHATSAPP';
-  scheduledAt: Date | null;
-}
-
 interface RecoverableSendingMessageSend {
   id: string;
   updatedAt: Date;
-}
-
-function buildRecoveredMessageSendPayload(
-  send: RecoverableQueuedMessageSend,
-): MessageSendJobPayload {
-  return {
-    runId: `message.send:${send.id}`,
-    sendId: send.id,
-    messageDraftId: send.messageDraftId,
-    messageVariantId: send.messageVariantId,
-    idempotencyKey: send.idempotencyKey,
-    channel: send.channel,
-    ...(send.scheduledAt ? { scheduledAt: send.scheduledAt.toISOString() } : {}),
-  };
 }
 
 export async function recoverStaleQueuedMessageSends(
@@ -70,58 +41,13 @@ export async function recoverStaleQueuedMessageSends(
   deps: MessageSendRecoveryJobDependencies,
   now: Date = new Date(),
 ): Promise<number> {
-  const staleBefore = new Date(now.getTime() - STALE_QUEUED_MESSAGE_SEND_THRESHOLD_MS);
-
-  const staleQueuedSends = await prisma.messageSend.findMany({
-    where: {
-      status: 'QUEUED',
-      updatedAt: { lt: staleBefore },
-    },
-    orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
-    take: STALE_QUEUED_MESSAGE_SEND_BATCH_SIZE,
-    select: {
-      id: true,
-      messageDraftId: true,
-      messageVariantId: true,
-      idempotencyKey: true,
-      channel: true,
-      scheduledAt: true,
-    },
-  });
-
-  for (const send of staleQueuedSends) {
-    const recoveredPayload = buildRecoveredMessageSendPayload(send);
-    const startAfter =
-      send.scheduledAt && send.scheduledAt.getTime() > now.getTime()
-        ? send.scheduledAt
-        : undefined;
-
-    await deps.boss.send(MESSAGE_SEND_JOB_NAME, recoveredPayload, {
-      singletonKey: `message.send:${send.id}`,
-      ...MESSAGE_SEND_RETRY_OPTIONS,
-      ...(startAfter ? { startAfter } : {}),
-    });
-
-    logger.info(
-      {
-        sendId: send.id,
-        scheduledAt: send.scheduledAt?.toISOString() ?? null,
-        queuedUntil: staleBefore.toISOString(),
-        dispatchMode: startAfter ? 'scheduled' : 'immediate',
-      },
-      'Re-enqueued stale queued MessageSend',
-    );
-  }
-
-  logger.info(
-    {
-      staleBefore: staleBefore.toISOString(),
-      recoveredCount: staleQueuedSends.length,
-    },
-    'Completed stale queued MessageSend recovery',
+  void deps;
+  void now;
+  logger.warn(
+    {},
+    'Skipping stale queued MessageSend recovery because outbound sending is disabled for the Leadzilla demo',
   );
-
-  return staleQueuedSends.length;
+  return 0;
 }
 
 async function quarantineStaleSendingMessageSends(

@@ -1,8 +1,10 @@
-# Lead-Flood Pipeline: Complete Workflow
+# Leadzilla Pipeline: Complete Workflow
 
 > From the moment you press "Start Discovery" through messaging, follow-ups, and the learning loop that makes the system smarter over time.
 
 Accuracy note added 2026-05-05: this operator overview has been updated for the current SerpAPI-default discovery path, resolved score semantics, manual draft-generation/approval flow, and current no-fallback-template draft failure behavior.
+
+Leadzilla demo note added 2026-07-07: the demo scope is bounded discovery/scoring plus message drafting. Outbound sending, follow-ups, and reply loops are historical/full-production implementation reference only; outbound delivery is disabled in API and worker code for the demo.
 
 ---
 
@@ -30,10 +32,10 @@ We score them: are they actually a good fit?
 AI drafts a lightly personalized message when an operator triggers it
     |
     v
-You approve it unless runtime auto-approval is explicitly enabled
+You review, edit, reject, or regenerate the draft
     |
     v
-Message goes out via Email or WhatsApp
+Demo stops here: outbound sending remains disabled
 ```
 
 ---
@@ -581,7 +583,7 @@ Controlled by the `followUpMaxCount` pipeline setting. Not every pipeline settin
 
 **Auto-approval for follow-ups:**
 
-Follow-up messages can be auto-approved only if auto-approval is enabled, the latest final persisted score is in range, and `manualApprovalOnly` is off. In the normal manual operating mode, follow-up drafts remain reviewable before sending.
+Follow-up messages can be auto-approved only in the historical/full-production implementation if auto-approval is enabled, the latest final persisted score is in range, and `manualApprovalOnly` is off. In the Leadzilla demo, outbound sending is disabled and follow-up send execution is out of scope.
 
 ---
 

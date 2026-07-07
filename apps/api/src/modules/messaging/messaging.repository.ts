@@ -17,11 +17,12 @@ import type {
   SendMessageRequest,
   UpdateMessageVariantRequest,
 } from '@lead-flood/contracts';
-import { PrismaRuntime, prisma, toInputJson, type Prisma } from '@lead-flood/db';
+import { PrismaRuntime, prisma } from '@lead-flood/db';
 
 import {
   MessagingNotFoundError,
   MessagingNotImplementedError,
+  MessagingOutboundDisabledError,
   MessagingSendIneligibleError,
 } from './messaging.errors.js';
 
@@ -144,7 +145,7 @@ export class StubMessagingRepository implements MessagingRepository {
   }
 
   async sendMessage(_input: SendMessageRequest): Promise<MessageSendQueueIntentResult> {
-    throw new MessagingNotImplementedError('TODO: send message persistence');
+    throw new MessagingOutboundDisabledError();
   }
 
   async listMessageSends(_query: ListMessageSendsQuery): Promise<ListMessageSendsResponse> {
@@ -160,7 +161,7 @@ export class StubMessagingRepository implements MessagingRepository {
   }
 
   async createMessageSendForApproval(_input: CreateMessageSendForApprovalInput): Promise<MessageSendResponse> {
-    throw new MessagingNotImplementedError('TODO: create message send for approval persistence');
+    throw new MessagingOutboundDisabledError();
   }
 
   async updateMessageVariant(_variantId: string, _input: UpdateMessageVariantRequest): Promise<MessageVariantResponse> {
@@ -306,115 +307,11 @@ function variantsInclude() {
   };
 }
 
-type MessagingTransactionClient = Prisma.TransactionClient;
-
-interface CreateQueuedMessageSendInput {
-  leadId: string;
-  messageDraftId: string;
-  messageVariantId: string;
-  channel: 'EMAIL' | 'WHATSAPP';
-  idempotencyKey: string;
-  followUpNumber: number;
-  scheduledAt?: Date | null | undefined;
-}
-
-function buildMessageSendOutboxPayload(send: PrismaMessageSend, runId: string) {
-  return {
-    runId,
-    sendId: send.id,
-    messageDraftId: send.messageDraftId,
-    messageVariantId: send.messageVariantId,
-    idempotencyKey: send.idempotencyKey,
-    channel: send.channel,
-    ...(send.scheduledAt ? { scheduledAt: send.scheduledAt.toISOString() } : {}),
-  };
-}
-
-function isUniqueConstraintError(error: unknown): boolean {
-  return error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2002';
-}
-
-async function findExistingInitialSendForDraftTx(
-  tx: MessagingTransactionClient,
-  draftId: string,
-): Promise<PrismaMessageSend | null> {
-  return tx.messageSend.findFirst({
-    where: {
-      messageDraftId: draftId,
-      followUpNumber: 0,
-    },
-    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-  });
-}
-
-async function findSendByIdempotencyKeyTx(
-  tx: MessagingTransactionClient,
-  idempotencyKey: string,
-): Promise<PrismaMessageSend | null> {
-  return tx.messageSend.findUnique({
-    where: { idempotencyKey },
-  });
-}
-
-async function createQueuedMessageSendWithOutbox(
-  tx: MessagingTransactionClient,
-  input: CreateQueuedMessageSendInput,
-  buildRunId: (sendId: string) => string,
-): Promise<MessageSendQueueIntentResult> {
-  const send = await tx.messageSend.create({
-    data: {
-      leadId: input.leadId,
-      messageDraftId: input.messageDraftId,
-      messageVariantId: input.messageVariantId,
-      channel: input.channel,
-      provider: input.channel === 'WHATSAPP' ? 'TRENGO' : 'RESEND',
-      status: 'QUEUED',
-      idempotencyKey: input.idempotencyKey,
-      followUpNumber: input.followUpNumber,
-      scheduledAt: input.scheduledAt ?? null,
-    },
-  });
-
-  const outboxEvent = await tx.outboxEvent.create({
-    data: {
-      type: 'message.send',
-      payload: toInputJson(buildMessageSendOutboxPayload(send, buildRunId(send.id))),
-      status: 'pending',
-    },
-  });
-
-  return {
-    send: mapSendToResponse(send),
-    outboxEventId: outboxEvent.id,
-  };
-}
-
 async function findExistingInitialSendForDraft(draftId: string): Promise<PrismaMessageSend | null> {
   return prisma.messageSend.findFirst({
     where: {
       messageDraftId: draftId,
       followUpNumber: 0,
-    },
-    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-  });
-}
-
-const BLOCKING_INITIAL_SEND_STATUSES: MessageSendStatus[] = [
-  'QUEUED',
-  'SENDING',
-  'UNRESOLVED',
-  'SENT',
-  'DELIVERED',
-  'REPLIED',
-  'BOUNCED',
-];
-
-async function findBlockingInitialSendForDraft(draftId: string): Promise<PrismaMessageSend | null> {
-  return prisma.messageSend.findFirst({
-    where: {
-      messageDraftId: draftId,
-      followUpNumber: 0,
-      status: { in: BLOCKING_INITIAL_SEND_STATUSES },
     },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
   });
@@ -723,64 +620,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
                 include: variantsInclude(),
               });
 
-        const mappedDraft = mapDraftToResponse(draft);
-
-        if (draft.approvalStatus !== 'APPROVED' || draft.variants.length === 0) {
-          return { draft: mappedDraft };
-        }
-
-        const selectedVariant = draft.variants.find((variant) => variant.isSelected) ?? draft.variants[0];
-        if (!selectedVariant) {
-          return { draft: mappedDraft };
-        }
-
-        const existingInitialSend = await findExistingInitialSendForDraftTx(tx, draft.id);
-        if (existingInitialSend) {
-          return {
-            draft: mappedDraft,
-            initialSend: {
-              send: mapSendToResponse(existingInitialSend),
-            },
-          };
-        }
-
-        const idempotencyKey = `approve:${draft.id}:${selectedVariant.id}`;
-
-        try {
-          const initialSend = await createQueuedMessageSendWithOutbox(
-            tx,
-            {
-              leadId: draft.leadId,
-              messageDraftId: draft.id,
-              messageVariantId: selectedVariant.id,
-              channel: selectedVariant.channel,
-              idempotencyKey,
-              followUpNumber: 0,
-            },
-            (sendId) => `message.send:${sendId}`,
-          );
-
-          return {
-            draft: mappedDraft,
-            initialSend,
-          };
-        } catch (error: unknown) {
-          if (!isUniqueConstraintError(error)) {
-            throw error;
-          }
-
-          const duplicateSend = await findSendByIdempotencyKeyTx(tx, idempotencyKey);
-          if (!duplicateSend) {
-            throw error;
-          }
-
-          return {
-            draft: mappedDraft,
-            initialSend: {
-              send: mapSendToResponse(duplicateSend),
-            },
-          };
-        }
+        return { draft: mapDraftToResponse(draft) };
       });
     } catch (error: unknown) {
       if (error instanceof PrismaRuntime.PrismaClientKnownRequestError && error.code === 'P2025') {
@@ -813,54 +653,8 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
   }
 
   override async sendMessage(input: SendMessageRequest): Promise<MessageSendQueueIntentResult> {
-    const variant = await prisma.messageVariant.findUnique({
-      where: { id: input.messageVariantId },
-      select: {
-        channel: true,
-        messageDraft: {
-          select: { id: true, leadId: true, followUpNumber: true, approvalStatus: true },
-        },
-      },
-    });
-    if (!variant) {
-      throw new MessagingNotFoundError('Message variant not found');
-    }
-
-    if (variant.messageDraft.id !== input.messageDraftId) {
-      throw new MessagingSendIneligibleError('Selected message variant does not belong to the requested draft.');
-    }
-
-    if (
-      variant.messageDraft.approvalStatus !== 'APPROVED' &&
-      variant.messageDraft.approvalStatus !== 'AUTO_APPROVED'
-    ) {
-      throw new MessagingSendIneligibleError('Draft must be approved before it can be sent.');
-    }
-
-    if (variant.messageDraft.followUpNumber === 0) {
-      const existingInitialSend = await findBlockingInitialSendForDraft(input.messageDraftId);
-      if (existingInitialSend) {
-        return {
-          send: mapSendToResponse(existingInitialSend),
-        };
-      }
-    }
-
-    return prisma.$transaction(async (tx) =>
-      createQueuedMessageSendWithOutbox(
-        tx,
-        {
-          leadId: variant.messageDraft.leadId,
-          messageDraftId: input.messageDraftId,
-          messageVariantId: input.messageVariantId,
-          channel: variant.channel,
-          idempotencyKey: input.idempotencyKey,
-          followUpNumber: variant.messageDraft.followUpNumber,
-          scheduledAt: input.scheduledAt !== undefined ? new Date(input.scheduledAt) : null,
-        },
-        (sendId) => sendId,
-      ),
-    );
+    void input;
+    throw new MessagingOutboundDisabledError();
   }
 
   override async listMessageSends(query: ListMessageSendsQuery): Promise<ListMessageSendsResponse> {
@@ -992,24 +786,7 @@ export class PrismaMessagingRepository extends StubMessagingRepository {
   override async createMessageSendForApproval(
     input: CreateMessageSendForApprovalInput,
   ): Promise<MessageSendResponse> {
-    const existingSend = await findExistingInitialSendForDraft(input.messageDraftId);
-    if (existingSend) {
-      return mapSendToResponse(existingSend);
-    }
-
-    const send = await prisma.messageSend.create({
-      data: {
-        leadId: input.leadId,
-        messageDraftId: input.messageDraftId,
-        messageVariantId: input.messageVariantId,
-        channel: input.channel === 'WHATSAPP' ? 'WHATSAPP' : 'EMAIL',
-        provider: input.channel === 'WHATSAPP' ? 'TRENGO' : 'RESEND',
-        status: 'QUEUED',
-        idempotencyKey: input.idempotencyKey,
-        followUpNumber: input.followUpNumber,
-      },
-    });
-
-    return mapSendToResponse(send);
+    void input;
+    throw new MessagingOutboundDisabledError();
   }
 }
