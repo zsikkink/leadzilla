@@ -8,6 +8,7 @@ import { useAuth } from '../../src/hooks/use-auth.js';
 
 const DEMO_EMAIL = 'demo@example.com';
 const DEMO_PASSWORD = 'password';
+const LOGIN_PREVIEW_NOTICE_SESSION_KEY = 'leadzilla:show-login-preview-notice';
 
 export default function LoginPage() {
   const { login, isAuthenticated } = useAuth();
@@ -19,14 +20,10 @@ export default function LoginPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && !isSubmitting) {
       router.replace('/dashboard');
     }
-  }, [isAuthenticated, router]);
-
-  if (isAuthenticated) {
-    return null;
-  }
+  }, [isAuthenticated, isSubmitting, router]);
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -35,6 +32,11 @@ export default function LoginPage() {
 
     try {
       await login(email, password);
+      try {
+        window.sessionStorage.setItem(LOGIN_PREVIEW_NOTICE_SESSION_KEY, 'true');
+      } catch {
+        // Ignore unavailable storage; login should continue normally.
+      }
       router.replace('/dashboard');
     } catch (submitError: unknown) {
       if (submitError instanceof Error) {
@@ -55,8 +57,8 @@ export default function LoginPage() {
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(60,200,224,0.045)_0%,rgba(123,255,107,0.02)_36%,transparent_72%)]" />
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-zbooni-teal/30 to-transparent" />
 
-      <div className="relative w-full max-w-[360px]">
-        <div className="mb-5 text-center">
+      <div className="relative w-full max-w-[440px] -translate-y-6 sm:-translate-y-8">
+        <div className="mb-20 text-center">
           <div className="mb-3">
             <Image
               src="/brand/leadzilla-wordmark.svg"
@@ -67,22 +69,15 @@ export default function LoginPage() {
               className="mx-auto h-auto w-[403.2px] max-w-full sm:w-[427.2px]"
             />
           </div>
-          <h1 className="text-[22px] font-bold leading-tight">Leadzilla Demo</h1>
-          <p className="mx-auto mt-1.5 max-w-[310px] text-sm leading-6 text-muted-foreground">
-            Explore a read-only sandbox of the AI outbound sales platform.
-          </p>
+          <h1 className="mx-auto max-w-[430px] whitespace-nowrap text-[34px] font-black leading-none tracking-normal text-foreground">
+            AI-Driven Sales Platform
+          </h1>
         </div>
 
-        <div className="rounded-lg border border-white/[0.08] bg-card/90 p-5 shadow-[0_18px_60px_rgba(0,0,0,0.28)] backdrop-blur sm:p-6">
-          <div className="mb-5 rounded-lg border border-zbooni-teal/15 bg-zbooni-teal/[0.045] px-3.5 py-3">
-            <p className="text-xs font-semibold text-zbooni-teal">Demo access is prefilled</p>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              This sandbox is read-only. Outreach, enrichment, messaging, and background jobs are
-              disabled.
-            </p>
-          </div>
-
+        <div className="mx-auto max-w-[360px] rounded-lg border border-white/[0.08] bg-card/90 p-5 shadow-[0_18px_60px_rgba(0,0,0,0.28)] backdrop-blur sm:p-6">
           <form onSubmit={handleLogin} className="space-y-4">
+            <h2 className="text-left text-lg font-semibold text-foreground">Sign in</h2>
+
             <div className="space-y-1.5">
               <label htmlFor="email" className="text-xs font-medium text-muted-foreground">
                 Email
@@ -130,7 +125,7 @@ export default function LoginPage() {
                   Signing in...
                 </span>
               ) : (
-                'Enter demo'
+                'Enter'
               )}
             </button>
 
@@ -139,6 +134,10 @@ export default function LoginPage() {
               <span className="font-medium text-foreground">{DEMO_EMAIL}</span>
               <span className="text-muted-foreground/50"> / </span>
               <span className="font-medium text-foreground">{DEMO_PASSWORD}</span>
+            </p>
+
+            <p className="text-center text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
+              Built by Zack Sikkink
             </p>
           </form>
         </div>
