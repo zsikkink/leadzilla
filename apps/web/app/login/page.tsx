@@ -57,7 +57,7 @@ export default function LoginPage() {
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(60,200,224,0.045)_0%,rgba(123,255,107,0.02)_36%,transparent_72%)]" />
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-zbooni-teal/30 to-transparent" />
 
-      <div className="relative w-full max-w-[440px] -translate-y-6 sm:-translate-y-8">
+      <div className="relative w-full max-w-[560px] -translate-y-6 sm:-translate-y-8">
         <div className="mb-20 text-center">
           <div className="mb-3">
             <Image
@@ -69,8 +69,8 @@ export default function LoginPage() {
               className="mx-auto h-auto w-[403.2px] max-w-full sm:w-[427.2px]"
             />
           </div>
-          <h1 className="mx-auto max-w-[430px] whitespace-nowrap text-[34px] font-black leading-none tracking-normal text-foreground">
-            AI-Driven Sales Platform
+          <h1 className="mx-auto w-full whitespace-nowrap text-center text-[24px] font-black leading-none tracking-normal text-foreground sm:text-[34px]">
+            AI-Driven Sales Automation
           </h1>
         </div>
 

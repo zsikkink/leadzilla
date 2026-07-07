@@ -90,15 +90,13 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
       <Dialog open={previewNoticeOpen} onOpenChange={handlePreviewNoticeOpenChange}>
         <DialogContent className="border-white/[0.08] bg-card/95 text-foreground shadow-[0_24px_80px_rgba(0,0,0,0.45)] sm:max-w-[430px]">
           <DialogHeader>
-            <DialogTitle className="text-xl font-bold">Safe public preview</DialogTitle>
+            <DialogTitle className="text-xl font-bold">This is a demo environment</DialogTitle>
             <DialogDescription className="leading-6">
-              This is a demo environment. Run small discovery and scoring workflows, then generate
-              message drafts.
+              Explore lead discovery, scoring, and message drafting.
             </DialogDescription>
           </DialogHeader>
-          <p className="text-sm leading-6 text-muted-foreground">
-            <span className="font-semibold text-foreground">Message sending is disabled for safety.</span>{' '}
-            Email, WhatsApp, and follow-ups are turned off.
+          <p className="text-sm leading-6 text-foreground">
+            Sending email and WhatsApp messages is disabled.
           </p>
           <DialogFooter className="justify-center sm:justify-center">
             <DialogClose asChild>

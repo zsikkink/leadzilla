@@ -6,15 +6,19 @@ Leadzilla is the demo-oriented continuation of the Lead-Flood outbound and lead-
 
 Current Leadzilla demo safety invariant: small discovery/scoring jobs and message drafting may function, but outbound email/WhatsApp sending must remain disabled in code and clearly communicated in the UI. Do not re-enable sends, follow-up delivery, provider delivery calls, or `message.send` publishing unless the user explicitly requests that safety boundary change.
 
+Primary presentation goal: this project is meant to be opened from a resume link by recruiters or hiring teams and immediately read as elegant, polished, and state-of-the-art. The underlying system has known architectural and implementation debt; do not broaden work into fixing all internals unless explicitly asked. For public demo work, optimize the visible experience so it feels like an enterprise-grade platform: refined visual hierarchy, cohesive branding, smooth navigation, credible data states, clear empty/loading/error states, and no obvious demo-breaking rough edges.
+
 Optimize in this order:
 
-1. production reliability
-2. data integrity
-3. security and auth correctness
-4. durable async execution
-5. operator-visible truth
-6. clean architectural boundaries
-7. small, safe, verifiable changes
+1. recruiter-facing elegance, polish, and enterprise-grade demo credibility
+2. current Leadzilla demo safety boundary, especially disabled outbound delivery
+3. production reliability
+4. data integrity
+5. security and auth correctness
+6. durable async execution
+7. operator-visible truth
+8. clean architectural boundaries
+9. small, safe, verifiable changes
 
 ## Repository Orientation
 
@@ -33,6 +37,19 @@ Optimize in this order:
 - `infra/docker` - local/docker deployment artifacts for API, web, worker, and local compose.
 - Tests live beside code as `*.test.ts`, with API integration/e2e tests under `apps/api/test` and worker integration tests under `apps/worker/test`.
 - `docs` contains current-state, setup, deployment, workflow, audit, schema-history, and handoff material. Read docs after code; if docs and code disagree, trust code and call out the drift.
+
+## Read First
+
+Before editing on any non-trivial task:
+
+1. Run `git status --short --branch`.
+2. Read this `AGENTS.md`.
+3. Read the exact code path being changed.
+4. Read nearby tests.
+5. Read the relevant runtime entrypoint.
+6. Read docs only after understanding the code.
+
+If docs and code disagree, trust code and call out the drift explicitly. Update docs only when behavior or an environment contract actually changes.
 
 ## Package Manager And Commands
 
@@ -98,6 +115,7 @@ The root `pnpm db:migrate` command intentionally fails because it is ambiguous. 
 - Do not move privileged writes, queue submission, admin operations, or service-role behavior into browser-side code.
 - Preserve public API route names, request/response contracts, env var names, webhook contracts, and status codes unless explicitly requested.
 - Keep `packages/contracts` synchronized with API behavior when contracts are affected.
+- Treat `packages/contracts` as high blast radius. Contract changes affect web, API, worker, tests, provider boundaries, and serialized job/API payloads. Inspect all consumers, update matching tests, keep runtime behavior and shared types aligned, and avoid parallel writes to dependent runtime code unless ownership is clearly split.
 
 ### Worker, Queue, And Outbox
 
@@ -105,7 +123,9 @@ The root `pnpm db:migrate` command intentionally fails because it is ambiguous. 
 - If a handler can retry, it must be safe to run more than once.
 - Do not bypass outbox/recovery paths with direct provider calls.
 - Do not rename queue names, job names, outbox event types, singleton-key formats, or job payload contracts without explicit approval and matching migrations/tests.
-- For the Leadzilla demo, keep all outbound delivery paths disabled: direct API send, auto-approved draft enqueue, approval recovery, queued-send recovery, outbox replay, and worker `message.send` provider calls.
+- For the Leadzilla demo, keep all outbound delivery paths disabled: direct API send, auto-approved draft enqueue, approval recovery send, queued-send recovery, outbox replay, worker `message.send`, and provider delivery calls.
+- API and worker paths must not publish or process real send jobs for the demo. Approval may save drafts for review only.
+- Tests touching message approval, outbox replay, queued-send recovery, or worker messaging must prove sends remain blocked unless the task explicitly changes this boundary.
 
 ### Web
 
@@ -117,6 +137,7 @@ The root `pnpm db:migrate` command intentionally fails because it is ambiguous. 
 ### External Providers And Secrets
 
 - Provider adapters live in `packages/providers` and discovery runtime logic lives in `packages/discovery`. Preserve timeouts, rate limits, idempotency keys, suppression checks, and provider-error observability.
+- Provider adapters must not be invoked for email or WhatsApp delivery in the Leadzilla demo.
 - Never print or commit secret values. Name env vars only.
 - Do not add provider side effects in tests unless they are explicitly integration tests and credentials are intentionally configured.
 
@@ -128,6 +149,7 @@ The root `pnpm db:migrate` command intentionally fails because it is ambiguous. 
 - Keep changes small and reviewable. Preserve public behavior unless the task explicitly asks to change it.
 - Add comments only when they clarify non-obvious operational logic.
 - Do not create new dependencies without approval.
+- Update generated artifacts only through documented repo commands. Do not hand-edit generated Prisma/client artifacts, package `dist/**` outputs, Next `.next/**` outputs, generated contract outputs, or lockfile internals. If generated output must change, run the appropriate generation/check command such as `pnpm db:generate`, `pnpm contracts:check`, a package build, or the relevant typecheck, and report it.
 
 ## Working Style
 
@@ -146,17 +168,37 @@ Actively look for safe parallelism on non-trivial tasks. Use read-only explorer 
 
 Before spawning worker agents, define:
 
+- task type: explorer, worker, or verifier
 - exact goal
 - file or directory ownership
 - files that are off-limits
+- safety invariant to preserve
 - expected behavior changes
 - behavior that must be preserved
 - validation commands to run
-- what the worker must report back
+- expected output format
+- instruction not to edit outside assigned scope
 
 Prefer several small parallel units over one broad worker prompt. Do not use sub-agents for tiny single-file edits, unclear requirements, tightly coupled changes, or work where all safe slices touch the same hotspot.
 
 Do not run parallel write agents against the same files, migrations, schema definitions, generated clients, auth/security helpers, worker/outbox code, API contract hotspots, package config, or deployment scripts. Use exactly one database/migration/schema owner at a time.
+
+Good parallel splits:
+
+- Explorer A audits SQL migration/Prisma drift while Explorer B audits runtime query usage.
+- Explorer A traces API contract usage while Explorer B finds relevant tests and fixtures.
+- Worker A updates a web-only UI state while Worker B updates API tests, only when files are disjoint.
+- Verifier A reviews auth/security implications while Verifier B reviews migration/schema alignment.
+
+Bad parallel splits:
+
+- Two workers editing Prisma/schema/migrations.
+- Two workers editing the same API module or shared contract.
+- A worker editing queue payloads while another edits worker handlers for the same queue.
+- A worker changing auth helpers while another changes protected route behavior that depends on those helpers.
+- Any parallel write work touching the same hotspot or generated artifacts.
+
+Explorer and verifier agents must not edit files. Worker agents must not broaden their assignment. Workers must report changed files, tests run, behavior changed, behavior preserved, and risks. Verifiers must distinguish blockers from non-blocking improvement suggestions.
 
 Repo-specific no-overlap hotspots:
 
@@ -202,6 +244,14 @@ Finish code-work handoffs with:
 - Skipped tests and why
 - Deferred or rejected verifier findings, if verifier agents were used
 - Recommended follow-up work, if any
+
+If sub-agents were used, also include:
+
+- which agents were used and why
+- what each agent reported
+- which verifier findings were applied, deferred, or rejected
+- whether any parallel work touched risky shared files
+- validation run after integration
 
 For audits or reviews, lead with findings ranked by production impact, cite exact files/functions, separate `CONFIRMED`, `LIKELY`, and `UNVERIFIED`, and name the real failure mode. Keep summaries secondary.
 
