@@ -48,54 +48,43 @@ export default function LoginPage() {
   };
 
   const inputClassName =
-    'flex h-11 w-full rounded-xl border border-input bg-background px-4 text-sm transition-colors placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
+    'flex h-10 w-full rounded-lg border border-border/70 bg-background/70 px-3.5 text-sm text-foreground shadow-inner shadow-black/[0.03] transition-colors placeholder:text-muted-foreground/40 focus:border-zbooni-teal/50 focus:outline-none focus:ring-2 focus:ring-zbooni-teal/15';
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
-      {/* Subtle background gradient */}
-      <div className="pointer-events-none fixed inset-0 overflow-hidden">
-        <div
-          className="absolute -top-1/2 -left-1/4 h-[800px] w-[800px] rounded-full opacity-[0.03]"
-          style={{ background: 'radial-gradient(circle, #7BFF6B 0%, transparent 70%)' }}
-        />
-        <div
-          className="absolute -bottom-1/2 -right-1/4 h-[600px] w-[600px] rounded-full opacity-[0.03]"
-          style={{ background: 'radial-gradient(circle, #3CC8E0 0%, transparent 70%)' }}
-        />
-      </div>
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-8 sm:py-12">
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(60,200,224,0.045)_0%,rgba(123,255,107,0.02)_36%,transparent_72%)]" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-zbooni-teal/30 to-transparent" />
 
-      <div className="relative w-full max-w-[380px]">
-        {/* Logo / Brand */}
-        <div className="mb-8 text-center">
-          <div className="mb-4 inline-block">
+      <div className="relative w-full max-w-[360px]">
+        <div className="mb-5 text-center">
+          <div className="mb-3">
             <Image
               src="/brand/leadzilla-wordmark.svg"
               alt="Leadzilla"
-              width={220}
-              height={50}
+              width={504}
+              height={115}
               priority
-              className="mx-auto h-auto w-[190px]"
+              className="mx-auto h-auto w-[403.2px] max-w-full sm:w-[427.2px]"
             />
           </div>
-          <h1 className="text-2xl font-extrabold tracking-tight">Leadzilla Demo</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Public sandbox for an AI-assisted outbound sales platform
+          <h1 className="text-[22px] font-bold leading-tight">Leadzilla Demo</h1>
+          <p className="mx-auto mt-1.5 max-w-[310px] text-sm leading-6 text-muted-foreground">
+            Explore a read-only sandbox of the AI outbound sales platform.
           </p>
         </div>
 
-        {/* Card */}
-        <div className="rounded-2xl border border-border/50 bg-card p-8 shadow-xl shadow-black/20">
-          <div className="mb-5 rounded-xl border border-zbooni-teal/25 bg-zbooni-teal/10 px-4 py-3 text-sm leading-relaxed text-muted-foreground">
-            <p className="font-semibold text-foreground">Public demo access is prefilled.</p>
-            <p className="mt-1">
-              This sandbox is read-focused. Discovery, enrichment, messaging, outbound sends,
-              and worker-backed jobs are disabled, and demo data may be reset.
+        <div className="rounded-lg border border-white/[0.08] bg-card/90 p-5 shadow-[0_18px_60px_rgba(0,0,0,0.28)] backdrop-blur sm:p-6">
+          <div className="mb-5 rounded-lg border border-zbooni-teal/15 bg-zbooni-teal/[0.045] px-3.5 py-3">
+            <p className="text-xs font-semibold text-zbooni-teal">Demo access is prefilled</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              This sandbox is read-only. Outreach, enrichment, messaging, and background jobs are
+              disabled.
             </p>
           </div>
 
-          <form onSubmit={handleLogin} className="space-y-5">
-            <div className="space-y-2">
-              <label htmlFor="email" className="text-sm font-medium text-muted-foreground">
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div className="space-y-1.5">
+              <label htmlFor="email" className="text-xs font-medium text-muted-foreground">
                 Email
               </label>
               <input
@@ -109,8 +98,8 @@ export default function LoginPage() {
               />
             </div>
 
-            <div className="space-y-2">
-              <label htmlFor="password" className="text-sm font-medium text-muted-foreground">
+            <div className="space-y-1.5">
+              <label htmlFor="password" className="text-xs font-medium text-muted-foreground">
                 Password
               </label>
               <input
@@ -125,13 +114,15 @@ export default function LoginPage() {
             </div>
 
             {error ? (
-              <p className="text-sm font-medium text-destructive">{error}</p>
+              <p className="rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive">
+                {error}
+              </p>
             ) : null}
 
             <button
               type="submit"
               disabled={isSubmitting}
-              className="zbooni-gradient-bg inline-flex h-11 w-full items-center justify-center rounded-xl text-sm font-semibold text-zbooni-dark shadow-lg shadow-zbooni-green/20 transition-all hover:opacity-90 hover:shadow-zbooni-green/30 disabled:pointer-events-none disabled:opacity-50"
+              className="zbooni-gradient-bg inline-flex h-10 w-full items-center justify-center rounded-lg text-sm font-semibold text-zbooni-dark shadow-md shadow-zbooni-green/10 transition-all hover:-translate-y-px hover:shadow-zbooni-green/15 focus:outline-none focus:ring-2 focus:ring-zbooni-teal/35 focus:ring-offset-2 focus:ring-offset-background disabled:pointer-events-none disabled:translate-y-0 disabled:opacity-50"
             >
               {isSubmitting ? (
                 <span className="flex items-center gap-2">
@@ -143,8 +134,10 @@ export default function LoginPage() {
               )}
             </button>
 
-            <p className="rounded-xl border border-border/70 bg-secondary/20 px-4 py-3 text-sm leading-relaxed text-muted-foreground">
-              Credentials: <span className="font-medium text-foreground">{DEMO_EMAIL}</span> /{' '}
+            <p className="text-center text-xs leading-5 text-muted-foreground">
+              <span>Demo credentials: </span>
+              <span className="font-medium text-foreground">{DEMO_EMAIL}</span>
+              <span className="text-muted-foreground/50"> / </span>
               <span className="font-medium text-foreground">{DEMO_PASSWORD}</span>
             </p>
           </form>

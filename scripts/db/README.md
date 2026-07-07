@@ -24,6 +24,10 @@ historical notes preserved for context.
 - `guard-no-prisma-migrate-prod.sh` — blocks Prisma from being treated as the
   production migration driver
 
+The root `pnpm db:migrate` script intentionally fails with guidance. Use
+`pnpm db:migrate:prod` for the Supabase SQL-first production path, and use
+`pnpm db:migrate:dev` only for local Prisma development workflows.
+
 ## Exceptional/manual scripts
 
 - `push-local-to-remote.sh` — manual data-move utility, not part of the normal

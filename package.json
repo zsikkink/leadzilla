@@ -7,7 +7,8 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "dev": "turbo run dev --parallel --filter=@lead-flood/web --filter=@lead-flood/api --filter=@lead-flood/worker",
+    "dev": "turbo run dev --parallel --filter=@lead-flood/web",
+    "dev:local-stack": "turbo run dev --parallel --filter=@lead-flood/web --filter=@lead-flood/api --filter=@lead-flood/worker",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
@@ -16,7 +17,7 @@
     "test:integration": "turbo run test:integration",
     "test:e2e": "turbo run test:e2e",
     "db:generate": "pnpm --filter @lead-flood/db prisma:generate",
-    "db:migrate": "pnpm --filter @lead-flood/db prisma:migrate",
+    "db:migrate": "bash -c 'echo \"[db:migrate] Ambiguous command. Use pnpm db:migrate:prod for Supabase SQL migrations or pnpm db:migrate:dev for local Prisma development.\" >&2; exit 1'",
     "db:migrate:dev": "pnpm --filter @lead-flood/db prisma:migrate:dev",
     "db:migrate:prod": "bash scripts/db/migrate-prod.sh",
     "db:verify:prod": "bash scripts/db/verify-prod.sh",

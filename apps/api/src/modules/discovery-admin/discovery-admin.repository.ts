@@ -13,22 +13,25 @@ import type {
   AdminSearchTaskDetailResponse,
   JobRunDetailResponse,
   JobRunListQuery,
+  JobRequestListQuery,
+  JobRequestListResponse,
+  JobRequestRow,
+  JobRequestStatus,
+  JobRequestType,
   ListJobRunsResponse,
   MessageSendStatus,
 } from '@lead-flood/contracts';
 import { PrismaRuntime, prisma, type Prisma } from '@lead-flood/db';
 
+import {
+  cancelDiscoveryRun as cancelDiscoveryRunPersistence,
+  CancelDiscoveryRunConfigurationError,
+  CancelDiscoveryRunConflictError,
+  type CancelDiscoveryRunResult,
+} from '../discovery/discovery-run-cancel.js';
 import { DiscoveryAdminBadRequestError, DiscoveryAdminNotFoundError } from './discovery-admin.errors.js';
 
-const DEFAULT_PG_BOSS_SCHEMA = 'pgboss';
-
-function readPgBossSchema(): string {
-  const schema = process.env.PG_BOSS_SCHEMA ?? DEFAULT_PG_BOSS_SCHEMA;
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
-    throw new DiscoveryAdminBadRequestError('Invalid pg-boss schema configuration');
-  }
-  return schema;
-}
+export type { CancelDiscoveryRunResult } from '../discovery/discovery-run-cancel.js';
 
 const SCORE_WEIGHTS = {
   hasWhatsapp: 0.2,
@@ -486,46 +489,11 @@ export interface DiscoveryRunLeadItem {
   companyName: string | null;
 }
 
-export interface CancelDiscoveryRunResult {
-  success: boolean;
-  outcome: 'cancelled' | 'already_cancelled' | 'already_terminal';
-  terminalStatus: 'completed' | 'failed' | 'cancelled' | null;
-  cancelledPendingJobsCount: number;
-}
-
-export type DiscoveryAdminJobRequestType = 'DISCOVERY_SEED' | 'DISCOVERY_RUN';
-export type DiscoveryAdminJobRequestStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELED';
-
-export interface DiscoveryAdminJobRequestRow {
-  id: number;
-  requestType: DiscoveryAdminJobRequestType;
-  status: DiscoveryAdminJobRequestStatus;
-  paramsJson: unknown;
-  requestedBy: string;
-  claimedBy: string | null;
-  createdAt: string;
-  updatedAt: string;
-  claimedAt: string | null;
-  startedAt: string | null;
-  finishedAt: string | null;
-  errorText: string | null;
-  jobRunId: string | null;
-  idempotencyKey: string | null;
-}
-
-export interface DiscoveryAdminListJobRequestsQuery {
-  page: number;
-  pageSize: number;
-  status?: DiscoveryAdminJobRequestStatus | undefined;
-  requestType?: DiscoveryAdminJobRequestType | undefined;
-}
-
-export interface DiscoveryAdminListJobRequestsResponse {
-  items: DiscoveryAdminJobRequestRow[];
-  page: number;
-  pageSize: number;
-  total: number;
-}
+export type DiscoveryAdminJobRequestType = JobRequestType;
+export type DiscoveryAdminJobRequestStatus = JobRequestStatus;
+export type DiscoveryAdminJobRequestRow = JobRequestRow;
+export type DiscoveryAdminListJobRequestsQuery = JobRequestListQuery;
+export type DiscoveryAdminListJobRequestsResponse = JobRequestListResponse;
 
 export type DiscoveryAdminApolloRevealAttemptStatus = 'CLAIMED' | 'COMPLETED' | 'ABANDONED';
 
@@ -1424,168 +1392,18 @@ export class PrismaDiscoveryAdminRepository implements DiscoveryAdminRepository 
     id: string,
     requestedByUserId?: string | undefined,
   ): Promise<CancelDiscoveryRunResult> {
-    const run = await prisma.jobExecution.findFirst({
-      where: {
-        id,
-        ...(requestedByUserId
-          ? {
-              payload: {
-                path: ['requestedByUserId'],
-                equals: requestedByUserId,
-              },
-            }
-          : {}),
-      },
-      select: { status: true, result: true },
-    });
-
-    if (!run) {
-      throw new DiscoveryAdminNotFoundError('Discovery run not found');
-    }
-
-    if (run.status === 'cancelled') {
-      return {
-        success: true,
-        outcome: 'already_cancelled',
-        terminalStatus: 'cancelled',
-        cancelledPendingJobsCount: 0,
-      };
-    }
-
-    const terminalStatuses = ['completed', 'failed'] as const;
-    if (terminalStatuses.includes(run.status as (typeof terminalStatuses)[number])) {
-      return {
-        success: false,
-        outcome: 'already_terminal',
-        terminalStatus: run.status as 'completed' | 'failed',
-        cancelledPendingJobsCount: 0,
-      };
-    }
-
-    const now = new Date();
-    const schema = readPgBossSchema();
-    let cancelledPendingJobsCount = 0;
-    let cancelledSearchTasksCount = 0;
-    let queueCleanupError: string | null = null;
-    let searchTaskCleanupError: string | null = null;
-
     try {
-      const cleanupRows = await prisma.$queryRawUnsafe<Array<{ deleted_count: number }>>(
-        `
-          with deleted as (
-            delete from ${schema}.job
-            where state in ('created', 'retry', 'active')
-              and name in (
-                'discovery.seed',
-                'discovery.run_search_task',
-                'business.prequalify',
-                'business.convert',
-                'features.compute',
-                'scoring.compute',
-                'apollo.enrich',
-                'message.generate',
-                'message.send'
-              )
-              and (
-                data ->> 'discoveryRunId' = $1
-                or data ->> 'runId' = $2
-                or singleton_key like $3
-              )
-            returning 1
-          )
-          select count(*)::int as deleted_count from deleted
-        `,
-        id,
-        id,
-        `%${id}%`,
-      );
-      cancelledPendingJobsCount = cleanupRows[0]?.deleted_count ?? 0;
-    } catch (error: unknown) {
-      queueCleanupError = error instanceof Error ? error.message : 'queue cleanup failed';
-    }
-
-    try {
-      const searchTaskCleanup = await prisma.searchTask.updateMany({
-        where: {
-          discoveryRunId: id,
-          status: { in: ['PENDING', 'RUNNING'] },
-        },
-        data: {
-          status: 'FAILED',
-          error: 'Cancelled: discovery run was cancelled',
-        },
-      });
-      cancelledSearchTasksCount = searchTaskCleanup.count;
-    } catch (error: unknown) {
-      searchTaskCleanupError = error instanceof Error ? error.message : 'search task cleanup failed';
-    }
-
-    const existingResult =
-      run.result && typeof run.result === 'object' && !Array.isArray(run.result)
-        ? run.result as Record<string, unknown>
-        : {};
-
-    try {
-      await prisma.jobExecution.update({
-        where: { id },
-        data: {
-          status: 'cancelled',
-          finishedAt: now,
-          result: {
-            ...existingResult,
-            cancellation: {
-              outcome: 'cancelled',
-              cancelledAt: now.toISOString(),
-              cancelledPendingJobsCount,
-              cancelledSearchTasksCount,
-              ...(queueCleanupError ? { queueCleanupError } : {}),
-              ...(searchTaskCleanupError ? { searchTaskCleanupError } : {}),
-            },
-          } as Prisma.InputJsonValue,
-        },
-      });
-    } catch {
-      // Race-safe fallback: if another worker finalized the run concurrently,
-      // return a deterministic non-500 cancel outcome.
-      const latest = await prisma.jobExecution.findFirst({
-        where: {
-          id,
-          ...(requestedByUserId
-            ? {
-                payload: {
-                  path: ['requestedByUserId'],
-                  equals: requestedByUserId,
-                },
-              }
-            : {}),
-        },
-        select: { status: true },
-      });
-      if (latest?.status === 'cancelled') {
-        return {
-          success: true,
-          outcome: 'already_cancelled',
-          terminalStatus: 'cancelled',
-          cancelledPendingJobsCount,
-        };
+      const result = await cancelDiscoveryRunPersistence(id, requestedByUserId);
+      if (!result) {
+        throw new DiscoveryAdminNotFoundError('Discovery run not found');
       }
-      if (latest && terminalStatuses.includes(latest.status as (typeof terminalStatuses)[number])) {
-        return {
-          success: false,
-          outcome: 'already_terminal',
-          terminalStatus: latest.status as 'completed' | 'failed',
-          cancelledPendingJobsCount,
-        };
+      return result;
+    } catch (error: unknown) {
+      if (error instanceof CancelDiscoveryRunConfigurationError || error instanceof CancelDiscoveryRunConflictError) {
+        throw new DiscoveryAdminBadRequestError(error.message);
       }
-      throw new DiscoveryAdminBadRequestError('Unable to cancel run due to concurrent state update');
+      throw error;
     }
-
-    return {
-      success: true,
-      outcome: 'cancelled',
-      terminalStatus: 'cancelled',
-      cancelledPendingJobsCount,
-    };
   }
 
   async getDiscoveryRunDetail(id: string) {

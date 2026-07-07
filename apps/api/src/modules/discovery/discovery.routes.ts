@@ -3,6 +3,7 @@ import { prisma } from '@lead-flood/db';
 import {
   CreateDiscoveryRunRequestSchema,
   CreateDiscoveryRunResponseSchema,
+  CancelDiscoveryRunResponseSchema,
   DiscoveryRunIdParamsSchema,
   DiscoveryRunStatusResponseSchema,
   ErrorResponseSchema,
@@ -354,6 +355,28 @@ export function registerDiscoveryRoutes(
     try {
       const result = await service.getDiscoveryRunStatus(parsedParams.data.runId, userId);
       return DiscoveryRunStatusResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.post('/v1/discovery/runs/:runId/cancel', async (request, reply) => {
+    const parsedParams = DiscoveryRunIdParamsSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return sendValidationError(reply, request.id, 'Invalid discovery run id');
+    }
+
+    const userId = requireAuthenticatedUserId(request, reply);
+    if (!userId) {
+      return;
+    }
+
+    try {
+      const result = await service.cancelDiscoveryRun(parsedParams.data.runId, userId);
+      return CancelDiscoveryRunResponseSchema.parse(result);
     } catch (error: unknown) {
       if (handleModuleError(error, request, reply)) {
         return;

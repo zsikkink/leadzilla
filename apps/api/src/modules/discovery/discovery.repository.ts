@@ -10,6 +10,13 @@ import type {
 } from '@lead-flood/contracts';
 
 import {
+  cancelDiscoveryRun as cancelDiscoveryRunPersistence,
+  CancelDiscoveryRunConfigurationError,
+  CancelDiscoveryRunConflictError,
+  type CancelDiscoveryRunResult,
+} from './discovery-run-cancel.js';
+import {
+  DiscoveryInvalidRequestError,
   DiscoveryNotImplementedError,
   DiscoveryRunNotFoundError,
   DiscoveryWorkerUnavailableError,
@@ -127,6 +134,10 @@ export interface DiscoveryRepository {
     query: ListDiscoveryRunsQuery,
     requestedByUserId?: string | undefined,
   ): Promise<ListDiscoveryRunsResponse>;
+  cancelDiscoveryRun(
+    runId: string,
+    requestedByUserId?: string | undefined,
+  ): Promise<CancelDiscoveryRunResult>;
 }
 
 export class StubDiscoveryRepository implements DiscoveryRepository {
@@ -163,6 +174,13 @@ export class StubDiscoveryRepository implements DiscoveryRepository {
     _requestedByUserId?: string | undefined,
   ): Promise<ListDiscoveryRunsResponse> {
     throw new DiscoveryNotImplementedError('TODO: list discovery runs persistence');
+  }
+
+  async cancelDiscoveryRun(
+    _runId: string,
+    _requestedByUserId?: string | undefined,
+  ): Promise<CancelDiscoveryRunResult> {
+    throw new DiscoveryNotImplementedError('TODO: cancel discovery run persistence');
   }
 }
 
@@ -480,5 +498,23 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
       pageSize: query.pageSize,
       total,
     };
+  }
+
+  async cancelDiscoveryRun(
+    runId: string,
+    requestedByUserId?: string | undefined,
+  ): Promise<CancelDiscoveryRunResult> {
+    try {
+      const result = await cancelDiscoveryRunPersistence(runId, requestedByUserId);
+      if (!result) {
+        throw new DiscoveryRunNotFoundError();
+      }
+      return result;
+    } catch (error: unknown) {
+      if (error instanceof CancelDiscoveryRunConfigurationError || error instanceof CancelDiscoveryRunConflictError) {
+        throw new DiscoveryInvalidRequestError(error.message);
+      }
+      throw error;
+    }
   }
 }

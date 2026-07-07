@@ -3,6 +3,7 @@ import { getPipelineSetting } from '@lead-flood/db';
 import type {
   CreateDiscoveryRunRequest,
   CreateDiscoveryRunResponse,
+  CancelDiscoveryRunResponse,
   DiscoveryRunStatusResponse,
   ListDiscoveryRecordsQuery,
   ListDiscoveryRecordsResponse,
@@ -83,6 +84,10 @@ export interface DiscoveryService {
     query: ListDiscoveryRunsQuery,
     requestedByUserId?: string | undefined,
   ): Promise<ListDiscoveryRunsResponse>;
+  cancelDiscoveryRun(
+    runId: string,
+    requestedByUserId?: string | undefined,
+  ): Promise<CancelDiscoveryRunResponse>;
 }
 
 async function resolveSupportedDiscoveryCities(
@@ -260,6 +265,9 @@ export function buildDiscoveryService(
     },
     async listDiscoveryRuns(query, requestedByUserId) {
       return repository.listDiscoveryRuns(query, requestedByUserId);
+    },
+    async cancelDiscoveryRun(runId, requestedByUserId) {
+      return repository.cancelDiscoveryRun(runId, requestedByUserId);
     },
   };
 }

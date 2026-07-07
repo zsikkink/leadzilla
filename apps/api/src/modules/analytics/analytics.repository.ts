@@ -1,3 +1,9 @@
+import {
+  ENRICHED_LEAD_STATUSES,
+  QUALIFIED_LEAD_STATUSES,
+  SCORED_LEAD_STATUSES,
+  SENT_MESSAGE_STATUSES,
+} from '@lead-flood/contracts';
 import type {
   AvgScoreQuery,
   AvgScoreResponse,
@@ -98,44 +104,24 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
     const to = query.to ? new Date(query.to) : null;
     const icpProfileId = query.icpProfileId ?? null;
 
-    const rollupWhere = {
+    const leadWhere = {
+      deletedAt: null,
+      ...(icpProfileId
+        ? {
+            discoveryRecords: {
+              some: { icpProfileId },
+            },
+          }
+        : {}),
       ...(from || to
         ? {
-            day: {
+            createdAt: {
               ...(from ? { gte: from } : {}),
               ...(to ? { lte: to } : {}),
             },
           }
         : {}),
-      ...(icpProfileId ? { icpProfileId } : {}),
     };
-
-    const discoveryDateWhere = from || to
-      ? {
-          discoveredAt: {
-            ...(from ? { gte: from } : {}),
-            ...(to ? { lte: to } : {}),
-          },
-        }
-      : {};
-
-    const enrichmentDateWhere = from || to
-      ? {
-          enrichedAt: {
-            ...(from ? { gte: from } : {}),
-            ...(to ? { lte: to } : {}),
-          },
-        }
-      : {};
-
-    const predictionDateWhere = from || to
-      ? {
-          predictedAt: {
-            ...(from ? { gte: from } : {}),
-            ...(to ? { lte: to } : {}),
-          },
-        }
-      : {};
 
     const draftDateWhere = from || to
       ? {
@@ -164,52 +150,43 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
         }
       : {};
 
-    const rollupAgg = await prisma.analyticsDailyRollup.aggregate({
-      where: rollupWhere,
-      _sum: {
-        discoveredCount: true,
-        enrichedCount: true,
-        scoredCount: true,
-      },
-    });
-
     const [
       discoveredCount,
+      qualifiedCount,
       enrichedCount,
       scoredCount,
+      costAgg,
       messagesGeneratedCount,
       messagesSentCount,
       repliesCount,
       meetingsCount,
       dealsWonCount,
     ] = await Promise.all([
-      prisma.leadDiscoveryRecord.count({
+      prisma.lead.count({
+        where: leadWhere,
+      }),
+      prisma.lead.count({
         where: {
-          ...(icpProfileId ? { icpProfileId } : {}),
-          ...discoveryDateWhere,
-          status: 'DISCOVERED',
+          ...leadWhere,
+          status: { in: [...QUALIFIED_LEAD_STATUSES] },
         },
       }),
-      prisma.leadEnrichmentRecord.count({
+      prisma.lead.count({
         where: {
-          ...enrichmentDateWhere,
-          status: 'COMPLETED',
-          ...(icpProfileId
-            ? {
-                lead: {
-                  discoveryRecords: {
-                    some: { icpProfileId },
-                  },
-                },
-              }
-            : {}),
+          ...leadWhere,
+          status: { in: [...ENRICHED_LEAD_STATUSES] },
         },
       }),
-      prisma.leadScorePrediction.count({
+      prisma.lead.count({
         where: {
-          ...(icpProfileId ? { icpProfileId } : {}),
-          ...predictionDateWhere,
+          ...leadWhere,
+          status: { in: [...SCORED_LEAD_STATUSES] },
         },
+      }),
+      prisma.lead.aggregate({
+        where: leadWhere,
+        _sum: { costCents: true },
+        _count: { id: true },
       }),
       prisma.messageDraft.count({
         where: {
@@ -220,7 +197,7 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
       prisma.messageSend.count({
         where: {
           ...sendDateWhere,
-          status: { in: ['SENT', 'DELIVERED', 'REPLIED'] },
+          status: { in: [...SENT_MESSAGE_STATUSES] },
           ...(icpProfileId
             ? {
                 messageDraft: { icpProfileId },
@@ -275,35 +252,10 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
       }),
     ]);
 
-    const qualifiedCount = rollupAgg._sum.discoveredCount ?? discoveredCount;
-
-    // Cost aggregation: sum costCents across leads matching the filter
-    const costAgg = await prisma.lead.aggregate({
-      where: {
-        deletedAt: null,
-        ...(icpProfileId
-          ? {
-              discoveryRecords: {
-                some: { icpProfileId },
-              },
-            }
-          : {}),
-        ...(from || to
-          ? {
-              createdAt: {
-                ...(from ? { gte: from } : {}),
-                ...(to ? { lte: to } : {}),
-              },
-            }
-          : {}),
-      },
-      _sum: { costCents: true },
-      _count: { id: true },
-    });
-
     const totalCostCents = costAgg._sum.costCents ?? 0;
-    const leadCount = costAgg._count.id || discoveredCount || 1;
-    const costPerLead = Math.round((totalCostCents / leadCount) * 100) / 100;
+    const costPerLead = discoveredCount > 0
+      ? Math.round((totalCostCents / discoveredCount) * 100) / 100
+      : 0;
 
     return {
       from: from?.toISOString() ?? null,

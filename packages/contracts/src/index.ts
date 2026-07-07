@@ -12,6 +12,7 @@ export * from './scoring.contract.js';
 export * from './learning.contract.js';
 export * from './messaging.contract.js';
 export * from './analytics.contract.js';
+export * from './metrics.contract.js';
 export * from './feedback.contract.js';
 export * from './webhook.contract.js';
 export * from './followup.contract.js';

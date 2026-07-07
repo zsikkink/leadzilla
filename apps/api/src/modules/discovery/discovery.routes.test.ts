@@ -10,6 +10,7 @@ const { prismaMock } = vi.hoisted(() => ({
       create: vi.fn(),
       findMany: vi.fn(),
       findFirst: vi.fn(),
+      update: vi.fn(),
     },
     getPipelineSetting: vi.fn(),
     outboxEvent: {
@@ -23,6 +24,7 @@ const { prismaMock } = vi.hoisted(() => ({
     },
     searchTask: {
       findMany: vi.fn(),
+      updateMany: vi.fn(),
     },
     businessConversion: {
       findMany: vi.fn(),
@@ -104,7 +106,9 @@ describe('discovery.routes ownership scoping', () => {
     });
     prismaMock.jobExecution.count.mockResolvedValue(0);
     prismaMock.jobExecution.create.mockResolvedValue(undefined);
+    prismaMock.jobExecution.update.mockResolvedValue(undefined);
     prismaMock.outboxEvent.create.mockResolvedValue(undefined);
+    prismaMock.searchTask.updateMany.mockResolvedValue({ count: 0 });
 
     app = Fastify();
     app.decorateRequest('user', null);
@@ -175,6 +179,50 @@ describe('discovery.routes ownership scoping', () => {
             path: ['requestedByUserId'],
             equals: 'user_a',
           },
+        }),
+      }),
+    );
+  });
+
+  it('cancels an owned discovery run through the user-owned discovery route', async () => {
+    prismaMock.jobExecution.findFirst.mockResolvedValueOnce({
+      status: 'running',
+      result: {
+        totalItems: 4,
+        processedItems: 2,
+        failedItems: 0,
+      },
+    });
+    prismaMock.$queryRawUnsafe.mockResolvedValueOnce([{ deleted_count: 2 }]);
+    prismaMock.searchTask.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/discovery/runs/run_own/cancel',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      success: true,
+      outcome: 'cancelled',
+      terminalStatus: 'cancelled',
+      cancelledPendingJobsCount: 2,
+    });
+    expect(prismaMock.jobExecution.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'run_own',
+        payload: {
+          path: ['requestedByUserId'],
+          equals: 'user_a',
+        },
+      },
+      select: { status: true, result: true },
+    });
+    expect(prismaMock.jobExecution.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'run_own' },
+        data: expect.objectContaining({
+          status: 'cancelled',
         }),
       }),
     );

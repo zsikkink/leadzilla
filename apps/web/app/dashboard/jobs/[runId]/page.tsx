@@ -1,6 +1,7 @@
 'use client';
 
 import type {
+  CancelDiscoveryRunResponse,
   DiscoveryRunStatusResponse,
   IcpProfileResponse,
   PipelineRunStatus,
@@ -26,7 +27,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
 import { countryName } from '../../../../src/lib/countries.js';
-import { getWebEnv } from '../../../../src/lib/env.js';
 
 // ── Status badge (reused from list page) ─────────────────────────────────
 const STATUS_CONFIG: Record<
@@ -163,13 +163,6 @@ interface RunDetailsResponse {
   businesses: BusinessData[];
   leads: LeadData[];
   costEvents: CostEventData[];
-}
-
-interface CancelRunResponse {
-  success: boolean;
-  outcome: 'cancelled' | 'already_cancelled' | 'already_terminal';
-  terminalStatus: 'cancelled' | 'completed' | 'failed';
-  cancelledPendingJobsCount: number;
 }
 
 // ── Metric card ──────────────────────────────────────────────────────────
@@ -435,7 +428,7 @@ function formatProviderName(provider: string): string {
 
 // ── Main page ────────────────────────────────────────────────────────────
 export default function DiscoveryRunDetailPage() {
-  const { apiClient, token } = useAuth();
+  const { apiClient } = useAuth();
   const router = useRouter();
   const params = useParams();
   const runId = params.runId as string;
@@ -500,65 +493,51 @@ export default function DiscoveryRunDetailPage() {
     setCancelError(null);
     setCancelNotice(null);
 
-    const attemptCancel = async (): Promise<Response> => {
-      const headers: Record<string, string> = { 'content-type': 'application/json' };
-      if (token) headers.authorization = `Bearer ${token}`;
-      return fetch(`${getWebEnv().NEXT_PUBLIC_API_BASE_URL}/v1/discovery-admin/runs/${runId}/cancel`, {
-        method: 'POST',
-        headers,
-      });
+    const readErrorStatus = (error: unknown): number | null => {
+      if (error && typeof error === 'object' && 'status' in error) {
+        const status = (error as { status?: unknown }).status;
+        return typeof status === 'number' ? status : null;
+      }
+      return null;
     };
 
+    const readErrorMessage = (error: unknown): string | null => (
+      error instanceof Error && error.message.trim().length > 0 ? error.message : null
+    );
+
+    const attemptCancel = async (): Promise<CancelDiscoveryRunResponse> =>
+      apiClient.cancelDiscoveryRun(runId);
+
     try {
-      let res: Response;
+      let cancelResult: CancelDiscoveryRunResponse;
       try {
-        res = await attemptCancel();
-      } catch {
+        cancelResult = await attemptCancel();
+      } catch (error: unknown) {
         // Connection error on first attempt -- retry once
         try {
-          res = await attemptCancel();
-        } catch {
-          // Both attempts failed with connection errors
-          setCancelError('Unable to reach the server. Please check your connection and try again.');
+          cancelResult = await attemptCancel();
+        } catch (retryError: unknown) {
+          const status = readErrorStatus(retryError);
+          const latestRun = await apiClient.getDiscoveryRunStatus(runId).catch(() => null);
+          if (latestRun?.status === 'CANCELLED') {
+            setCancelNotice('Run Cancelled');
+            setShowCancelConfirm(false);
+            run.refetch();
+            details.refetch();
+            return;
+          }
+
+          if (status !== null && status >= 500) {
+            setCancelError('The server encountered an error while cancelling. The run may still be processing. Please refresh and try again.');
+          } else if (status === 404) {
+            setCancelError('This discovery run was not found. It may have already been removed.');
+          } else {
+            setCancelError(readErrorMessage(retryError) ?? readErrorMessage(error) ?? 'Cancel request failed. Please try again in a moment.');
+          }
           setCancelPending(false);
           return;
         }
       }
-
-      const responseBody = await res.json().catch(() => null) as CancelRunResponse | { error?: string; message?: string } | null;
-
-      if (!res.ok) {
-        // Guard against raw backend errors: if cancel actually succeeded, show success.
-        const latestRun = await apiClient.getDiscoveryRunStatus(runId).catch(() => null);
-        if (latestRun?.status === 'CANCELLED') {
-          setCancelNotice('Run Cancelled');
-          setShowCancelConfirm(false);
-          run.refetch();
-          details.refetch();
-          return;
-        }
-
-        const errorMessage =
-          responseBody && 'error' in responseBody
-            ? (responseBody.error ?? responseBody.message)
-            : undefined;
-
-        // Show user-friendly error instead of raw status codes
-        if (res.status >= 500) {
-          setCancelError('The server encountered an error while cancelling. The run may still be processing. Please refresh and try again.');
-        } else if (res.status === 404) {
-          setCancelError('This discovery run was not found. It may have already been removed.');
-        } else {
-          setCancelError(errorMessage ?? 'Cancel request failed. Please try again in a moment.');
-        }
-        setCancelPending(false);
-        return;
-      }
-
-      const cancelResult =
-        responseBody && 'success' in responseBody
-          ? responseBody as CancelRunResponse
-          : null;
 
       if (cancelResult?.outcome === 'already_terminal') {
         setCancelNotice(

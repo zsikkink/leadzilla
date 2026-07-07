@@ -71,18 +71,13 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             collapsed ? 'px-0 justify-center w-full' : 'px-5 flex-1 min-w-0',
           )}
         >
-          <span
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-zbooni-teal/25 bg-zbooni-teal/10"
-            aria-hidden="true"
-          >
-            <Image
-              src="/brand/L-logo.svg"
-              alt=""
-              width={24}
-              height={24}
-              className="h-6 w-6 object-contain"
-            />
-          </span>
+          <Image
+            src="/brand/L-logo.svg"
+            alt=""
+            width={48}
+            height={48}
+            className="h-12 w-12 shrink-0 object-contain"
+          />
           <div
             className={cn(
               'flex flex-col overflow-hidden transition-[opacity,max-width] duration-250 ease-[cubic-bezier(0.4,0,0.2,1)]',

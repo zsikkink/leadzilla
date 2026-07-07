@@ -1,5 +1,6 @@
 import type {
   AvgScoreResponse,
+  CancelDiscoveryRunResponse,
   DailyQualityTrendsQuery,
   DailyQualityTrendsResponse,
   ContactRecoveryDetailResponse,
@@ -509,6 +510,12 @@ export class ApiClient {
 
   getDiscoveryRunStatus(runId: string): Promise<DiscoveryRunStatusResponse> {
     return this.request(`/v1/discovery/runs/${runId}`);
+  }
+
+  cancelDiscoveryRun(runId: string): Promise<CancelDiscoveryRunResponse> {
+    return this.request(`/v1/discovery/runs/${runId}/cancel`, {
+      method: 'POST',
+    });
   }
 
   listDiscoveryRecords(query?: ListDiscoveryRecordsQuery): Promise<ListDiscoveryRecordsResponse> {

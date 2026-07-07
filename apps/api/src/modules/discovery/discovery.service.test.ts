@@ -23,6 +23,7 @@ function buildRepositoryMock(): DiscoveryRepository {
     getDiscoveryRunStatus: vi.fn(),
     listDiscoveryRecords: vi.fn(),
     listDiscoveryRuns: vi.fn(),
+    cancelDiscoveryRun: vi.fn(),
   };
 }
 

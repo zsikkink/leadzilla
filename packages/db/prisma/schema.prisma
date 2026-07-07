@@ -331,6 +331,8 @@ model IcpProfile {
   excludedDomains      String[]             @default([])
   featureList          Json?
   isActive             Boolean              @default(true)
+  /// Supabase Auth user id (auth.users.id). The SQL schema intentionally does
+  /// not enforce a legacy public.User foreign key.
   createdByUserId      String?
   qualificationRules   QualificationRule[]
   discoveryRecords     LeadDiscoveryRecord[]
@@ -451,6 +453,8 @@ model TrainingRun {
   modelType          ModelType         @default(LOGISTIC_REGRESSION)
   status             TrainingRunStatus @default(QUEUED)
   trigger            TrainingTrigger
+  /// Supabase Auth user id (auth.users.id). The SQL schema intentionally does
+  /// not enforce a legacy public.User foreign key.
   triggeredByUserId  String?
   configJson         Json
   trainingWindowStart DateTime

@@ -1,3 +1,9 @@
+import {
+  ENRICHED_LEAD_STATUSES,
+  MESSAGED_LEAD_STATUSES,
+  SCORED_LEAD_STATUSES,
+} from '@lead-flood/contracts';
+
 import { query, type SqlQueryable } from './postgres.js';
 
 export interface PipelineStatsSnapshot {
@@ -41,21 +47,24 @@ export async function getPipelineStatsSnapshot(
     db.query<LeadDistributionRow>(
       `
         select
+          count(*)::integer as discovered,
           count(*) filter (
-            where "status" in ('new', 'processing', 'stuck')
-          )::integer as discovered,
-          count(*) filter (
-            where "status" in ('enriched', 'failed')
+            where "status" = any($1::text[])
           )::integer as enriched,
           count(*) filter (
-            where "status" in ('scored', 'qualified', 'drafted', 'rejected')
+            where "status" = any($2::text[])
           )::integer as scored,
           count(*) filter (
-            where "status" in ('messaged', 'replied', 'cold')
+            where "status" = any($3::text[])
           )::integer as messaged
         from "Lead"
         where "deletedAt" is null
       `,
+      [
+        [...ENRICHED_LEAD_STATUSES],
+        [...SCORED_LEAD_STATUSES],
+        [...MESSAGED_LEAD_STATUSES],
+      ],
     ),
     db.query<PendingApprovalsRow>(
       `

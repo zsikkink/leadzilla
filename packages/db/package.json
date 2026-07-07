@@ -34,6 +34,7 @@
     "prisma:seed": "prisma generate --schema prisma/schema.prisma && node --env-file-if-exists=.env --import tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@lead-flood/contracts": "workspace:*",
     "@prisma/client": "^6.2.1",
     "pg": "^8.18.0"
   },

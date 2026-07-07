@@ -8,6 +8,8 @@ import {
   AdminListSearchTasksQuerySchema,
   AdminListSearchTasksResponseSchema,
   AdminSearchTaskDetailResponseSchema,
+  JobRequestListQuerySchema,
+  JobRequestListResponseSchema,
   JobRunDetailResponseSchema,
   JobRunListQuerySchema,
   ListJobRunsResponseSchema,
@@ -23,6 +25,8 @@ import {
   type AdminListSearchTasksQuery,
   type AdminListSearchTasksResponse,
   type AdminSearchTaskDetailResponse,
+  type JobRequestListQuery,
+  type JobRequestListResponse,
   type JobRunDetailResponse,
   type JobRunListQuery,
   type ListJobRunsResponse,
@@ -30,80 +34,10 @@ import {
   type RunDiscoveryTasksRequest,
   type TriggerJobRunResponse,
 } from '@lead-flood/contracts';
-import { z } from 'zod';
 
 import { getWebEnv } from './env.js';
 
-export type JobRequestType = 'DISCOVERY_SEED' | 'DISCOVERY_RUN';
-export type JobRequestStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELED';
-
-export interface JobRequestRow {
-  id: number;
-  requestType: JobRequestType;
-  status: JobRequestStatus;
-  paramsJson: unknown;
-  requestedBy: string;
-  claimedBy: string | null;
-  createdAt: string;
-  updatedAt: string;
-  claimedAt: string | null;
-  startedAt: string | null;
-  finishedAt: string | null;
-  errorText: string | null;
-  jobRunId: string | null;
-  idempotencyKey: string | null;
-}
-
-export interface JobRequestListQuery {
-  page: number;
-  pageSize: number;
-  status?: JobRequestStatus | undefined;
-  requestType?: JobRequestType | undefined;
-}
-
-export interface JobRequestListResponse {
-  items: JobRequestRow[];
-  page: number;
-  pageSize: number;
-  total: number;
-}
-
-const JobRequestTypeSchema = z.enum(['DISCOVERY_SEED', 'DISCOVERY_RUN']);
-const JobRequestStatusSchema = z.enum(['PENDING', 'RUNNING', 'SUCCESS', 'FAILED', 'CANCELED']);
-const JobRequestListQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).default(1),
-    pageSize: z.coerce.number().int().min(1).max(100).default(20),
-    status: JobRequestStatusSchema.optional(),
-    requestType: JobRequestTypeSchema.optional(),
-  })
-  .strict();
-const JobRequestRowSchema = z
-  .object({
-    id: z.number().int().nonnegative(),
-    requestType: JobRequestTypeSchema,
-    status: JobRequestStatusSchema,
-    paramsJson: z.any(),
-    requestedBy: z.string(),
-    claimedBy: z.string().nullable(),
-    createdAt: z.string().datetime(),
-    updatedAt: z.string().datetime(),
-    claimedAt: z.string().datetime().nullable(),
-    startedAt: z.string().datetime().nullable(),
-    finishedAt: z.string().datetime().nullable(),
-    errorText: z.string().nullable(),
-    jobRunId: z.string().nullable(),
-    idempotencyKey: z.string().nullable(),
-  })
-  .strict();
-const JobRequestListResponseSchema = z
-  .object({
-    items: z.array(JobRequestRowSchema),
-    page: z.number().int().min(1),
-    pageSize: z.number().int().min(1).max(100),
-    total: z.number().int().min(0),
-  })
-  .strict();
+export type { JobRequestListQuery, JobRequestListResponse } from '@lead-flood/contracts';
 
 const AUTH_TOKEN_STORAGE_KEY = 'lf_access_token';
 

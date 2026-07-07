@@ -21,6 +21,8 @@ import {
   AdminSearchTaskDetailResponseSchema,
   AdminSearchTaskIdParamsSchema,
   ErrorResponseSchema,
+  JobRequestListQuerySchema,
+  JobRequestListResponseSchema,
   JobRunDetailResponseSchema,
   JobRunIdParamsSchema,
   JobRunListQuerySchema,
@@ -79,42 +81,6 @@ function sendValidationError(reply: FastifyReply, requestId: string, message: st
 }
 
 const DiscoveryRunIdParamsSchema = z.object({ id: z.string().min(1) }).strict();
-const JobRequestTypeSchema = z.enum(['DISCOVERY_SEED', 'DISCOVERY_RUN']);
-const JobRequestStatusSchema = z.enum(['PENDING', 'RUNNING', 'SUCCESS', 'FAILED', 'CANCELED']);
-const JobRequestListQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).default(1),
-    pageSize: z.coerce.number().int().min(1).max(100).default(20),
-    status: JobRequestStatusSchema.optional(),
-    requestType: JobRequestTypeSchema.optional(),
-  })
-  .strict();
-const JobRequestRowSchema = z
-  .object({
-    id: z.number().int().nonnegative(),
-    requestType: JobRequestTypeSchema,
-    status: JobRequestStatusSchema,
-    paramsJson: z.any(),
-    requestedBy: z.string(),
-    claimedBy: z.string().nullable(),
-    createdAt: z.string().datetime(),
-    updatedAt: z.string().datetime(),
-    claimedAt: z.string().datetime().nullable(),
-    startedAt: z.string().datetime().nullable(),
-    finishedAt: z.string().datetime().nullable(),
-    errorText: z.string().nullable(),
-    jobRunId: z.string().nullable(),
-    idempotencyKey: z.string().nullable(),
-  })
-  .strict();
-const JobRequestListResponseSchema = z
-  .object({
-    items: z.array(JobRequestRowSchema),
-    page: z.number().int().min(1),
-    pageSize: z.number().int().min(1).max(100),
-    total: z.number().int().min(0),
-  })
-  .strict();
 const ApolloRevealAttemptStatusSchema = z.enum(['CLAIMED', 'COMPLETED', 'ABANDONED']);
 const ApolloRevealAttemptIdParamsSchema = z.object({ id: z.string().min(1) }).strict();
 const StaleApolloRevealAttemptsQuerySchema = z

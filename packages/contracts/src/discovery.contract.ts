@@ -123,6 +123,15 @@ export const DiscoveryRunStatusResponseSchema = z
   })
   .strict();
 
+export const CancelDiscoveryRunResponseSchema = z
+  .object({
+    success: z.boolean(),
+    outcome: z.enum(['cancelled', 'already_cancelled', 'already_terminal']),
+    terminalStatus: z.enum(['completed', 'failed', 'cancelled']).nullable(),
+    cancelledPendingJobsCount: z.number().int().min(0),
+  })
+  .strict();
+
 export const ListDiscoveryRecordsQuerySchema = z
   .object({
     icpProfileId: z.string().min(1).optional(),
@@ -206,6 +215,7 @@ export type PipelineRunStatus = z.infer<typeof DiscoveryPipelineRunStatusSchema>
 export type CreateDiscoveryRunRequest = z.infer<typeof CreateDiscoveryRunRequestSchema>;
 export type CreateDiscoveryRunResponse = z.infer<typeof CreateDiscoveryRunResponseSchema>;
 export type DiscoveryRunStatusResponse = z.infer<typeof DiscoveryRunStatusResponseSchema>;
+export type CancelDiscoveryRunResponse = z.infer<typeof CancelDiscoveryRunResponseSchema>;
 export type ListDiscoveryRecordsQuery = z.infer<typeof ListDiscoveryRecordsQuerySchema>;
 export type LeadDiscoveryRecordResponse = z.infer<typeof LeadDiscoveryRecordResponseSchema>;
 export type DiscoveryQualityMetrics = z.infer<typeof DiscoveryQualityMetricsSchema>;

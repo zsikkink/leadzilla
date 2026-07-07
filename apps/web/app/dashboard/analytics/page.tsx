@@ -8,6 +8,12 @@ import type {
   ScoreDistributionResponse,
 } from '@lead-flood/contracts';
 import {
+  MESSAGED_LEAD_STATUSES,
+  QUALIFIED_LEAD_STATUSES,
+  sumAllLeadStatusCounts,
+  sumLeadStatusCounts,
+} from '@lead-flood/contracts';
+import {
   Activity,
   BarChart3,
   Clock,
@@ -873,17 +879,15 @@ export default function AnalyticsPage() {
       }
     }
 
-    const allLeadCount = Array.from(statusMap.values()).reduce((a, b) => a + b, 0);
+    const statusRows = leadStatuses.data ?? [];
+    const allLeadCount = sumAllLeadStatusCounts(statusRows);
     const discoveredFromApi = funnel.data?.discoveredCount ?? allLeadCount;
 
-    const qualifiedCount = (statusMap.get('qualified') ?? 0) +
-      (statusMap.get('drafted') ?? 0) +
-      (statusMap.get('messaged') ?? 0) +
-      (statusMap.get('replied') ?? 0) +
-      (statusMap.get('cold') ?? 0);
+    const qualifiedCount = funnel.data?.qualifiedCount ??
+      sumLeadStatusCounts(statusRows, QUALIFIED_LEAD_STATUSES);
 
     const messagedCount = funnel.data?.messagesSentCount ??
-      ((statusMap.get('messaged') ?? 0) + (statusMap.get('replied') ?? 0) + (statusMap.get('cold') ?? 0));
+      sumLeadStatusCounts(statusRows, MESSAGED_LEAD_STATUSES);
     const repliedCount = funnel.data?.repliesCount ?? (statusMap.get('replied') ?? 0);
     const wonCount = funnel.data?.dealsWonCount ?? 0;
 

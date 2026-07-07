@@ -22,6 +22,8 @@ export const SearchTaskSortBySchema = z.enum(['updated_desc', 'run_after_asc', '
 export const SearchTaskTypeSchema = z.enum(['SERP_GOOGLE', 'SERP_GOOGLE_LOCAL', 'SERP_MAPS_LOCAL']);
 export const SearchTaskStatusSchema = z.enum(['PENDING', 'RUNNING', 'DONE', 'FAILED', 'SKIPPED']);
 export const JobRunStatusSchema = z.enum(['RUNNING', 'SUCCESS', 'FAILED', 'CANCELED']);
+export const JobRequestTypeSchema = z.enum(['DISCOVERY_SEED', 'DISCOVERY_RUN']);
+export const JobRequestStatusSchema = z.enum(['PENDING', 'RUNNING', 'SUCCESS', 'FAILED', 'CANCELED']);
 
 export const AdminBulkCreateDiscoveryRunsRequestSchema = z
   .object({
@@ -541,11 +543,50 @@ export const JobRunDetailResponseSchema = z
   })
   .strict();
 
+export const JobRequestListQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(20),
+    status: JobRequestStatusSchema.optional(),
+    requestType: JobRequestTypeSchema.optional(),
+  })
+  .strict();
+
+export const JobRequestRowSchema = z
+  .object({
+    id: z.number().int().nonnegative(),
+    requestType: JobRequestTypeSchema,
+    status: JobRequestStatusSchema,
+    paramsJson: z.any(),
+    requestedBy: z.string(),
+    claimedBy: z.string().nullable(),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+    claimedAt: z.string().datetime().nullable(),
+    startedAt: z.string().datetime().nullable(),
+    finishedAt: z.string().datetime().nullable(),
+    errorText: z.string().nullable(),
+    jobRunId: z.string().nullable(),
+    idempotencyKey: z.string().nullable(),
+  })
+  .strict();
+
+export const JobRequestListResponseSchema = z
+  .object({
+    items: z.array(JobRequestRowSchema),
+    page: z.number().int().min(1),
+    pageSize: z.number().int().min(1).max(100),
+    total: z.number().int().min(0),
+  })
+  .strict();
+
 export type AdminLeadSortBy = z.infer<typeof AdminLeadSortBySchema>;
 export type SearchTaskSortBy = z.infer<typeof SearchTaskSortBySchema>;
 export type SearchTaskType = z.infer<typeof SearchTaskTypeSchema>;
 export type SearchTaskStatus = z.infer<typeof SearchTaskStatusSchema>;
 export type JobRunStatus = z.infer<typeof JobRunStatusSchema>;
+export type JobRequestType = z.infer<typeof JobRequestTypeSchema>;
+export type JobRequestStatus = z.infer<typeof JobRequestStatusSchema>;
 export type AdminBulkCreateDiscoveryRunsRequest = z.infer<typeof AdminBulkCreateDiscoveryRunsRequestSchema>;
 export type AdminBulkCreateDiscoveryRunsResult = z.infer<typeof AdminBulkCreateDiscoveryRunsResultSchema>;
 export type AdminBulkCreateDiscoveryRunsResponse = z.infer<typeof AdminBulkCreateDiscoveryRunsResponseSchema>;
@@ -603,3 +644,6 @@ export type JobRunListQuery = z.infer<typeof JobRunListQuerySchema>;
 export type JobRunItem = z.infer<typeof JobRunItemSchema>;
 export type ListJobRunsResponse = z.infer<typeof ListJobRunsResponseSchema>;
 export type JobRunDetailResponse = z.infer<typeof JobRunDetailResponseSchema>;
+export type JobRequestListQuery = z.infer<typeof JobRequestListQuerySchema>;
+export type JobRequestRow = z.infer<typeof JobRequestRowSchema>;
+export type JobRequestListResponse = z.infer<typeof JobRequestListResponseSchema>;
