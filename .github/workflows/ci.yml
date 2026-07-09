@@ -59,7 +59,7 @@ jobs:
         env:
           OUTPUT_ENV_FILE: ${{ runner.temp }}/ci-sql-bootstrap.env
           SQL_BOOTSTRAP_ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5434/postgres
-          SQL_BOOTSTRAP_DATABASE_NAME: lead_flood_ci
+          SQL_BOOTSTRAP_DATABASE_NAME: lead_flood
           SQL_BOOTSTRAP_DROP_EXISTING: '1'
         run: |
           bash scripts/db/bootstrap-sql-disposable.sh
