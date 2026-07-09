@@ -12,6 +12,7 @@ const { dbMocks, routeMocks } = vi.hoisted(() => ({
     buildAnalyticsService: vi.fn(),
     HybridAnalyticsRepository: vi.fn(() => ({})),
     service: {
+      getDashboardSummary: vi.fn(),
       getFunnel: vi.fn(),
       recomputeRollup: vi.fn(),
     },
@@ -149,5 +150,83 @@ describe('analytics.routes authz', () => {
       costPerLead: 120,
     });
     expect(dbMocks.query).not.toHaveBeenCalled();
+  });
+
+  it('returns dashboard summary reads for authenticated non-admin users', async () => {
+    routeMocks.service.getDashboardSummary.mockResolvedValue({
+      from: null,
+      to: null,
+      icpProfileId: null,
+      generatedAt: '2026-07-08T00:00:00.000Z',
+      dataFreshness: {
+        qualityRollupBacked: true,
+        qualityRollupLatestDay: '2026-07-07',
+      },
+      funnel: {
+        from: null,
+        to: null,
+        icpProfileId: null,
+        businessCount: 12,
+        discoveredCount: 10,
+        qualifiedCount: 4,
+        enrichedCount: 5,
+        scoredCount: 4,
+        messagesGeneratedCount: 3,
+        messagesSentCount: 2,
+        repliesCount: 1,
+        meetingsCount: 0,
+        dealsWonCount: 0,
+        totalCostCents: 1200,
+        costPerLead: 120,
+      },
+      scoreDistribution: {
+        bands: [
+          { scoreBand: 'LOW', count: 1 },
+          { scoreBand: 'MEDIUM', count: 2 },
+          { scoreBand: 'HIGH', count: 3 },
+        ],
+        histogram: [],
+      },
+      feedback: {
+        from: null,
+        to: null,
+        totalEvents: 1,
+        repliedCount: 1,
+        meetingBookedCount: 0,
+        dealWonCount: 0,
+        dealLostCount: 0,
+        bouncedCount: 0,
+        notInterestedCount: 0,
+      },
+      qualityTrends: {
+        items: [
+          {
+            day: '2026-07-07',
+            avgScore: 0.7,
+            totalCreated: 10,
+            rejectedCount: 1,
+          },
+        ],
+      },
+      avgScore: { avgScore: 0.72 },
+      icpPerformance: { items: [] },
+      pendingDraftsCount: 2,
+      discoveryRuns: [],
+      discoveryRunsTotal: 0,
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/analytics/dashboard-summary',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(routeMocks.service.getDashboardSummary).toHaveBeenCalledWith({});
+    expect(response.json()).toMatchObject({
+      pendingDraftsCount: 2,
+      dataFreshness: {
+        qualityRollupLatestDay: '2026-07-07',
+      },
+    });
   });
 });

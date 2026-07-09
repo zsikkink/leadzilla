@@ -1,4 +1,8 @@
-import type { RecomputeRollupRequest } from '@lead-flood/contracts';
+import {
+  QUALIFIED_LEAD_STATUSES,
+  SENT_MESSAGE_STATUSES,
+  type RecomputeRollupRequest,
+} from '@lead-flood/contracts';
 import { prisma } from '@lead-flood/db';
 import type { Job, SendOptions } from 'pg-boss';
 
@@ -29,7 +33,7 @@ export interface AnalyticsRollupLogger {
   error: (object: Record<string, unknown>, message: string) => void;
 }
 
-const BOUNCED_EVENT_TYPES = new Set(['BOUNCED', 'NOT_INTERESTED', 'UNSUBSCRIBED']);
+const NOT_INTERESTED_EVENT_TYPES = ['NOT_INTERESTED', 'UNSUBSCRIBED'] as const;
 
 function parseDayRange(day: string): { dayStart: Date; dayEnd: Date } {
   const dayStart = new Date(`${day}T00:00:00.000Z`);
@@ -56,6 +60,10 @@ function toBooleanFeature(featuresJson: unknown, key: string): boolean {
   }
   const value = (featuresJson as Record<string, unknown>)[key];
   return value === true;
+}
+
+function scoreBucketIndex(score: number): number {
+  return Math.min(Math.max(Math.floor(score * 10), 0), 9);
 }
 
 export async function handleAnalyticsRollupJob(
@@ -125,13 +133,21 @@ export async function handleAnalyticsRollupJob(
           lead: {
             select: {
               email: true,
+              status: true,
+              costCents: true,
             },
           },
         },
       });
 
       const discoveredCount = discoveryRows.length;
-      const uniqueLeadIds = Array.from(new Set(discoveryRows.map((row) => row.leadId)));
+      const leadsById = new Map(discoveryRows.map((row) => [row.leadId, row.lead]));
+      const uniqueLeadIds = Array.from(leadsById.keys());
+      const qualifiedStatuses = new Set<string>(QUALIFIED_LEAD_STATUSES);
+      const qualifiedCount = Array.from(leadsById.values()).filter((lead) =>
+        qualifiedStatuses.has(lead.status),
+      ).length;
+      const totalCostCents = Array.from(leadsById.values()).reduce((sum, lead) => sum + lead.costCents, 0);
 
       let validEmailCount = 0;
       const validDomains = new Set<string>();
@@ -171,7 +187,7 @@ export async function handleAnalyticsRollupJob(
               },
             });
 
-      const scoredCount = await prisma.leadScorePrediction.count({
+      const scoreRows = await prisma.leadScorePrediction.findMany({
         where: {
           icpProfileId: targetIcpId,
           predictedAt: {
@@ -179,7 +195,22 @@ export async function handleAnalyticsRollupJob(
             lt: dayEnd,
           },
         },
+        orderBy: [{ leadId: 'asc' }, { predictedAt: 'desc' }, { createdAt: 'desc' }],
+        distinct: ['leadId'],
+        select: {
+          blendedScore: true,
+          scoreBand: true,
+        },
       });
+      const scoredCount = scoreRows.length;
+      const scoreSum = scoreRows.reduce((sum, row) => sum + row.blendedScore, 0);
+      const lowScoreCount = scoreRows.filter((row) => row.scoreBand === 'LOW').length;
+      const mediumScoreCount = scoreRows.filter((row) => row.scoreBand === 'MEDIUM').length;
+      const highScoreCount = scoreRows.filter((row) => row.scoreBand === 'HIGH').length;
+      const scoreBucketCounts = Array.from({ length: 10 }, () => 0);
+      for (const row of scoreRows) {
+        scoreBucketCounts[scoreBucketIndex(row.blendedScore)]! += 1;
+      }
 
       const snapshots = await prisma.leadFeatureSnapshot.findMany({
         where: {
@@ -208,34 +239,72 @@ export async function handleAnalyticsRollupJob(
         snapshotCount > 0 ? Number((geoMatchCount / snapshotCount).toFixed(6)) : 0;
 
       // ── Bottom-of-funnel metrics ──────────────────────────────────────
+      const messagesGeneratedCount = await prisma.messageDraft.count({
+        where: {
+          icpProfileId: targetIcpId,
+          createdAt: { gte: dayStart, lt: dayEnd },
+        },
+      });
+
       const sentCount = await prisma.messageSend.count({
         where: {
-          status: { in: ['SENT', 'DELIVERED'] },
+          messageDraft: { icpProfileId: targetIcpId },
+          status: { in: [...SENT_MESSAGE_STATUSES] },
           sentAt: { gte: dayStart, lt: dayEnd },
         },
       });
 
       const failedCount = await prisma.messageSend.count({
         where: {
+          messageDraft: { icpProfileId: targetIcpId },
           status: 'FAILED',
           createdAt: { gte: dayStart, lt: dayEnd },
         },
       });
 
-      const repliedCount = await prisma.feedbackEvent.count({
-        where: {
-          eventType: 'REPLIED',
-          createdAt: { gte: dayStart, lt: dayEnd },
+      const feedbackWhereBase = {
+        occurredAt: { gte: dayStart, lt: dayEnd },
+        lead: {
+          discoveryRecords: {
+            some: { icpProfileId: targetIcpId },
+          },
         },
-      });
+      };
 
-      const dailyFeedbackEvents = await prisma.feedbackEvent.findMany({
-        where: {
-          createdAt: { gte: dayStart, lt: dayEnd },
-        },
-        select: { eventType: true },
-      });
-      const bouncedCount = dailyFeedbackEvents.filter((event) => BOUNCED_EVENT_TYPES.has(event.eventType)).length;
+      const [
+        repliedCount,
+        meetingsCount,
+        dealsWonCount,
+        dealLostCount,
+        bouncedCount,
+        notInterestedCount,
+        rejectedCount,
+      ] = await Promise.all([
+        prisma.feedbackEvent.count({
+          where: { ...feedbackWhereBase, eventType: 'REPLIED' },
+        }),
+        prisma.feedbackEvent.count({
+          where: { ...feedbackWhereBase, eventType: 'MEETING_BOOKED' },
+        }),
+        prisma.feedbackEvent.count({
+          where: { ...feedbackWhereBase, eventType: 'DEAL_WON' },
+        }),
+        prisma.feedbackEvent.count({
+          where: { ...feedbackWhereBase, eventType: 'DEAL_LOST' },
+        }),
+        prisma.feedbackEvent.count({
+          where: { ...feedbackWhereBase, eventType: 'BOUNCED' },
+        }),
+        prisma.feedbackEvent.count({
+          where: { ...feedbackWhereBase, eventType: { in: [...NOT_INTERESTED_EVENT_TYPES] } },
+        }),
+        prisma.leadRejection.count({
+          where: {
+            icpProfileId: targetIcpId,
+            rejectedAt: { gte: dayStart, lt: dayEnd },
+          },
+        }),
+      ]);
 
       await prisma.analyticsDailyRollup.upsert({
         where: {
@@ -248,29 +317,73 @@ export async function handleAnalyticsRollupJob(
           day: dayStart,
           icpProfileId: targetIcpId,
           discoveredCount,
+          qualifiedCount,
           enrichedCount,
           scoredCount,
+          scoreSum,
+          lowScoreCount,
+          mediumScoreCount,
+          highScoreCount,
+          scoreBucket0Count: scoreBucketCounts[0] ?? 0,
+          scoreBucket1Count: scoreBucketCounts[1] ?? 0,
+          scoreBucket2Count: scoreBucketCounts[2] ?? 0,
+          scoreBucket3Count: scoreBucketCounts[3] ?? 0,
+          scoreBucket4Count: scoreBucketCounts[4] ?? 0,
+          scoreBucket5Count: scoreBucketCounts[5] ?? 0,
+          scoreBucket6Count: scoreBucketCounts[6] ?? 0,
+          scoreBucket7Count: scoreBucketCounts[7] ?? 0,
+          scoreBucket8Count: scoreBucketCounts[8] ?? 0,
+          scoreBucket9Count: scoreBucketCounts[9] ?? 0,
           validEmailCount,
           validDomainCount: validDomains.size,
           industryMatchRate,
           geoMatchRate,
+          messagesGeneratedCount,
           sentCount,
           failedCount,
           repliedCount,
+          meetingsCount,
+          dealsWonCount,
+          dealLostCount,
           bouncedCount,
+          notInterestedCount,
+          rejectedCount,
+          totalCostCents,
         },
         update: {
           discoveredCount,
+          qualifiedCount,
           enrichedCount,
           scoredCount,
+          scoreSum,
+          lowScoreCount,
+          mediumScoreCount,
+          highScoreCount,
+          scoreBucket0Count: scoreBucketCounts[0] ?? 0,
+          scoreBucket1Count: scoreBucketCounts[1] ?? 0,
+          scoreBucket2Count: scoreBucketCounts[2] ?? 0,
+          scoreBucket3Count: scoreBucketCounts[3] ?? 0,
+          scoreBucket4Count: scoreBucketCounts[4] ?? 0,
+          scoreBucket5Count: scoreBucketCounts[5] ?? 0,
+          scoreBucket6Count: scoreBucketCounts[6] ?? 0,
+          scoreBucket7Count: scoreBucketCounts[7] ?? 0,
+          scoreBucket8Count: scoreBucketCounts[8] ?? 0,
+          scoreBucket9Count: scoreBucketCounts[9] ?? 0,
           validEmailCount,
           validDomainCount: validDomains.size,
           industryMatchRate,
           geoMatchRate,
+          messagesGeneratedCount,
           sentCount,
           failedCount,
           repliedCount,
+          meetingsCount,
+          dealsWonCount,
+          dealLostCount,
           bouncedCount,
+          notInterestedCount,
+          rejectedCount,
+          totalCostCents,
         },
       });
     }

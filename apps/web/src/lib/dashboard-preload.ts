@@ -29,6 +29,7 @@ function dashboardQueryKey(name: string, query?: object): string {
 
 export const dashboardQueryKeys = {
   avgScore: (query?: object) => dashboardQueryKey('avg-score', query),
+  dashboardSummary: (query?: object) => dashboardQueryKey('dashboard-summary', query),
   discoveryRuns: (query?: object) => dashboardQueryKey('discovery-runs', query),
   drafts: (query?: object) => dashboardQueryKey('drafts', query),
   feedback: (query?: object) => dashboardQueryKey('feedback', query),
@@ -69,30 +70,12 @@ export function getCachedDashboardQuery<T>(key: string, fetcher: () => Promise<T
 
 export function warmDashboardData(apiClient: ApiClient): void {
   const analyticsFilter = {};
-  const dateFilter = {};
   const icpsQuery = { page: 1, pageSize: 50 };
-  const discoveryRunsQuery = { page: 1, pageSize: 6 };
-  const draftsQuery = { approvalStatus: 'PENDING', page: 1, pageSize: 1 } as const;
 
   void Promise.allSettled([
     getCachedDashboardQuery(dashboardQueryKeys.icps(icpsQuery), () => apiClient.listIcps(icpsQuery)),
-    getCachedDashboardQuery(dashboardQueryKeys.funnel(analyticsFilter), () => apiClient.getFunnel(analyticsFilter)),
-    getCachedDashboardQuery(dashboardQueryKeys.scoreDistribution(analyticsFilter), () =>
-      apiClient.getScoreDistribution(analyticsFilter),
+    getCachedDashboardQuery(dashboardQueryKeys.dashboardSummary(analyticsFilter), () =>
+      apiClient.getDashboardSummary(analyticsFilter),
     ),
-    getCachedDashboardQuery(dashboardQueryKeys.feedback(analyticsFilter), () =>
-      apiClient.getFeedbackSummary(analyticsFilter),
-    ),
-    getCachedDashboardQuery(dashboardQueryKeys.qualityTrends(dateFilter), () =>
-      apiClient.getDailyQualityTrends(dateFilter),
-    ),
-    getCachedDashboardQuery(dashboardQueryKeys.icpPerformance(analyticsFilter), () =>
-      apiClient.getIcpPerformance(analyticsFilter),
-    ),
-    getCachedDashboardQuery(dashboardQueryKeys.avgScore(analyticsFilter), () => apiClient.getAvgScore(analyticsFilter)),
-    getCachedDashboardQuery(dashboardQueryKeys.discoveryRuns(discoveryRunsQuery), () =>
-      apiClient.listDiscoveryRuns(discoveryRunsQuery),
-    ),
-    getCachedDashboardQuery(dashboardQueryKeys.drafts(draftsQuery), () => apiClient.listDrafts(draftsQuery)),
   ]);
 }

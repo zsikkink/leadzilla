@@ -43,15 +43,16 @@ For demo work, keep outbound provider credentials unset unless the product scope
 ## 2. Current architecture truth
 
 - Frontend runtime: `apps/web` is a Next.js app targeting Vercel. Supabase browser auth/session is still used client-side. Discovery-admin leads/search-task reads now go through the Next admin proxy, but some other operational reads still go browser-direct elsewhere in the web app.
-- API runtime: `apps/api` is the protected operational boundary and intended Railway API service. It verifies Supabase JWTs, owns `/ready`, owner-scopes normal discovery reads, and enforces discovery-admin access with `x-admin-key` plus server-side `app_admins` membership.
-- Worker runtime: `apps/worker` is server-only background execution and intended Railway worker service.
+- Recruiter demo API runtime: the public Vercel deployment points `NEXT_PUBLIC_API_BASE_URL` and `API_BASE_URL` at the Supabase Edge Function API. That Edge API supports read routes plus bounded discovery, enrichment, scoring, and OpenAI draft-generation jobs.
+- Historical full-platform API runtime: `apps/api` remains the protected Fastify operational boundary for the full service path. It verifies Supabase JWTs, owns `/ready`, owner-scopes normal discovery reads, and enforces discovery-admin access with `x-admin-key` plus server-side `app_admins` membership.
+- Worker runtime: `apps/worker` remains the server-only background execution path for the full service. It is not part of the public recruiter demo runtime; worker-backed and outbound actions stay disabled in the demo.
 - Database/auth: Supabase Postgres + Auth.
 - Schema authority: `supabase/migrations/` is the intended canonical schema source for production.
 - Current runtime reality: the repo is still mid-transition away from Prisma. Prisma remains in parts of runtime, local/bootstrap, CI, and tests.
 
 ### Last verified production deploy truth as of 2026-05-07
 
-This section is historical verification, not proof of the current live state on 2026-07-08. Reverify Vercel, Railway, Supabase, `/health`, and `/ready` before claiming the remote demo is live.
+This section is historical verification for the older Railway-backed topology, not proof of the current Supabase Edge demo state. Reverify Vercel, Supabase Edge, Supabase Auth, and the authenticated `/ready` route before claiming the remote demo is live.
 
 - Before the handoff push on 2026-05-07, local `main` matched `origin/main` at `6d31eefe20bb3a5c3d318b7b90bb58afcd3edb57`.
 - Latest local validation on 2026-05-07 passed `pnpm typecheck`, `pnpm lint`, targeted API/worker/provider tests for changed seams, `pnpm build`, Supabase production migration verification, and Docker builds for the API/worker/web runtime images.

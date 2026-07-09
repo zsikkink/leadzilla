@@ -4,7 +4,7 @@ Demo-oriented AI-assisted lead discovery, enrichment, scoring, and message-draft
 
 This checkout is Leadzilla: a demo-hosted version of the platform originally built for Zbooni. The public demo is designed for a recruiter or hiring team to open from a resume link and immediately see a polished, enterprise-grade AI sales platform. The demo target is intentionally narrow:
 
-- small, bounded discovery and scoring jobs should work end to end
+- small, bounded discovery, enrichment, and scoring jobs should work end to end
 - message drafting should work for qualified leads
 - outbound message sending must remain disabled
 - existing Zbooni-discovered leads can remain as demo data
@@ -103,9 +103,13 @@ pnpm dev:local-stack
 ## Deployment Topology
 
 - Web app: Vercel
-- API: Railway
-- Worker: Railway
+- Recruiter demo API: Supabase Edge Function `api` for read routes plus bounded discovery, enrichment, scoring, and OpenAI draft generation
+- Worker: not part of the public demo runtime; worker-backed and outbound actions remain disabled
 - Database/Auth: Supabase
+
+The historical Fastify API and worker services remain in the repo for the full
+platform path, but the public recruiter demo is configured to call the Supabase
+Edge API entrypoint directly.
 
 ## Demo Pipeline Target
 
@@ -123,6 +127,12 @@ Required worker env for discovery:
 - `DATABASE_URL` (cloud Supabase Postgres with `?connection_limit=3`)
 - `SERPAPI_API_KEY` when `DISCOVERY_SEARCH_PROVIDER=SERPAPI` (the default)
 - `GOOGLE_PLACES_API_KEY` only when `DISCOVERY_SEARCH_PROVIDER=GOOGLE_PLACES`
+
+Public demo Edge Function env:
+
+- `SERPAPI_API_KEY` enables bounded recruiter-demo discovery.
+- `OPENAI_API_KEY` enables live draft generation through the Supabase Edge API.
+- `OPENAI_DRAFT_MODEL` optionally overrides the default frontier draft model.
 
 Admin access requires your Supabase Auth user ID in the `app_admins` table:
 

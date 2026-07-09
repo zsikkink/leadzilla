@@ -10,6 +10,9 @@ import type {
   DailyQualityTrendItem,
   DailyQualityTrendsQuery,
   DailyQualityTrendsResponse,
+  DashboardSummaryQuery,
+  DashboardSummaryResponse,
+  DiscoveryRunSummary,
   FunnelQuery,
   FunnelResponse,
   IcpPerformanceQuery,
@@ -44,6 +47,7 @@ export interface AnalyticsRepository {
   getDailyQualityTrends(query: DailyQualityTrendsQuery): Promise<DailyQualityTrendsResponse>;
   getAvgScore(query: AvgScoreQuery): Promise<AvgScoreResponse>;
   getIcpPerformance(query: IcpPerformanceQuery): Promise<IcpPerformanceResponse>;
+  getDashboardSummary(query: DashboardSummaryQuery): Promise<DashboardSummaryResponse>;
   getModelMetrics(query: ModelMetricsQuery): Promise<ModelMetricsResponse>;
   getRetrainStatus(query: RetrainStatusQuery): Promise<RetrainStatusResponse>;
   recomputeRollup(input: RecomputeRollupRequest): Promise<void>;
@@ -71,6 +75,10 @@ export class StubAnalyticsRepository implements AnalyticsRepository {
 
   async getIcpPerformance(_query: IcpPerformanceQuery): Promise<IcpPerformanceResponse> {
     throw new AnalyticsNotImplementedError('TODO: get ICP performance persistence');
+  }
+
+  async getDashboardSummary(_query: DashboardSummaryQuery): Promise<DashboardSummaryResponse> {
+    throw new AnalyticsNotImplementedError('TODO: get dashboard summary persistence');
   }
 
   async getModelMetrics(_query: ModelMetricsQuery): Promise<ModelMetricsResponse> {
@@ -430,49 +438,313 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
           .then((profiles) => profiles.map((profile) => profile.id));
 
     for (const icpProfileId of icpProfilesToProcess) {
-      const [discoveredCount, enrichedCount, scoredCount] = await Promise.all([
-        prisma.leadDiscoveryRecord.count({
-          where: {
-            icpProfileId,
-            discoveredAt: { gte: dayStart, lte: dayEnd },
-            status: 'DISCOVERED',
-          },
-        }),
-        prisma.leadEnrichmentRecord.count({
-          where: {
-            status: 'COMPLETED',
-            enrichedAt: { gte: dayStart, lte: dayEnd },
-            lead: {
-              discoveryRecords: {
-                some: { icpProfileId },
-              },
+      const discoveryRows = await prisma.leadDiscoveryRecord.findMany({
+        where: {
+          icpProfileId,
+          discoveredAt: { gte: dayStart, lte: dayEnd },
+          status: 'DISCOVERED',
+        },
+        select: {
+          leadId: true,
+          lead: {
+            select: {
+              status: true,
+              costCents: true,
             },
           },
-        }),
-        prisma.leadScorePrediction.count({
+        },
+      });
+      const discoveredCount = discoveryRows.length;
+      const leadsById = new Map(discoveryRows.map((row) => [row.leadId, row.lead]));
+      const uniqueLeadIds = Array.from(leadsById.keys());
+      const qualifiedStatuses = new Set<string>(QUALIFIED_LEAD_STATUSES);
+      const qualifiedCount = Array.from(leadsById.values()).filter((lead) =>
+        qualifiedStatuses.has(lead.status),
+      ).length;
+      const totalCostCents = Array.from(leadsById.values()).reduce((sum, lead) => sum + lead.costCents, 0);
+
+      const [enrichedCount, scoreRows, messagesGeneratedCount, sentCount, failedCount] = await Promise.all([
+        uniqueLeadIds.length === 0
+          ? Promise.resolve(0)
+          : prisma.leadEnrichmentRecord.count({
+              where: {
+                status: 'COMPLETED',
+                enrichedAt: { gte: dayStart, lte: dayEnd },
+                leadId: { in: uniqueLeadIds },
+              },
+            }),
+        prisma.leadScorePrediction.findMany({
           where: {
             icpProfileId,
             predictedAt: { gte: dayStart, lte: dayEnd },
           },
+          orderBy: [{ leadId: 'asc' }, { predictedAt: 'desc' }, { createdAt: 'desc' }],
+          distinct: ['leadId'],
+          select: { blendedScore: true, scoreBand: true },
+        }),
+        prisma.messageDraft.count({
+          where: {
+            icpProfileId,
+            createdAt: { gte: dayStart, lte: dayEnd },
+          },
+        }),
+        prisma.messageSend.count({
+          where: {
+            messageDraft: { icpProfileId },
+            status: { in: [...SENT_MESSAGE_STATUSES] },
+            sentAt: { gte: dayStart, lte: dayEnd },
+          },
+        }),
+        prisma.messageSend.count({
+          where: {
+            messageDraft: { icpProfileId },
+            status: 'FAILED',
+            createdAt: { gte: dayStart, lte: dayEnd },
+          },
         }),
       ]);
+      const scoredCount = scoreRows.length;
+      const scoreSum = scoreRows.reduce((sum, row) => sum + row.blendedScore, 0);
+      const lowScoreCount = scoreRows.filter((row) => row.scoreBand === 'LOW').length;
+      const mediumScoreCount = scoreRows.filter((row) => row.scoreBand === 'MEDIUM').length;
+      const highScoreCount = scoreRows.filter((row) => row.scoreBand === 'HIGH').length;
+      const scoreBucketCounts = Array.from({ length: 10 }, () => 0);
+      for (const row of scoreRows) {
+        scoreBucketCounts[scoreBucketIndex(row.blendedScore)]! += 1;
+      }
+
+      const feedbackWhereBase = {
+        occurredAt: { gte: dayStart, lte: dayEnd },
+        lead: {
+          discoveryRecords: {
+            some: { icpProfileId },
+          },
+        },
+      };
+      const [
+        repliedCount,
+        meetingsCount,
+        dealsWonCount,
+        dealLostCount,
+        bouncedCount,
+        notInterestedCount,
+        rejectedCount,
+      ] = await Promise.all([
+        prisma.feedbackEvent.count({ where: { ...feedbackWhereBase, eventType: 'REPLIED' } }),
+        prisma.feedbackEvent.count({ where: { ...feedbackWhereBase, eventType: 'MEETING_BOOKED' } }),
+        prisma.feedbackEvent.count({ where: { ...feedbackWhereBase, eventType: 'DEAL_WON' } }),
+        prisma.feedbackEvent.count({ where: { ...feedbackWhereBase, eventType: 'DEAL_LOST' } }),
+        prisma.feedbackEvent.count({ where: { ...feedbackWhereBase, eventType: 'BOUNCED' } }),
+        prisma.feedbackEvent.count({
+          where: { ...feedbackWhereBase, eventType: { in: ['NOT_INTERESTED', 'UNSUBSCRIBED'] } },
+        }),
+        prisma.leadRejection.count({
+          where: {
+            icpProfileId,
+            rejectedAt: { gte: dayStart, lte: dayEnd },
+          },
+        }),
+      ]);
+
+      const rollupData = {
+        discoveredCount,
+        qualifiedCount,
+        enrichedCount,
+        scoredCount,
+        scoreSum,
+        lowScoreCount,
+        mediumScoreCount,
+        highScoreCount,
+        scoreBucket0Count: scoreBucketCounts[0] ?? 0,
+        scoreBucket1Count: scoreBucketCounts[1] ?? 0,
+        scoreBucket2Count: scoreBucketCounts[2] ?? 0,
+        scoreBucket3Count: scoreBucketCounts[3] ?? 0,
+        scoreBucket4Count: scoreBucketCounts[4] ?? 0,
+        scoreBucket5Count: scoreBucketCounts[5] ?? 0,
+        scoreBucket6Count: scoreBucketCounts[6] ?? 0,
+        scoreBucket7Count: scoreBucketCounts[7] ?? 0,
+        scoreBucket8Count: scoreBucketCounts[8] ?? 0,
+        scoreBucket9Count: scoreBucketCounts[9] ?? 0,
+        messagesGeneratedCount,
+        sentCount,
+        failedCount,
+        repliedCount,
+        meetingsCount,
+        dealsWonCount,
+        dealLostCount,
+        bouncedCount,
+        notInterestedCount,
+        rejectedCount,
+        totalCostCents,
+      };
 
       await prisma.analyticsDailyRollup.upsert({
         where: { day_icpProfileId: { day: dayStart, icpProfileId } },
         create: {
           day: dayStart,
           icpProfileId,
-          discoveredCount,
-          enrichedCount,
-          scoredCount,
+          ...rollupData,
         },
-        update: {
-          discoveredCount,
-          enrichedCount,
-          scoredCount,
-        },
+        update: rollupData,
       });
     }
+  }
+
+  override async getDashboardSummary(query: DashboardSummaryQuery): Promise<DashboardSummaryResponse> {
+    const from = query.from ?? null;
+    const to = query.to ?? null;
+    const icpProfileId = query.icpProfileId ?? null;
+
+    const rollupWhere = {
+      ...(icpProfileId ? { icpProfileId } : {}),
+      ...(query.from || query.to
+        ? {
+            day: {
+              ...(query.from ? { gte: toDayStart(query.from) } : {}),
+              ...(query.to ? { lte: toDayStart(query.to) } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const [rollupRows, businessCount, pendingDraftsCount, discoveryRunsResult] = await Promise.all([
+      prisma.analyticsDailyRollup.findMany({
+        where: rollupWhere,
+        orderBy: [{ day: 'asc' }, { icpProfileId: 'asc' }],
+      }),
+      prisma.business.count(),
+      prisma.messageDraft.count({
+        where: {
+          approvalStatus: 'PENDING',
+          ...(icpProfileId ? { icpProfileId } : {}),
+        },
+      }),
+      this.getRecentDiscoveryRuns(),
+    ]);
+    const totals = summarizeDashboardRollups(rollupRows);
+    const latestRollup = rollupRows.reduce<Date | null>(
+      (latest, row) => (latest === null || row.day > latest ? row.day : latest),
+      null,
+    );
+
+    return {
+      from,
+      to,
+      icpProfileId,
+      generatedAt: new Date().toISOString(),
+      dataFreshness: {
+        qualityRollupBacked: rollupRows.length > 0,
+        qualityRollupLatestDay: latestRollup?.toISOString().slice(0, 10) ?? null,
+      },
+      funnel: {
+        from,
+        to,
+        icpProfileId,
+        businessCount,
+        discoveredCount: totals.discoveredCount,
+        qualifiedCount: totals.qualifiedCount,
+        enrichedCount: totals.enrichedCount,
+        scoredCount: totals.scoredCount,
+        messagesGeneratedCount: totals.messagesGeneratedCount,
+        messagesSentCount: totals.sentCount,
+        repliesCount: totals.repliedCount,
+        meetingsCount: totals.meetingsCount,
+        dealsWonCount: totals.dealsWonCount,
+        totalCostCents: totals.totalCostCents,
+        costPerLead: totals.discoveredCount > 0
+          ? Math.round((totals.totalCostCents / totals.discoveredCount) * 100) / 100
+          : 0,
+      },
+      scoreDistribution: {
+        bands: [
+          { scoreBand: 'LOW', count: totals.lowScoreCount },
+          { scoreBand: 'MEDIUM', count: totals.mediumScoreCount },
+          { scoreBand: 'HIGH', count: totals.highScoreCount },
+        ],
+        histogram: buildRollupScoreHistogram(totals.scoreBucketCounts),
+      },
+      feedback: {
+        from,
+        to,
+        totalEvents:
+          totals.repliedCount +
+          totals.meetingsCount +
+          totals.dealsWonCount +
+          totals.dealLostCount +
+          totals.bouncedCount +
+          totals.notInterestedCount,
+        repliedCount: totals.repliedCount,
+        meetingBookedCount: totals.meetingsCount,
+        dealWonCount: totals.dealsWonCount,
+        dealLostCount: totals.dealLostCount,
+        bouncedCount: totals.bouncedCount,
+        notInterestedCount: totals.notInterestedCount,
+      },
+      qualityTrends: {
+        items: buildRollupQualityTrends(rollupRows),
+      },
+      avgScore: {
+        avgScore: totals.scoredCount > 0 ? totals.scoreSum / totals.scoredCount : null,
+      },
+      icpPerformance: {
+        items: buildRollupIcpPerformance(rollupRows),
+      },
+      pendingDraftsCount,
+      discoveryRuns: discoveryRunsResult.runs,
+      discoveryRunsTotal: discoveryRunsResult.total,
+    };
+  }
+
+  private async getRecentDiscoveryRuns(): Promise<{ runs: DiscoveryRunSummary[]; total: number }> {
+    const where = { type: 'discovery.run' };
+    const [total, rows] = await Promise.all([
+      prisma.jobExecution.count({ where }),
+      prisma.jobExecution.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: 6,
+      }),
+    ]);
+
+    return {
+      runs: rows.map((row) => {
+        const progress = readDashboardRunProgress(row.result);
+        const payload = asRecord(row.payload);
+        const result = asRecord(row.result);
+        const icpProfileId = typeof payload.icpProfileId === 'string' ? payload.icpProfileId : null;
+        const icpProfileIds = Array.isArray(payload.icpProfileIds)
+          ? payload.icpProfileIds.filter((id): id is string => typeof id === 'string')
+          : icpProfileId
+            ? [icpProfileId]
+            : [];
+        const countries = Array.isArray(payload.countries)
+          ? payload.countries.filter((country): country is string => typeof country === 'string')
+          : [];
+        const limit = typeof payload.limit === 'number' && Number.isFinite(payload.limit) ? payload.limit : 0;
+        const converted = typeof result.converted === 'number' && Number.isFinite(result.converted)
+          ? result.converted
+          : undefined;
+
+        return {
+          runId: row.id,
+          status: mapDashboardRunStatus(row.status, progress.failedItems),
+          totalItems: progress.totalItems,
+          processedItems: progress.processedItems,
+          failedItems: progress.failedItems,
+          createdAt: row.createdAt.toISOString(),
+          startedAt: row.startedAt?.toISOString() ?? null,
+          finishedAt: row.finishedAt?.toISOString() ?? null,
+          icpProfileId,
+          icpProfileIds,
+          countries,
+          limit,
+          ...(converted !== undefined ? { converted } : {}),
+          errorMessage: row.error,
+          currentStage: deriveDashboardRunStage(result, row.status),
+        };
+      }),
+      total,
+    };
   }
 
   override async getManagerRecommendations(query: ManagerRecommendationsQuery): Promise<ManagerRecommendationsResponse> {
@@ -603,6 +875,14 @@ interface StoredRecommendationSqlRow {
 }
 
 type RetrainRunStatus = NonNullable<RetrainStatusResponse['currentRun']>['status'];
+type DashboardRunStatus = DiscoveryRunSummary['status'];
+type DashboardJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+interface DashboardRunProgress {
+  totalItems: number;
+  processedItems: number;
+  failedItems: number;
+}
 
 interface RetrainStatusActiveModelRow {
   id: string;
@@ -643,6 +923,68 @@ interface IcpPerformanceAggregateRow {
   rejectedCount: number | string;
 }
 
+interface DashboardRollupRow {
+  day: Date;
+  icpProfileId: string;
+  discoveredCount: number;
+  qualifiedCount: number;
+  enrichedCount: number;
+  scoredCount: number;
+  scoreSum: number;
+  lowScoreCount: number;
+  mediumScoreCount: number;
+  highScoreCount: number;
+  scoreBucket0Count: number;
+  scoreBucket1Count: number;
+  scoreBucket2Count: number;
+  scoreBucket3Count: number;
+  scoreBucket4Count: number;
+  scoreBucket5Count: number;
+  scoreBucket6Count: number;
+  scoreBucket7Count: number;
+  scoreBucket8Count: number;
+  scoreBucket9Count: number;
+  messagesGeneratedCount: number;
+  sentCount: number;
+  failedCount: number;
+  repliedCount: number;
+  meetingsCount: number;
+  dealsWonCount: number;
+  dealLostCount: number;
+  bouncedCount: number;
+  notInterestedCount: number;
+  rejectedCount: number;
+  totalCostCents: number;
+}
+
+interface DashboardRollupTotals {
+  discoveredCount: number;
+  qualifiedCount: number;
+  enrichedCount: number;
+  scoredCount: number;
+  scoreSum: number;
+  lowScoreCount: number;
+  mediumScoreCount: number;
+  highScoreCount: number;
+  scoreBucketCounts: number[];
+  messagesGeneratedCount: number;
+  sentCount: number;
+  failedCount: number;
+  repliedCount: number;
+  meetingsCount: number;
+  dealsWonCount: number;
+  dealLostCount: number;
+  bouncedCount: number;
+  notInterestedCount: number;
+  rejectedCount: number;
+  totalCostCents: number;
+}
+
+function toDayStart(value: string): Date {
+  const source = new Date(value);
+  return new Date(Date.UTC(source.getUTCFullYear(), source.getUTCMonth(), source.getUTCDate()));
+}
+
 function toNonNegativeInt(value: number | string): number {
   if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
     return Math.floor(value);
@@ -650,6 +992,70 @@ function toNonNegativeInt(value: number | string): number {
 
   const parsed = Number.parseInt(String(value), 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function toNonNegativeCount(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return Math.floor(value);
+  }
+
+  return 0;
+}
+
+function scoreBucketIndex(score: number): number {
+  return Math.min(Math.max(Math.floor(score * 10), 0), 9);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function readDashboardRunProgress(result: unknown): DashboardRunProgress {
+  const payload = asRecord(result);
+  const newFound = toNonNegativeCount(payload.newFound);
+  const newBusinesses = toNonNegativeCount(payload.newBusinesses);
+  const totalItems =
+    newFound > 0
+      ? newFound
+      : newBusinesses > 0
+        ? newBusinesses
+        : toNonNegativeCount(payload.totalItems);
+  const explicitLeadFailures = toNonNegativeCount(payload.leadFailedItems);
+  const failedItems = explicitLeadFailures > 0
+    ? explicitLeadFailures
+    : Math.max(
+        0,
+        toNonNegativeCount(payload.failedItems) - toNonNegativeCount(payload.disqualified),
+      );
+
+  return {
+    totalItems,
+    processedItems: toNonNegativeCount(payload.processedItems),
+    failedItems,
+  };
+}
+
+function mapDashboardRunStatus(status: DashboardJobStatus, failedItems: number): DashboardRunStatus {
+  switch (status) {
+    case 'queued':
+      return 'QUEUED';
+    case 'running':
+      return 'RUNNING';
+    case 'failed':
+      return 'FAILED';
+    case 'cancelled':
+      return 'CANCELLED';
+    case 'completed':
+    default:
+      return failedItems > 0 ? 'PARTIAL' : 'SUCCEEDED';
+  }
+}
+
+function deriveDashboardRunStage(result: Record<string, unknown>, status: DashboardJobStatus): string | null {
+  if (status !== 'running') return null;
+  return result.searchTasksComplete ? 'processing' : 'searching';
 }
 
 function buildEmptyScoreHistogram(): ScoreDistributionResponse['histogram'] {
@@ -684,6 +1090,119 @@ function buildScoreHistogramFromRows(rows: ScoreHistogramRow[]): ScoreDistributi
   }
 
   return histogram;
+}
+
+function emptyDashboardRollupTotals(): DashboardRollupTotals {
+  return {
+    discoveredCount: 0,
+    qualifiedCount: 0,
+    enrichedCount: 0,
+    scoredCount: 0,
+    scoreSum: 0,
+    lowScoreCount: 0,
+    mediumScoreCount: 0,
+    highScoreCount: 0,
+    scoreBucketCounts: Array.from({ length: 10 }, () => 0),
+    messagesGeneratedCount: 0,
+    sentCount: 0,
+    failedCount: 0,
+    repliedCount: 0,
+    meetingsCount: 0,
+    dealsWonCount: 0,
+    dealLostCount: 0,
+    bouncedCount: 0,
+    notInterestedCount: 0,
+    rejectedCount: 0,
+    totalCostCents: 0,
+  };
+}
+
+function addDashboardRollup(total: DashboardRollupTotals, row: DashboardRollupRow): void {
+  total.discoveredCount += row.discoveredCount;
+  total.qualifiedCount += row.qualifiedCount;
+  total.enrichedCount += row.enrichedCount;
+  total.scoredCount += row.scoredCount;
+  total.scoreSum += row.scoreSum;
+  total.lowScoreCount += row.lowScoreCount;
+  total.mediumScoreCount += row.mediumScoreCount;
+  total.highScoreCount += row.highScoreCount;
+  total.scoreBucketCounts[0]! += row.scoreBucket0Count;
+  total.scoreBucketCounts[1]! += row.scoreBucket1Count;
+  total.scoreBucketCounts[2]! += row.scoreBucket2Count;
+  total.scoreBucketCounts[3]! += row.scoreBucket3Count;
+  total.scoreBucketCounts[4]! += row.scoreBucket4Count;
+  total.scoreBucketCounts[5]! += row.scoreBucket5Count;
+  total.scoreBucketCounts[6]! += row.scoreBucket6Count;
+  total.scoreBucketCounts[7]! += row.scoreBucket7Count;
+  total.scoreBucketCounts[8]! += row.scoreBucket8Count;
+  total.scoreBucketCounts[9]! += row.scoreBucket9Count;
+  total.messagesGeneratedCount += row.messagesGeneratedCount;
+  total.sentCount += row.sentCount;
+  total.failedCount += row.failedCount;
+  total.repliedCount += row.repliedCount;
+  total.meetingsCount += row.meetingsCount;
+  total.dealsWonCount += row.dealsWonCount;
+  total.dealLostCount += row.dealLostCount;
+  total.bouncedCount += row.bouncedCount;
+  total.notInterestedCount += row.notInterestedCount;
+  total.rejectedCount += row.rejectedCount;
+  total.totalCostCents += row.totalCostCents;
+}
+
+function summarizeDashboardRollups(rows: DashboardRollupRow[]): DashboardRollupTotals {
+  const totals = emptyDashboardRollupTotals();
+  for (const row of rows) {
+    addDashboardRollup(totals, row);
+  }
+  return totals;
+}
+
+function buildRollupScoreHistogram(bucketCounts: number[]): ScoreDistributionResponse['histogram'] {
+  return bucketCounts.map((count, index) => ({
+    scoreMin: index / 10,
+    scoreMax: (index + 1) / 10,
+    count,
+  }));
+}
+
+function buildRollupQualityTrends(rows: DashboardRollupRow[]): DailyQualityTrendsResponse['items'] {
+  const byDay = new Map<string, DashboardRollupTotals>();
+
+  for (const row of rows) {
+    const day = row.day.toISOString().slice(0, 10);
+    const total = byDay.get(day) ?? emptyDashboardRollupTotals();
+    addDashboardRollup(total, row);
+    byDay.set(day, total);
+  }
+
+  return Array.from(byDay.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([day, total]) => ({
+      day,
+      avgScore: total.scoredCount > 0 ? total.scoreSum / total.scoredCount : 0,
+      totalCreated: total.discoveredCount,
+      rejectedCount: total.rejectedCount,
+    }));
+}
+
+function buildRollupIcpPerformance(rows: DashboardRollupRow[]): IcpPerformanceResponse['items'] {
+  const byIcp = new Map<string, DashboardRollupTotals>();
+
+  for (const row of rows) {
+    const total = byIcp.get(row.icpProfileId) ?? emptyDashboardRollupTotals();
+    addDashboardRollup(total, row);
+    byIcp.set(row.icpProfileId, total);
+  }
+
+  return Array.from(byIcp.entries())
+    .map(([icpProfileId, total]) => ({
+      icpProfileId,
+      leadCount: total.scoredCount,
+      avgScore: total.scoredCount > 0 ? total.scoreSum / total.scoredCount : null,
+      qualifiedCount: total.qualifiedCount,
+      rejectedCount: total.rejectedCount,
+    }))
+    .sort((left, right) => right.leadCount - left.leadCount || left.icpProfileId.localeCompare(right.icpProfileId));
 }
 
 export class HybridAnalyticsRepository extends PrismaAnalyticsRepository {

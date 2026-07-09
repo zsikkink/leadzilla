@@ -4,6 +4,8 @@ import type {
   CancelDiscoveryRunResponse,
   DailyQualityTrendsQuery,
   DailyQualityTrendsResponse,
+  DashboardSummaryQuery,
+  DashboardSummaryResponse,
   ContactRecoveryDetailResponse,
   ConversationResponse,
   CreateDiscoveryRunRequest,
@@ -441,6 +443,11 @@ export class ApiClient {
   }
 
   // ── Analytics ─────────────────────────────────────
+  getDashboardSummary(query?: DashboardSummaryQuery): Promise<DashboardSummaryResponse> {
+    const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
+    return this.request(`/v1/analytics/dashboard-summary${qs}`);
+  }
+
   getFunnel(query?: FunnelQuery): Promise<FunnelResponse> {
     const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
     return this.request(`/v1/analytics/funnel${qs}`);

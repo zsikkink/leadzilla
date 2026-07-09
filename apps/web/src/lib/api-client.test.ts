@@ -116,6 +116,44 @@ describe('ApiClient', () => {
     expect(icpPerformanceUrl.searchParams.get('icpProfileId')).toBe(icpProfileId);
   });
 
+  it('requests the precomputed dashboard summary with filters', async () => {
+    const from = '2026-07-01T00:00:00.000Z';
+    const to = '2026-07-08T23:59:59.999Z';
+    const icpProfileId = 'icp_1';
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          from,
+          to,
+          icpProfileId,
+          generatedAt: '2026-07-08T23:59:59.999Z',
+          dataFreshness: {
+            qualityRollupBacked: true,
+            qualityRollupLatestDay: '2026-07-08',
+          },
+          funnel: {},
+          scoreDistribution: {},
+          feedback: {},
+          qualityTrends: { items: [] },
+          avgScore: { avgScore: null },
+          icpPerformance: { items: [] },
+          pendingDraftsCount: 0,
+          discoveryRuns: [],
+          discoveryRunsTotal: 0,
+        }),
+        { status: 200 },
+      ),
+    );
+
+    await client.getDashboardSummary({ from, to, icpProfileId });
+
+    const calledUrl = new URL((fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string);
+    expect(calledUrl.pathname).toBe('/v1/analytics/dashboard-summary');
+    expect(calledUrl.searchParams.get('from')).toBe(from);
+    expect(calledUrl.searchParams.get('to')).toBe(to);
+    expect(calledUrl.searchParams.get('icpProfileId')).toBe(icpProfileId);
+  });
+
   it('throws helpful error when API is unreachable', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('fetch failed'));
 

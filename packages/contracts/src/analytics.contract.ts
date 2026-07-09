@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { DiscoveryRunSummarySchema } from './discovery.contract.js';
+import { FeedbackSummaryResponseSchema } from './feedback.contract.js';
 
 export const AnalyticsScoreBandSchema = z.enum(['LOW', 'MEDIUM', 'HIGH']);
 
@@ -115,6 +117,34 @@ export const IcpPerformanceResponseSchema = z
   })
   .strict();
 
+export const DashboardSummaryQuerySchema = z
+  .object(IcpScopedDateRangeQueryFields)
+  .strict();
+
+export const DashboardSummaryResponseSchema = z
+  .object({
+    from: z.string().datetime().nullable(),
+    to: z.string().datetime().nullable(),
+    icpProfileId: z.string().nullable(),
+    generatedAt: z.string().datetime(),
+    dataFreshness: z
+      .object({
+        qualityRollupBacked: z.boolean(),
+        qualityRollupLatestDay: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+      })
+      .strict(),
+    funnel: FunnelResponseSchema,
+    scoreDistribution: ScoreDistributionResponseSchema,
+    feedback: FeedbackSummaryResponseSchema,
+    qualityTrends: DailyQualityTrendsResponseSchema,
+    avgScore: AvgScoreResponseSchema,
+    icpPerformance: IcpPerformanceResponseSchema,
+    pendingDraftsCount: z.number().int().min(0),
+    discoveryRuns: z.array(DiscoveryRunSummarySchema),
+    discoveryRunsTotal: z.number().int().min(0),
+  })
+  .strict();
+
 export const ModelMetricsQuerySchema = z
   .object({
     modelVersionId: z.string().min(1).optional(),
@@ -192,6 +222,8 @@ export type AvgScoreResponse = z.infer<typeof AvgScoreResponseSchema>;
 export type IcpPerformanceQuery = z.infer<typeof IcpPerformanceQuerySchema>;
 export type IcpPerformanceItem = z.infer<typeof IcpPerformanceItemSchema>;
 export type IcpPerformanceResponse = z.infer<typeof IcpPerformanceResponseSchema>;
+export type DashboardSummaryQuery = z.infer<typeof DashboardSummaryQuerySchema>;
+export type DashboardSummaryResponse = z.infer<typeof DashboardSummaryResponseSchema>;
 export type ModelMetricsQuery = z.infer<typeof ModelMetricsQuerySchema>;
 export type ModelMetricsResponse = z.infer<typeof ModelMetricsResponseSchema>;
 export type RetrainStatusQuery = z.infer<typeof RetrainStatusQuerySchema>;

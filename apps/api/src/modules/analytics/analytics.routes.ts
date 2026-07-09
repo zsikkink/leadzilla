@@ -4,6 +4,8 @@ import {
   AvgScoreResponseSchema,
   DailyQualityTrendsQuerySchema,
   DailyQualityTrendsResponseSchema,
+  DashboardSummaryQuerySchema,
+  DashboardSummaryResponseSchema,
   ErrorResponseSchema,
   FunnelQuerySchema,
   FunnelResponseSchema,
@@ -69,6 +71,23 @@ export function registerAnalyticsRoutes(
       return reply;
     }
   };
+
+  app.get('/v1/analytics/dashboard-summary', async (request, reply) => {
+    const parsedQuery = DashboardSummaryQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return sendValidationError(reply, request.id, 'Invalid dashboard summary query');
+    }
+
+    try {
+      const result = await service.getDashboardSummary(parsedQuery.data);
+      return DashboardSummaryResponseSchema.parse(result);
+    } catch (error: unknown) {
+      if (handleModuleError(error, request, reply)) {
+        return;
+      }
+      throw error;
+    }
+  });
 
   app.get('/v1/analytics/funnel', async (request, reply) => {
     const parsedQuery = FunnelQuerySchema.safeParse(request.query);

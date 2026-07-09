@@ -11,10 +11,17 @@ type Row = Record<string, unknown>;
 
 const DEFAULT_CORS_ORIGINS: string[] = [];
 const DEMO_DISABLED_MESSAGE =
-  'This demo API is read-only. Discovery, enrichment, messaging, outbound sends, and other worker-backed actions are disabled.';
+  'This demo API allows small discovery, enrichment, scoring, and OpenAI draft-generation jobs. Outbound sends and other worker-backed actions are disabled.';
 const MAX_DEMO_ROWS = 1000;
 const STATS_PAGE_SIZE = 1000;
 const STATS_IN_FILTER_CHUNK_SIZE = 200;
+const EDGE_DISCOVERY_MAX_RESULTS = 10;
+const EDGE_DISCOVERY_MAX_SERPAPI_CALLS = 5;
+const EDGE_DISCOVERY_DEFAULT_LIMIT = 5;
+const SERPAPI_SEARCH_URL = 'https://serpapi.com/search.json';
+const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
+const DEFAULT_OPENAI_DRAFT_MODEL = 'gpt-5.5';
+const OPENAI_DRAFT_TIMEOUT_MS = 30_000;
 
 class HttpError extends Error {
   constructor(
@@ -30,6 +37,65 @@ class HttpError extends Error {
 interface AuthContext {
   userId: string;
   email: string | null;
+}
+
+interface EdgeDiscoveryRequest {
+  icpProfileId?: string | undefined;
+  icpProfileIds?: string[] | undefined;
+  countries: string[];
+  cities?: string[] | undefined;
+  includeWebsiteAnalysis?: boolean | undefined;
+  includeSocialMediaAnalysis?: boolean | undefined;
+  limit?: number | undefined;
+  advancedSettings?: {
+    searchCategories?: string[] | undefined;
+    minReviewCount?: number | undefined;
+  } | undefined;
+}
+
+interface EdgeIcpProfile {
+  id: string;
+  name: string;
+  targetIndustries: string[];
+  targetCountries: string[];
+  metadataJson: JsonObject | null;
+}
+
+interface EdgeGenerateDraftRequest {
+  leadId: string;
+  icpProfileId: string;
+  scorePredictionId?: string | undefined;
+  knowledgeEntryIds: string[];
+  channel: 'EMAIL' | 'WHATSAPP';
+  promptVersion: string;
+  forceRegenerate?: boolean | undefined;
+  redraftFeedback?: string | undefined;
+}
+
+interface OpenAiDraftContent {
+  subject: string | null;
+  bodyText: string;
+  bodyHtml: string | null;
+  ctaText: string | null;
+  qualityScore: number | null;
+}
+
+interface EdgeLocalBusiness {
+  providerRecordId: string;
+  name: string;
+  url: string | null;
+  websiteUrl: string | null;
+  address: string | null;
+  phone: string | null;
+  city: string | null;
+  countryCode: string;
+  category: string | null;
+  rating: number | null;
+  reviewCount: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  instagramHandle: string | null;
+  raw: unknown;
 }
 
 interface RestResult<T> {
@@ -54,8 +120,8 @@ function anonKey(): string {
 }
 
 function serviceRoleKey(): string {
-  // This Edge Function is a read-only demo adapter. It uses the service role
-  // only for PostgREST reads; worker-backed and mutating routes return 403.
+  // This Edge Function uses the service role for demo-scoped reads/writes.
+  // Worker-backed delivery and outbound send routes remain blocked.
   return readEnv('SUPABASE_SERVICE_ROLE_KEY');
 }
 
@@ -101,6 +167,10 @@ function withCors(response: Response, corsHeaders: Headers): Response {
 
 function jsonResponse(value: unknown, status = 200): Response {
   return Response.json(value, { status });
+}
+
+async function responseJson<T extends JsonObject>(response: Response): Promise<T> {
+  return await response.json() as T;
 }
 
 function emptyResponse(status = 204): Response {
@@ -179,6 +249,52 @@ async function restRequest<T>(
     data,
     total: parseContentRange(response.headers.get('content-range')),
   };
+}
+
+async function insertRows<T extends Row>(
+  table: string,
+  rows: Row[],
+  params: Record<string, string | number | boolean | undefined | null> = {},
+): Promise<T[]> {
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const result = await restRequest<T[]>(table, { select: '*', ...params }, {
+    method: 'POST',
+    headers: {
+      prefer: 'return=representation',
+    },
+    body: JSON.stringify(rows),
+  });
+  return result.data;
+}
+
+async function insertRow<T extends Row>(
+  table: string,
+  row: Row,
+  params: Record<string, string | number | boolean | undefined | null> = {},
+): Promise<T> {
+  const [created] = await insertRows<T>(table, [row], params);
+  if (!created) {
+    throw new HttpError(502, 'Database insert failed', false);
+  }
+  return created;
+}
+
+async function updateRows<T extends Row>(
+  table: string,
+  params: Record<string, string | number | boolean | undefined | null>,
+  patch: Row,
+): Promise<T[]> {
+  const result = await restRequest<T[]>(table, { select: '*', ...params }, {
+    method: 'PATCH',
+    headers: {
+      prefer: 'return=representation',
+    },
+    body: JSON.stringify(patch),
+  });
+  return result.data;
 }
 
 async function listRows(
@@ -442,6 +558,1024 @@ function normalizeJobRunRow(row: Row): Row {
   };
 }
 
+function newId(prefix: string): string {
+  return `${prefix}_${crypto.randomUUID()}`;
+}
+
+function edgeHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function normalizeSearchText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function normalizeOptionalString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeOptionalNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(/,/g, ''));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function parseEdgeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      value
+        .map((entry) => normalizeOptionalString(entry))
+        .filter((entry): entry is string => Boolean(entry)),
+    ),
+  );
+}
+
+function parseGenerateDraftBody(value: unknown): EdgeGenerateDraftRequest {
+  const body = asObject(value);
+  if (!body) {
+    throw new HttpError(400, 'Invalid generate message payload');
+  }
+
+  const leadId = normalizeOptionalString(body.leadId);
+  const icpProfileId = normalizeOptionalString(body.icpProfileId);
+  const scorePredictionId = normalizeOptionalString(body.scorePredictionId) ?? undefined;
+  const promptVersion = normalizeOptionalString(body.promptVersion) ?? 'v2';
+  const channelValue = normalizeOptionalString(body.channel) ?? 'EMAIL';
+  const redraftFeedback = normalizeOptionalString(body.redraftFeedback) ?? undefined;
+
+  if (!leadId || !icpProfileId) {
+    throw new HttpError(400, 'leadId and icpProfileId are required');
+  }
+  if (channelValue !== 'EMAIL' && channelValue !== 'WHATSAPP') {
+    throw new HttpError(400, 'channel must be EMAIL or WHATSAPP');
+  }
+
+  return {
+    leadId,
+    icpProfileId,
+    ...(scorePredictionId ? { scorePredictionId } : {}),
+    knowledgeEntryIds: parseEdgeStringArray(body.knowledgeEntryIds),
+    channel: channelValue,
+    promptVersion,
+    ...(body.forceRegenerate === true ? { forceRegenerate: true } : {}),
+    ...(redraftFeedback ? { redraftFeedback } : {}),
+  };
+}
+
+function clampDraftQualityScore(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
+function normalizeNullableDraftString(value: unknown, maxLength: number): string | null {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return null;
+  }
+  return normalized.slice(0, maxLength);
+}
+
+function parseOpenAiDraftContent(value: unknown): OpenAiDraftContent {
+  const payload = asObject(value);
+  if (!payload) {
+    throw new HttpError(502, 'OpenAI draft response was not valid JSON');
+  }
+
+  const bodyText = normalizeOptionalString(payload.bodyText);
+  if (!bodyText) {
+    throw new HttpError(502, 'OpenAI draft response was missing bodyText');
+  }
+
+  return {
+    subject: normalizeNullableDraftString(payload.subject, 500),
+    bodyText: bodyText.slice(0, 10_000),
+    bodyHtml: normalizeNullableDraftString(payload.bodyHtml, 10_000),
+    ctaText: normalizeNullableDraftString(payload.ctaText, 500),
+    qualityScore: clampDraftQualityScore(payload.qualityScore),
+  };
+}
+
+function stripMarkdownFences(text: string): string {
+  return text
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/i, '')
+    .trim();
+}
+
+function firstParsedOpenAiOutput(payload: JsonObject): JsonObject | null {
+  const directParsed = asObject(payload.output_parsed);
+  if (directParsed) {
+    return directParsed;
+  }
+
+  for (const item of asArray(payload.output)) {
+    const itemObject = asObject(item);
+    for (const content of asArray(itemObject?.content)) {
+      const contentObject = asObject(content);
+      const parsed = asObject(contentObject?.parsed);
+      if (parsed) {
+        return parsed;
+      }
+    }
+  }
+
+  return null;
+}
+
+function firstOpenAiOutputText(payload: JsonObject): string | null {
+  const direct = normalizeOptionalString(payload.output_text);
+  if (direct) {
+    return direct;
+  }
+
+  for (const item of asArray(payload.output)) {
+    const itemObject = asObject(item);
+    for (const content of asArray(itemObject?.content)) {
+      const contentObject = asObject(content);
+      const text = normalizeOptionalString(contentObject?.text);
+      if (text) {
+        return text;
+      }
+    }
+  }
+
+  return null;
+}
+
+function parseOpenAiDraftResponse(payload: JsonObject): OpenAiDraftContent {
+  const parsed = firstParsedOpenAiOutput(payload);
+  if (parsed) {
+    return parseOpenAiDraftContent(parsed);
+  }
+
+  const outputText = firstOpenAiOutputText(payload);
+  if (!outputText) {
+    throw new HttpError(502, 'OpenAI draft response was missing output text');
+  }
+
+  try {
+    return parseOpenAiDraftContent(JSON.parse(stripMarkdownFences(outputText)));
+  } catch (error: unknown) {
+    if (error instanceof HttpError) {
+      throw error;
+    }
+    throw new HttpError(502, 'OpenAI draft response could not be parsed');
+  }
+}
+
+function compactJson(value: unknown, maxLength = 1800): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  try {
+    const text = JSON.stringify(value);
+    return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+  } catch {
+    return null;
+  }
+}
+
+function settingString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+async function pipelineSettingValue(key: string): Promise<unknown | null> {
+  const row = await singleRow('pipeline_settings', {
+    select: 'valueJson',
+    key: `eq.${key}`,
+  });
+  return row?.valueJson ?? null;
+}
+
+async function loadScoreQualificationThreshold(): Promise<number> {
+  const value = await pipelineSettingValue('scoreQualificationThreshold');
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    throw new HttpError(
+      503,
+      'Draft generation is unavailable because the score qualification threshold is missing or invalid.',
+    );
+  }
+  return parsed;
+}
+
+async function loadMessagingTextSetting(key: string): Promise<string | null> {
+  return settingString(await pipelineSettingValue(key));
+}
+
+function openAiDraftModel(settingModel: string | null): string {
+  return (
+    normalizeOptionalString(Deno.env.get('OPENAI_DRAFT_MODEL')) ??
+    normalizeOptionalString(Deno.env.get('OPENAI_GENERATION_MODEL')) ??
+    settingModel ??
+    DEFAULT_OPENAI_DRAFT_MODEL
+  );
+}
+
+function parseCreateDiscoveryRunBody(value: unknown): EdgeDiscoveryRequest {
+  const body = asObject(value);
+  if (!body) {
+    throw new HttpError(400, 'Invalid discovery run payload');
+  }
+
+  const icpProfileIds = parseEdgeStringArray(body.icpProfileIds);
+  const icpProfileId = normalizeOptionalString(body.icpProfileId) ?? undefined;
+  const countries = parseEdgeStringArray(body.countries).map((country) => country.toUpperCase());
+  const cities = parseEdgeStringArray(body.cities);
+  const advancedSettings = asObject(body.advancedSettings);
+  const limitValue = body.limit === undefined ? EDGE_DISCOVERY_DEFAULT_LIMIT : Number(body.limit);
+
+  if (icpProfileIds.length === 0 && !icpProfileId) {
+    throw new HttpError(400, 'Either icpProfileIds or icpProfileId is required');
+  }
+  if (countries.length === 0) {
+    throw new HttpError(400, 'Select at least one country for the discovery run');
+  }
+  if (!Number.isInteger(limitValue) || limitValue < 1) {
+    throw new HttpError(400, 'Discovery run limit must be a positive integer');
+  }
+
+  return {
+    ...(icpProfileId ? { icpProfileId } : {}),
+    ...(icpProfileIds.length > 0 ? { icpProfileIds } : {}),
+    countries,
+    ...(cities.length > 0 ? { cities } : {}),
+    includeWebsiteAnalysis: body.includeWebsiteAnalysis !== false,
+    includeSocialMediaAnalysis: body.includeSocialMediaAnalysis !== false,
+    limit: Math.min(limitValue, EDGE_DISCOVERY_MAX_RESULTS),
+    ...(advancedSettings
+      ? {
+          advancedSettings: {
+            searchCategories: parseEdgeStringArray(advancedSettings.searchCategories),
+            minReviewCount: Math.max(0, Math.floor(asNumber(advancedSettings.minReviewCount, 0))),
+          },
+        }
+      : {}),
+  };
+}
+
+function resolveRequestedIcpIds(input: EdgeDiscoveryRequest): string[] {
+  if (input.icpProfileIds && input.icpProfileIds.length > 0) {
+    return input.icpProfileIds;
+  }
+  return input.icpProfileId ? [input.icpProfileId] : [];
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string')
+    : [];
+}
+
+function normalizeIcpProfile(row: Row): EdgeIcpProfile {
+  return {
+    id: asString(row.id),
+    name: asString(row.name, 'ICP'),
+    targetIndustries: asStringArray(row.targetIndustries),
+    targetCountries: asStringArray(row.targetCountries),
+    metadataJson: asObject(row.metadataJson),
+  };
+}
+
+function resolveSearchCategory(
+  icp: EdgeIcpProfile,
+  input: EdgeDiscoveryRequest,
+): string {
+  const requested = input.advancedSettings?.searchCategories?.[0];
+  if (requested) {
+    return requested;
+  }
+  return icp.targetIndustries[0] ?? icp.name;
+}
+
+function safeUrl(value: string | null): URL | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    return new URL(value.includes('://') ? value : `https://${value}`);
+  } catch {
+    return null;
+  }
+}
+
+function rootDomainFromUrl(value: string | null): string | null {
+  const url = safeUrl(value);
+  return url?.hostname.toLowerCase().replace(/^www\./, '') ?? null;
+}
+
+function isNonBusinessDomain(domain: string | null): boolean {
+  if (!domain) {
+    return false;
+  }
+  return [
+    'facebook.com',
+    'fb.com',
+    'instagram.com',
+    'tiktok.com',
+    'wa.me',
+    'whatsapp.com',
+    'google.com',
+    'goo.gl',
+    'maps.google.com',
+  ].some((blocked) => domain === blocked || domain.endsWith(`.${blocked}`));
+}
+
+function businessDomainFromUrl(value: string | null): string | null {
+  const domain = rootDomainFromUrl(value);
+  return isNonBusinessDomain(domain) ? null : domain;
+}
+
+function collectLinkCandidates(value: unknown): string[] {
+  const candidates: string[] = [];
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const row = asObject(item);
+      for (const key of ['website', 'link', 'url', 'instagram', 'profile']) {
+        const candidate = normalizeOptionalString(row?.[key]);
+        if (candidate) {
+          candidates.push(candidate);
+        }
+      }
+    }
+  } else {
+    const row = asObject(value);
+    if (row) {
+      for (const key of ['website', 'link', 'url', 'instagram', 'profile']) {
+        const candidate = normalizeOptionalString(row[key]);
+        if (candidate) {
+          candidates.push(candidate);
+        }
+      }
+    }
+  }
+  return candidates;
+}
+
+function pickBusinessWebsite(candidates: unknown[]): string | null {
+  for (const candidate of candidates) {
+    const value = normalizeOptionalString(candidate);
+    if (!value) {
+      continue;
+    }
+    if (businessDomainFromUrl(value)) {
+      return safeUrl(value)?.toString() ?? value;
+    }
+  }
+  return null;
+}
+
+function parseInstagramHandle(candidates: unknown[]): string | null {
+  for (const candidate of candidates) {
+    const value = normalizeOptionalString(candidate);
+    if (!value) {
+      continue;
+    }
+    const match = value.match(/instagram\.com\/([A-Za-z0-9_.]+)/i);
+    if (match?.[1]) {
+      return match[1].replace(/^@/, '');
+    }
+  }
+  return null;
+}
+
+function normalizeSerpApiLocalBusinesses(payload: JsonObject, countryCode: string): EdgeLocalBusiness[] {
+  const collections: unknown[] = [];
+  const localResults = payload.local_results;
+  if (Array.isArray(localResults)) {
+    collections.push(...localResults);
+  } else {
+    const localResultsObject = asObject(localResults);
+    if (Array.isArray(localResultsObject?.places)) {
+      collections.push(...localResultsObject.places);
+    }
+  }
+
+  const localMap = asObject(payload.local_map);
+  if (Array.isArray(localMap?.places)) {
+    collections.push(...localMap.places);
+  }
+  if (Array.isArray(localMap?.results)) {
+    collections.push(...localMap.results);
+  }
+  if (Array.isArray(payload.places_results)) {
+    collections.push(...payload.places_results);
+  }
+
+  return collections.flatMap((raw, index): EdgeLocalBusiness[] => {
+    const row = asObject(raw);
+    const name = normalizeOptionalString(row?.title) ?? normalizeOptionalString(row?.name);
+    if (!row || !name) {
+      return [];
+    }
+
+    const links = collectLinkCandidates(row.links);
+    const websiteUrl = pickBusinessWebsite([row.website, row.link, row.domain, ...links]);
+    const resultUrl =
+      normalizeOptionalString(row.place_link) ??
+      normalizeOptionalString(row.link) ??
+      websiteUrl;
+    const gps = asObject(row.gps_coordinates);
+    const reviewCount =
+      normalizeOptionalNumber(row.reviews) ??
+      normalizeOptionalNumber(row.reviews_original) ??
+      normalizeOptionalNumber(row.rating_count);
+    const address = normalizeOptionalString(row.address);
+    const city = address
+      ? address.split(',').map((part) => part.trim()).filter(Boolean).at(-2) ?? null
+      : null;
+    const providerRecordId =
+      normalizeOptionalString(row.data_id) ??
+      normalizeOptionalString(row.data_cid) ??
+      normalizeOptionalString(row.place_id) ??
+      resultUrl ??
+      `${name}:${index}`;
+
+    return [{
+      providerRecordId,
+      name,
+      url: resultUrl,
+      websiteUrl,
+      address,
+      phone: normalizeOptionalString(row.phone),
+      city,
+      countryCode,
+      category: normalizeOptionalString(row.type) ?? normalizeOptionalString(row.category),
+      rating: normalizeOptionalNumber(row.rating),
+      reviewCount: reviewCount !== null ? Math.floor(reviewCount) : null,
+      latitude: normalizeOptionalNumber(gps?.latitude),
+      longitude: normalizeOptionalNumber(gps?.longitude),
+      instagramHandle: parseInstagramHandle([row.instagram, row.website, row.link, row.domain, ...links]),
+      raw,
+    }];
+  });
+}
+
+function edgeScoreBand(score: number): 'LOW' | 'MEDIUM' | 'HIGH' {
+  if (score >= 0.67) return 'HIGH';
+  if (score >= 0.34) return 'MEDIUM';
+  return 'LOW';
+}
+
+function businessSignals(local: EdgeLocalBusiness): {
+  hasWhatsapp: boolean;
+  hasInstagram: boolean;
+  acceptsOnlinePayments: boolean;
+  physicalAddressPresent: boolean;
+  recentActivity: boolean;
+  deterministicScore: number;
+  scoreBand: 'LOW' | 'MEDIUM' | 'HIGH';
+} {
+  const rawText = JSON.stringify(local.raw ?? {}).toLowerCase();
+  const hasWhatsapp = rawText.includes('whatsapp') || rawText.includes('wa.me');
+  const hasInstagram = Boolean(local.instagramHandle) || rawText.includes('instagram');
+  const acceptsOnlinePayments =
+    rawText.includes('pay now') ||
+    rawText.includes('payment link') ||
+    rawText.includes('order online') ||
+    Boolean(local.websiteUrl?.toLowerCase().includes('shop'));
+  const physicalAddressPresent = Boolean(local.address);
+  const recentActivity = (local.reviewCount ?? 0) > 0 || rawText.includes('open now');
+  const deterministicScore = Number(
+    Math.min(
+      1,
+      (hasWhatsapp ? 0.2 : 0) +
+        (hasInstagram ? 0.1 : 0) +
+        (acceptsOnlinePayments ? 0.15 : 0) +
+        Math.min((local.reviewCount ?? 0) / 200, 1) * 0.2 +
+        (physicalAddressPresent ? 0.1 : 0) +
+        (recentActivity ? 0.15 : 0),
+    ).toFixed(6),
+  );
+  return {
+    hasWhatsapp,
+    hasInstagram,
+    acceptsOnlinePayments,
+    physicalAddressPresent,
+    recentActivity,
+    deterministicScore,
+    scoreBand: edgeScoreBand(deterministicScore),
+  };
+}
+
+function boolScore(value: boolean, weight: number): number {
+  return value ? weight : 0;
+}
+
+function scoreLeadBusinessSignals(lead: Row, business: Row | null): {
+  deterministicScore: number;
+  scoreBand: 'LOW' | 'MEDIUM' | 'HIGH';
+  features: JsonObject;
+  reasonCodes: string[];
+  ruleEvaluation: JsonObject[];
+} {
+  const normalizedBusiness = normalizeBusinessRow(business);
+  const businessScore = asNullableNumber(normalizedBusiness?.deterministicScore);
+  const hasBusinessEmail = Boolean(asNullableString(lead.businessEmail));
+  const hasLeadEmail = Boolean(asNullableString(lead.email));
+  const hasPhone = Boolean(asNullableString(lead.phone) ?? asNullableString(normalizedBusiness?.phoneE164));
+  const hasWebsite = Boolean(asNullableString(normalizedBusiness?.websiteDomain));
+  const hasInstagram = asBoolean(normalizedBusiness?.hasInstagram);
+  const hasWhatsapp = asBoolean(normalizedBusiness?.hasWhatsapp);
+  const acceptsOnlinePayments = asBoolean(normalizedBusiness?.acceptsOnlinePayments);
+  const physicalAddressPresent = asBoolean(normalizedBusiness?.physicalAddressPresent);
+  const recentActivity = asBoolean(normalizedBusiness?.recentActivity);
+  const reviewCount = asNumber(normalizedBusiness?.reviewCount);
+
+  const fallbackScore = Number(Math.min(
+    1,
+    0.2 +
+      boolScore(hasBusinessEmail || hasLeadEmail, 0.12) +
+      boolScore(hasPhone, 0.08) +
+      boolScore(hasWebsite, 0.1) +
+      boolScore(hasInstagram, 0.08) +
+      boolScore(hasWhatsapp, 0.08) +
+      boolScore(acceptsOnlinePayments, 0.1) +
+      boolScore(physicalAddressPresent, 0.08) +
+      boolScore(recentActivity, 0.08) +
+      Math.min(reviewCount / 200, 1) * 0.08,
+  ).toFixed(6));
+  const deterministicScore = businessScore ?? fallbackScore;
+  const features: JsonObject = {
+    has_business_email: hasBusinessEmail,
+    has_lead_email: hasLeadEmail,
+    has_phone: hasPhone,
+    has_website: hasWebsite,
+    has_instagram: hasInstagram,
+    has_whatsapp: hasWhatsapp,
+    accepts_online_payments: acceptsOnlinePayments,
+    physical_address_present: physicalAddressPresent,
+    recent_activity: recentActivity,
+    review_count: reviewCount,
+    business_score_available: businessScore !== null,
+  };
+  const reasonCodes = Object.entries(features)
+    .filter(([, value]) => value === true)
+    .map(([key]) => key.toUpperCase());
+  if (reviewCount > 0) {
+    reasonCodes.push('HAS_REVIEWS');
+  }
+  if (reasonCodes.length === 0) {
+    reasonCodes.push('LIMITED_PUBLIC_SIGNALS');
+  }
+
+  return {
+    deterministicScore,
+    scoreBand: scoreTier(deterministicScore),
+    features,
+    reasonCodes,
+    ruleEvaluation: Object.entries(features).map(([fieldKey, value]) => ({
+      fieldKey,
+      matched: value === true || (typeof value === 'number' && value > 0),
+      value,
+    })),
+  };
+}
+
+function buildEdgeEnrichmentPayload(input: {
+  lead: Row;
+  business: Row | null;
+  icpProfileId: string;
+  scoring: ReturnType<typeof scoreLeadBusinessSignals>;
+}): JsonObject {
+  const normalizedBusiness = normalizeBusinessRow(input.business);
+  const businessName = asNullableString(normalizedBusiness?.name);
+  const websiteDomain = asNullableString(normalizedBusiness?.websiteDomain);
+  const phone = asNullableString(input.lead.phone) ?? asNullableString(normalizedBusiness?.phoneE164);
+  return {
+    edgeEnrichment: true,
+    provider: 'EDGE_DEMO',
+    companyName: businessName,
+    businessName,
+    industry: asNullableString(normalizedBusiness?.category),
+    country: asNullableString(normalizedBusiness?.countryCode) ?? asNullableString(normalizedBusiness?.country),
+    city: asNullableString(normalizedBusiness?.city),
+    phone,
+    phone_number: phone,
+    websiteDomain,
+    websiteUrl: websiteDomain ? `https://${websiteDomain}` : null,
+    instagramHandle: asNullableString(normalizedBusiness?.instagramHandle),
+    rating: asNullableNumber(normalizedBusiness?.rating),
+    reviewCount: asNullableNumber(normalizedBusiness?.reviewCount),
+    jobTitle: asNullableString(input.lead.decisionMakerTitle) ?? 'Owner / Operator',
+    title: asNullableString(input.lead.decisionMakerTitle) ?? 'Owner / Operator',
+    icpProfileId: input.icpProfileId,
+    data_alignment_score: input.scoring.deterministicScore,
+    _scoreInfo: {
+      deterministicScore: input.scoring.deterministicScore,
+      blendedScore: input.scoring.deterministicScore,
+      scoreBand: input.scoring.scoreBand,
+      scoreSource: 'EDGE_DETERMINISTIC',
+      reasonCodes: input.scoring.reasonCodes,
+    },
+  };
+}
+
+async function activeModelVersionId(): Promise<string> {
+  const active = await singleRow('ModelVersion', {
+    select: 'id',
+    modelType: 'eq.LOGISTIC_REGRESSION',
+    stage: 'eq.ACTIVE',
+    order: 'activatedAt.desc,createdAt.desc',
+  });
+  if (active) {
+    return asString(active.id);
+  }
+
+  const latest = await singleRow('ModelVersion', {
+    select: 'id',
+    modelType: 'eq.LOGISTIC_REGRESSION',
+    order: 'createdAt.desc',
+  });
+  if (!latest) {
+    throw new HttpError(502, 'Scoring model is not configured', false);
+  }
+  return asString(latest.id);
+}
+
+async function resolveLeadIcpProfileId(leadId: string): Promise<string> {
+  const [discovery, score, conversion, activeIcp] = await Promise.all([
+    singleRow('LeadDiscoveryRecord', {
+      select: 'icpProfileId',
+      leadId: `eq.${leadId}`,
+      order: 'discoveredAt.desc,createdAt.desc',
+    }),
+    singleRow('LeadScorePrediction', {
+      select: 'icpProfileId',
+      leadId: `eq.${leadId}`,
+      order: 'predictedAt.desc,createdAt.desc',
+    }),
+    singleRow('business_conversions', {
+      select: 'icpProfileId',
+      leadId: `eq.${leadId}`,
+      order: 'convertedAt.desc,createdAt.desc',
+    }),
+    singleRow('IcpProfile', {
+      select: 'id',
+      isActive: 'eq.true',
+      order: 'createdAt.asc',
+    }),
+  ]);
+  const icpProfileId =
+    asNullableString(discovery?.icpProfileId) ??
+    asNullableString(score?.icpProfileId) ??
+    asNullableString(conversion?.icpProfileId) ??
+    asNullableString(activeIcp?.id);
+  if (!icpProfileId) {
+    throw new HttpError(400, 'Create an active ICP before enriching and scoring leads');
+  }
+  return icpProfileId;
+}
+
+function nextLeadStatus(currentStatus: string, score: number): string {
+  if (['drafted', 'messaged', 'replied', 'cold', 'rejected'].includes(currentStatus)) {
+    return currentStatus;
+  }
+  return score >= 0.5 ? 'qualified' : 'scored';
+}
+
+function mapScorePrediction(row: Row): JsonObject {
+  return {
+    id: asString(row.id),
+    leadId: asString(row.leadId),
+    icpProfileId: asString(row.icpProfileId),
+    featureSnapshotId: asString(row.featureSnapshotId),
+    modelVersionId: asString(row.modelVersionId),
+    deterministicScore: asNumber(row.deterministicScore),
+    logisticScore: asNumber(row.logisticScore),
+    blendedScore: asNumber(row.blendedScore),
+    scoreBand: asString(row.scoreBand, 'LOW'),
+    reasonsJson: row.reasonsJson ?? {},
+    predictedAt: iso(row.predictedAt),
+    createdAt: iso(row.createdAt),
+  };
+}
+
+function mapFeatureSnapshot(row: Row): JsonObject {
+  return {
+    id: asString(row.id),
+    leadId: asString(row.leadId),
+    icpProfileId: asString(row.icpProfileId),
+    discoveryRecordId: asNullableString(row.discoveryRecordId),
+    enrichmentRecordId: asNullableString(row.enrichmentRecordId),
+    snapshotVersion: asNumber(row.snapshotVersion, 1),
+    sourceVersion: asString(row.sourceVersion, 'edge-demo-v1'),
+    featureVectorHash: asString(row.featureVectorHash),
+    featuresJson: row.featuresJson ?? {},
+    ruleMatchCount: asNumber(row.ruleMatchCount),
+    hardFilterPassed: asBoolean(row.hardFilterPassed),
+    computedAt: iso(row.computedAt),
+    createdAt: iso(row.createdAt),
+  };
+}
+
+async function createEdgeEnrichmentAndScore(input: {
+  lead: Row;
+  business: Row | null;
+  icpProfileId: string;
+  discoveryRecordId?: string | null | undefined;
+  now?: string | undefined;
+}): Promise<{ enrichment: Row; snapshot: Row; prediction: Row }> {
+  const now = input.now ?? new Date().toISOString();
+  const leadId = asString(input.lead.id);
+  const scoring = scoreLeadBusinessSignals(input.lead, input.business);
+  const normalizedPayload = buildEdgeEnrichmentPayload({
+    lead: input.lead,
+    business: input.business,
+    icpProfileId: input.icpProfileId,
+    scoring,
+  });
+  const enrichment = await insertRow<Row>('LeadEnrichmentRecord', {
+    id: newId('enrich'),
+    leadId,
+    provider: 'HUNTER',
+    status: 'COMPLETED',
+    attempt: 1,
+    providerRecordId: `edge-${edgeHash(`${leadId}:${now}`)}`,
+    normalizedPayload,
+    rawPayload: {
+      edgeDemo: true,
+      lead: {
+        id: leadId,
+        email: asNullableString(input.lead.email),
+        businessEmail: asNullableString(input.lead.businessEmail),
+      },
+      business: normalizeBusinessRow(input.business),
+    },
+    errorCode: null,
+    errorMessage: null,
+    enrichedAt: now,
+    requestKey: `edge:${leadId}:${edgeHash(now)}`,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const featureVectorHash = edgeHash(JSON.stringify({
+    leadId,
+    icpProfileId: input.icpProfileId,
+    features: scoring.features,
+    now,
+  }));
+  const snapshot = await insertRow<Row>('LeadFeatureSnapshot', {
+    id: newId('snapshot'),
+    leadId,
+    icpProfileId: input.icpProfileId,
+    discoveryRecordId: input.discoveryRecordId ?? null,
+    enrichmentRecordId: asString(enrichment.id),
+    snapshotVersion: Math.max(1, Math.floor(Date.now() / 1000)),
+    sourceVersion: 'edge-demo-v1',
+    featureVectorHash,
+    featuresJson: scoring.features,
+    ruleMatchCount: scoring.reasonCodes.length,
+    hardFilterPassed: scoring.deterministicScore >= 0.34,
+    computedAt: now,
+    createdAt: now,
+  });
+
+  const modelVersionId = await activeModelVersionId();
+  const prediction = await insertRow<Row>('LeadScorePrediction', {
+    id: newId('score'),
+    leadId,
+    icpProfileId: input.icpProfileId,
+    featureSnapshotId: asString(snapshot.id),
+    modelVersionId,
+    deterministicScore: scoring.deterministicScore,
+    logisticScore: scoring.deterministicScore,
+    blendedScore: scoring.deterministicScore,
+    scoreBand: scoring.scoreBand,
+    reasonsJson: {
+      scoreSource: 'EDGE_DETERMINISTIC',
+      reasonCodes: scoring.reasonCodes,
+      explanation: 'Supabase Edge demo scoring uses public discovery and enrichment signals.',
+    },
+    ruleEvaluationJson: scoring.ruleEvaluation,
+    predictedAt: now,
+    createdAt: now,
+  });
+
+  await updateRows<Row>('Lead', { id: `eq.${leadId}` }, {
+    status: nextLeadStatus(asString(input.lead.status, 'new'), scoring.deterministicScore),
+    enrichmentData: normalizedPayload,
+    decisionMakerTitle: asNullableString(input.lead.decisionMakerTitle) ?? 'Owner / Operator',
+    phone: asNullableString(input.lead.phone) ?? asNullableString(normalizeBusinessRow(input.business)?.phoneE164),
+    phoneSource: 'EDGE_ENRICHMENT',
+    updatedAt: now,
+  });
+
+  return { enrichment, snapshot, prediction };
+}
+
+function normalizePhone(value: string | null, countryCode: string): string | null {
+  if (!value) {
+    return null;
+  }
+  const digits = value.replace(/\D/g, '');
+  if (digits.length < 8 || digits.length > 15) {
+    return null;
+  }
+  if (value.trim().startsWith('+')) {
+    return `+${digits}`;
+  }
+  const countryPrefix: Record<string, string> = {
+    AE: '971',
+    SA: '966',
+    JO: '962',
+    EG: '20',
+    QA: '974',
+    KW: '965',
+    BH: '973',
+    OM: '968',
+    US: '1',
+  };
+  const prefix = countryPrefix[countryCode];
+  return prefix ? `+${digits.startsWith('0') ? `${prefix}${digits.slice(1)}` : digits}` : null;
+}
+
+function leadEmailForBusiness(local: EdgeLocalBusiness, runId: string): string {
+  const domain = businessDomainFromUrl(local.websiteUrl);
+  const suffix = edgeHash(`${runId}:${local.providerRecordId}`).slice(0, 8);
+  return domain ? `hello+${suffix}@${domain}` : `lead-${suffix}@leadzilla.demo`;
+}
+
+async function fetchSerpApiMapsResults(input: {
+  query: string;
+  countryCode: string;
+  city: string | null;
+}): Promise<JsonObject> {
+  const url = new URL(Deno.env.get('SERPAPI_BASE_URL') ?? SERPAPI_SEARCH_URL);
+  url.searchParams.set('engine', 'google_maps');
+  url.searchParams.set('type', 'search');
+  url.searchParams.set('q', input.query);
+  url.searchParams.set('gl', input.countryCode.toLowerCase());
+  url.searchParams.set('hl', 'en');
+  if (input.city) {
+    url.searchParams.set('location', `${input.city}, ${input.countryCode}`);
+  }
+  url.searchParams.set('api_key', readEnv('SERPAPI_API_KEY'));
+
+  const response = await fetch(url, { method: 'GET' });
+  const body = asObject(await response.json().catch(() => ({}))) ?? {};
+  if (!response.ok) {
+    throw new HttpError(502, `SerpAPI request failed with status ${response.status}`);
+  }
+  const providerError = normalizeOptionalString(body.error);
+  if (providerError) {
+    throw new HttpError(502, `SerpAPI request failed: ${providerError}`);
+  }
+  return body;
+}
+
+async function persistEdgeDiscoveryBusiness(input: {
+  runId: string;
+  taskId: string;
+  icpProfileId: string;
+  queryHash: string;
+  local: EdgeLocalBusiness;
+  now: string;
+}): Promise<{ businessId: string; leadId: string; deterministicScore: number; websiteDomain: string | null }> {
+  const signals = businessSignals(input.local);
+  const websiteDomain = businessDomainFromUrl(input.local.websiteUrl);
+  const phoneE164 = normalizePhone(input.local.phone, input.local.countryCode);
+  const business = await insertRow<Row>('businesses', {
+    id: newId('biz'),
+    name: input.local.name,
+    country_code: input.local.countryCode,
+    country: input.local.countryCode,
+    city: input.local.city,
+    address: input.local.address,
+    phone_e164: phoneE164,
+    website_domain: websiteDomain,
+    instagram_handle: input.local.instagramHandle,
+    category: input.local.category,
+    rating: input.local.rating,
+    review_count: input.local.reviewCount,
+    lat: input.local.latitude,
+    lng: input.local.longitude,
+    confidence: 0.8,
+    deterministic_score: signals.deterministicScore,
+    score_band: signals.scoreBand,
+    has_whatsapp: signals.hasWhatsapp,
+    has_instagram: signals.hasInstagram,
+    accepts_online_payments: signals.acceptsOnlinePayments,
+    follower_count: null,
+    physical_address_present: signals.physicalAddressPresent,
+    recent_activity: signals.recentActivity,
+    discovery_run_id: input.runId,
+    pre_qualified: signals.deterministicScore >= 0.34,
+    disqualification_reason: signals.deterministicScore >= 0.34 ? null : 'LOW_DISCOVERY_SCORE',
+    created_at: input.now,
+    updated_at: input.now,
+  });
+
+  const businessId = asString(business.id);
+  const email = leadEmailForBusiness(input.local, input.runId);
+  const lead = await insertRow<Row>('Lead', {
+    id: newId('lead'),
+    firstName: input.local.name.slice(0, 80),
+    lastName: 'Team',
+    email,
+    businessEmail: websiteDomain ? `hello@${websiteDomain}` : null,
+    phone: phoneE164,
+    source: 'SERPAPI_DISCOVERY',
+    status: signals.deterministicScore >= 0.34 ? 'qualified' : 'new',
+    enrichmentData: {
+      edgeDiscovery: true,
+      businessName: input.local.name,
+      providerRecordId: input.local.providerRecordId,
+      websiteUrl: input.local.websiteUrl,
+      scoreInfo: {
+        deterministicScore: signals.deterministicScore,
+        scoreBand: signals.scoreBand,
+      },
+    },
+    costCents: 0,
+    businessId,
+    createdAt: input.now,
+    updatedAt: input.now,
+  });
+  const leadId = asString(lead.id);
+
+  const discovery = await insertRow<Row>('LeadDiscoveryRecord', {
+    id: newId('disc'),
+    leadId,
+    icpProfileId: input.icpProfileId,
+    provider: 'SERPAPI',
+    providerSource: 'EDGE_SERPAPI_MAPS',
+    providerConfidence: signals.deterministicScore,
+    providerRecordId: input.local.providerRecordId,
+    providerCursor: null,
+    queryHash: input.queryHash,
+    status: 'DISCOVERED',
+    rawPayload: {
+      edgeDiscovery: true,
+      searchTaskId: input.taskId,
+      businessId,
+      result: input.local.raw,
+    },
+    provenanceJson: {
+      runId: input.runId,
+      searchTaskId: input.taskId,
+      source: 'supabase-edge-serpapi',
+    },
+    errorMessage: null,
+    discoveredAt: input.now,
+    createdAt: input.now,
+  });
+
+  await insertRow<Row>('business_evidence', {
+    id: newId('evidence'),
+    business_id: businessId,
+    search_task_id: input.taskId,
+    source_url: input.local.url ?? input.local.websiteUrl ?? `serpapi://${input.local.providerRecordId}`,
+    source_type: 'maps_local',
+    serpapi_result_id: input.local.providerRecordId,
+    raw_json: input.local.raw ?? {},
+    created_at: input.now,
+  });
+
+  await createEdgeEnrichmentAndScore({
+    lead,
+    business,
+    icpProfileId: input.icpProfileId,
+    discoveryRecordId: asString(discovery.id),
+    now: input.now,
+  });
+
+  return {
+    businessId,
+    leadId,
+    deterministicScore: signals.deterministicScore,
+    websiteDomain,
+  };
+}
+
 function iso(value: unknown): string {
   if (typeof value === 'string' || value instanceof Date) {
     const date = new Date(value);
@@ -615,6 +1749,27 @@ async function latestDiscoveryByLeadId(leadIds: string[]): Promise<Map<string, R
   return records;
 }
 
+async function latestEnrichmentByLeadId(leadIds: string[]): Promise<Map<string, Row>> {
+  if (leadIds.length === 0) {
+    return new Map();
+  }
+
+  const result = await listRows('LeadEnrichmentRecord', {
+    select: 'id,leadId,provider,status,normalizedPayload,rawPayload,enrichedAt,createdAt,updatedAt',
+    leadId: pgIn(leadIds),
+    order: 'enrichedAt.desc,createdAt.desc,id.desc',
+    limit: MAX_DEMO_ROWS,
+  });
+  const records = new Map<string, Row>();
+  for (const row of result.data) {
+    const leadId = asNullableString(row.leadId);
+    if (leadId && !records.has(leadId)) {
+      records.set(leadId, row);
+    }
+  }
+  return records;
+}
+
 async function businessesById(businessIds: string[]): Promise<Map<string, Row>> {
   if (businessIds.length === 0) {
     return new Map();
@@ -705,7 +1860,13 @@ function mapRule(row: Row): JsonObject {
   };
 }
 
-function mapLeadListRow(lead: Row, score: Row | undefined, discovery: Row | undefined, business: Row | undefined): JsonObject {
+function mapLeadListRow(
+  lead: Row,
+  score: Row | undefined,
+  discovery: Row | undefined,
+  enrichment: Row | undefined,
+  business: Row | undefined,
+): JsonObject {
   const biz = normalizeBusinessRow(business);
   const businessScore = biz ? asNullableNumber(biz.deterministicScore) : null;
   const scoreValue = asNullableNumber(score?.blendedScore);
@@ -730,8 +1891,8 @@ function mapLeadListRow(lead: Row, score: Row | undefined, discovery: Row | unde
     displayScoreBand: scoreBandValue,
     displayScoreSource: scoreValue !== null ? 'AI_SCORE' : businessScore !== null ? 'BUSINESS_SCORE' : 'NONE',
     latestDiscoveryRawPayload: discovery?.rawPayload ?? null,
-    latestEnrichmentNormalizedPayload: null,
-    latestEnrichmentRawPayload: null,
+    latestEnrichmentNormalizedPayload: enrichment?.normalizedPayload ?? lead.enrichmentData ?? null,
+    latestEnrichmentRawPayload: enrichment?.rawPayload ?? null,
     businessCountryCode: asNullableString(biz?.countryCode),
     businessCountry: asNullableString(biz?.country),
     businessCity: asNullableString(biz?.city),
@@ -836,6 +1997,621 @@ function mapVariant(row: Row): JsonObject {
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
   };
+}
+
+async function latestScoreForDraft(input: EdgeGenerateDraftRequest): Promise<Row | null> {
+  const params: Record<string, string | number> = {
+    select: '*',
+    leadId: `eq.${input.leadId}`,
+    icpProfileId: `eq.${input.icpProfileId}`,
+    order: 'predictedAt.desc,createdAt.desc,id.desc',
+  };
+  if (input.scorePredictionId) {
+    params.id = `eq.${input.scorePredictionId}`;
+  }
+  return singleRow('LeadScorePrediction', params);
+}
+
+async function latestFeatureSnapshotForDraft(score: Row | null, input: EdgeGenerateDraftRequest): Promise<Row | null> {
+  const featureSnapshotId = asNullableString(score?.featureSnapshotId);
+  if (featureSnapshotId) {
+    return singleRow('LeadFeatureSnapshot', { select: '*', id: `eq.${featureSnapshotId}` });
+  }
+  return singleRow('LeadFeatureSnapshot', {
+    select: '*',
+    leadId: `eq.${input.leadId}`,
+    icpProfileId: `eq.${input.icpProfileId}`,
+    order: 'computedAt.desc,createdAt.desc,id.desc',
+  });
+}
+
+async function activeInitialDraft(input: Pick<EdgeGenerateDraftRequest, 'leadId' | 'icpProfileId'>): Promise<Row | null> {
+  return singleRow('MessageDraft', {
+    select: '*',
+    leadId: `eq.${input.leadId}`,
+    icpProfileId: `eq.${input.icpProfileId}`,
+    followUpNumber: 'eq.0',
+    approvalStatus: pgIn(['PENDING', 'APPROVED', 'AUTO_APPROVED']),
+    order: 'createdAt.desc,id.desc',
+  });
+}
+
+async function variantIdsForDraft(draftId: string): Promise<string[]> {
+  const variants = await listRows('MessageVariant', {
+    select: 'id',
+    messageDraftId: `eq.${draftId}`,
+    order: 'variantKey.asc,createdAt.asc',
+    limit: 20,
+  });
+  return variants.data.map((variant) => asString(variant.id)).filter(Boolean);
+}
+
+async function existingInitialSendForDraft(draftId: string): Promise<Row | null> {
+  return singleRow('MessageSend', {
+    select: 'id',
+    messageDraftId: `eq.${draftId}`,
+    followUpNumber: 'eq.0',
+    order: 'createdAt.desc,id.desc',
+  });
+}
+
+function genericEmailAddress(email: string): boolean {
+  const local = email.split('@')[0]?.toLowerCase() ?? '';
+  return ['hello', 'info', 'contact', 'sales', 'team', 'admin', 'support'].includes(local);
+}
+
+function leadDisplayName(lead: Row): string {
+  const first = asString(lead.firstName).trim();
+  const last = asString(lead.lastName).trim();
+  return [first, last].filter(Boolean).join(' ').trim() || 'Unknown contact';
+}
+
+function businessNameFromContext(lead: Row, business: Row | null, enrichment: Row | null): string | null {
+  const payload = asObject(enrichment?.normalizedPayload);
+  return (
+    asNullableString(payload?.companyName) ??
+    asNullableString(payload?.company_name) ??
+    asNullableString(normalizeBusinessRow(business)?.name)
+  );
+}
+
+function featureListLines(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => {
+      if (typeof entry === 'string') {
+        return entry.trim();
+      }
+      const label = asObject(entry)?.label ?? asObject(entry)?.name ?? asObject(entry)?.title;
+      return typeof label === 'string' ? label.trim() : null;
+    })
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function icpMetadataStrings(icp: Row): {
+  hook: string | null;
+  angle: string | null;
+  messagingInstructions: string | null;
+} {
+  const metadata = asObject(icp.metadataJson);
+  const angleValue = metadata?.angle;
+  const angle = Array.isArray(angleValue)
+    ? angleValue.filter((entry): entry is string => typeof entry === 'string').join(', ')
+    : settingString(angleValue);
+  return {
+    hook: settingString(metadata?.salesHook) ?? settingString(metadata?.hook),
+    angle,
+    messagingInstructions: settingString(metadata?.messagingInstructions),
+  };
+}
+
+function firstSentence(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  return value.split(/[.!?]/)[0]?.trim() ?? value.trim();
+}
+
+function buildBusinessIntelligence(input: {
+  business: Row | null;
+  conversion: Row | null;
+  discovery: Row | null;
+  enrichment: Row | null;
+  evidence: Row[];
+}): string | null {
+  const business = normalizeBusinessRow(input.business);
+  const parts: string[] = [];
+  const conversionInsight = asNullableString(input.conversion?.businessInsights);
+  if (conversionInsight) {
+    parts.push(`Pre-computed business insight: ${conversionInsight}`);
+  }
+  if (business) {
+    const location = [asNullableString(business.city), asNullableString(business.countryCode)]
+      .filter(Boolean)
+      .join(', ');
+    parts.push(
+      [
+        `Business: ${asString(business.name, 'Unknown business')}`,
+        asNullableString(business.category) ? `category ${asNullableString(business.category)}` : null,
+        location ? `location ${location}` : null,
+        asNullableString(business.websiteDomain) ? `website ${asNullableString(business.websiteDomain)}` : null,
+        asNullableString(business.instagramHandle) ? `Instagram ${asNullableString(business.instagramHandle)}` : null,
+        asNullableNumber(business.rating) !== null ? `rating ${asNullableNumber(business.rating)}` : null,
+        asNullableNumber(business.reviewCount) !== null ? `${asNullableNumber(business.reviewCount)} reviews` : null,
+        asBoolean(business.acceptsOnlinePayments) ? 'accepts online payments' : null,
+        asBoolean(business.hasWhatsapp) ? 'has direct messaging contact' : null,
+      ]
+        .filter(Boolean)
+        .join('; '),
+    );
+  }
+  const enrichmentSnippet = compactJson(input.enrichment?.normalizedPayload, 1200);
+  if (enrichmentSnippet) {
+    parts.push(`Enrichment: ${enrichmentSnippet}`);
+  }
+  const discoverySnippet = compactJson(input.discovery?.rawPayload, 1200);
+  if (discoverySnippet) {
+    parts.push(`Discovery evidence: ${discoverySnippet}`);
+  }
+  const evidenceSnippets = input.evidence
+    .slice(0, 3)
+    .map((row) => {
+      const sourceType = asString(firstValue(row, 'source_type', 'sourceType'), 'source');
+      const sourceUrl = asString(firstValue(row, 'source_url', 'sourceUrl'));
+      const raw = compactJson(firstValue(row, 'raw_json', 'rawJson'), 500);
+      return [sourceType, sourceUrl, raw].filter(Boolean).join(' | ');
+    })
+    .filter(Boolean);
+  if (evidenceSnippets.length > 0) {
+    parts.push(`Supporting evidence:\n${evidenceSnippets.join('\n')}`);
+  }
+  return parts.length > 0 ? parts.join('\n') : null;
+}
+
+function openAiDraftDeveloperPrompt(input: {
+  channel: 'EMAIL' | 'WHATSAPP';
+  behaviorPrompt: string | null;
+  rolePrompt: string | null;
+  systemPrompt: string | null;
+}): string {
+  const channelInstruction =
+    input.channel === 'WHATSAPP'
+      ? 'The API channel is WHATSAPP, but this public demo uses American recruiter-friendly terminology. Write it as an SMS-style direct message.'
+      : 'Write a polished first-touch email.';
+
+  return [
+    'You are Leadzilla\'s senior outbound strategist writing one recruiter-demo-quality B2B outreach draft.',
+    'Leadzilla helps businesses turn SMS, social, and direct customer conversations into paid, structured, trackable workflows.',
+    channelInstruction,
+    'Use only the provided lead, ICP, score, enrichment, discovery, and business evidence. Never fabricate facts.',
+    'The message should feel like a thoughtful operator actually reviewed the business, not like a mail merge.',
+    'Reference one concrete observed detail when evidence supports it. If the evidence is thin, keep the claim conservative.',
+    'Pitch exactly one relevant Leadzilla capability and connect it to the prospect\'s likely workflow.',
+    'First-touch CTAs must be low-friction. Do not ask for a call unless operator re-draft feedback explicitly asks for that.',
+    'Tone: professional, concise, warm, specific, calm, no emojis, no exclamation points, no hype, no buzzwords.',
+    'Avoid phrases like "hope this finds you well", "I wanted to reach out", "game-changer", "unlock", and "revolutionize".',
+    'Email bodies should be 70-140 words. SMS-style bodies should be 50-110 words. Body text must end exactly with "Best,\\nLeadzilla Team".',
+    'For email, write a calm 2-6 word buyer-readable question as the subject. For SMS-style direct messages, subject must be null.',
+    'Return only the requested JSON shape.',
+    input.behaviorPrompt ? `Configured behavior guidance:\n${input.behaviorPrompt}` : null,
+    input.rolePrompt ? `Configured role guidance:\n${input.rolePrompt}` : null,
+    input.systemPrompt ? `Configured system guidance:\n${input.systemPrompt}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function openAiDraftUserPrompt(input: {
+  request: EdgeGenerateDraftRequest;
+  lead: Row;
+  icp: Row;
+  score: Row;
+  snapshot: Row | null;
+  business: Row | null;
+  enrichment: Row | null;
+  discovery: Row | null;
+  conversion: Row | null;
+  evidence: Row[];
+  globalMessagingInstructions: string | null;
+  previousVariant: Row | null;
+}): { prompt: string; groundingContext: JsonObject } {
+  const business = normalizeBusinessRow(input.business);
+  const companyName = businessNameFromContext(input.lead, input.business, input.enrichment);
+  const email = asString(input.lead.email, 'unknown@example.invalid');
+  const recipientType = genericEmailAddress(email) ? 'GENERIC_CONTACT' : 'DECISION_MAKER';
+  const icpDescription = asNullableString(input.icp.description) ?? 'No ICP description available';
+  const icpMetadata = icpMetadataStrings(input.icp);
+  const icpHook =
+    icpMetadata.hook ??
+    icpMetadata.angle ??
+    (firstSentence(icpDescription) ? `Hook: ${firstSentence(icpDescription)}` : null);
+  const featuresToPitch = featureListLines(input.icp.featureList);
+  const businessIntelligence = buildBusinessIntelligence({
+    business: input.business,
+    conversion: input.conversion,
+    discovery: input.discovery,
+    enrichment: input.enrichment,
+    evidence: input.evidence,
+  });
+  const featuresJson = asObject(input.snapshot?.featuresJson) ?? {};
+  const promptParts = [
+    `Channel: ${input.request.channel}`,
+    `Lead: ${leadDisplayName(input.lead)} <${email}>`,
+    `Recipient type: ${recipientType}`,
+    `Recipient title: ${asNullableString(input.lead.decisionMakerTitle) ?? 'not verified'}`,
+    companyName ? `Company: ${companyName}` : null,
+    asNullableString(business?.category) ? `Business category: ${asNullableString(business?.category)}` : null,
+    [asNullableString(business?.city), asNullableString(business?.countryCode)].filter(Boolean).length > 0
+      ? `Location: ${[asNullableString(business?.city), asNullableString(business?.countryCode)].filter(Boolean).join(', ')}`
+      : null,
+    `ICP segment: ${asString(input.icp.name, 'ICP')}`,
+    `ICP description: ${icpDescription}`,
+    icpHook ? `Required sales hook: ${icpHook}` : null,
+    icpMetadata.angle ? `ICP angle: ${icpMetadata.angle}` : null,
+    featuresToPitch.length > 0 ? `Possible Leadzilla features to pitch:\n${featuresToPitch.map((feature, index) => `${index + 1}. ${feature}`).join('\n')}` : null,
+    `Score: ${asNumber(input.score.blendedScore).toFixed(2)} (${asString(input.score.scoreBand, 'MEDIUM')})`,
+    input.globalMessagingInstructions ? `Global messaging instructions:\n${input.globalMessagingInstructions}` : null,
+    icpMetadata.messagingInstructions ? `ICP messaging instructions:\n${icpMetadata.messagingInstructions}` : null,
+    input.request.redraftFeedback ? `Operator re-draft feedback:\n${input.request.redraftFeedback}` : null,
+    input.previousVariant ? `Previous draft subject: ${asNullableString(input.previousVariant.subject) ?? '(none)'}` : null,
+    input.previousVariant ? `Previous draft body:\n${asString(input.previousVariant.bodyText)}` : null,
+    businessIntelligence ? `Business intelligence:\n${businessIntelligence}` : null,
+    compactJson(featuresJson, 1400) ? `Feature snapshot:\n${compactJson(featuresJson, 1400)}` : null,
+  ];
+
+  const groundingContext: JsonObject = {
+    leadName: leadDisplayName(input.lead),
+    leadEmail: email,
+    recipientType,
+    companyName,
+    businessCategory: asNullableString(business?.category),
+    businessCity: asNullableString(business?.city),
+    businessCountryCode: asNullableString(business?.countryCode),
+    scoreBand: asString(input.score.scoreBand, 'MEDIUM'),
+    blendedScore: asNumber(input.score.blendedScore),
+    icpName: asString(input.icp.name, 'ICP'),
+    icpDescription,
+    icpHook,
+    icpAngle: icpMetadata.angle,
+    featuresToPitch,
+    businessIntelligence,
+    promptVersion: input.request.promptVersion,
+    channel: input.request.channel,
+    generatedBy: 'supabase-edge-openai',
+  };
+
+  return {
+    prompt: promptParts.filter(Boolean).join('\n'),
+    groundingContext,
+  };
+}
+
+function assertUsableDraftContent(content: OpenAiDraftContent): void {
+  const body = content.bodyText.trim();
+  if (
+    /^\{[\s\S]*\}$/.test(body) ||
+    body.includes('{"message"') ||
+    body.includes('{"insights"') ||
+    /```json/i.test(body)
+  ) {
+    throw new HttpError(502, 'OpenAI returned invalid structured output instead of a usable message.');
+  }
+}
+
+async function generateOpenAiDraft(input: {
+  request: EdgeGenerateDraftRequest;
+  lead: Row;
+  icp: Row;
+  score: Row;
+  snapshot: Row | null;
+  business: Row | null;
+  enrichment: Row | null;
+  discovery: Row | null;
+  conversion: Row | null;
+  evidence: Row[];
+  previousVariant: Row | null;
+}): Promise<{ model: string; content: OpenAiDraftContent; groundingContext: JsonObject }> {
+  const apiKey = Deno.env.get('OPENAI_API_KEY');
+  if (!apiKey) {
+    throw new HttpError(
+      503,
+      'OpenAI draft generation is not configured. Add OPENAI_API_KEY to Supabase Edge Function secrets.',
+    );
+  }
+
+  const [behaviorPrompt, rolePrompt, systemPrompt, globalMessagingInstructions, settingModel] = await Promise.all([
+    loadMessagingTextSetting('messagingBehaviorPrompt'),
+    loadMessagingTextSetting('messagingRole'),
+    loadMessagingTextSetting('messagingSystemPrompt'),
+    loadMessagingTextSetting('messagingInstructions'),
+    loadMessagingTextSetting('messagingModel'),
+  ]);
+  const model = openAiDraftModel(settingModel);
+  const { prompt, groundingContext } = openAiDraftUserPrompt({
+    ...input,
+    globalMessagingInstructions,
+  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OPENAI_DRAFT_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(Deno.env.get('OPENAI_BASE_URL') ?? OPENAI_RESPONSES_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        reasoning: { effort: 'low' },
+        input: [
+          {
+            role: 'developer',
+            content: openAiDraftDeveloperPrompt({
+              channel: input.request.channel,
+              behaviorPrompt,
+              rolePrompt,
+              systemPrompt,
+            }),
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'lead_message_draft',
+            strict: true,
+            schema: {
+              type: 'object',
+              properties: {
+                subject: { type: ['string', 'null'] },
+                bodyText: { type: 'string' },
+                bodyHtml: { type: ['string', 'null'] },
+                ctaText: { type: ['string', 'null'] },
+                qualityScore: { type: ['number', 'null'] },
+              },
+              required: ['subject', 'bodyText', 'bodyHtml', 'ctaText', 'qualityScore'],
+              additionalProperties: false,
+            },
+          },
+        },
+        max_output_tokens: 900,
+      }),
+      signal: controller.signal,
+    });
+  } catch (error: unknown) {
+    throw new HttpError(
+      503,
+      error instanceof DOMException && error.name === 'AbortError'
+        ? 'OpenAI draft generation timed out. Please try again.'
+        : 'OpenAI draft generation is temporarily unavailable.',
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  const rawText = await response.text();
+  if (!response.ok) {
+    console.error('[demo-edge-api] openai draft generation failed', {
+      status: response.status,
+      body: rawText.slice(0, 500),
+    });
+    throw new HttpError(
+      response.status === 429 || response.status >= 500 ? 503 : 502,
+      'OpenAI draft generation failed. Check OPENAI_API_KEY and OPENAI_DRAFT_MODEL.',
+    );
+  }
+
+  let payload: JsonObject | null;
+  try {
+    payload = asObject(JSON.parse(rawText));
+  } catch {
+    throw new HttpError(502, 'OpenAI draft response was invalid JSON');
+  }
+  if (!payload) {
+    throw new HttpError(502, 'OpenAI draft response was invalid');
+  }
+  const content = parseOpenAiDraftResponse(payload);
+  assertUsableDraftContent(content);
+  return {
+    model,
+    content: {
+      ...content,
+      subject: input.request.channel === 'EMAIL' ? content.subject : null,
+      bodyHtml: null,
+    },
+    groundingContext,
+  };
+}
+
+async function handleGenerateDraft(request: Request): Promise<Response> {
+  const input = parseGenerateDraftBody(await request.json().catch(() => null));
+  const [lead, icp, existingDraft] = await Promise.all([
+    singleRow('Lead', {
+      select: '*',
+      id: `eq.${input.leadId}`,
+      deletedAt: 'is.null',
+    }),
+    singleRow('IcpProfile', {
+      select: '*',
+      id: `eq.${input.icpProfileId}`,
+    }),
+    activeInitialDraft(input),
+  ]);
+
+  if (!lead) {
+    throw new HttpError(404, 'Lead not found');
+  }
+  if (!icp) {
+    throw new HttpError(404, 'ICP profile not found');
+  }
+
+  if (existingDraft && !input.forceRegenerate) {
+    if (asString(lead.status) === 'qualified') {
+      await updateRows<Row>('Lead', { id: `eq.${input.leadId}`, status: 'eq.qualified' }, {
+        status: 'drafted',
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    return jsonResponse({
+      status: 'EXISTS',
+      draftId: asString(existingDraft.id),
+      variantIds: await variantIdsForDraft(asString(existingDraft.id)),
+    });
+  }
+
+  if (existingDraft && input.forceRegenerate) {
+    const blockingSend = await existingInitialSendForDraft(asString(existingDraft.id));
+    if (blockingSend) {
+      throw new HttpError(
+        422,
+        'Draft cannot be regenerated because the initial message has already been queued or sent. Review it in Message Queue instead.',
+      );
+    }
+  }
+
+  const [score, threshold] = await Promise.all([
+    latestScoreForDraft(input),
+    loadScoreQualificationThreshold(),
+  ]);
+  if (!score) {
+    throw new HttpError(
+      422,
+      'Lead is not eligible for draft generation because no score is available for the requested ICP profile.',
+    );
+  }
+  if (asNumber(score.blendedScore, -1) < threshold) {
+    throw new HttpError(
+      422,
+      'Lead is not eligible for draft generation because its score is below the configured qualification threshold.',
+    );
+  }
+
+  const businessId = asNullableString(lead.businessId);
+  const [
+    snapshot,
+    business,
+    enrichment,
+    discovery,
+    conversion,
+    evidenceResult,
+    previousVariant,
+  ] = await Promise.all([
+    latestFeatureSnapshotForDraft(score, input),
+    businessId ? singleRow('businesses', { select: '*', id: `eq.${businessId}` }) : Promise.resolve(null),
+    singleRow('LeadEnrichmentRecord', {
+      select: '*',
+      leadId: `eq.${input.leadId}`,
+      order: 'enrichedAt.desc,createdAt.desc,id.desc',
+    }),
+    singleRow('LeadDiscoveryRecord', {
+      select: '*',
+      leadId: `eq.${input.leadId}`,
+      icpProfileId: `eq.${input.icpProfileId}`,
+      order: 'discoveredAt.desc,createdAt.desc,id.desc',
+    }),
+    businessId
+      ? singleRow('business_conversions', {
+          select: '*',
+          leadId: `eq.${input.leadId}`,
+          businessId: `eq.${businessId}`,
+          order: 'createdAt.desc,id.desc',
+        })
+      : Promise.resolve(null),
+    businessId
+      ? listRows('business_evidence', {
+          select: '*',
+          business_id: `eq.${businessId}`,
+          order: 'created_at.desc,id.desc',
+          limit: 5,
+        })
+      : Promise.resolve({ data: [], total: 0 }),
+    existingDraft
+      ? singleRow('MessageVariant', {
+          select: '*',
+          messageDraftId: `eq.${asString(existingDraft.id)}`,
+          order: 'variantKey.asc,createdAt.asc',
+        })
+      : Promise.resolve(null),
+  ]);
+
+  await updateRows<Row>('Lead', { id: `eq.${input.leadId}` }, {
+    error: null,
+    updatedAt: new Date().toISOString(),
+  });
+
+  const generation = await generateOpenAiDraft({
+    request: input,
+    lead,
+    icp,
+    score,
+    snapshot,
+    business,
+    enrichment,
+    discovery,
+    conversion,
+    evidence: evidenceResult.data,
+    previousVariant,
+  });
+
+  const now = new Date().toISOString();
+  if (existingDraft && input.forceRegenerate) {
+    await updateRows<Row>('MessageDraft', { id: `eq.${asString(existingDraft.id)}` }, {
+      approvalStatus: 'REJECTED',
+      rejectedReason: 'Superseded by regenerated draft',
+      approvedByUserId: null,
+      approvedAt: null,
+      updatedAt: now,
+    });
+  }
+
+  const draft = await insertRow<Row>('MessageDraft', {
+    id: newId('draft'),
+    leadId: input.leadId,
+    icpProfileId: input.icpProfileId,
+    scorePredictionId: asString(score.id),
+    promptVersion: input.promptVersion,
+    generatedByModel: generation.model,
+    groundingKnowledgeIds: input.knowledgeEntryIds,
+    groundingContextJson: generation.groundingContext,
+    approvalStatus: 'PENDING',
+    followUpNumber: 0,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const variant = await insertRow<Row>('MessageVariant', {
+    id: newId('variant'),
+    messageDraftId: asString(draft.id),
+    variantKey: 'openai_primary',
+    channel: input.channel,
+    subject: generation.content.subject,
+    bodyText: generation.content.bodyText,
+    bodyHtml: generation.content.bodyHtml,
+    ctaText: generation.content.ctaText,
+    qualityScore: generation.content.qualityScore,
+    isSelected: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  if (asString(lead.status) === 'qualified') {
+    await updateRows<Row>('Lead', { id: `eq.${input.leadId}`, status: 'eq.qualified' }, {
+      status: 'drafted',
+      updatedAt: now,
+    });
+  }
+
+  return jsonResponse({
+    status: 'CREATED',
+    draftId: asString(draft.id),
+    variantIds: [asString(variant.id)],
+  });
 }
 
 function mapSend(row: Row): JsonObject {
@@ -1245,9 +3021,10 @@ async function handleListLeads(url: URL): Promise<Response> {
   const businessIds = pageRows
     .map((lead) => asNullableString(lead.businessId))
     .filter((id): id is string => id !== null);
-  const [scores, discoveryRecords, businesses] = await Promise.all([
+  const [scores, discoveryRecords, enrichmentRecords, businesses] = await Promise.all([
     latestScoresByLeadId(leadIds),
     latestDiscoveryByLeadId(leadIds),
+    latestEnrichmentByLeadId(leadIds),
     businessesById(businessIds),
   ]);
 
@@ -1257,6 +3034,7 @@ async function handleListLeads(url: URL): Promise<Response> {
         lead,
         scores.get(asString(lead.id)),
         discoveryRecords.get(asString(lead.id)),
+        enrichmentRecords.get(asString(lead.id)),
         businesses.get(asString(lead.businessId)),
       ),
     ),
@@ -1313,6 +3091,87 @@ async function handleGetLead(id: string): Promise<Response> {
       conversions.data[0] ?? null,
     ),
   );
+}
+
+async function handleEnrichLead(leadId: string): Promise<Response> {
+  const lead = await singleRow('Lead', {
+    select: '*',
+    id: `eq.${leadId}`,
+    deletedAt: 'is.null',
+  });
+  if (!lead) {
+    throw new HttpError(404, 'Lead not found');
+  }
+
+  const businessId = asNullableString(lead.businessId);
+  const [business, icpProfileId] = await Promise.all([
+    businessId ? singleRow('businesses', { select: '*', id: `eq.${businessId}` }) : Promise.resolve(null),
+    resolveLeadIcpProfileId(leadId),
+  ]);
+  const result = await createEdgeEnrichmentAndScore({
+    lead,
+    business,
+    icpProfileId,
+  });
+
+  return jsonResponse({
+    jobId: asString(result.enrichment.id),
+    status: 'QUEUED',
+    provider: 'HUNTER',
+  }, 202);
+}
+
+async function handleLatestLeadScore(leadId: string, url: URL): Promise<Response> {
+  const icpProfileId = url.searchParams.get('icpProfileId');
+  const prediction = await singleRow('LeadScorePrediction', {
+    select: 'id,leadId,icpProfileId,featureSnapshotId,modelVersionId,deterministicScore,logisticScore,blendedScore,scoreBand,reasonsJson,ruleEvaluationJson,predictedAt,createdAt',
+    leadId: `eq.${leadId}`,
+    ...(icpProfileId ? { icpProfileId: `eq.${icpProfileId}` } : {}),
+    order: 'predictedAt.desc,createdAt.desc,id.desc',
+  });
+
+  return jsonResponse({
+    leadId,
+    prediction: prediction ? mapScorePrediction(prediction) : null,
+  });
+}
+
+async function handleLatestLeadFeatureSnapshot(leadId: string, url: URL): Promise<Response> {
+  const icpProfileId = url.searchParams.get('icpProfileId');
+  const snapshot = await singleRow('LeadFeatureSnapshot', {
+    select: '*',
+    leadId: `eq.${leadId}`,
+    ...(icpProfileId ? { icpProfileId: `eq.${icpProfileId}` } : {}),
+    order: 'computedAt.desc,createdAt.desc,id.desc',
+  });
+
+  return jsonResponse({
+    leadId,
+    icpProfileId,
+    snapshot: snapshot ? mapFeatureSnapshot(snapshot) : null,
+  });
+}
+
+async function handleLatestLeadDeterministicScore(leadId: string, url: URL): Promise<Response> {
+  const icpProfileId = url.searchParams.get('icpProfileId');
+  const prediction = await singleRow('LeadScorePrediction', {
+    select: 'id,leadId,icpProfileId,deterministicScore,scoreBand,reasonsJson,ruleEvaluationJson,predictedAt,createdAt',
+    leadId: `eq.${leadId}`,
+    ...(icpProfileId ? { icpProfileId: `eq.${icpProfileId}` } : {}),
+    order: 'predictedAt.desc,createdAt.desc,id.desc',
+  });
+  const reasons = asObject(prediction?.reasonsJson) ?? {};
+  const reasonCodes = asStringArray(reasons.reasonCodes);
+
+  return jsonResponse({
+    leadId,
+    icpProfileId: icpProfileId ?? asNullableString(prediction?.icpProfileId),
+    predictionId: asNullableString(prediction?.id),
+    deterministicScore: prediction ? asNumber(prediction.deterministicScore) : null,
+    reasonCodes,
+    ruleEvaluation: Array.isArray(prediction?.ruleEvaluationJson) ? prediction.ruleEvaluationJson : [],
+    predictedAt: prediction ? iso(prediction.predictedAt) : null,
+  });
 }
 
 async function handleListRejectedLeads(url: URL): Promise<Response> {
@@ -1768,6 +3627,245 @@ function emptyFunnel(
   };
 }
 
+const DASHBOARD_ROLLUP_SELECT = [
+  'day',
+  'icpProfileId',
+  'discoveredCount',
+  'qualifiedCount',
+  'enrichedCount',
+  'scoredCount',
+  'scoreSum',
+  'lowScoreCount',
+  'mediumScoreCount',
+  'highScoreCount',
+  'scoreBucket0Count',
+  'scoreBucket1Count',
+  'scoreBucket2Count',
+  'scoreBucket3Count',
+  'scoreBucket4Count',
+  'scoreBucket5Count',
+  'scoreBucket6Count',
+  'scoreBucket7Count',
+  'scoreBucket8Count',
+  'scoreBucket9Count',
+  'messagesGeneratedCount',
+  'sentCount',
+  'failedCount',
+  'repliedCount',
+  'meetingsCount',
+  'dealsWonCount',
+  'dealLostCount',
+  'bouncedCount',
+  'notInterestedCount',
+  'rejectedCount',
+  'totalCostCents',
+].join(',');
+
+const LEGACY_DASHBOARD_ROLLUP_SELECT = [
+  'day',
+  'icpProfileId',
+  'discoveredCount',
+  'enrichedCount',
+  'scoredCount',
+  'validEmailCount',
+  'validDomainCount',
+  'industryMatchRate',
+  'geoMatchRate',
+  'sentCount',
+  'failedCount',
+  'repliedCount',
+  'bouncedCount',
+].join(',');
+
+interface EdgeDashboardRollupTotals {
+  discoveredCount: number;
+  qualifiedCount: number;
+  enrichedCount: number;
+  scoredCount: number;
+  scoreSum: number;
+  lowScoreCount: number;
+  mediumScoreCount: number;
+  highScoreCount: number;
+  scoreBucketCounts: number[];
+  messagesGeneratedCount: number;
+  sentCount: number;
+  failedCount: number;
+  repliedCount: number;
+  meetingsCount: number;
+  dealsWonCount: number;
+  dealLostCount: number;
+  bouncedCount: number;
+  notInterestedCount: number;
+  rejectedCount: number;
+  totalCostCents: number;
+}
+
+function toRollupDayIso(value: string | null): string | null {
+  if (!value) return null;
+  const source = new Date(value);
+  if (Number.isNaN(source.getTime())) return null;
+  return new Date(Date.UTC(source.getUTCFullYear(), source.getUTCMonth(), source.getUTCDate())).toISOString();
+}
+
+function applyRollupDateRange(params: Record<string, string | number>, from: string | null, to: string | null): void {
+  const fromDay = toRollupDayIso(from);
+  const toDay = toRollupDayIso(to);
+
+  if (fromDay && toDay) {
+    params.and = `(day.gte.${fromDay},day.lte.${toDay})`;
+    return;
+  }
+
+  if (fromDay) {
+    params.day = `gte.${fromDay}`;
+    return;
+  }
+
+  if (toDay) {
+    params.day = `lte.${toDay}`;
+  }
+}
+
+function emptyRollupTotals(): EdgeDashboardRollupTotals {
+  return {
+    discoveredCount: 0,
+    qualifiedCount: 0,
+    enrichedCount: 0,
+    scoredCount: 0,
+    scoreSum: 0,
+    lowScoreCount: 0,
+    mediumScoreCount: 0,
+    highScoreCount: 0,
+    scoreBucketCounts: Array.from({ length: 10 }, () => 0),
+    messagesGeneratedCount: 0,
+    sentCount: 0,
+    failedCount: 0,
+    repliedCount: 0,
+    meetingsCount: 0,
+    dealsWonCount: 0,
+    dealLostCount: 0,
+    bouncedCount: 0,
+    notInterestedCount: 0,
+    rejectedCount: 0,
+    totalCostCents: 0,
+  };
+}
+
+function addRollup(total: EdgeDashboardRollupTotals, row: Row): void {
+  const scoredCount = asNumber(row.scoredCount);
+  total.discoveredCount += asNumber(row.discoveredCount);
+  total.qualifiedCount += asNumber(row.qualifiedCount);
+  total.enrichedCount += asNumber(row.enrichedCount);
+  total.scoredCount += scoredCount;
+  total.scoreSum += row.scoreSum === undefined
+    ? asNumber(row.industryMatchRate) * scoredCount
+    : asNumber(row.scoreSum);
+  total.lowScoreCount += asNumber(row.lowScoreCount);
+  total.mediumScoreCount += asNumber(row.mediumScoreCount);
+  total.highScoreCount += asNumber(row.highScoreCount);
+  total.scoreBucketCounts[0]! += asNumber(row.scoreBucket0Count);
+  total.scoreBucketCounts[1]! += asNumber(row.scoreBucket1Count);
+  total.scoreBucketCounts[2]! += asNumber(row.scoreBucket2Count);
+  total.scoreBucketCounts[3]! += asNumber(row.scoreBucket3Count);
+  total.scoreBucketCounts[4]! += asNumber(row.scoreBucket4Count);
+  total.scoreBucketCounts[5]! += asNumber(row.scoreBucket5Count);
+  total.scoreBucketCounts[6]! += asNumber(row.scoreBucket6Count);
+  total.scoreBucketCounts[7]! += asNumber(row.scoreBucket7Count);
+  total.scoreBucketCounts[8]! += asNumber(row.scoreBucket8Count);
+  total.scoreBucketCounts[9]! += asNumber(row.scoreBucket9Count);
+  total.messagesGeneratedCount += asNumber(row.messagesGeneratedCount);
+  total.sentCount += asNumber(row.sentCount);
+  total.failedCount += asNumber(row.failedCount);
+  total.repliedCount += asNumber(row.repliedCount);
+  total.meetingsCount += asNumber(row.meetingsCount);
+  total.dealsWonCount += asNumber(row.dealsWonCount);
+  total.dealLostCount += asNumber(row.dealLostCount);
+  total.bouncedCount += asNumber(row.bouncedCount);
+  total.notInterestedCount += asNumber(row.notInterestedCount);
+  total.rejectedCount += asNumber(row.rejectedCount);
+  total.totalCostCents += asNumber(row.totalCostCents);
+}
+
+function summarizeRollups(rows: Row[]): EdgeDashboardRollupTotals {
+  const total = emptyRollupTotals();
+  for (const row of rows) {
+    addRollup(total, row);
+  }
+  return total;
+}
+
+function buildRollupHistogram(bucketCounts: number[]): JsonObject[] {
+  return bucketCounts.map((count, index) => ({
+    scoreMin: index / 10,
+    scoreMax: (index + 1) / 10,
+    count,
+  }));
+}
+
+function buildRollupQualityTrends(rows: Row[]): JsonObject[] {
+  const byDay = new Map<string, EdgeDashboardRollupTotals>();
+
+  for (const row of rows) {
+    const day = iso(row.day).slice(0, 10);
+    const total = byDay.get(day) ?? emptyRollupTotals();
+    addRollup(total, row);
+    byDay.set(day, total);
+  }
+
+  return Array.from(byDay.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([day, total]) => ({
+      day,
+      avgScore: total.scoredCount > 0 ? total.scoreSum / total.scoredCount : 0,
+      totalCreated: total.discoveredCount,
+      rejectedCount: total.rejectedCount,
+    }));
+}
+
+function buildRollupIcpPerformance(rows: Row[]): JsonObject[] {
+  const byIcp = new Map<string, EdgeDashboardRollupTotals>();
+
+  for (const row of rows) {
+    const icpProfileId = asString(row.icpProfileId);
+    if (!icpProfileId) continue;
+    const total = byIcp.get(icpProfileId) ?? emptyRollupTotals();
+    addRollup(total, row);
+    byIcp.set(icpProfileId, total);
+  }
+
+  return Array.from(byIcp.entries())
+    .map(([icpProfileId, total]) => ({
+      icpProfileId,
+      leadCount: total.scoredCount,
+      avgScore: total.scoredCount > 0 ? total.scoreSum / total.scoredCount : null,
+      qualifiedCount: total.qualifiedCount,
+      rejectedCount: total.rejectedCount,
+    }))
+    .sort((left, right) =>
+      asNumber(right.leadCount) - asNumber(left.leadCount) ||
+      asString(left.icpProfileId).localeCompare(asString(right.icpProfileId)),
+    );
+}
+
+async function listDashboardRollups(
+  baseParams: Record<string, string | number>,
+): Promise<{ rows: Row[]; extended: boolean }> {
+  try {
+    const rows = await listAllRows('AnalyticsDailyRollup', {
+      ...baseParams,
+      select: DASHBOARD_ROLLUP_SELECT,
+    });
+    return { rows, extended: true };
+  } catch (error) {
+    console.warn('[demo-edge-api] extended analytics rollup unavailable; using legacy rollup fallback', error);
+    const rows = await listAllRows('AnalyticsDailyRollup', {
+      ...baseParams,
+      select: LEGACY_DASHBOARD_ROLLUP_SELECT,
+    });
+    return { rows, extended: false };
+  }
+}
+
 async function handleScoreDistribution(url: URL): Promise<Response> {
   const params: Record<string, string | number> = {};
   const icpProfileId = url.searchParams.get('icpProfileId');
@@ -1834,19 +3932,12 @@ async function handleScoreDistribution(url: URL): Promise<Response> {
 
 async function handleDailyQualityTrends(url: URL): Promise<Response> {
   const params: Record<string, string | number> = {
-    select: 'day,discoveredCount,validEmailCount,validDomainCount,industryMatchRate,geoMatchRate',
     order: 'day.asc',
   };
-  const from = url.searchParams.get('from');
-  if (from) params.day = `gte.${from}`;
-  const rows = await listAllRows('AnalyticsDailyRollup', params);
+  applyRollupDateRange(params, url.searchParams.get('from'), url.searchParams.get('to'));
+  const { rows } = await listDashboardRollups(params);
   return jsonResponse({
-    items: rows.map((row) => ({
-      day: iso(row.day).slice(0, 10),
-      avgScore: asNumber(row.industryMatchRate),
-      totalCreated: asNumber(row.discoveredCount),
-      rejectedCount: 0,
-    })),
+    items: buildRollupQualityTrends(rows),
   });
 }
 
@@ -1929,6 +4020,119 @@ async function handleIcpPerformance(url: URL): Promise<Response> {
       qualifiedCount: group.qualified,
       rejectedCount: group.rejected,
     })),
+  });
+}
+
+async function handleDashboardSummary(url: URL): Promise<Response> {
+  const from = url.searchParams.get('from');
+  const to = url.searchParams.get('to');
+  const icpProfileId = url.searchParams.get('icpProfileId');
+  const rollupParams: Record<string, string | number> = {
+    order: 'day.asc,icpProfileId.asc',
+  };
+  if (icpProfileId) {
+    rollupParams.icpProfileId = `eq.${icpProfileId}`;
+  }
+  applyRollupDateRange(rollupParams, from, to);
+
+  const [rollups, businessCount, pendingDraftsCount, discoveryRuns] = await Promise.all([
+    listDashboardRollups(rollupParams),
+    countRows('businesses'),
+    countRows('MessageDraft', {
+      approvalStatus: 'eq.PENDING',
+      ...(icpProfileId ? { icpProfileId: `eq.${icpProfileId}` } : {}),
+    }),
+    listRows('JobExecution', {
+      select: '*',
+      type: 'eq.discovery.run',
+      order: 'createdAt.desc',
+      offset: 0,
+      limit: 6,
+    }),
+  ]);
+  const rollupRows = rollups.rows;
+  const totals = summarizeRollups(rollupRows);
+  const latestRollup = rollupRows.reduce<string | null>((latest, row) => {
+    const day = iso(row.day).slice(0, 10);
+    return latest === null || day > latest ? day : latest;
+  }, null);
+  const [fallbackFunnel, fallbackScoreDistribution, fallbackFeedback, fallbackAvgScore, fallbackIcpPerformance] =
+    rollups.extended
+      ? [null, null, null, null, null]
+      : await Promise.all([
+          responseJson(await handleFunnel(url)),
+          responseJson(await handleScoreDistribution(url)),
+          responseJson(await handleFeedbackSummary(url)),
+          responseJson(await handleAvgScore(url)),
+          responseJson(await handleIcpPerformance(url)),
+        ]);
+
+  return jsonResponse({
+    from,
+    to,
+    icpProfileId,
+    generatedAt: new Date().toISOString(),
+    dataFreshness: {
+      qualityRollupBacked: rollupRows.length > 0,
+      qualityRollupLatestDay: latestRollup,
+      dashboardRollupExtended: rollups.extended,
+    },
+    funnel: fallbackFunnel ?? {
+      from,
+      to,
+      icpProfileId,
+      businessCount,
+      discoveredCount: totals.discoveredCount,
+      qualifiedCount: totals.qualifiedCount,
+      enrichedCount: totals.enrichedCount,
+      scoredCount: totals.scoredCount,
+      messagesGeneratedCount: totals.messagesGeneratedCount,
+      messagesSentCount: totals.sentCount,
+      repliesCount: totals.repliedCount,
+      meetingsCount: totals.meetingsCount,
+      dealsWonCount: totals.dealsWonCount,
+      totalCostCents: totals.totalCostCents,
+      costPerLead: totals.discoveredCount > 0
+        ? Math.round((totals.totalCostCents / totals.discoveredCount) * 100) / 100
+        : 0,
+    },
+    scoreDistribution: fallbackScoreDistribution ?? {
+      bands: [
+        { scoreBand: 'LOW', count: totals.lowScoreCount },
+        { scoreBand: 'MEDIUM', count: totals.mediumScoreCount },
+        { scoreBand: 'HIGH', count: totals.highScoreCount },
+      ],
+      histogram: buildRollupHistogram(totals.scoreBucketCounts),
+    },
+    feedback: fallbackFeedback ?? {
+      from,
+      to,
+      totalEvents:
+        totals.repliedCount +
+        totals.meetingsCount +
+        totals.dealsWonCount +
+        totals.dealLostCount +
+        totals.bouncedCount +
+        totals.notInterestedCount,
+      repliedCount: totals.repliedCount,
+      meetingBookedCount: totals.meetingsCount,
+      dealWonCount: totals.dealsWonCount,
+      dealLostCount: totals.dealLostCount,
+      bouncedCount: totals.bouncedCount,
+      notInterestedCount: totals.notInterestedCount,
+    },
+    qualityTrends: {
+      items: buildRollupQualityTrends(rollupRows),
+    },
+    avgScore: fallbackAvgScore ?? {
+      avgScore: totals.scoredCount > 0 ? totals.scoreSum / totals.scoredCount : null,
+    },
+    icpPerformance: fallbackIcpPerformance ?? {
+      items: buildRollupIcpPerformance(rollupRows),
+    },
+    pendingDraftsCount,
+    discoveryRuns: discoveryRuns.data.map(mapDiscoveryRun),
+    discoveryRunsTotal: discoveryRuns.total ?? discoveryRuns.data.length,
   });
 }
 
@@ -2024,6 +4228,191 @@ async function handleRecommendations(url: URL): Promise<Response> {
     pageSize,
     total: result.total ?? result.data.length,
   });
+}
+
+async function handleCreateDiscoveryRun(request: Request, auth: AuthContext): Promise<Response> {
+  const body = await request.json().catch(() => {
+    throw new HttpError(400, 'Invalid JSON body');
+  });
+  const input = parseCreateDiscoveryRunBody(body);
+  const requestedIcpIds = resolveRequestedIcpIds(input);
+  const icpRows = await listRows('IcpProfile', {
+    select: 'id,name,targetIndustries,targetCountries,metadataJson',
+    id: pgIn(requestedIcpIds),
+    isActive: 'eq.true',
+    limit: requestedIcpIds.length,
+  });
+  const icps = icpRows.data.map(normalizeIcpProfile);
+  const missingIcpIds = requestedIcpIds.filter((id) => !icps.some((icp) => icp.id === id));
+  if (missingIcpIds.length > 0 || icps.length === 0) {
+    throw new HttpError(400, 'Choose one or more active ICPs before starting discovery');
+  }
+
+  const runId = newId('run');
+  const now = new Date().toISOString();
+  const primaryIcp = icps[0]!;
+  const resultSeed = {
+    totalItems: 0,
+    processedItems: 0,
+    failedItems: 0,
+    newFound: 0,
+    newBusinesses: 0,
+    converted: 0,
+    searchTasksComplete: false,
+    provider: 'SERPAPI',
+    edgeMode: true,
+  };
+  const runPayload = {
+    ...input,
+    icpProfileId: primaryIcp.id,
+    icpProfileIds: icps.map((icp) => icp.id),
+    requestedByUserId: auth.userId,
+    edgeMode: true,
+  };
+
+  await insertRow<Row>('JobExecution', {
+    id: runId,
+    type: 'discovery.run',
+    status: 'running',
+    attempts: 1,
+    payload: runPayload,
+    result: resultSeed,
+    error: null,
+    leadId: null,
+    createdAt: now,
+    startedAt: now,
+    finishedAt: null,
+    updatedAt: now,
+  });
+
+  let processedItems = 0;
+  let failedItems = 0;
+  let newBusinesses = 0;
+  let converted = 0;
+  let taskCount = 0;
+  const errors: string[] = [];
+  const limit = Math.min(input.limit ?? EDGE_DISCOVERY_DEFAULT_LIMIT, EDGE_DISCOVERY_MAX_RESULTS);
+  const cities = input.cities && input.cities.length > 0 ? input.cities : [null];
+
+  for (const icp of icps) {
+    for (const countryCode of input.countries) {
+      for (const city of cities) {
+        if (processedItems >= limit || taskCount >= EDGE_DISCOVERY_MAX_SERPAPI_CALLS) {
+          break;
+        }
+
+        const category = resolveSearchCategory(icp, input);
+        const query = [category, city, countryCode].filter(Boolean).join(' ');
+        const normalizedQueryKey = normalizeSearchText(query);
+        const queryHash = edgeHash(`${runId}:${icp.id}:${countryCode}:${city ?? ''}:${normalizedQueryKey}`);
+        const taskNow = new Date().toISOString();
+        const task = await insertRow<Row>('search_tasks', {
+          id: newId('task'),
+          task_type: 'SERP_MAPS_LOCAL',
+          country_code: countryCode,
+          city,
+          language: 'en',
+          query_text: query,
+          normalized_query_key: normalizedQueryKey,
+          query_hash: queryHash,
+          params_json: {
+            edgeMode: true,
+            engine: 'google_maps',
+            provider: 'SERPAPI',
+            icpProfileId: icp.id,
+            runId,
+          },
+          page: 1,
+          time_bucket: `edge-${taskNow.slice(0, 10)}`,
+          status: 'RUNNING',
+          attempts: 1,
+          run_after: taskNow,
+          last_result_hash: null,
+          error: null,
+          created_at: taskNow,
+          updated_at: taskNow,
+          discovery_run_id: runId,
+        });
+        taskCount += 1;
+
+        try {
+          const serpApiPayload = await fetchSerpApiMapsResults({ query, countryCode, city });
+          const minReviewCount = input.advancedSettings?.minReviewCount ?? 0;
+          const businesses = normalizeSerpApiLocalBusinesses(serpApiPayload, countryCode)
+            .filter((business) => (business.reviewCount ?? 0) >= minReviewCount)
+            .slice(0, Math.max(0, limit - processedItems));
+
+          for (const local of businesses) {
+            await persistEdgeDiscoveryBusiness({
+              runId,
+              taskId: asString(task.id),
+              icpProfileId: icp.id,
+              queryHash,
+              local,
+              now: new Date().toISOString(),
+            });
+            processedItems += 1;
+            newBusinesses += 1;
+            converted += 1;
+          }
+
+          await insertRow<Row>('discovery_cost_events', {
+            id: newId('cost'),
+            discoveryRunId: runId,
+            provider: 'SERPAPI',
+            costCents: 0,
+            apiCallType: 'google_maps_search',
+            businessId: null,
+            leadId: null,
+            recordedAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+          });
+
+          await updateRows<Row>('search_tasks', { id: `eq.${asString(task.id)}` }, {
+            status: 'DONE',
+            last_result_hash: edgeHash(JSON.stringify(businesses.map((business) => business.providerRecordId))),
+            error: null,
+            updated_at: new Date().toISOString(),
+          });
+        } catch (error) {
+          failedItems += 1;
+          const message = error instanceof Error ? error.message : 'Discovery task failed';
+          errors.push(message);
+          await updateRows<Row>('search_tasks', { id: `eq.${asString(task.id)}` }, {
+            status: 'FAILED',
+            error: message,
+            updated_at: new Date().toISOString(),
+          });
+        }
+      }
+    }
+  }
+
+  const finishedAt = new Date().toISOString();
+  const terminalStatus = processedItems > 0 ? 'completed' : 'failed';
+  await updateRows<Row>('JobExecution', { id: `eq.${runId}` }, {
+    status: terminalStatus,
+    result: {
+      totalItems: processedItems,
+      processedItems,
+      failedItems,
+      newFound: processedItems,
+      newBusinesses,
+      converted,
+      searchTasksComplete: true,
+      provider: 'SERPAPI',
+      edgeMode: true,
+      taskCount,
+    },
+    error: errors.length > 0 ? errors.join('; ').slice(0, 1000) : null,
+    finishedAt,
+    updatedAt: finishedAt,
+  });
+
+  return jsonResponse({
+    runId,
+    status: terminalStatus === 'failed' ? 'FAILED' : failedItems > 0 ? 'PARTIAL' : 'SUCCEEDED',
+  }, 201);
 }
 
 async function handleDiscoveryRuns(url: URL): Promise<Response> {
@@ -2460,15 +4849,11 @@ function disabled(): Response {
   return jsonResponse({ error: DEMO_DISABLED_MESSAGE }, 403);
 }
 
-async function routeRequest(request: Request, _auth: AuthContext): Promise<Response> {
+async function routeRequest(request: Request, auth: AuthContext): Promise<Response> {
   const url = new URL(request.url);
   const routePath = extractRoutePath(url.pathname);
   const parts = pathParts(routePath);
   const method = request.method.toUpperCase();
-
-  if (method !== 'GET') {
-    return disabled();
-  }
 
   if (routePath === '/health' || routePath === '/ready') {
     return jsonResponse({ ok: true, service: 'demo-edge-api' });
@@ -2476,6 +4861,22 @@ async function routeRequest(request: Request, _auth: AuthContext): Promise<Respo
 
   if (parts[0] !== 'v1') {
     throw new HttpError(404, 'Not found');
+  }
+
+  if (method === 'POST' && parts[1] === 'discovery' && parts[2] === 'runs' && parts.length === 3) {
+    return handleCreateDiscoveryRun(request, auth);
+  }
+
+  if (method === 'POST' && parts[1] === 'leads' && parts[2] && parts[3] === 'enrich' && parts.length === 4) {
+    return handleEnrichLead(parts[2]);
+  }
+
+  if (method === 'POST' && parts[1] === 'messaging' && parts[2] === 'drafts' && parts[3] === 'generate' && parts.length === 4) {
+    return handleGenerateDraft(request);
+  }
+
+  if (method !== 'GET') {
+    return disabled();
   }
 
   if (parts[1] === 'icps' && parts.length === 2) return handleListIcps(url);
@@ -2488,6 +4889,16 @@ async function routeRequest(request: Request, _auth: AuthContext): Promise<Respo
   if (parts[1] === 'leads' && parts.length === 2) return handleListLeads(url);
   if (parts[1] === 'leads' && parts[2]) return handleGetLead(parts[2]);
 
+  if (parts[1] === 'scoring' && parts[2] === 'leads' && parts[3] && parts[4] === 'latest') {
+    return handleLatestLeadScore(parts[3], url);
+  }
+  if (parts[1] === 'scoring' && parts[2] === 'leads' && parts[3] && parts[4] === 'latest-feature-snapshot') {
+    return handleLatestLeadFeatureSnapshot(parts[3], url);
+  }
+  if (parts[1] === 'scoring' && parts[2] === 'leads' && parts[3] && parts[4] === 'latest-deterministic') {
+    return handleLatestLeadDeterministicScore(parts[3], url);
+  }
+
   if (parts[1] === 'messaging' && parts[2] === 'drafts' && parts.length === 3) return handleListDrafts(url);
   if (parts[1] === 'messaging' && parts[2] === 'drafts' && parts[3] === 'events') {
     return new Response('event: timeout\ndata: {}\n\n', {
@@ -2498,6 +4909,7 @@ async function routeRequest(request: Request, _auth: AuthContext): Promise<Respo
   if (parts[1] === 'messaging' && parts[2] === 'sends') return handleListSends(url);
   if (parts[1] === 'messaging' && parts[2] === 'conversations' && parts[3]) return handleConversation(parts[3]);
 
+  if (parts[1] === 'analytics' && parts[2] === 'dashboard-summary') return handleDashboardSummary(url);
   if (parts[1] === 'analytics' && parts[2] === 'funnel') return handleFunnel(url);
   if (parts[1] === 'analytics' && parts[2] === 'score-distribution') return handleScoreDistribution(url);
   if (parts[1] === 'analytics' && parts[2] === 'daily-quality-trends') return handleDailyQualityTrends(url);

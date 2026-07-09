@@ -1,11 +1,9 @@
 'use client';
 
 import type {
-  DailyQualityTrendsResponse,
+  DashboardSummaryResponse,
   FeedbackSummaryResponse,
   FunnelResponse,
-  IcpPerformanceResponse,
-  ListDiscoveryRunsResponse,
   ScoreDistributionResponse,
 } from '@lead-flood/contracts';
 import {
@@ -24,7 +22,7 @@ import {
   Zap,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Area,
   AreaChart,
@@ -54,9 +52,9 @@ type AnalyticsFilter = {
   icpProfileId?: string | undefined;
 };
 
-type IcpPerformanceRow = IcpPerformanceResponse['items'][number];
-type DiscoveryRun = ListDiscoveryRunsResponse['runs'][number];
-type QualityTrend = DailyQualityTrendsResponse['items'][number];
+type IcpPerformanceRow = DashboardSummaryResponse['icpPerformance']['items'][number];
+type DiscoveryRun = DashboardSummaryResponse['discoveryRuns'][number];
+type QualityTrend = DashboardSummaryResponse['qualityTrends']['items'][number];
 
 const DATE_RANGE_OPTIONS: Array<{ value: DateRange; label: string }> = [
   { value: '7d', label: '7 Days' },
@@ -66,8 +64,6 @@ const DATE_RANGE_OPTIONS: Array<{ value: DateRange; label: string }> = [
 ];
 
 const DASHBOARD_ICPS_QUERY = { page: 1, pageSize: 50 } as const;
-const DASHBOARD_DISCOVERY_RUNS_QUERY = { page: 1, pageSize: 6 } as const;
-const DASHBOARD_PENDING_DRAFTS_QUERY = { approvalStatus: 'PENDING', page: 1, pageSize: 1 } as const;
 
 function getDateFilter(range: DateRange): Omit<AnalyticsFilter, 'icpProfileId'> {
   if (range === 'all') return {};
@@ -260,25 +256,6 @@ function buildLeadFlowData(
     low: lowCount,
     unbanded: unbandedCount,
   };
-}
-
-async function fetchDashboardBusinessCount(accessToken: string): Promise<number> {
-  const response = await fetch('/api/dashboard/business-count', {
-    headers: {
-      authorization: `Bearer ${accessToken}`,
-    },
-  });
-  const body = (await response.json().catch(() => null)) as { total?: unknown; error?: string } | null;
-
-  if (!response.ok) {
-    throw new Error(body?.error ?? 'Failed to load business count');
-  }
-
-  if (typeof body?.total !== 'number') {
-    throw new Error('Business count unavailable');
-  }
-
-  return body.total;
 }
 
 function QualityTrendsChart({ data }: { data: QualityTrend[] }) {
@@ -554,10 +531,9 @@ function DiscoveryYield({
 }
 
 export default function DashboardPage() {
-  const { apiClient, token } = useAuth();
+  const { apiClient } = useAuth();
   const [icpFilter, setIcpFilter] = useState<string | undefined>(undefined);
   const [dateRange, setDateRange] = useState<DateRange>('all');
-  const [businessCountFallback, setBusinessCountFallback] = useState<number | null>(null);
 
   const dateFilter = useMemo(() => getDateFilter(dateRange), [dateRange]);
   const analyticsFilter = useMemo<AnalyticsFilter>(
@@ -579,116 +555,16 @@ export default function DashboardPage() {
     [apiClient],
   );
 
-  const funnel = useApiQuery(
+  const dashboardSummary = useApiQuery(
     useCallback(
       () =>
-        getCachedDashboardQuery(dashboardQueryKeys.funnel(analyticsFilter), () =>
-          apiClient.getFunnel(analyticsFilter),
+        getCachedDashboardQuery(dashboardQueryKeys.dashboardSummary(analyticsFilter), () =>
+          apiClient.getDashboardSummary(analyticsFilter),
         ),
       [apiClient, analyticsFilter],
     ),
     [apiClient, analyticsFilter],
   );
-
-  const scoreDistribution = useApiQuery(
-    useCallback(
-      () =>
-        getCachedDashboardQuery(dashboardQueryKeys.scoreDistribution(analyticsFilter), () =>
-          apiClient.getScoreDistribution(analyticsFilter),
-        ),
-      [apiClient, analyticsFilter],
-    ),
-    [apiClient, analyticsFilter],
-  );
-
-  const feedback = useApiQuery(
-    useCallback(
-      () =>
-        getCachedDashboardQuery(dashboardQueryKeys.feedback(analyticsFilter), () =>
-          apiClient.getFeedbackSummary(analyticsFilter),
-        ),
-      [apiClient, analyticsFilter],
-    ),
-    [apiClient, analyticsFilter],
-  );
-
-  const qualityTrends = useApiQuery(
-    useCallback(
-      () =>
-        getCachedDashboardQuery(dashboardQueryKeys.qualityTrends(dateFilter), () =>
-          apiClient.getDailyQualityTrends(dateFilter),
-        ),
-      [apiClient, dateFilter],
-    ),
-    [apiClient, dateFilter],
-  );
-
-  const icpPerformance = useApiQuery(
-    useCallback(
-      () =>
-        getCachedDashboardQuery(dashboardQueryKeys.icpPerformance(analyticsFilter), () =>
-          apiClient.getIcpPerformance(analyticsFilter),
-        ),
-      [apiClient, analyticsFilter],
-    ),
-    [apiClient, analyticsFilter],
-  );
-
-  const avgScore = useApiQuery(
-    useCallback(
-      () =>
-        getCachedDashboardQuery(dashboardQueryKeys.avgScore(analyticsFilter), () =>
-          apiClient.getAvgScore(analyticsFilter),
-        ),
-      [apiClient, analyticsFilter],
-    ),
-    [apiClient, analyticsFilter],
-  );
-
-  const discoveryRuns = useApiQuery(
-    useCallback(
-      () =>
-        getCachedDashboardQuery(dashboardQueryKeys.discoveryRuns(DASHBOARD_DISCOVERY_RUNS_QUERY), () =>
-          apiClient.listDiscoveryRuns(DASHBOARD_DISCOVERY_RUNS_QUERY),
-        ),
-      [apiClient],
-    ),
-    [apiClient],
-  );
-
-  const drafts = useApiQuery(
-    useCallback(
-      () =>
-        getCachedDashboardQuery(dashboardQueryKeys.drafts(DASHBOARD_PENDING_DRAFTS_QUERY), () =>
-          apiClient.listDrafts(DASHBOARD_PENDING_DRAFTS_QUERY),
-        ),
-      [apiClient],
-    ),
-    [apiClient],
-  );
-
-  useEffect(() => {
-    if (!token) {
-      return;
-    }
-
-    let cancelled = false;
-    void fetchDashboardBusinessCount(token)
-      .then((total) => {
-        if (!cancelled) {
-          setBusinessCountFallback(total);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setBusinessCountFallback(null);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [funnel.data?.businessCount, token]);
 
   const icpOptions = [
     { value: '', label: 'All ICPs' },
@@ -703,37 +579,41 @@ export default function DashboardPage() {
     return map;
   }, [icps.data]);
 
+  const summary = dashboardSummary.data;
+  const funnel = summary?.funnel ?? null;
+  const scoreDistribution = summary?.scoreDistribution ?? null;
+  const feedback = summary?.feedback ?? null;
+  const qualityTrends = summary?.qualityTrends ?? null;
+  const icpPerformance = summary?.icpPerformance ?? null;
+  const avgScore = summary?.avgScore ?? null;
+
   const sortedRuns = useMemo(() => {
-    return [...(discoveryRuns.data?.runs ?? [])].sort(
+    return [...(summary?.discoveryRuns ?? [])].sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
     );
-  }, [discoveryRuns.data]);
+  }, [summary?.discoveryRuns]);
 
-  const discovered = funnel.data?.discoveredCount ?? 0;
-  const qualified = funnel.data?.qualifiedCount ?? 0;
-  const sent = funnel.data?.messagesSentCount ?? 0;
-  const replies = funnel.data?.repliesCount ?? 0;
+  const discovered = funnel?.discoveredCount ?? 0;
+  const qualified = funnel?.qualifiedCount ?? 0;
+  const sent = funnel?.messagesSentCount ?? 0;
+  const replies = funnel?.repliesCount ?? 0;
   const replyRate = ratioPercent(replies, sent);
   const qualifiedRate = ratioPercent(qualified, discovered);
-  const averageScore = avgScore.data?.avgScore ?? null;
+  const averageScore = avgScore?.avgScore ?? null;
   const costPerLead =
-    discovered > 0 && funnel.data ? funnel.data.costPerLead : null;
+    discovered > 0 && funnel ? funnel.costPerLead : null;
   const totalCost =
-    funnel.data && funnel.data.totalCostCents > 0
-      ? funnel.data.totalCostCents / 100
+    funnel && funnel.totalCostCents > 0
+      ? funnel.totalCostCents / 100
       : null;
   const loadError =
-    funnel.error ??
-    scoreDistribution.error ??
-    feedback.error ??
-    qualityTrends.error ??
-    icpPerformance.error ??
-    discoveryRuns.error ??
+    dashboardSummary.error ??
+    icps.error ??
     null;
-  const leadFlowBusinessCount = Math.max(funnel.data?.businessCount ?? 0, businessCountFallback ?? 0);
+  const leadFlowBusinessCount = funnel?.businessCount ?? 0;
   const leadFlowData = useMemo(
-    () => buildLeadFlowData(funnel.data, scoreDistribution.data, leadFlowBusinessCount),
-    [funnel.data, leadFlowBusinessCount, scoreDistribution.data],
+    () => buildLeadFlowData(funnel, scoreDistribution, leadFlowBusinessCount),
+    [funnel, leadFlowBusinessCount, scoreDistribution],
   );
 
   return (
@@ -811,7 +691,7 @@ export default function DashboardPage() {
         <MetricCard
           icon={Clock3}
           label="Pending review"
-          value={formatCount(drafts.data?.total)}
+          value={formatCount(summary?.pendingDraftsCount)}
           detail="Drafts awaiting operator approval"
           accent="bg-yellow-400"
         />
@@ -823,8 +703,7 @@ export default function DashboardPage() {
           title="Lead Flow"
           subtitle="Database records through qualification and lead-fit bands."
         />
-        {(funnel.isLoading && !funnel.data) ||
-        (scoreDistribution.isLoading && !scoreDistribution.data) ? (
+        {dashboardSummary.isLoading && !summary ? (
           <div className="flex min-h-[220px] items-center justify-center text-sm font-semibold text-white">
             Loading lead flow...
           </div>
@@ -853,12 +732,12 @@ export default function DashboardPage() {
             title="ICP Performance"
             subtitle="Top segments by lead volume and quality."
           />
-          {icpPerformance.isLoading ? (
+          {dashboardSummary.isLoading && !summary ? (
             <div className="flex min-h-[260px] items-center justify-center text-sm font-semibold text-white">
               Loading ICP performance...
             </div>
           ) : (
-            <IcpPerformance rows={icpPerformance.data?.items ?? []} icpNames={icpNameMap} />
+            <IcpPerformance rows={icpPerformance?.items ?? []} icpNames={icpNameMap} />
           )}
         </Card>
 
@@ -868,12 +747,12 @@ export default function DashboardPage() {
             title="Quality Trend"
             subtitle="Average score and rejection rate over time."
           />
-          {qualityTrends.isLoading ? (
+          {dashboardSummary.isLoading && !summary ? (
             <div className="flex min-h-[260px] items-center justify-center text-sm font-semibold text-white">
               Loading quality trend...
             </div>
           ) : (
-            <QualityTrendsChart data={qualityTrends.data?.items ?? []} />
+            <QualityTrendsChart data={qualityTrends?.items ?? []} />
           )}
         </Card>
       </div>
@@ -885,14 +764,14 @@ export default function DashboardPage() {
             title="Outreach Outcomes"
             subtitle="Recorded replies, meetings, deals, and bounces."
             action={
-              feedback.data ? (
+              feedback ? (
                 <span className="rounded-full border border-white/[0.1] bg-white/[0.06] px-3 py-1 text-xs font-bold text-white">
-                  {feedback.data.totalEvents.toLocaleString()} events
+                  {feedback.totalEvents.toLocaleString()} events
                 </span>
               ) : undefined
             }
           />
-          <OutreachOutcomes feedback={feedback.data} />
+          <OutreachOutcomes feedback={feedback} />
         </Card>
 
         <Card>
@@ -909,7 +788,7 @@ export default function DashboardPage() {
               </Link>
             }
           />
-          {discoveryRuns.isLoading ? (
+          {dashboardSummary.isLoading && !summary ? (
             <div className="flex min-h-[260px] items-center justify-center text-sm font-semibold text-white">
               Loading discovery runs...
             </div>
@@ -919,7 +798,7 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {!funnel.data && !funnel.isLoading && !loadError ? (
+      {!funnel && !dashboardSummary.isLoading && !loadError ? (
         <Card>
           <div className="flex items-center gap-3 text-white">
             <CheckCircle2 className="h-5 w-5" />

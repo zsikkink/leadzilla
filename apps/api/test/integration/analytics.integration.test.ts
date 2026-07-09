@@ -393,6 +393,145 @@ describe('analytics score distribution integration', () => {
   }, 15_000);
 });
 
+describe('analytics dashboard summary rollup integration', () => {
+  const createdIcpIds: string[] = [];
+
+  afterEach(async () => {
+    if (createdIcpIds.length > 0) {
+      const icpIds = createdIcpIds.splice(0);
+      await prisma.analyticsDailyRollup.deleteMany({ where: { icpProfileId: { in: icpIds } } });
+      await prisma.icpProfile.deleteMany({ where: { id: { in: icpIds } } });
+    }
+  });
+
+  it('hydrates dashboard summary metrics from AnalyticsDailyRollup rows', async () => {
+    const icp = await prisma.icpProfile.create({
+      data: {
+        name: createUniqueToken('analytics-dashboard-icp'),
+        isActive: true,
+        targetIndustries: ['retail'],
+        targetCountries: ['us'],
+        requiredTechnologies: ['shopify'],
+      },
+    });
+    createdIcpIds.push(icp.id);
+
+    await prisma.analyticsDailyRollup.create({
+      data: {
+        day: new Date('2026-07-08T00:00:00.000Z'),
+        icpProfileId: icp.id,
+        discoveredCount: 10,
+        qualifiedCount: 4,
+        enrichedCount: 6,
+        scoredCount: 6,
+        scoreSum: 2.4,
+        lowScoreCount: 1,
+        mediumScoreCount: 2,
+        highScoreCount: 3,
+        scoreBucket1Count: 1,
+        scoreBucket5Count: 2,
+        scoreBucket9Count: 3,
+        messagesGeneratedCount: 5,
+        sentCount: 3,
+        failedCount: 1,
+        repliedCount: 2,
+        meetingsCount: 1,
+        dealsWonCount: 1,
+        dealLostCount: 1,
+        bouncedCount: 1,
+        notInterestedCount: 1,
+        rejectedCount: 2,
+        totalCostCents: 1234,
+      },
+    });
+
+    const server = buildTestServer();
+
+    try {
+      const response = await server.inject({
+        method: 'GET',
+        url: `/v1/analytics/dashboard-summary?icpProfileId=${icp.id}&from=2026-07-08T00:00:00.000Z&to=2026-07-08T23:59:59.999Z`,
+        headers: authHeaders(),
+      });
+      const body = response.json();
+
+      expect(response.statusCode).toBe(200);
+      expect(body).toMatchObject({
+        icpProfileId: icp.id,
+        dataFreshness: {
+          qualityRollupBacked: true,
+          qualityRollupLatestDay: '2026-07-08',
+        },
+        funnel: {
+          discoveredCount: 10,
+          qualifiedCount: 4,
+          enrichedCount: 6,
+          scoredCount: 6,
+          messagesGeneratedCount: 5,
+          messagesSentCount: 3,
+          repliesCount: 2,
+          meetingsCount: 1,
+          dealsWonCount: 1,
+          totalCostCents: 1234,
+          costPerLead: 123.4,
+        },
+        scoreDistribution: {
+          bands: [
+            { scoreBand: 'LOW', count: 1 },
+            { scoreBand: 'MEDIUM', count: 2 },
+            { scoreBand: 'HIGH', count: 3 },
+          ],
+        },
+        feedback: {
+          totalEvents: 7,
+          repliedCount: 2,
+          meetingBookedCount: 1,
+          dealWonCount: 1,
+          dealLostCount: 1,
+          bouncedCount: 1,
+          notInterestedCount: 1,
+        },
+        avgScore: {
+          avgScore: 0.39999999999999997,
+        },
+        qualityTrends: {
+          items: [
+            {
+              day: '2026-07-08',
+              avgScore: 0.39999999999999997,
+              totalCreated: 10,
+              rejectedCount: 2,
+            },
+          ],
+        },
+        icpPerformance: {
+          items: [
+            {
+              icpProfileId: icp.id,
+              leadCount: 6,
+              avgScore: 0.39999999999999997,
+              qualifiedCount: 4,
+              rejectedCount: 2,
+            },
+          ],
+        },
+      });
+      expect(body.scoreDistribution.histogram[1]).toEqual({
+        scoreMin: 0.1,
+        scoreMax: 0.2,
+        count: 1,
+      });
+      expect(body.scoreDistribution.histogram[9]).toEqual({
+        scoreMin: 0.9,
+        scoreMax: 1,
+        count: 3,
+      });
+    } finally {
+      await server.close();
+    }
+  });
+});
+
 describe('analytics stored recommendations integration', () => {
   const createdRecommendationIds: string[] = [];
 

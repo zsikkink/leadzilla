@@ -2,10 +2,14 @@
 
 The web app runs on Vercel and calls the API. Do not run Postgres on Vercel.
 
-Current production note: as of 2026-05-05 the intended Railway API/worker
-services are stopped/failed because Railway deployment is blocked by account
-billing status. Vercel settings alone cannot make the production app usable
-until the backend API domain returns `/ready`.
+Current production note: as of 2026-07-09 the recruiter demo no longer uses a
+Railway API. Vercel `NEXT_PUBLIC_API_BASE_URL` and `API_BASE_URL` should point
+to the Supabase Edge Function API:
+`https://pjeezkwvsxyiuzaglwck.supabase.co/functions/v1/api`.
+
+The Supabase Edge API supports read routes plus bounded discovery, enrichment,
+scoring, and OpenAI draft-generation jobs for the demo. Outbound sends and other
+worker-backed actions remain disabled.
 
 ## 1) Vercel Project Settings
 
@@ -20,19 +24,29 @@ until the backend API domain returns `/ready`.
 Set for both Preview and Production (with environment-specific values):
 
 - `NEXT_PUBLIC_API_BASE_URL`
+- `API_BASE_URL`
 - `ADMIN_API_KEY` (server-only; used by `apps/web` route handlers for `/api/admin/*`)
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 
 Do not put database credentials in the Vercel web project.
+This Vercel project currently requires branch-scoped Preview variables, so add
+Preview API base variables for the specific preview branch you intend to build.
 
-## 3) API/Worker Environment Variables (Railway runtime)
+## 3) Supabase Edge API Environment Variables
 
-Set on the Railway API + worker services:
+Set on the Supabase Edge Function project:
 
-- `DATABASE_URL`
-- `DIRECT_URL`
-- `PG_BOSS_SCHEMA`
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_JWKS`
+- `SUPABASE_PUBLISHABLE_KEYS`
+- `SUPABASE_SECRET_KEYS`
+- `SERPAPI_API_KEY`
+- `OPENAI_API_KEY`
+- `OPENAI_DRAFT_MODEL` (optional; defaults to the current frontier draft model)
+- `LEADZILLA_CORS_ORIGINS`
 
 Set for migration/ops workflows:
 
@@ -73,17 +87,16 @@ EOF
 
 ## 5) DB Readiness Verification
 
-Check deployed API:
+Check the deployed Edge API with an authenticated Supabase session token:
 
 ```bash
-curl -sS https://<api-domain>/health
-curl -sS https://<api-domain>/ready
+curl -sS https://pjeezkwvsxyiuzaglwck.supabase.co/functions/v1/api/ready \
+  -H "Authorization: Bearer <supabase-session-token>"
 ```
 
 Expected:
 
-- `/health` returns status ok
-- `/ready` returns ready + db ok
+- `/ready` returns ok for the demo Edge API
 
 ## 6) Preview/Production Safety
 

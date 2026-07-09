@@ -3,6 +3,8 @@ import type {
   AvgScoreResponse,
   DailyQualityTrendsQuery,
   DailyQualityTrendsResponse,
+  DashboardSummaryQuery,
+  DashboardSummaryResponse,
   FunnelQuery,
   FunnelResponse,
   IcpPerformanceQuery,
@@ -43,6 +45,7 @@ export interface AnalyticsService {
   getDailyQualityTrends(query: DailyQualityTrendsQuery): Promise<DailyQualityTrendsResponse>;
   getAvgScore(query: AvgScoreQuery): Promise<AvgScoreResponse>;
   getIcpPerformance(query: IcpPerformanceQuery): Promise<IcpPerformanceResponse>;
+  getDashboardSummary(query: DashboardSummaryQuery): Promise<DashboardSummaryResponse>;
   getModelMetrics(query: ModelMetricsQuery): Promise<ModelMetricsResponse>;
   getRetrainStatus(query: RetrainStatusQuery): Promise<RetrainStatusResponse>;
   recomputeRollup(input: RecomputeRollupRequest): Promise<void>;
@@ -70,6 +73,9 @@ export function buildAnalyticsService(
     },
     async getIcpPerformance(query) {
       return repository.getIcpPerformance(query);
+    },
+    async getDashboardSummary(query) {
+      return repository.getDashboardSummary(query);
     },
     async getModelMetrics(query) {
       return repository.getModelMetrics(query);
