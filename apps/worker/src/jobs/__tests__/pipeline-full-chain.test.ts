@@ -7,7 +7,7 @@
  * Pipeline under test:
  *   [pre-seeded lead] → features.compute → scoring.compute
  *   → message.generate (PENDING approval) → manual approval
- *   → message.send (Resend for email, Trengo for WhatsApp)
+ *   → message.send blocked before provider delivery for the Leadzilla demo
  */
 import { randomUUID } from 'node:crypto';
 
@@ -37,6 +37,8 @@ import {
 } from '../message.generate.job.js';
 import {
   handleMessageSendJob,
+  OUTBOUND_DISABLED_FAILURE_CODE,
+  OUTBOUND_DISABLED_FAILURE_REASON,
   type MessageSendJobPayload,
   type MessageSendJobDependencies,
 } from '../message.send.job.js';
@@ -198,23 +200,6 @@ function makeOpenAiGenerateAdapter(): OpenAiAdapter {
   return new OpenAiAdapter({
     apiKey: 'test-openai-key',
     fetchImpl: makeOpenAiGenerateFetch(),
-  });
-}
-
-function makeResendAdapter(): ResendAdapter {
-  return new ResendAdapter({
-    apiKey: 'test-resend-key',
-    fromEmail: 'noreply@leadflood.test',
-    fetchImpl: makeResendFetch(),
-  });
-}
-
-function makeTrengoAdapter(): TrengoAdapter {
-  return new TrengoAdapter({
-    apiKey: 'test-trengo-key',
-    channelId: 'test-channel-789',
-    templateId: 'test-template-012',
-    fetchImpl: makeTrengoFetch(),
   });
 }
 
@@ -486,9 +471,9 @@ describe('pipeline full chain: features.compute → message.send', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Stage 6: Manual approval + email send via Resend
+  // Stage 6: Manual approval + blocked email send
   // -----------------------------------------------------------------------
-  it('stage 5: after manual approval, message.send delivers email via Resend', async () => {
+  it('stage 5: after manual approval, message.send marks the send failed while outbound is disabled', async () => {
     bossSendSpy.mockClear();
 
     // Simulate manual approval: select variant_a and create MessageSend
@@ -537,37 +522,51 @@ describe('pipeline full chain: features.compute → message.send', () => {
       correlationId: `corr-${RUN_ID}`,
     };
 
+    const resendFetch = makeResendFetch();
+    const trengoFetch = makeTrengoFetch();
     const deps: MessageSendJobDependencies = {
-      resendAdapter: makeResendAdapter(),
-      trengoAdapter: makeTrengoAdapter(),
+      resendAdapter: new ResendAdapter({
+        apiKey: 'test-resend-key',
+        fromEmail: 'noreply@leadflood.test',
+        fetchImpl: resendFetch,
+      }),
+      trengoAdapter: new TrengoAdapter({
+        apiKey: 'test-trengo-key',
+        channelId: 'test-channel-789',
+        templateId: 'test-template-012',
+        fetchImpl: trengoFetch,
+      }),
     };
 
     await handleMessageSendJob(noopLogger, makeJob(payload, 'message.send'), deps);
 
-    // Verify send was marked SENT
+    // Verify send was blocked before any provider call
     const updatedSend = await prisma.messageSend.findUniqueOrThrow({
       where: { id: messageSend.id },
     });
-    expect(updatedSend.status).toBe('SENT');
-    expect(updatedSend.providerMessageId).toBeTruthy();
-    expect(updatedSend.sentAt).toBeTruthy();
+    expect(updatedSend.status).toBe('FAILED');
+    expect(updatedSend.failureCode).toBe(OUTBOUND_DISABLED_FAILURE_CODE);
+    expect(updatedSend.failureReason).toBe(OUTBOUND_DISABLED_FAILURE_REASON);
+    expect(updatedSend.providerMessageId).toBeNull();
+    expect(updatedSend.sentAt).toBeNull();
     expect(updatedSend.followUpNumber).toBe(0);
-    // nextFollowUpAfter is set (~72h from now) since followUpNumber < 3
-    expect(updatedSend.nextFollowUpAfter).toBeTruthy();
+    expect(updatedSend.nextFollowUpAfter).toBeNull();
+    expect(resendFetch).not.toHaveBeenCalled();
+    expect(trengoFetch).not.toHaveBeenCalled();
 
-    // Lead status should be 'messaged'
+    // Lead remains drafted because delivery never occurs in the demo.
     const lead = await prisma.lead.findUniqueOrThrow({ where: { id: discoveredLeadId } });
-    expect(lead.status).toBe('messaged');
+    expect(lead.status).toBe('drafted');
   });
 
   // -----------------------------------------------------------------------
-  // Stage 7: WhatsApp send via Trengo (auto-approved follow-up)
+  // Stage 7: Follow-up remains blocked after the initial send is blocked
   // -----------------------------------------------------------------------
-  it('stage 6: message.generate (WhatsApp) + message.send delivers via Trengo', async () => {
+  it('stage 6: message.generate does not create a follow-up after the initial send is blocked', async () => {
     bossSendSpy.mockClear();
 
     const emailSend = await prisma.messageSend.findFirst({
-      where: { leadId: discoveredLeadId, followUpNumber: 0, status: 'SENT' },
+      where: { leadId: discoveredLeadId, followUpNumber: 0, status: 'FAILED' },
     });
     expect(emailSend).toBeTruthy();
 
@@ -591,77 +590,26 @@ describe('pipeline full chain: features.compute → message.send', () => {
 
     await handleMessageGenerateJob(noopLogger, makeJob(genPayload, 'message.generate'), genDeps);
 
-    // Verify WhatsApp draft was created and remains pending review
     const waDraft = await prisma.messageDraft.findFirst({
       where: { leadId: discoveredLeadId, followUpNumber: 1 },
       include: { variants: true },
     });
-    expect(waDraft).toBeTruthy();
-    expect(waDraft!.approvalStatus).toBe('PENDING');
-    expect(waDraft!.variants[0]!.channel).toBe('WHATSAPP');
+    expect(waDraft).toBeNull();
+    expect(bossSendSpy).not.toHaveBeenCalledWith('message.send', expect.anything(), expect.anything());
 
-    const selectedWaVariant = waDraft!.variants[0]!;
-    await prisma.messageVariant.update({
-      where: { id: selectedWaVariant.id },
-      data: { isSelected: true },
+    const waSends = await prisma.messageSend.findMany({
+      where: { leadId: discoveredLeadId, channel: 'WHATSAPP' },
     });
-    await prisma.messageDraft.update({
-      where: { id: waDraft!.id },
-      data: { approvalStatus: 'APPROVED' },
-    });
-
-    const waIdempotencyKey = `manual-approve:${discoveredLeadId}:${waDraft!.id}:${selectedWaVariant.id}`;
-    const waSend = await prisma.messageSend.create({
-      data: {
-        leadId: discoveredLeadId,
-        messageDraftId: waDraft!.id,
-        messageVariantId: selectedWaVariant.id,
-        channel: 'WHATSAPP',
-        provider: 'TRENGO',
-        status: 'QUEUED',
-        idempotencyKey: waIdempotencyKey,
-        followUpNumber: 1,
-      },
-    });
-    expect(waSend.channel).toBe('WHATSAPP');
-
-    // Send via Trengo
-    bossSendSpy.mockClear();
-    const sendPayload: MessageSendJobPayload = {
-      runId: `msgsend-wa-${RUN_ID}`,
-      sendId: waSend.id,
-      messageDraftId: waSend.messageDraftId,
-      messageVariantId: waSend.messageVariantId,
-      idempotencyKey: waSend.idempotencyKey,
-      channel: 'WHATSAPP',
-      followUpNumber: 1,
-      correlationId: `corr-${RUN_ID}`,
-    };
-
-    const sendDeps: MessageSendJobDependencies = {
-      resendAdapter: makeResendAdapter(),
-      trengoAdapter: makeTrengoAdapter(),
-    };
-
-    await handleMessageSendJob(noopLogger, makeJob(sendPayload, 'message.send'), sendDeps);
-
-    // Verify WhatsApp send was marked SENT
-    const updatedWaSend = await prisma.messageSend.findUniqueOrThrow({
-      where: { id: waSend.id },
-    });
-    expect(updatedWaSend.status).toBe('SENT');
-    expect(updatedWaSend.providerMessageId).toBeTruthy();
-    expect(updatedWaSend.providerConversationId).toBeTruthy();
-    expect(updatedWaSend.followUpNumber).toBe(1);
+    expect(waSends.length).toBe(0);
   });
 
   // -----------------------------------------------------------------------
   // Final: complete chain verification
   // -----------------------------------------------------------------------
   it('final: all pipeline artifacts exist across the full chain', async () => {
-    // Lead should be in 'messaged' state
+    // Lead remains drafted because outbound delivery is blocked.
     const lead = await prisma.lead.findUniqueOrThrow({ where: { id: discoveredLeadId } });
-    expect(lead.status).toBe('messaged');
+    expect(lead.status).toBe('drafted');
     expect(lead.email).toBe(DISCOVERED_EMAIL);
 
     // Discovery record — pre-seeded
@@ -686,32 +634,28 @@ describe('pipeline full chain: features.compute → message.send', () => {
     expect(scores.length).toBeGreaterThanOrEqual(1);
     expect(scores[0]!.blendedScore).toBeGreaterThanOrEqual(0.5);
 
-    // Message drafts: initial email (APPROVED) + follow-up WhatsApp (APPROVED)
+    // Message drafts: approved email draft only. Follow-up drafting does not
+    // start because the parent send never delivered.
     const drafts = await prisma.messageDraft.findMany({
       where: { leadId: discoveredLeadId },
       orderBy: { followUpNumber: 'asc' },
     });
-    expect(drafts.length).toBe(2);
+    expect(drafts.length).toBe(1);
     expect(drafts[0]!.followUpNumber).toBe(0);
     expect(drafts[0]!.approvalStatus).toBe('APPROVED');
-    expect(drafts[1]!.followUpNumber).toBe(1);
-    expect(drafts[1]!.approvalStatus).toBe('APPROVED');
 
-    // Feature rotation: initial=Payment Links, follow-up=Order Management
+    // Feature positioning: initial=Payment Links
     expect(drafts[0]!.pitchedFeature).toBe('Payment Links');
-    // Follow-up: available = ['WhatsApp Commerce', 'Order Management', 'Custom Storefronts']
-    // followUpNumber=1, 1 % 3 = 1 → 'Order Management'
-    expect(drafts[1]!.pitchedFeature).toBe('Order Management');
 
-    // Message sends: 1 email + 1 WhatsApp, both SENT
+    // Message sends: the approved email send is retained as blocked, no WhatsApp delivery exists.
     const sends = await prisma.messageSend.findMany({
-      where: { leadId: discoveredLeadId, status: 'SENT' },
+      where: { leadId: discoveredLeadId },
       orderBy: { followUpNumber: 'asc' },
     });
-    expect(sends.length).toBe(2);
+    expect(sends.length).toBe(1);
     expect(sends[0]!.channel).toBe('EMAIL');
     expect(sends[0]!.followUpNumber).toBe(0);
-    expect(sends[1]!.channel).toBe('WHATSAPP');
-    expect(sends[1]!.followUpNumber).toBe(1);
+    expect(sends[0]!.status).toBe('FAILED');
+    expect(sends[0]!.failureCode).toBe(OUTBOUND_DISABLED_FAILURE_CODE);
   });
 });

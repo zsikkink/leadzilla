@@ -55,8 +55,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Apply database migrations
-        run: NODE_ENV=test pnpm db:migrate
+      - name: Bootstrap canonical SQL database
+        env:
+          OUTPUT_ENV_FILE: ${{ runner.temp }}/ci-sql-bootstrap.env
+          SQL_BOOTSTRAP_ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5434/postgres
+          SQL_BOOTSTRAP_DATABASE_NAME: lead_flood_ci
+          SQL_BOOTSTRAP_DROP_EXISTING: '1'
+        run: |
+          bash scripts/db/bootstrap-sql-disposable.sh
+          source "$OUTPUT_ENV_FILE"
+          {
+            echo "DATABASE_URL=$DATABASE_URL"
+            echo "DIRECT_URL=$DIRECT_URL"
+          } >> "$GITHUB_ENV"
 
       - name: Seed database
         run: pnpm db:seed
