@@ -20,6 +20,8 @@ import {
 import {
   getScoreQualificationThreshold,
   getScoreTierBands,
+  getScoringModel,
+  getScoringSystemPrompt,
 } from '../utils/pipeline-settings.js';
 
 export const SCORING_COMPUTE_JOB_NAME = 'scoring.compute';
@@ -221,6 +223,8 @@ export async function handleScoringComputeJob(
     // Deterministic scoring is the baseline/fallback. When AI/model scoring is available,
     // that score is the final qualification score.
     const scoreTierBands = await getScoreTierBands();
+    const scoringModel = await getScoringModel();
+    const scoringSystemPrompt = await getScoringSystemPrompt();
 
     let persistedPredictions = 0;
     for (const targetLeadId of targetLeadIds) {
@@ -280,11 +284,15 @@ export async function handleScoringComputeJob(
               select: { description: true },
             });
 
-            const aiResult = await deps.openAiAdapter.evaluateLeadScore({
-              featuresJson: featurePayload,
-              icpDescription: icpProfile?.description ?? 'No ICP description available',
-              deterministicScore,
-            });
+            const aiResult = await deps.openAiAdapter.evaluateLeadScore(
+              {
+                featuresJson: featurePayload,
+                icpDescription: icpProfile?.description ?? 'No ICP description available',
+                deterministicScore,
+                customSystemPrompt: scoringSystemPrompt,
+              },
+              scoringModel ? { model: scoringModel } : undefined,
+            );
 
             if (aiResult.status === 'success') {
               logisticScore = aiResult.data.score;

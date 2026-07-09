@@ -92,6 +92,30 @@ describe('ApiClient', () => {
     expect(calledUrl).toContain('sortBy=score_desc');
   });
 
+  it('requests filtered dashboard aggregate analytics', async () => {
+    const from = '2026-07-01T00:00:00.000Z';
+    const to = '2026-07-08T23:59:59.999Z';
+    const icpProfileId = 'icp_1';
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ avgScore: null }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+
+    await client.getAvgScore({ from, to, icpProfileId });
+    await client.getIcpPerformance({ from, to, icpProfileId });
+
+    const avgScoreUrl = new URL((fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string);
+    expect(avgScoreUrl.pathname).toBe('/v1/analytics/avg-score');
+    expect(avgScoreUrl.searchParams.get('from')).toBe(from);
+    expect(avgScoreUrl.searchParams.get('to')).toBe(to);
+    expect(avgScoreUrl.searchParams.get('icpProfileId')).toBe(icpProfileId);
+
+    const icpPerformanceUrl = new URL((fetch as ReturnType<typeof vi.fn>).mock.calls[1]?.[0] as string);
+    expect(icpPerformanceUrl.pathname).toBe('/v1/analytics/icp-performance');
+    expect(icpPerformanceUrl.searchParams.get('from')).toBe(from);
+    expect(icpPerformanceUrl.searchParams.get('to')).toBe(to);
+    expect(icpPerformanceUrl.searchParams.get('icpProfileId')).toBe(icpProfileId);
+  });
+
   it('throws helpful error when API is unreachable', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('fetch failed'));
 

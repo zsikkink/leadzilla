@@ -8,6 +8,8 @@ import { RetryableError, classifyError } from '../errors.js';
 import { tryFinalizeDiscoveryRun } from '../utils/discovery-run-tracker.js';
 import { recordPipelineEvent } from '../utils/pipeline-events.js';
 import {
+  getMessagingBehaviorPrompt,
+  getMessagingModel,
   getMessagingRole,
   getMessagingSystemPrompt,
   isManualApprovalOnlyEnabled,
@@ -67,6 +69,8 @@ export interface MessageGenerateJobDependencies {
   openAiAdapter: OpenAiAdapter;
   boss?: Pick<PgBoss, 'send'> | undefined;
 }
+
+type OpenAiMessageGenerationContext = Parameters<OpenAiAdapter['generateMessageVariants']>[0];
 
 interface MessageContext {
   companyInsight: string | null;
@@ -779,13 +783,17 @@ export async function handleMessageGenerateJob(
         : null;
     const messageQualityOptions = buildMessageQualityOptions(companyName, businessIntelligence, redraftFeedback);
 
-    // Load custom messaging settings from PipelineSetting (role, system prompt)
-    const [roleSetting, systemPromptSetting] = await Promise.all([
+    // Load custom messaging settings from PipelineSetting.
+    const [behaviorPromptSetting, roleSetting, systemPromptSetting, modelSetting] = await Promise.all([
+      getMessagingBehaviorPrompt(),
       getMessagingRole(),
       getMessagingSystemPrompt(),
+      getMessagingModel(),
     ]);
-    const customRole = roleSetting;
-    const customSystemPrompt = systemPromptSetting;
+    const customBehaviorPrompt = behaviorPromptSetting;
+    const customRole = behaviorPromptSetting ? null : roleSetting;
+    const customSystemPrompt = behaviorPromptSetting ? null : systemPromptSetting;
+    const messagingModel = modelSetting;
 
     // Extract ICP metadata (sales hook, angle, messaging instructions)
     const icpMetadata = icpProfile?.metadataJson && typeof icpProfile.metadataJson === 'object'
@@ -852,6 +860,7 @@ export async function handleMessageGenerateJob(
       icpHook: requiredIcpHook,
       icpAngle,
       redraftFeedback,
+      customBehaviorPrompt,
       customRole,
       customSystemPrompt,
       messagingInstructions,
@@ -958,7 +967,12 @@ export async function handleMessageGenerateJob(
       ? { ...generationBaseContext, icpDescription: systemPromptOverride }
       : generationBaseContext;
 
-    const result = await deps.openAiAdapter.generateMessageVariants(generateContext);
+    const generateMessageVariants = (context: OpenAiMessageGenerationContext) =>
+      messagingModel
+        ? deps.openAiAdapter.generateMessageVariants(context, { model: messagingModel })
+        : deps.openAiAdapter.generateMessageVariants(context);
+
+    const result = await generateMessageVariants(generateContext);
 
     if (result.status !== 'success') {
       const failureMessage = buildDraftGenerationFailureMessage(
@@ -1050,7 +1064,7 @@ export async function handleMessageGenerateJob(
         ].join('\n'),
       };
 
-      const retryResult = await deps.openAiAdapter.generateMessageVariants(retryContext);
+      const retryResult = await generateMessageVariants(retryContext);
 
       if (retryResult.status === 'success') {
         generatedByModel = retryResult.data.model;
@@ -1108,7 +1122,7 @@ export async function handleMessageGenerateJob(
         icpDescription: `${generateContext.icpDescription}\n\n${nkPromptSuffix}`,
       };
 
-      const nkRetryResult = await deps.openAiAdapter.generateMessageVariants(nkRetryContext);
+      const nkRetryResult = await generateMessageVariants(nkRetryContext);
 
       if (nkRetryResult.status === 'success') {
         generatedByModel = nkRetryResult.data.model;

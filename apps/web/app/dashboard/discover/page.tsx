@@ -39,6 +39,7 @@ import {
 const MIN_SEARCH_TASK_LIMIT = 1;
 const MAX_SEARCH_TASK_LIMIT = 1000;
 const SEARCH_TASK_OPTIONS = ['5', '10', '25', '50', '100', '250', '500', '1000'] as const;
+const DEMO_SEARCH_TASK_LIMIT = '5';
 const DEFAULT_DISCOVERY_COUNTRY_CODES = ['AE', 'SA', 'JO', 'EG'] as const satisfies readonly DiscoveryCountryCodeContract[];
 const DEFAULT_DISCOVERY_COUNTRY_ORDER = new Map<DiscoveryCountryCodeContract, number>(
   DEFAULT_DISCOVERY_COUNTRY_CODES.map((country, index) => [country, index]),
@@ -258,11 +259,13 @@ function ProgressBar({ processed, total, label }: { processed: number; total: nu
 
 function PillOption({
   selected,
+  disabled = false,
   onClick,
   children,
   className,
 }: {
   selected: boolean;
+  disabled?: boolean;
   onClick: () => void;
   children: React.ReactNode;
   className?: string | undefined;
@@ -270,12 +273,14 @@ function PillOption({
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
       className={cn(
         'inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-all duration-150',
         selected
           ? 'border-zbooni-teal/40 bg-zbooni-teal/10 text-zbooni-teal shadow-sm'
           : 'border-border/40 bg-zbooni-dark/30 text-muted-foreground hover:border-border/60 hover:bg-zbooni-dark/50 hover:text-foreground',
+        disabled && 'cursor-not-allowed opacity-40 hover:border-border/40 hover:bg-zbooni-dark/30 hover:text-muted-foreground',
         className,
       )}
     >
@@ -463,7 +468,7 @@ export default function DiscoverPage() {
   >({});
   const [includeWebsiteAnalysis, setIncludeWebsiteAnalysis] = useState(true);
   const [includeSocialMediaAnalysis, setIncludeSocialMediaAnalysis] = useState(true);
-  const [searchTaskLimit, setSearchTaskLimit] = useState('25');
+  const [searchTaskLimit, setSearchTaskLimit] = useState(DEMO_SEARCH_TASK_LIMIT);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [showSearchTaskLimitError, setShowSearchTaskLimitError] = useState(false);
@@ -840,6 +845,13 @@ export default function DiscoverPage() {
   const parsedSearchTaskLimit = parseSearchTaskLimit(searchTaskLimit);
   const isPresetSearchTaskLimit = SEARCH_TASK_OPTIONS.some((option) => option === searchTaskLimit);
 
+  useEffect(() => {
+    if (searchTaskLimit !== DEMO_SEARCH_TASK_LIMIT) {
+      setSearchTaskLimit(DEMO_SEARCH_TASK_LIMIT);
+      setShowSearchTaskLimitError(false);
+    }
+  }, [searchTaskLimit]);
+
   const handleStartDiscovery = async () => {
     if (selectedIcpIds.length === 0) {
       setShowTargetingControls(true);
@@ -1034,33 +1046,67 @@ export default function DiscoverPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-extrabold tracking-tight">Discovery Pipeline</h1>
+      <p className="text-sm text-muted-foreground/80">
+        Find, enrich, deduplicate, and score new leads automatically.
+      </p>
+
+      {/* Discovery Workflow */}
+      <div className="rounded-2xl border border-border/50 bg-card p-4 shadow-sm">
+        <div className="mb-3">
+          <h2 className="text-base font-bold tracking-tight">Lead Discovery</h2>
+          <p className="mt-1 text-sm text-muted-foreground/70">
+            Run one job to turn ICPs and regions into scored leads.
+          </p>
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+          {[
+            { title: 'Set Scope', icon: Target },
+            { title: 'Search', icon: Search },
+            { title: 'Enrich', icon: TrendingUp },
+            { title: 'Score', icon: Zap },
+          ].map(({ title, icon: Icon }, idx) => (
+            <div key={title} className="relative flex items-center gap-2">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zbooni-teal/10">
+                <Icon className="h-4 w-4 text-zbooni-teal" />
+              </div>
+              <p className="text-sm font-semibold text-foreground">{title}</p>
+              {idx < 3 ? (
+                <ChevronRight className="absolute -right-1 top-2 hidden h-4 w-4 text-muted-foreground/20 sm:block" />
+              ) : null}
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Configuration Form */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
         <div className="space-y-6">
-          {/* Step 1: Search task budget */}
+          {/* Search task budget */}
           <div>
             <div className="mb-3 flex items-center gap-2">
               <label htmlFor="search-task-limit" className="text-sm font-semibold">Number of Search Tasks</label>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {SEARCH_TASK_OPTIONS.map((option) => (
-                <PillOption
-                  key={option}
-                  selected={searchTaskLimit === option}
-                  onClick={() => {
-                    setSearchTaskLimit(option);
-                    setShowSearchTaskLimitError(false);
-                  }}
-                  className="min-w-[56px] justify-center"
-                >
-                  {option}
-                </PillOption>
-              ))}
+              {SEARCH_TASK_OPTIONS.map((option) => {
+                const isDemoLimit = option === DEMO_SEARCH_TASK_LIMIT;
+                return (
+                  <PillOption
+                    key={option}
+                    selected={searchTaskLimit === option}
+                    disabled={!isDemoLimit}
+                    onClick={() => {
+                      if (!isDemoLimit) {
+                        return;
+                      }
+                      setSearchTaskLimit(option);
+                      setShowSearchTaskLimitError(false);
+                    }}
+                    className="min-w-[56px] justify-center"
+                  >
+                    {option}
+                  </PillOption>
+                );
+              })}
               <input
                 id="search-task-limit"
                 type="text"
@@ -1068,12 +1114,13 @@ export default function DiscoverPage() {
                 pattern="[0-9]*"
                 aria-label="Custom number of search tasks"
                 placeholder="Custom"
+                disabled
                 value={isPresetSearchTaskLimit ? '' : searchTaskLimit}
                 onChange={(event) => {
                   setSearchTaskLimit(event.target.value.replace(/\D/g, ''));
                   setShowSearchTaskLimitError(false);
                 }}
-                className="h-10 w-24 rounded-xl border border-border/40 bg-background px-3 py-2 text-center text-sm font-mono text-foreground placeholder:text-muted-foreground/60 focus:border-zbooni-teal/50 focus:outline-none"
+                className="h-10 w-24 cursor-not-allowed rounded-xl border border-border/40 bg-background px-3 py-2 text-center text-sm font-mono text-foreground opacity-40 placeholder:text-muted-foreground/60 focus:border-zbooni-teal/50 focus:outline-none"
               />
             </div>
 
@@ -1332,12 +1379,17 @@ export default function DiscoverPage() {
       </div>
 
       {/* Discovery Runs */}
-      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
+      <div id="discovery-runs" className="scroll-mt-24 rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="flex items-center gap-2 text-base font-bold tracking-tight">
-            <Zap className="h-4 w-4 text-zbooni-green" />
-            Discovery Runs
-          </h2>
+          <div>
+            <h2 className="flex items-center gap-2 text-base font-bold tracking-tight">
+              <Zap className="h-4 w-4 text-zbooni-green" />
+              Previous Discovery Runs
+            </h2>
+            <p className="mt-0.5 text-xs text-muted-foreground/50">
+              Recent jobs are consolidated here so discovery setup and run history stay in one place.
+            </p>
+          </div>
           <button
             type="button"
             onClick={() => setRunsRefreshKey((k) => k + 1)}
@@ -1483,32 +1535,6 @@ export default function DiscoverPage() {
         ) : null}
       </div>
 
-      {/* How it Works */}
-      <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <h2 className="mb-4 text-base font-bold tracking-tight">How Discovery Works</h2>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
-          {[
-            { step: 1, title: 'Select ICP', desc: 'Choose which customer profile to target', icon: Target },
-            { step: 2, title: 'Seed Search Tasks', desc: 'Search tasks are generated from selected ICPs and locations', icon: Search },
-            { step: 3, title: 'Enrich & Score', desc: 'Discovered businesses are scraped, enriched, and scored', icon: TrendingUp },
-            { step: 4, title: 'Message & Follow-up', desc: 'Approved messages are sent via email or WhatsApp', icon: Zap },
-          ].map(({ step, title, desc, icon: Icon }, idx) => (
-            <div key={step} className="relative flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zbooni-teal/10">
-                <Icon className="h-5 w-5 text-zbooni-teal" />
-              </div>
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground/60">Step {step}</p>
-                <p className="font-semibold">{title}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground/60">{desc}</p>
-              </div>
-              {idx < 3 ? (
-                <ChevronRight className="absolute -right-2 top-3 hidden h-4 w-4 text-muted-foreground/20 sm:block" />
-              ) : null}
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }

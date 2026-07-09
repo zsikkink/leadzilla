@@ -11,6 +11,7 @@ import {
 } from 'react';
 
 import { ApiClient } from './api-client.js';
+import { clearDashboardPreloadCache } from './dashboard-preload.js';
 import { getWebEnv } from './env.js';
 import { getSupabaseBrowserClient } from './supabase-client.js';
 
@@ -26,7 +27,7 @@ export interface AuthContextValue {
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<{ token: string; user: AuthUser }>;
   logout: () => void;
   apiClient: ApiClient;
 }
@@ -75,6 +76,7 @@ function persistAuthState(token: string, user: AuthUser): void {
 function clearAuthState(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  clearDashboardPreloadCache();
 }
 
 function readPersistedAuthState(): { token: string; user: AuthUser } | null {
@@ -223,6 +225,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       persistAuthState(data.session.access_token, mappedUser);
       setToken(data.session.access_token);
       setUser(mappedUser);
+      return { token: data.session.access_token, user: mappedUser };
     },
     [],
   );

@@ -38,32 +38,6 @@ vi.mock('@lead-flood/db', () => ({
 
 import { MessagingOutboundDisabledError } from './messaging.errors.js';
 
-function buildPrismaSend(overrides?: Partial<Record<string, unknown>>) {
-  return {
-    id: 'send_1',
-    leadId: 'lead_1',
-    messageDraftId: 'draft_1',
-    messageVariantId: 'variant_1',
-    channel: 'EMAIL' as const,
-    provider: 'RESEND' as const,
-    providerMessageId: null,
-    status: 'QUEUED' as const,
-    idempotencyKey: 'approve:draft_1:variant_1',
-    scheduledAt: null,
-    sentAt: null,
-    deliveredAt: null,
-    repliedAt: null,
-    followUpNumber: 0,
-    nextFollowUpAfter: null,
-    providerConversationId: null,
-    failureCode: null,
-    failureReason: null,
-    createdAt: new Date('2026-03-21T00:00:00.000Z'),
-    updatedAt: new Date('2026-03-21T01:00:00.000Z'),
-    ...overrides,
-  };
-}
-
 function buildPrismaVariant(overrides?: Partial<Record<string, unknown>>) {
   return {
     id: 'variant_1',

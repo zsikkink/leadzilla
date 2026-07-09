@@ -1662,6 +1662,7 @@ async function handleFunnel(url: URL): Promise<Response> {
   const from = url.searchParams.get('from');
   const to = url.searchParams.get('to');
   const icpProfileId = url.searchParams.get('icpProfileId');
+  const businessCountPromise = countRows('businesses');
   let leadIds: string[] | null = null;
   let messageDraftIds: string[] | null = null;
   if (icpProfileId) {
@@ -1670,7 +1671,7 @@ async function handleFunnel(url: URL): Promise<Response> {
       messageDraftIdsForIcp(icpProfileId),
     ]);
     if (ids.size === 0) {
-      return jsonResponse(emptyFunnel(from, to, icpProfileId));
+      return jsonResponse(emptyFunnel(from, to, icpProfileId, await businessCountPromise));
     }
     leadIds = [...ids];
     messageDraftIds = draftIds;
@@ -1698,6 +1699,7 @@ async function handleFunnel(url: URL): Promise<Response> {
   applyDateRange(wonFilter, 'occurredAt', from, to);
 
   const [
+    businessCount,
     discoveredCount,
     qualifiedCount,
     enrichedCount,
@@ -1709,6 +1711,7 @@ async function handleFunnel(url: URL): Promise<Response> {
     meetingsCount,
     dealsWonCount,
   ] = await Promise.all([
+    businessCountPromise,
     countRowsWithOptionalInChunks('Lead', leadFilter, 'id', leadIds),
     countRowsWithOptionalInChunks('Lead', { ...leadFilter, status: pgIn(QUALIFIED_LEAD_STATUSES) }, 'id', leadIds),
     countRowsWithOptionalInChunks('Lead', { ...leadFilter, status: pgIn(ENRICHED_LEAD_STATUSES) }, 'id', leadIds),
@@ -1725,6 +1728,7 @@ async function handleFunnel(url: URL): Promise<Response> {
     from,
     to,
     icpProfileId,
+    businessCount,
     discoveredCount,
     qualifiedCount,
     enrichedCount,
@@ -1739,11 +1743,17 @@ async function handleFunnel(url: URL): Promise<Response> {
   });
 }
 
-function emptyFunnel(from: string | null, to: string | null, icpProfileId: string | null): JsonObject {
+function emptyFunnel(
+  from: string | null,
+  to: string | null,
+  icpProfileId: string | null,
+  businessCount = 0,
+): JsonObject {
   return {
     from,
     to,
     icpProfileId,
+    businessCount,
     discoveredCount: 0,
     qualifiedCount: 0,
     enrichedCount: 0,
@@ -1762,15 +1772,63 @@ async function handleScoreDistribution(url: URL): Promise<Response> {
   const params: Record<string, string | number> = {};
   const icpProfileId = url.searchParams.get('icpProfileId');
   if (icpProfileId) params.icpProfileId = `eq.${icpProfileId}`;
-  const scoreBands = ['LOW', 'MEDIUM', 'HIGH'];
-  const bands = await Promise.all(
-    scoreBands.map(async (scoreBand) => ({
-      scoreBand,
-      count: await countRows('LeadScorePrediction', { ...params, scoreBand: `eq.${scoreBand}` }),
-    })),
-  );
+  const modelVersionId = url.searchParams.get('modelVersionId');
+  if (modelVersionId) params.modelVersionId = `eq.${modelVersionId}`;
+  const from = url.searchParams.get('from');
+  const to = url.searchParams.get('to');
+  if (from && to) {
+    params.and = `(predictedAt.gte.${from},predictedAt.lte.${to})`;
+  } else if (from) {
+    params.predictedAt = `gte.${from}`;
+  } else if (to) {
+    params.predictedAt = `lte.${to}`;
+  }
+  const scoreRows = await listAllRows('LeadScorePrediction', {
+    ...params,
+    select: 'leadId,scoreBand,blendedScore,predictedAt,createdAt',
+  });
+  const latestByLeadId = new Map<string, Row>();
+  for (const row of scoreRows) {
+    const leadId = asNullableString(row.leadId);
+    if (!leadId) continue;
+
+    const existing = latestByLeadId.get(leadId);
+    const rowTime = Date.parse(iso(firstValue(row, 'predictedAt', 'createdAt')));
+    const existingTime = existing
+      ? Date.parse(iso(firstValue(existing, 'predictedAt', 'createdAt')))
+      : Number.NEGATIVE_INFINITY;
+
+    if (!existing || rowTime > existingTime) {
+      latestByLeadId.set(leadId, row);
+    }
+  }
+
+  const latestScores = Array.from(latestByLeadId.values());
+  const scoreBands = ['LOW', 'MEDIUM', 'HIGH'] as const;
+  const thresholds = Array.from({ length: 10 }, (_, index) => index / 10);
+  const bands = scoreBands.map((scoreBand) => ({
+    scoreBand,
+    count: latestScores.filter((row) => asNullableString(row.scoreBand) === scoreBand).length,
+  }));
+  const histogram = thresholds.map((scoreMin, index) => {
+    const scoreMax = (index + 1) / 10;
+    const count = latestScores.filter((row) => {
+      const score = asNullableNumber(row.blendedScore);
+      if (score === null) return false;
+      return index === thresholds.length - 1
+        ? score >= scoreMin && score <= scoreMax
+        : score >= scoreMin && score < scoreMax;
+    }).length;
+
+    return {
+      scoreMin,
+      scoreMax,
+      count,
+    };
+  });
   return jsonResponse({
     bands,
+    histogram,
   });
 }
 
@@ -1792,30 +1850,76 @@ async function handleDailyQualityTrends(url: URL): Promise<Response> {
   });
 }
 
-async function handleAvgScore(): Promise<Response> {
-  const rows = await listAllRows('LeadScorePrediction', {
-    select: 'blendedScore',
-  });
-  const scores = rows.map((row) => asNullableNumber(row.blendedScore)).filter((value): value is number => value !== null);
+async function handleAvgScore(url: URL): Promise<Response> {
+  const params: Record<string, string | number> = {
+    select: 'leadId,icpProfileId,blendedScore,predictedAt,createdAt',
+  };
+  const icpProfileId = url.searchParams.get('icpProfileId');
+  if (icpProfileId) params.icpProfileId = `eq.${icpProfileId}`;
+  applyDateRange(params, 'predictedAt', url.searchParams.get('from'), url.searchParams.get('to'));
+
+  const rows = await listAllRows('LeadScorePrediction', params);
+  const latestByLeadId = new Map<string, Row>();
+  for (const row of rows) {
+    const leadId = asNullableString(row.leadId);
+    if (!leadId) continue;
+
+    const existing = latestByLeadId.get(leadId);
+    const rowTime = Date.parse(iso(firstValue(row, 'predictedAt', 'createdAt')));
+    const existingTime = existing
+      ? Date.parse(iso(firstValue(existing, 'predictedAt', 'createdAt')))
+      : Number.NEGATIVE_INFINITY;
+
+    if (!existing || rowTime > existingTime) {
+      latestByLeadId.set(leadId, row);
+    }
+  }
+
+  const scores = Array.from(latestByLeadId.values())
+    .map((row) => asNullableNumber(row.blendedScore))
+    .filter((value): value is number => value !== null);
   return jsonResponse({
     avgScore: scores.length > 0 ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null,
   });
 }
 
-async function handleIcpPerformance(): Promise<Response> {
-  const rows = await listAllRows('LeadScorePrediction', {
-    select: 'icpProfileId,blendedScore,scoreBand',
-  });
-  const grouped = new Map<string, { count: number; scoreTotal: number; qualified: number; rejected: number }>();
+async function handleIcpPerformance(url: URL): Promise<Response> {
+  const params: Record<string, string | number> = {
+    select: 'leadId,icpProfileId,blendedScore,scoreBand,predictedAt,createdAt',
+  };
+  const icpProfileId = url.searchParams.get('icpProfileId');
+  if (icpProfileId) params.icpProfileId = `eq.${icpProfileId}`;
+  applyDateRange(params, 'predictedAt', url.searchParams.get('from'), url.searchParams.get('to'));
+
+  const rows = await listAllRows('LeadScorePrediction', params);
+  const latestByLeadIcp = new Map<string, Row>();
   for (const row of rows) {
-    const icpProfileId = asNullableString(row.icpProfileId);
+    const leadId = asNullableString(row.leadId);
+    const rowIcpProfileId = asNullableString(row.icpProfileId);
+    if (!leadId || !rowIcpProfileId) continue;
+
+    const key = `${leadId}:${rowIcpProfileId}`;
+    const existing = latestByLeadIcp.get(key);
+    const rowTime = Date.parse(iso(firstValue(row, 'predictedAt', 'createdAt')));
+    const existingTime = existing
+      ? Date.parse(iso(firstValue(existing, 'predictedAt', 'createdAt')))
+      : Number.NEGATIVE_INFINITY;
+
+    if (!existing || rowTime > existingTime) {
+      latestByLeadIcp.set(key, row);
+    }
+  }
+
+  const grouped = new Map<string, { count: number; scoreTotal: number; qualified: number; rejected: number }>();
+  for (const row of latestByLeadIcp.values()) {
+    const rowIcpProfileId = asNullableString(row.icpProfileId);
     const score = asNullableNumber(row.blendedScore);
-    if (!icpProfileId || score === null) continue;
-    const group = grouped.get(icpProfileId) ?? { count: 0, scoreTotal: 0, qualified: 0, rejected: 0 };
+    if (!rowIcpProfileId || score === null) continue;
+    const group = grouped.get(rowIcpProfileId) ?? { count: 0, scoreTotal: 0, qualified: 0, rejected: 0 };
     group.count += 1;
     group.scoreTotal += score;
     if (score >= 0.5) group.qualified += 1;
-    grouped.set(icpProfileId, group);
+    grouped.set(rowIcpProfileId, group);
   }
   return jsonResponse({
     items: [...grouped.entries()].map(([icpProfileId, group]) => ({
@@ -2397,8 +2501,8 @@ async function routeRequest(request: Request, _auth: AuthContext): Promise<Respo
   if (parts[1] === 'analytics' && parts[2] === 'funnel') return handleFunnel(url);
   if (parts[1] === 'analytics' && parts[2] === 'score-distribution') return handleScoreDistribution(url);
   if (parts[1] === 'analytics' && parts[2] === 'daily-quality-trends') return handleDailyQualityTrends(url);
-  if (parts[1] === 'analytics' && parts[2] === 'avg-score') return handleAvgScore();
-  if (parts[1] === 'analytics' && parts[2] === 'icp-performance') return handleIcpPerformance();
+  if (parts[1] === 'analytics' && parts[2] === 'avg-score') return handleAvgScore(url);
+  if (parts[1] === 'analytics' && parts[2] === 'icp-performance') return handleIcpPerformance(url);
   if (parts[1] === 'analytics' && parts[2] === 'model-metrics') return handleModelMetrics();
   if (parts[1] === 'analytics' && parts[2] === 'retrain-status') return handleRetrainStatus();
   if (parts[1] === 'analytics' && parts[2] === 'recommendations') return handleRecommendations(url);

@@ -151,6 +151,7 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
       : {};
 
     const [
+      businessCount,
       discoveredCount,
       qualifiedCount,
       enrichedCount,
@@ -162,6 +163,7 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
       meetingsCount,
       dealsWonCount,
     ] = await Promise.all([
+      prisma.business.count(),
       prisma.lead.count({
         where: leadWhere,
       }),
@@ -261,6 +263,7 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
       from: from?.toISOString() ?? null,
       to: to?.toISOString() ?? null,
       icpProfileId,
+      businessCount,
       discoveredCount,
       qualifiedCount,
       enrichedCount,
@@ -292,20 +295,26 @@ export class PrismaAnalyticsRepository extends StubAnalyticsRepository {
         : {}),
     };
 
-    const groups = await prisma.leadScorePrediction.groupBy({
-      by: ['scoreBand'],
+    const scoreRows = await prisma.leadScorePrediction.findMany({
       where,
-      _count: { id: true },
+      orderBy: [{ leadId: 'asc' }, { predictedAt: 'desc' }, { createdAt: 'desc' }],
+      distinct: ['leadId'],
+      select: { blendedScore: true, scoreBand: true },
     });
 
     const bandOrder: Array<'LOW' | 'MEDIUM' | 'HIGH'> = ['LOW', 'MEDIUM', 'HIGH'];
 
     const bands = bandOrder.map((band) => {
-      const match = groups.find((group) => group.scoreBand === band);
-      return { scoreBand: band, count: match?._count.id ?? 0 };
+      return {
+        scoreBand: band,
+        count: scoreRows.filter((row) => row.scoreBand === band).length,
+      };
     });
 
-    return { bands };
+    return {
+      bands,
+      histogram: buildScoreHistogramFromScores(scoreRows.map((row) => row.blendedScore)),
+    };
   }
 
   override async getModelMetrics(query: ModelMetricsQuery): Promise<ModelMetricsResponse> {
@@ -570,6 +579,11 @@ interface ScoreDistributionRow {
   count: number | string;
 }
 
+interface ScoreHistogramRow {
+  bucketIndex: number | string;
+  count: number | string;
+}
+
 interface StoredRecommendationSqlRow {
   id: string;
   type: string;
@@ -638,6 +652,40 @@ function toNonNegativeInt(value: number | string): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
+function buildEmptyScoreHistogram(): ScoreDistributionResponse['histogram'] {
+  return Array.from({ length: 10 }, (_, index) => ({
+    scoreMin: index / 10,
+    scoreMax: (index + 1) / 10,
+    count: 0,
+  }));
+}
+
+function buildScoreHistogramFromScores(scores: number[]): ScoreDistributionResponse['histogram'] {
+  const histogram = buildEmptyScoreHistogram();
+
+  for (const score of scores) {
+    if (!Number.isFinite(score)) continue;
+
+    const bucketIndex = Math.min(Math.max(Math.floor(score * 10), 0), 9);
+    histogram[bucketIndex]!.count += 1;
+  }
+
+  return histogram;
+}
+
+function buildScoreHistogramFromRows(rows: ScoreHistogramRow[]): ScoreDistributionResponse['histogram'] {
+  const histogram = buildEmptyScoreHistogram();
+
+  for (const row of rows) {
+    const bucketIndex = toNonNegativeInt(row.bucketIndex);
+    if (bucketIndex < 0 || bucketIndex >= histogram.length) continue;
+
+    histogram[bucketIndex]!.count = toNonNegativeInt(row.count);
+  }
+
+  return histogram;
+}
+
 export class HybridAnalyticsRepository extends PrismaAnalyticsRepository {
   override async getScoreDistribution(input: ScoreDistributionQuery): Promise<ScoreDistributionResponse> {
     const from = input.from ? new Date(input.from) : null;
@@ -666,27 +714,56 @@ export class HybridAnalyticsRepository extends PrismaAnalyticsRepository {
     }
 
     const whereClause = filters.length > 0 ? `where ${filters.join(' and ')}` : '';
-    const result = await dbQuery<ScoreDistributionRow>(
-      `
-        select
-          "scoreBand" as "scoreBand",
-          count(*)::integer as count
+    const latestScoresCte = `
+      with latest_scores as (
+        select distinct on ("leadId")
+          "leadId",
+          "scoreBand",
+          "blendedScore"
         from public."LeadScorePrediction"
         ${whereClause}
-        group by "scoreBand"
-      `,
-      values,
-    );
+        order by "leadId", "predictedAt" desc, "createdAt" desc
+      )
+    `;
+    const [bandResult, histogramResult] = await Promise.all([
+      dbQuery<ScoreDistributionRow>(
+        `
+          ${latestScoresCte}
+          select
+            "scoreBand" as "scoreBand",
+            count(*)::integer as count
+          from latest_scores
+          group by "scoreBand"
+        `,
+        values,
+      ),
+      dbQuery<ScoreHistogramRow>(
+        `
+          ${latestScoresCte}
+          select
+            least(floor("blendedScore" * 10)::integer, 9) as "bucketIndex",
+            count(*)::integer as count
+          from latest_scores
+          where "blendedScore" is not null
+          group by 1
+          order by 1 asc
+        `,
+        values,
+      ),
+    ]);
 
     const bands = SCORE_BAND_ORDER.map((scoreBand) => {
-      const match = result.rows.find((row) => row.scoreBand === scoreBand);
+      const match = bandResult.rows.find((row) => row.scoreBand === scoreBand);
       return {
         scoreBand,
         count: toNonNegativeInt(match?.count ?? 0),
       };
     });
 
-    return { bands };
+    return {
+      bands,
+      histogram: buildScoreHistogramFromRows(histogramResult.rows),
+    };
   }
 
   override async getDailyQualityTrends(input: DailyQualityTrendsQuery): Promise<DailyQualityTrendsResponse> {
@@ -754,14 +831,28 @@ export class HybridAnalyticsRepository extends PrismaAnalyticsRepository {
     };
   }
 
-  override async getAvgScore(_input: AvgScoreQuery): Promise<AvgScoreResponse> {
+  override async getAvgScore(input: AvgScoreQuery): Promise<AvgScoreResponse> {
+    const from = input.from ? new Date(input.from) : null;
+    const to = input.to ? new Date(input.to) : null;
+    const icpProfileId = input.icpProfileId ?? null;
+
     const result = await dbQuery<AvgScoreAggregateRow>(
       `
+        with latest_scores as (
+          select distinct on ("leadId")
+            "leadId",
+            "blendedScore"
+          from public."LeadScorePrediction"
+          where ($1::timestamp is null or "predictedAt" >= $1)
+            and ($2::timestamp is null or "predictedAt" <= $2)
+            and ($3::text is null or "icpProfileId" = $3)
+          order by "leadId", "predictedAt" desc, "createdAt" desc
+        )
         select
           avg("blendedScore")::double precision as "avgScore"
-        from public."LeadScorePrediction"
+        from latest_scores
       `,
-      [],
+      [from, to, icpProfileId],
     );
 
     const rawAvgScore = result.rows[0]?.avgScore;
@@ -772,27 +863,42 @@ export class HybridAnalyticsRepository extends PrismaAnalyticsRepository {
     };
   }
 
-  override async getIcpPerformance(_input: IcpPerformanceQuery): Promise<IcpPerformanceResponse> {
+  override async getIcpPerformance(input: IcpPerformanceQuery): Promise<IcpPerformanceResponse> {
+    const from = input.from ? new Date(input.from) : null;
+    const to = input.to ? new Date(input.to) : null;
+    const icpProfileId = input.icpProfileId ?? null;
+
     const result = await dbQuery<IcpPerformanceAggregateRow>(
       `
-        with scored as (
-          select
-            sp."icpProfileId" as "icpProfileId",
-            count(distinct sp."leadId")::integer as "leadCount",
-            avg(sp."blendedScore")::double precision as "avgScore"
+        with latest_scores as (
+          select distinct on (sp."leadId", sp."icpProfileId")
+            sp."leadId",
+            sp."icpProfileId",
+            sp."blendedScore"
           from public."LeadScorePrediction" sp
-          group by sp."icpProfileId"
+          where ($1::timestamp is null or sp."predictedAt" >= $1)
+            and ($2::timestamp is null or sp."predictedAt" <= $2)
+            and ($3::text is null or sp."icpProfileId" = $3)
+          order by sp."leadId", sp."icpProfileId", sp."predictedAt" desc, sp."createdAt" desc
+        ),
+        scored as (
+          select
+            latest_scores."icpProfileId" as "icpProfileId",
+            count(*)::integer as "leadCount",
+            avg(latest_scores."blendedScore")::double precision as "avgScore"
+          from latest_scores
+          group by latest_scores."icpProfileId"
         ),
         qualified as (
           select
-            sp."icpProfileId" as "icpProfileId",
-            count(distinct sp."leadId")::integer as "qualifiedCount"
-          from public."LeadScorePrediction" sp
+            latest_scores."icpProfileId" as "icpProfileId",
+            count(*)::integer as "qualifiedCount"
+          from latest_scores
           join public."Lead" lead
-            on lead."id" = sp."leadId"
+            on lead."id" = latest_scores."leadId"
           where lead."deletedAt" is null
             and lead."status" in ('qualified', 'drafted', 'messaged', 'replied', 'cold')
-          group by sp."icpProfileId"
+          group by latest_scores."icpProfileId"
         ),
         rejections as (
           select
@@ -800,6 +906,9 @@ export class HybridAnalyticsRepository extends PrismaAnalyticsRepository {
             count(*)::integer as "rejectedCount"
           from public."lead_rejections" lr
           where lr."icpProfileId" is not null
+            and ($1::timestamp is null or lr."rejectedAt" >= $1)
+            and ($2::timestamp is null or lr."rejectedAt" <= $2)
+            and ($3::text is null or lr."icpProfileId" = $3)
           group by lr."icpProfileId"
         )
         select
@@ -815,7 +924,7 @@ export class HybridAnalyticsRepository extends PrismaAnalyticsRepository {
           on rejections."icpProfileId" = scored."icpProfileId"
         order by scored."leadCount" desc, scored."icpProfileId" asc
       `,
-      [],
+      [from, to, icpProfileId],
     );
 
     return {

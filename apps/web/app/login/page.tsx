@@ -5,6 +5,12 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 
 import { useAuth } from '../../src/hooks/use-auth.js';
+import { ApiClient } from '../../src/lib/api-client.js';
+import {
+  clearDashboardPreloadCache,
+  warmDashboardData,
+} from '../../src/lib/dashboard-preload.js';
+import { getWebEnv } from '../../src/lib/env.js';
 
 const DEMO_EMAIL = 'demo@example.com';
 const DEMO_PASSWORD = 'password';
@@ -20,6 +26,10 @@ export default function LoginPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
+    router.prefetch('/dashboard');
+  }, [router]);
+
+  useEffect(() => {
     if (isAuthenticated && !isSubmitting) {
       router.replace('/dashboard');
     }
@@ -31,7 +41,12 @@ export default function LoginPage() {
     setIsSubmitting(true);
 
     try {
-      await login(email, password);
+      const session = await login(email, password);
+      clearDashboardPreloadCache();
+      const env = getWebEnv();
+      warmDashboardData(
+        new ApiClient(env.NEXT_PUBLIC_API_BASE_URL, () => session.token, env.NEXT_PUBLIC_API_TIMEOUT_MS),
+      );
       try {
         window.sessionStorage.setItem(LOGIN_PREVIEW_NOTICE_SESSION_KEY, 'true');
       } catch {
@@ -69,7 +84,7 @@ export default function LoginPage() {
               className="mx-auto h-auto w-[403.2px] max-w-full sm:w-[427.2px]"
             />
           </div>
-          <h1 className="mx-auto w-full whitespace-nowrap text-center text-[24px] font-black leading-none tracking-normal text-foreground sm:text-[34px]">
+          <h1 className="mx-auto w-full whitespace-nowrap text-center text-[18px] font-black leading-none tracking-normal text-foreground sm:text-[26px]">
             AI-Driven Sales Automation
           </h1>
         </div>

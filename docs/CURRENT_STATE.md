@@ -6,9 +6,11 @@ This is the authoritative high-level current-state and handoff document for the 
 
 Code is still the source of truth. This doc is the fastest orientation path for a new agent, and stale or historical docs are called out explicitly below.
 
-## 1.1 Leadzilla demo target as of 2026-07-07
+## 1.1 Leadzilla demo target as of 2026-07-08
 
-This repository is being re-oriented as Leadzilla: a demo-hosted version of the outbound / lead-generation platform originally built for Zbooni.
+This repository is Leadzilla: a demo-hosted version of the outbound / lead-generation platform originally built for Zbooni.
+
+The primary presentation goal is recruiter-facing polish. A recruiter or hiring team should be able to open the resume-linked demo and immediately read it as a refined, credible, enterprise-grade AI sales platform. The repo still contains historical/full-production paths and known architectural debt; current demo work should favor a coherent visible product over broad internal rewrites unless those rewrites are explicitly requested.
 
 The intended demo slice is intentionally narrow:
 
@@ -21,13 +23,20 @@ The intended demo slice is intentionally narrow:
 - Bug removal and UI/UX simplification are in scope.
 - New features are out of scope unless explicitly approved.
 
-Confirmed current implementation facts from this onboarding pass:
+Confirmed current implementation facts:
 
 - The worker has real discovery, scoring, `message.generate`, and `message.send` handlers.
 - API approval now records draft approval only; it does not create or enqueue `MessageSend`.
 - Direct API send requests reject with the Leadzilla demo outbound-disabled error.
 - Worker `message.send`, auto-approved draft enqueue, manual approval recovery, queued-send recovery, and `message.send` outbox replay are blocked for the demo.
 - `apps/worker/src/env.ts` still defines `MESSAGING_ENABLED`, but the demo send-disabled boundary is enforced in code rather than by that env var.
+- The active web navigation is intentionally compact: Dashboard, Discover, Leads, Prompt Center, Inbox, and ICPs. Settings and Rules remain under the Dev Console area.
+- The Dashboard now consolidates the older overview/analytics surfaces. `/dashboard/analytics` redirects to `/dashboard`; the removed Deals and Recommendations pages are no longer active demo surfaces.
+- The Dashboard lead-flow Sankey represents the full business table count, splits evaluated versus not evaluated records, and then shows qualification and score-band flow. The web app also has an authenticated `/api/dashboard/business-count` fallback for demo deployments where the remote funnel response is stale.
+- The Discover page is the single bounded discovery/enrichment/scoring job setup surface. Its top card is compact and describes the flow as Set Scope -> Search -> Enrich -> Score; only the safe demo search-task count is selectable.
+- The Prompt Center exposes prompt inputs, editable outreach and lead-scoring prompt logic, and per-prompt model selectors. Advanced model options are visible but locked for demo credibility; only the default demo model is selectable.
+- The Inbox now owns draft review and conversation-style messaging. `/dashboard/messages` redirects to `/dashboard/inbox` while preserving query parameters.
+- The web API request timeout defaults to 5 seconds (`NEXT_PUBLIC_API_TIMEOUT_MS=5000`) so stalled demo API calls fail quickly instead of making the UI feel frozen.
 
 For demo work, keep outbound provider credentials unset unless the product scope explicitly changes. The current demo contract is draft review only: no email or WhatsApp delivery.
 
@@ -40,7 +49,9 @@ For demo work, keep outbound provider credentials unset unless the product scope
 - Schema authority: `supabase/migrations/` is the intended canonical schema source for production.
 - Current runtime reality: the repo is still mid-transition away from Prisma. Prisma remains in parts of runtime, local/bootstrap, CI, and tests.
 
-### Current production deploy truth as of 2026-05-07
+### Last verified production deploy truth as of 2026-05-07
+
+This section is historical verification, not proof of the current live state on 2026-07-08. Reverify Vercel, Railway, Supabase, `/health`, and `/ready` before claiming the remote demo is live.
 
 - Before the handoff push on 2026-05-07, local `main` matched `origin/main` at `6d31eefe20bb3a5c3d318b7b90bb58afcd3edb57`.
 - Latest local validation on 2026-05-07 passed `pnpm typecheck`, `pnpm lint`, targeted API/worker/provider tests for changed seams, `pnpm build`, Supabase production migration verification, and Docker builds for the API/worker/web runtime images.
@@ -82,8 +93,9 @@ For demo work, keep outbound provider credentials unset unless the product scope
 
 ## 4. Current highest-risk remaining issues
 
-1. Remaining browser-direct analytics/debug/business operational reads
-   - `apps/web/app/dashboard/analytics/page.tsx`, `apps/web/app/dashboard/leads/[id]/page.tsx`, `apps/web/app/dashboard/leads/businesses/page.tsx`, `apps/web/src/components/debug/lifecycle-data.ts`, and `apps/web/src/components/pipeline-time-series-chart.tsx` still query operational tables from the browser. This keeps the browser as a real data plane beyond auth/session.
+1. Remaining browser-direct debug/business operational reads
+   - The main Dashboard analytics surface now uses API/proxy-backed reads and `/dashboard/analytics` redirects to `/dashboard`.
+   - Some non-primary/debug/business surfaces still query operational tables from the browser, including `apps/web/app/dashboard/leads/[id]/page.tsx`, `apps/web/app/dashboard/leads/businesses/page.tsx`, `apps/web/src/components/debug/lifecycle-data.ts`, and `apps/web/src/components/pipeline-time-series-chart.tsx`. This keeps the browser as a real data plane beyond auth/session in those remaining areas.
 
 2. Prisma / SQL split is still real across local, CI, and runtime
    - `supabase/migrations/` is canonical, but Prisma is still present in runtime repositories, local bootstrap, tests, and build paths. The repo should be treated as intentionally dual-stack, not already SQL-only.
@@ -114,6 +126,10 @@ For demo work, keep outbound provider credentials unset unless the product scope
 
 - Leadzilla runs as a demo version of the original Zbooni platform.
 - The demo supports bounded discovery/scoring and message drafting.
+- The active recruiter-facing UI is intentionally simplified to Dashboard, Discover, Leads, Prompt Center, Inbox, and ICPs.
+- The Dashboard is the single overview/analytics page; old analytics links redirect to it.
+- The Inbox is the single messaging/review page; old Messages links redirect to it.
+- Deals and Recommendations are not active demo pages.
 - Outbound sending is disabled by a hard runtime guard, not just by missing provider credentials.
 - Existing Zbooni-discovered leads may remain as demo data, while Zbooni-specific ICPs/copy should move toward Leadzilla-neutral language.
 - `apps/web` runs on Vercel.

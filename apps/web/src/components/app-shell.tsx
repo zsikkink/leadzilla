@@ -11,7 +11,6 @@ import { Header } from './header.js';
 import { Sidebar } from './sidebar.js';
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -54,7 +53,13 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
   }, [isAuthenticated]);
 
   const handlePreviewNoticeOpenChange = useCallback((open: boolean) => {
-    setPreviewNoticeOpen(open);
+    if (open) {
+      setPreviewNoticeOpen(true);
+    }
+  }, []);
+
+  const handlePreviewNoticeDismiss = useCallback(() => {
+    setPreviewNoticeOpen(false);
   }, []);
 
   if (isLoading) {
@@ -88,7 +93,12 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
         </main>
       </div>
       <Dialog open={previewNoticeOpen} onOpenChange={handlePreviewNoticeOpenChange}>
-        <DialogContent className="border-white/[0.08] bg-card/95 text-foreground shadow-[0_24px_80px_rgba(0,0,0,0.45)] sm:max-w-[430px]">
+        <DialogContent
+          className="border-white/[0.08] bg-card/95 text-foreground shadow-[0_24px_80px_rgba(0,0,0,0.45)] sm:max-w-[430px]"
+          onEscapeKeyDown={(event) => event.preventDefault()}
+          onPointerDownOutside={(event) => event.preventDefault()}
+          showCloseButton={false}
+        >
           <DialogHeader>
             <DialogTitle className="text-xl font-bold">This is a demo environment</DialogTitle>
             <DialogDescription className="leading-6">
@@ -96,17 +106,16 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
             </DialogDescription>
           </DialogHeader>
           <p className="text-sm leading-6 text-foreground">
-            Sending email and WhatsApp messages is disabled.
+            Sending emails and SMS messages is disabled.
           </p>
-          <DialogFooter className="justify-center sm:justify-center">
-            <DialogClose asChild>
-              <button
-                type="button"
-                className="inline-flex h-10 items-center justify-center rounded-lg border border-zbooni-teal/15 bg-zbooni-teal/[0.045] px-4 text-sm font-semibold text-zbooni-teal shadow-sm shadow-black/10 transition-colors hover:bg-zbooni-teal/[0.075] focus:outline-none focus:ring-2 focus:ring-zbooni-teal/25 focus:ring-offset-2 focus:ring-offset-background"
-              >
-                Start exploring
-              </button>
-            </DialogClose>
+          <DialogFooter className="mt-6 justify-center sm:justify-center">
+            <button
+              type="button"
+              onClick={handlePreviewNoticeDismiss}
+              className="inline-flex h-10 items-center justify-center rounded-lg border border-zbooni-teal/15 bg-zbooni-teal/[0.045] px-4 text-sm font-semibold text-zbooni-teal shadow-sm shadow-black/10 transition-colors hover:bg-zbooni-teal/[0.075] focus:outline-none focus:ring-2 focus:ring-zbooni-teal/25 focus:ring-offset-2 focus:ring-offset-background"
+            >
+              Start exploring
+            </button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

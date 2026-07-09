@@ -2,7 +2,7 @@
 
 Demo-oriented AI-assisted lead discovery, enrichment, scoring, and message-drafting platform for B2B sales.
 
-This checkout is being prepared as Leadzilla: a demo-hosted version of the platform originally built for Zbooni. The demo target is intentionally narrow:
+This checkout is Leadzilla: a demo-hosted version of the platform originally built for Zbooni. The public demo is designed for a recruiter or hiring team to open from a resume link and immediately see a polished, enterprise-grade AI sales platform. The demo target is intentionally narrow:
 
 - small, bounded discovery and scoring jobs should work end to end
 - message drafting should work for qualified leads
@@ -12,6 +12,19 @@ This checkout is being prepared as Leadzilla: a demo-hosted version of the platf
 - bug removal and UI/UX simplification are in scope; new feature development is not
 
 Code is still the source of truth. Outbound delivery is currently disabled in API and worker code for the Leadzilla demo; approvals are review records and do not send email or WhatsApp.
+
+## Current Demo Surface
+
+The active recruiter-facing operator app is intentionally compact:
+
+- **Dashboard** consolidates the former analytics/overview surfaces into one executive view with a lead-flow Sankey, lead quality, ICP performance, quality trend, outreach outcomes, and discovery runs.
+- **Discover** runs one bounded discovery/enrichment/scoring job. The demo UI exposes the workflow as Set Scope -> Search -> Enrich -> Score and locks search-task volume to the safe demo limit.
+- **Leads** is the main lead review surface.
+- **Prompt Center** keeps AI-centric controls center-stage: editable outreach and lead-scoring prompts, prompt inputs, per-prompt model selectors, and session-scoped save/reset behavior.
+- **Inbox** owns draft review and conversation-style messaging. The old Messages route redirects here.
+- **ICPs** owns target customer profiles.
+
+Recommendations, Deals, the standalone Analytics page, and the separate Messages page are not active demo surfaces. Legacy routes redirect where needed so older links do not dead-end.
 
 ## Stack
 
@@ -51,8 +64,8 @@ The default developer setup uses a shared cloud Supabase instance. Docker is onl
 For the full setup guide with credentials and env configuration, see `docs/SETUP_ONBOARDING.md`.
 
 ```bash
-git clone https://github.com/zsikkink/lead-flood.git
-cd lead-flood
+git clone https://github.com/zsikkink/leadzilla.git
+cd leadzilla
 nvm use
 corepack enable
 pnpm install
@@ -66,10 +79,16 @@ cp apps/worker/.env.example apps/worker/.env.local
 cp apps/web/.env.example apps/web/.env.local
 ```
 
-Fill in credentials (get these from the team lead), then start:
+Fill in credentials (get these from the team lead), then start the web demo:
 
 ```bash
 pnpm dev
+```
+
+Use the full local stack when you need the Fastify API and worker locally:
+
+```bash
+pnpm dev:local-stack
 ```
 
 ## Local URLs
@@ -78,8 +97,8 @@ pnpm dev
 - Login: `http://localhost:3000/login` (Supabase Auth)
 - Operator discovery page: `http://localhost:3000/dashboard/discover`
 - Legacy/debug discovery console: `http://localhost:3000/discovery`
-- API health: `http://localhost:5050/health`
-- API ready: `http://localhost:5050/ready`
+- API health when running `pnpm dev:local-stack`: `http://localhost:5050/health`
+- API ready when running `pnpm dev:local-stack`: `http://localhost:5050/ready`
 
 ## Deployment Topology
 

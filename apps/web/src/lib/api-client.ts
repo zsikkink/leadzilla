@@ -1,4 +1,5 @@
 import type {
+  AvgScoreQuery,
   AvgScoreResponse,
   CancelDiscoveryRunResponse,
   DailyQualityTrendsQuery,
@@ -18,6 +19,7 @@ import type {
   GenerateMessageDraftResponse,
   EnrichLeadResponse,
   GetLeadResponse,
+  IcpPerformanceQuery,
   IcpPerformanceResponse,
   IcpProfileResponse,
   LatestLeadDeterministicScoreResponse,
@@ -81,7 +83,7 @@ export class ApiClient {
   constructor(
     private readonly baseUrl: string,
     private readonly getToken: () => string | null,
-    private readonly requestTimeoutMs = 10000,
+    private readonly requestTimeoutMs = 5000,
   ) {}
 
   private async request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -454,12 +456,14 @@ export class ApiClient {
     return this.request(`/v1/analytics/daily-quality-trends${qs}`);
   }
 
-  getAvgScore(): Promise<AvgScoreResponse> {
-    return this.request('/v1/analytics/avg-score');
+  getAvgScore(query?: AvgScoreQuery): Promise<AvgScoreResponse> {
+    const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
+    return this.request(`/v1/analytics/avg-score${qs}`);
   }
 
-  getIcpPerformance(): Promise<IcpPerformanceResponse> {
-    return this.request('/v1/analytics/icp-performance');
+  getIcpPerformance(query?: IcpPerformanceQuery): Promise<IcpPerformanceResponse> {
+    const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
+    return this.request(`/v1/analytics/icp-performance${qs}`);
   }
 
   getModelMetrics(query?: Record<string, unknown>): Promise<ModelMetricsResponse> {

@@ -133,6 +133,8 @@ export default function InboxPage() {
   const { apiClient } = useAuth();
   const searchParams = useSearchParams();
   const requestedLeadId = searchParams.get('leadId');
+  const requestedDraftId = searchParams.get('draftId');
+  const shouldPollDraftFromUrl = searchParams.get('pollDraft') === '1';
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [channelFilter, setChannelFilter] = useState<string>('ALL');
@@ -214,7 +216,10 @@ export default function InboxPage() {
   useEffect(() => {
     if (!requestedLeadId) return;
     setSelectedLeadId(requestedLeadId);
-  }, [requestedLeadId]);
+    if (requestedDraftId || shouldPollDraftFromUrl) {
+      setActiveFolder('DRAFTS');
+    }
+  }, [requestedDraftId, requestedLeadId, shouldPollDraftFromUrl]);
 
   useEffect(() => {
     try {
@@ -531,7 +536,7 @@ export default function InboxPage() {
       setManualSubject('');
       setManualBody('');
       refreshMessaging();
-      toast.success('Reply draft saved. Review and send it from the drafts section below.');
+      toast.success('Reply draft saved. Review it in Inbox draft review. No message was sent.');
     } catch (error: unknown) {
       toast.error(error instanceof Error ? error.message : 'Failed to save reply draft');
     } finally {
@@ -566,7 +571,7 @@ export default function InboxPage() {
             {[
               { id: 'INBOX' as const, label: 'Inbox', icon: InboxIcon },
               { id: 'SENT' as const, label: 'Sent', icon: Send },
-              { id: 'DRAFTS' as const, label: 'Drafts', icon: FileText },
+              { id: 'DRAFTS' as const, label: 'Draft Review', icon: FileText },
               { id: 'FAILED' as const, label: 'Needs review', icon: RefreshCw },
               { id: 'TRASH' as const, label: 'Trash', icon: Trash2 },
             ].map((folder) => {
@@ -598,7 +603,7 @@ export default function InboxPage() {
             <input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search conversations..."
+              placeholder={activeFolder === 'DRAFTS' ? 'Search drafts...' : 'Search conversations...'}
               className="w-full rounded-lg border border-border/50 bg-zbooni-dark/40 py-2 pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
@@ -631,7 +636,7 @@ export default function InboxPage() {
             <div className="flex flex-col items-center justify-center p-8 text-center">
               <InboxIcon className="mb-2 h-8 w-8 text-muted-foreground/30" />
               <p className="text-sm text-muted-foreground/60">
-                {activeFolder === 'DRAFTS' ? 'No drafts yet' : 'No conversations in this folder'}
+                {activeFolder === 'DRAFTS' ? 'No drafts to review' : 'No conversations in this folder'}
               </p>
             </div>
           ) : activeFolder === 'DRAFTS' ? (
@@ -875,7 +880,7 @@ export default function InboxPage() {
                 <div className="border-t border-border/40 pt-5">
                   <div className="mb-3 flex items-center gap-2">
                     <FileText className="h-4 w-4 text-primary" />
-                    <h3 className="text-sm font-semibold">Drafts for this lead</h3>
+                    <h3 className="text-sm font-semibold">Draft review for this lead</h3>
                   </div>
                   <div className="space-y-3">
                     {selectedUnsentDrafts.map((draft) => (
@@ -911,7 +916,7 @@ export default function InboxPage() {
                     Write a reply
                   </div>
                   <p className="mt-0.5 text-xs text-muted-foreground/60">
-                    Saves an approved email draft for {selectedLeadDetails?.email ?? 'this lead'}; outbound delivery is disabled for the demo.
+                    Saves an email draft for {selectedLeadDetails?.email ?? 'this lead'}; outbound delivery is disabled for the demo.
                   </p>
                 </div>
                 {!selectedIcpProfileId ? (

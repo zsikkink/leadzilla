@@ -42,7 +42,9 @@ const { dbMock, pipelineSettingsMock, trackerMock, pipelineEventsMock } = vi.hoi
     },
   },
   pipelineSettingsMock: {
+    getMessagingBehaviorPrompt: vi.fn(),
     getMessagingInstructions: vi.fn(),
+    getMessagingModel: vi.fn(),
     getMessagingRole: vi.fn(),
     getMessagingSystemPrompt: vi.fn(),
     isManualApprovalOnlyEnabled: vi.fn(),
@@ -64,7 +66,9 @@ vi.mock('@lead-flood/db', () => ({
 }));
 
 vi.mock('../utils/pipeline-settings.js', () => ({
+  getMessagingBehaviorPrompt: pipelineSettingsMock.getMessagingBehaviorPrompt,
   getMessagingInstructions: pipelineSettingsMock.getMessagingInstructions,
+  getMessagingModel: pipelineSettingsMock.getMessagingModel,
   getMessagingRole: pipelineSettingsMock.getMessagingRole,
   getMessagingSystemPrompt: pipelineSettingsMock.getMessagingSystemPrompt,
   isManualApprovalOnlyEnabled: pipelineSettingsMock.isManualApprovalOnlyEnabled,
@@ -147,7 +151,9 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
     dbMock.prisma.messageSend.findFirst.mockResolvedValue(null);
     pipelineSettingsMock.loadVerifiedScoreQualificationThreshold.mockResolvedValue(0.6);
     trackerMock.tryFinalizeDiscoveryRun.mockResolvedValue(undefined);
+    pipelineSettingsMock.getMessagingBehaviorPrompt.mockResolvedValue(null);
     pipelineSettingsMock.getMessagingInstructions.mockResolvedValue(null);
+    pipelineSettingsMock.getMessagingModel.mockResolvedValue(null);
     pipelineSettingsMock.getMessagingRole.mockResolvedValue(null);
     pipelineSettingsMock.getMessagingSystemPrompt.mockResolvedValue(null);
     pipelineSettingsMock.isManualApprovalOnlyEnabled.mockResolvedValue(false);
@@ -338,6 +344,71 @@ describe('handleMessageGenerateJob eligibility and approval enforcement', () => 
         recipientName: 'Ada Lovelace',
         recipientEmailKind: 'PERSONAL',
       }),
+    );
+  });
+
+  it('passes consolidated behavior prompt into OpenAI generation', async () => {
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
+      id: 'score_current',
+      scoreBand: 'HIGH',
+      blendedScore: 0.72,
+    });
+    pipelineSettingsMock.getMessagingBehaviorPrompt.mockResolvedValue(
+      'Behave like a concise enterprise sales operator.',
+    );
+    pipelineSettingsMock.getMessagingRole.mockResolvedValue('Legacy role');
+    pipelineSettingsMock.getMessagingSystemPrompt.mockResolvedValue('Legacy instructions');
+
+    const openAiAdapter = buildSuccessfulOpenAiAdapter();
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+      }),
+      { openAiAdapter: openAiAdapter as never },
+    );
+
+    expect(openAiAdapter.generateMessageVariants).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customBehaviorPrompt: 'Behave like a concise enterprise sales operator.',
+        customRole: null,
+        customSystemPrompt: null,
+      }),
+    );
+  });
+
+  it('passes configured messaging model into OpenAI generation', async () => {
+    dbMock.prisma.leadScorePrediction.findFirst.mockResolvedValue({
+      id: 'score_current',
+      scoreBand: 'HIGH',
+      blendedScore: 0.72,
+    });
+    pipelineSettingsMock.getMessagingModel.mockResolvedValue('gpt-4.1-mini');
+
+    const openAiAdapter = buildSuccessfulOpenAiAdapter();
+
+    await handleMessageGenerateJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        leadId: 'lead_1',
+        icpProfileId: 'icp_1',
+        knowledgeEntryIds: [],
+        promptVersion: 'v2',
+      }),
+      { openAiAdapter: openAiAdapter as never },
+    );
+
+    expect(openAiAdapter.generateMessageVariants).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: 'EMAIL',
+      }),
+      { model: 'gpt-4.1-mini' },
     );
   });
 

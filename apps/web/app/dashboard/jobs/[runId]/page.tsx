@@ -607,11 +607,11 @@ export default function DiscoveryRunDetailPage() {
       <div className="space-y-6">
         <button
           type="button"
-          onClick={() => router.push('/dashboard/jobs')}
+          onClick={() => router.push('/dashboard/discover#discovery-runs')}
           className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
-          Back to Discovery Runs
+          Back to Discover
         </button>
         <div className="rounded-2xl border border-border/50 bg-card p-8 text-center shadow-sm">
           <AlertCircle className="mx-auto mb-3 h-8 w-8 text-muted-foreground/30" />
@@ -649,11 +649,11 @@ export default function DiscoveryRunDetailPage() {
       {/* Back link */}
       <button
         type="button"
-        onClick={() => router.push('/dashboard/jobs')}
+        onClick={() => router.push('/dashboard/discover#discovery-runs')}
         className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground hover:text-foreground transition-colors"
       >
         <ArrowLeft className="h-4 w-4" />
-        Back to Discovery Runs
+        Back to Discover
       </button>
 
       {/* Header */}
@@ -871,7 +871,7 @@ export default function DiscoveryRunDetailPage() {
               { label: 'Businesses', value: outcome!.businessesFound, color: 'text-blue-400' },
               { label: 'Qualified', value: outcome!.businessesFound - outcome!.businessesDisqualified, color: 'text-zbooni-teal' },
               { label: 'Leads', value: outcome!.leadsCreated, color: 'text-zbooni-green' },
-              { label: 'Messages', value: outcome!.messagesDrafted, color: 'text-yellow-400' },
+              { label: 'Drafts', value: outcome!.messagesDrafted, color: 'text-yellow-400' },
             ];
 
         return (

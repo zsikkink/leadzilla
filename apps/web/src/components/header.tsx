@@ -9,39 +9,39 @@ import { useAuth } from '../hooks/use-auth.js';
 import { cn } from '../lib/utils.js';
 
 const MOBILE_NAV = [
-  { href: '/dashboard', label: 'Pipeline' },
+  { href: '/dashboard', label: 'Dashboard' },
   { href: '/dashboard/discover', label: 'Discover' },
   { href: '/dashboard/leads', label: 'Leads' },
-  { href: '/dashboard/messages', label: 'Messages' },
-  { href: '/dashboard/inbox', label: 'Inbox' },
   { href: '/dashboard/prompts', label: 'Prompt Center' },
-  { href: '/dashboard/icps', label: 'ICP Profiles' },
-  { href: '/dashboard/analytics', label: 'Analytics' },
-  { href: '/discovery', label: 'Controls & Settings' },
+  { href: '/dashboard/inbox', label: 'Inbox' },
+  { href: '/dashboard/icps', label: 'ICPs' },
+  { href: '/discovery', label: 'Settings' },
   { href: '/discovery/lifecycle', label: 'Lead Lifecycle' },
   { href: '/discovery/model', label: 'Model Inspector' },
-  { href: '/discovery/rules', label: 'ICP & Rules' },
+  { href: '/discovery/rules', label: 'Rules' },
 ] as const;
 
 function getPageTitle(pathname: string): string {
-  if (pathname === '/dashboard') return 'Pipeline Overview';
+  if (pathname === '/dashboard') return 'Dashboard';
   if (pathname === '/dashboard/discover') return 'Discover Leads';
   if (pathname === '/dashboard/leads/businesses') return 'Business Intelligence';
   if (pathname === '/dashboard/leads/recovery') return 'Contact Recovery';
   if (pathname.startsWith('/dashboard/leads/')) return 'Lead Detail';
   if (pathname === '/dashboard/leads') return 'Leads';
-  if (pathname === '/dashboard/messages') return 'Message Queue';
+  if (pathname === '/dashboard/messages') return 'Inbox';
   if (pathname === '/dashboard/inbox') return 'Inbox';
+  if (pathname === '/dashboard/jobs') return 'Discover Leads';
+  if (pathname.startsWith('/dashboard/jobs/')) return 'Discovery Run';
   if (pathname === '/dashboard/prompts') return 'Prompt Center';
   if (pathname.startsWith('/dashboard/icps/')) return 'ICP Profile';
-  if (pathname === '/dashboard/icps') return 'ICP Profiles';
-  if (pathname === '/dashboard/analytics') return 'Analytics';
+  if (pathname === '/dashboard/icps') return 'ICPs';
+  if (pathname === '/dashboard/analytics') return 'Dashboard';
 
-  if (pathname === '/discovery') return 'Controls & Settings';
+  if (pathname === '/discovery') return 'Settings';
   if (pathname === '/discovery/lifecycle') return 'Lead Lifecycle Inspector';
   if (pathname.startsWith('/discovery/lifecycle/')) return 'Lead Lifecycle Inspector';
   if (pathname === '/discovery/model') return 'Model Inspector';
-  if (pathname === '/discovery/rules') return 'ICP & Rules Viewer';
+  if (pathname === '/discovery/rules') return 'Rules';
 
   return 'Dashboard';
 }
@@ -65,17 +65,14 @@ export function Header() {
           >
             <Menu className="h-5 w-5" />
           </button>
-          <h1 className="text-lg font-bold tracking-tight">{pageTitle}</h1>
+          <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">{pageTitle}</h1>
         </div>
 
         <div className="flex items-center gap-3">
           {user ? (
             <div className="flex items-center gap-2">
               <div className="hidden items-center gap-2 sm:flex">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent text-xs font-semibold text-accent-foreground">
-                  {user.firstName.charAt(0)}{user.lastName.charAt(0)}
-                </div>
-                <span className="text-sm text-muted-foreground">
+                <span className="text-sm text-foreground">
                   {user.firstName}
                 </span>
               </div>
@@ -97,7 +94,10 @@ export function Header() {
       {mobileMenuOpen ? (
         <nav className="border-t border-border/50 p-3 lg:hidden">
           {MOBILE_NAV.map(({ href, label }) => {
+            const isDiscoverDetailRoute =
+              href === '/dashboard/discover' && pathname.startsWith('/dashboard/jobs');
             const isActive =
+              isDiscoverDetailRoute ||
               pathname === href ||
               ((href !== '/dashboard' && href !== '/discovery') &&
                 pathname.startsWith(`${href}/`));

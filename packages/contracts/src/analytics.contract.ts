@@ -2,12 +2,18 @@ import { z } from 'zod';
 
 export const AnalyticsScoreBandSchema = z.enum(['LOW', 'MEDIUM', 'HIGH']);
 
+const DateRangeQueryFields = {
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
+};
+
+const IcpScopedDateRangeQueryFields = {
+  ...DateRangeQueryFields,
+  icpProfileId: z.string().min(1).optional(),
+};
+
 export const FunnelQuerySchema = z
-  .object({
-    from: z.string().datetime().optional(),
-    to: z.string().datetime().optional(),
-    icpProfileId: z.string().min(1).optional(),
-  })
+  .object(IcpScopedDateRangeQueryFields)
   .strict();
 
 export const FunnelResponseSchema = z
@@ -15,6 +21,7 @@ export const FunnelResponseSchema = z
     from: z.string().datetime().nullable(),
     to: z.string().datetime().nullable(),
     icpProfileId: z.string().nullable(),
+    businessCount: z.number().int().min(0),
     discoveredCount: z.number().int().min(0),
     qualifiedCount: z.number().int().min(0),
     enrichedCount: z.number().int().min(0),
@@ -31,8 +38,7 @@ export const FunnelResponseSchema = z
 
 export const ScoreDistributionQuerySchema = z
   .object({
-    from: z.string().datetime().optional(),
-    to: z.string().datetime().optional(),
+    ...DateRangeQueryFields,
     icpProfileId: z.string().min(1).optional(),
     modelVersionId: z.string().min(1).optional(),
   })
@@ -48,14 +54,20 @@ export const ScoreDistributionResponseSchema = z
         })
         .strict(),
     ),
+    histogram: z.array(
+      z
+        .object({
+          scoreMin: z.number().min(0).max(1),
+          scoreMax: z.number().min(0).max(1),
+          count: z.number().int().min(0),
+        })
+        .strict(),
+    ),
   })
   .strict();
 
 export const DailyQualityTrendsQuerySchema = z
-  .object({
-    from: z.string().datetime().optional(),
-    to: z.string().datetime().optional(),
-  })
+  .object(DateRangeQueryFields)
   .strict();
 
 export const DailyQualityTrendItemSchema = z
@@ -73,7 +85,9 @@ export const DailyQualityTrendsResponseSchema = z
   })
   .strict();
 
-export const AvgScoreQuerySchema = z.object({}).strict();
+export const AvgScoreQuerySchema = z
+  .object(IcpScopedDateRangeQueryFields)
+  .strict();
 
 export const AvgScoreResponseSchema = z
   .object({
@@ -81,7 +95,9 @@ export const AvgScoreResponseSchema = z
   })
   .strict();
 
-export const IcpPerformanceQuerySchema = z.object({}).strict();
+export const IcpPerformanceQuerySchema = z
+  .object(IcpScopedDateRangeQueryFields)
+  .strict();
 
 export const IcpPerformanceItemSchema = z
   .object({

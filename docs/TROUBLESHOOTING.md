@@ -15,9 +15,9 @@ DATABASE_URL=postgresql://...pooler.supabase.com:5432/postgres?connection_limit=
 
 ### `Unable to reach API` on the web app
 
-**Cause:** The API server hasn't finished starting yet.
+**Cause:** The API server is not running, has not finished starting, or the web app is pointed at the wrong API URL.
 
-**Fix:** Check the terminal running `pnpm dev` — wait for `Server listening on 0.0.0.0:5050`. If it never appears, check the API logs for errors above it.
+**Fix:** For the web-only recruiter demo, `pnpm dev` is enough because the app talks to the configured remote demo API. For local API work, run `pnpm dev:local-stack` and wait for `Server listening on 0.0.0.0:5050`. If it never appears, check the API logs above it and confirm `NEXT_PUBLIC_API_BASE_URL=http://localhost:5050`.
 
 ### API fails with JWT/Supabase env errors
 

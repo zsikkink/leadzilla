@@ -302,15 +302,6 @@ function isPrismaKnownRequestError(error: unknown): error is { code: string } {
   );
 }
 
-function resolveMessageSendStartAfter(payload: MessagingSendJobPayload): Date | undefined {
-  if (!payload.scheduledAt) {
-    return undefined;
-  }
-
-  const scheduledAt = new Date(payload.scheduledAt);
-  return scheduledAt.getTime() > Date.now() ? scheduledAt : undefined;
-}
-
 function mapContactRecoveryItem(record: {
   id: string;
   businessId: string;

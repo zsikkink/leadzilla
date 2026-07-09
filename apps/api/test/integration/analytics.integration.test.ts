@@ -139,6 +139,14 @@ async function createScorePredictionFixture(input: {
   });
 }
 
+function expectedScoreHistogram(countsByBucketIndex: Record<number, number>) {
+  return Array.from({ length: 10 }, (_, index) => ({
+    scoreMin: index / 10,
+    scoreMax: (index + 1) / 10,
+    count: countsByBucketIndex[index] ?? 0,
+  }));
+}
+
 async function createStoredRecommendationFixture(input: {
   createdRecommendationIds: string[];
   type: string;
@@ -345,6 +353,7 @@ describe('analytics score distribution integration', () => {
           { scoreBand: 'MEDIUM', count: 0 },
           { scoreBand: 'HIGH', count: 2 },
         ],
+        histogram: expectedScoreHistogram({ 1: 1, 9: 2 }),
       });
 
       const primaryIcpResponse = await server.inject({
@@ -360,6 +369,7 @@ describe('analytics score distribution integration', () => {
           { scoreBand: 'MEDIUM', count: 1 },
           { scoreBand: 'HIGH', count: 2 },
         ],
+        histogram: expectedScoreHistogram({ 1: 1, 5: 1, 9: 2 }),
       });
 
       const primaryModelOnlyResponse = await server.inject({
@@ -375,6 +385,7 @@ describe('analytics score distribution integration', () => {
           { scoreBand: 'MEDIUM', count: 0 },
           { scoreBand: 'HIGH', count: 2 },
         ],
+        histogram: expectedScoreHistogram({ 1: 2, 9: 2 }),
       });
     } finally {
       await server.close();

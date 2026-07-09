@@ -19,8 +19,13 @@ vi.mock('@lead-flood/db', () => ({
 }));
 
 import {
+  getMessagingBehaviorPrompt,
+  getMessagingModel,
   getMessagingRole,
+  getMessagingSystemPrompt,
   getPipelineSettings,
+  getScoringModel,
+  getScoringSystemPrompt,
   loadVerifiedScoreQualificationThreshold,
   loadAutoApproveConfig,
 } from './pipeline-settings.js';
@@ -66,6 +71,62 @@ describe('pipeline settings utility', () => {
     });
 
     await expect(getMessagingRole()).resolves.toBe('founder whisperer');
+  });
+
+  it('returns trimmed consolidated messaging behavior prompt strings', async () => {
+    dbMock.getPipelineSetting.mockResolvedValue({
+      key: 'messagingBehaviorPrompt',
+      valueJson: '  act like an enterprise operator  ',
+    });
+
+    await expect(getMessagingBehaviorPrompt()).resolves.toBe('act like an enterprise operator');
+  });
+
+  it('ignores stale regional outreach prompt settings', async () => {
+    dbMock.getPipelineSetting.mockResolvedValue({
+      key: 'messagingBehaviorPrompt',
+      valueJson: 'You write personalized cold outreach messages to business owners in the MENA region.',
+    });
+    await expect(getMessagingBehaviorPrompt()).resolves.toBeNull();
+
+    dbMock.getPipelineSetting.mockResolvedValue({
+      key: 'messagingRole',
+      valueJson: 'Write to prospects in the UAE, Saudi Arabia, Egypt, Jordan.',
+    });
+    await expect(getMessagingRole()).resolves.toBeNull();
+
+    dbMock.getPipelineSetting.mockResolvedValue({
+      key: 'messagingSystemPrompt',
+      valueJson: 'You are a sales outreach specialist for a platform built for businesses in the MENA region.',
+    });
+    await expect(getMessagingSystemPrompt()).resolves.toBeNull();
+  });
+
+  it('returns trimmed messaging model strings', async () => {
+    dbMock.getPipelineSetting.mockResolvedValue({
+      key: 'messagingModel',
+      valueJson: '  gpt-4.1-mini  ',
+    });
+
+    await expect(getMessagingModel()).resolves.toBe('gpt-4.1-mini');
+  });
+
+  it('returns trimmed scoring model strings', async () => {
+    dbMock.getPipelineSetting.mockResolvedValue({
+      key: 'scoringModel',
+      valueJson: '  gpt-4.1-mini  ',
+    });
+
+    await expect(getScoringModel()).resolves.toBe('gpt-4.1-mini');
+  });
+
+  it('returns trimmed scoring system prompt strings', async () => {
+    dbMock.getPipelineSetting.mockResolvedValue({
+      key: 'scoringSystemPrompt',
+      valueJson: '  score enterprise readiness only  ',
+    });
+
+    await expect(getScoringSystemPrompt()).resolves.toBe('score enterprise readiness only');
   });
 
   it('loads the verified score qualification threshold without falling back', async () => {

@@ -65,46 +65,41 @@ export function CustomSelect({
         />
       </button>
 
-      {/* Dropdown menu */}
-      <div
-        className={cn(
-          'absolute left-0 top-full z-50 mt-1.5 min-w-[180px] max-w-[min(320px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-border/50 bg-card shadow-xl shadow-black/20',
-          'origin-top transition-all duration-200 ease-out',
-          open
-            ? 'scale-100 opacity-100'
-            : 'pointer-events-none scale-95 opacity-0',
-        )}
-        role="listbox"
-      >
-        <div className="max-h-[240px] overflow-y-auto p-1">
-          {options.map((option) => {
-            const isSelected = option.value === value;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                role="option"
-                aria-selected={isSelected}
-                onClick={() => {
-                  onChange(option.value);
-                  setOpen(false);
-                }}
-                className={cn(
-                  'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors',
-                  isSelected
-                    ? 'bg-primary/10 text-primary font-medium'
-                    : 'text-foreground hover:bg-accent/50',
-                )}
-              >
-                <span className="flex-1 truncate">{option.label}</span>
-                {isSelected ? (
-                  <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
-                ) : null}
-              </button>
-            );
-          })}
+      {open ? (
+        <div
+          className="absolute left-0 top-full z-50 mt-1.5 min-w-[180px] max-w-[min(320px,calc(100vw-2rem))] origin-top overflow-hidden rounded-xl border border-border/50 bg-card shadow-xl shadow-black/20"
+          role="listbox"
+        >
+          <div className="max-h-[240px] overflow-y-auto p-1">
+            {options.map((option) => {
+              const isSelected = option.value === value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  onClick={() => {
+                    onChange(option.value);
+                    setOpen(false);
+                  }}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors',
+                    isSelected
+                      ? 'bg-primary/10 text-primary font-medium'
+                      : 'text-foreground hover:bg-accent/50',
+                  )}
+                >
+                  <span className="flex-1 truncate">{option.label}</span>
+                  {isSelected ? (
+                    <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }

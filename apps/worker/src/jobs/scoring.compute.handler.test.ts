@@ -58,6 +58,8 @@ const {
     getDeterministicAiBlend: vi.fn(),
     getScoreQualificationThreshold: vi.fn(),
     getScoreTierBands: vi.fn(),
+    getScoringModel: vi.fn(),
+    getScoringSystemPrompt: vi.fn(),
   },
   trackerMock: {
     tryFinalizeDiscoveryRun: vi.fn(),
@@ -90,6 +92,8 @@ vi.mock('../utils/pipeline-settings.js', () => ({
   getDeterministicAiBlend: pipelineSettingsMock.getDeterministicAiBlend,
   getScoreQualificationThreshold: pipelineSettingsMock.getScoreQualificationThreshold,
   getScoreTierBands: pipelineSettingsMock.getScoreTierBands,
+  getScoringModel: pipelineSettingsMock.getScoringModel,
+  getScoringSystemPrompt: pipelineSettingsMock.getScoringSystemPrompt,
 }));
 
 vi.mock('../utils/discovery-run-tracker.js', () => ({
@@ -125,6 +129,8 @@ describe('handleScoringComputeJob primary business conversion anchoring', () => 
       high: 0.8,
       medium: 0.5,
     });
+    pipelineSettingsMock.getScoringModel.mockResolvedValue(null);
+    pipelineSettingsMock.getScoringSystemPrompt.mockResolvedValue(null);
     sharedMock.ensureBaselineModelVersion.mockResolvedValue('model_1');
     sharedMock.findActiveTrainedModel.mockResolvedValue(null);
     sharedMock.computeBlendRatio.mockResolvedValue({
@@ -347,6 +353,84 @@ describe('handleScoringComputeJob primary business conversion anchoring', () => 
       },
       data: { status: 'qualified' },
     });
+  });
+
+  it('passes the configured scoring system prompt into OpenAI scoring', async () => {
+    dbMock.prisma.icpProfile.findUnique.mockResolvedValue({
+      description: 'Leadzilla ICP',
+    });
+    pipelineSettingsMock.getScoringSystemPrompt.mockResolvedValue(
+      'Score enterprise payment readiness only.',
+    );
+    const openAiAdapter = {
+      isConfigured: true,
+      evaluateLeadScore: vi.fn().mockResolvedValue({
+        status: 'success',
+        data: {
+          score: 0.82,
+          reasoning: ['LLM found strong ICP fit'],
+        },
+      }),
+    };
+
+    await handleScoringComputeJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        mode: 'BY_LEAD_IDS',
+        leadIds: ['lead_1'],
+        icpProfileId: 'icp_1',
+        requestedByUserId: 'user_1',
+      }),
+      {
+        openAiAdapter: openAiAdapter as unknown as OpenAiAdapter,
+      },
+    );
+
+    expect(openAiAdapter.evaluateLeadScore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customSystemPrompt: 'Score enterprise payment readiness only.',
+      }),
+      undefined,
+    );
+  });
+
+  it('passes the configured scoring model into OpenAI scoring', async () => {
+    dbMock.prisma.icpProfile.findUnique.mockResolvedValue({
+      description: 'Leadzilla ICP',
+    });
+    pipelineSettingsMock.getScoringModel.mockResolvedValue('gpt-4.1-mini');
+    const openAiAdapter = {
+      isConfigured: true,
+      evaluateLeadScore: vi.fn().mockResolvedValue({
+        status: 'success',
+        data: {
+          score: 0.82,
+          reasoning: ['LLM found strong ICP fit'],
+        },
+      }),
+    };
+
+    await handleScoringComputeJob(
+      logger,
+      makeJob({
+        runId: 'run_1',
+        mode: 'BY_LEAD_IDS',
+        leadIds: ['lead_1'],
+        icpProfileId: 'icp_1',
+        requestedByUserId: 'user_1',
+      }),
+      {
+        openAiAdapter: openAiAdapter as unknown as OpenAiAdapter,
+      },
+    );
+
+    expect(openAiAdapter.evaluateLeadScore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customSystemPrompt: null,
+      }),
+      { model: 'gpt-4.1-mini' },
+    );
   });
 
   it('does not enqueue Apollo enrich when a hard filter fails even if blended score is high', async () => {

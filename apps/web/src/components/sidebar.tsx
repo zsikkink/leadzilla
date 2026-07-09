@@ -4,16 +4,11 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  Activity,
   BarChart3,
   Bot,
   ChevronsLeft,
   ChevronsRight,
-  Handshake,
   Inbox,
-  LayoutDashboard,
-  Lightbulb,
-  MessageSquare,
   Rocket,
   Settings,
   Target,
@@ -24,26 +19,17 @@ import {
 import { cn } from '../lib/utils.js';
 
 const DASHBOARD_NAV_ITEMS = [
-  { href: '/dashboard', label: 'Pipeline', icon: LayoutDashboard },
+  { href: '/dashboard', label: 'Dashboard', icon: BarChart3 },
   { href: '/dashboard/discover', label: 'Discover', icon: Rocket },
   { href: '/dashboard/leads', label: 'Leads', icon: Users },
-  { href: '/dashboard/messages', label: 'Messages', icon: MessageSquare },
-  { href: '/dashboard/inbox', label: 'Inbox', icon: Inbox },
   { href: '/dashboard/prompts', label: 'Prompt Center', icon: Bot },
-  { href: '/dashboard/icps', label: 'ICP Profiles', icon: Target },
-  { href: '/dashboard/analytics', label: 'Analytics', icon: BarChart3 },
-  { href: '/dashboard/analytics/deals', label: 'Deals', icon: Handshake },
-  { href: '/dashboard/recommendations', label: 'Recommendations', icon: Lightbulb },
-  { href: '/dashboard/jobs', label: 'Jobs', icon: Activity },
+  { href: '/dashboard/inbox', label: 'Inbox', icon: Inbox },
+  { href: '/dashboard/icps', label: 'ICPs', icon: Target },
 ] as const;
 
-// Routes that have child pages — use exact match only for these
-// to prevent double-highlighting (e.g. Analytics + Deals both lit)
-const EXACT_MATCH_ROUTES = new Set(['/dashboard/analytics']);
-
 const DEV_CONSOLE_NAV_ITEMS = [
-  { href: '/discovery', label: 'Controls & Settings', icon: Settings },
-  { href: '/discovery/rules', label: 'ICP & Rules', icon: TerminalSquare },
+  { href: '/discovery', label: 'Settings', icon: Settings },
+  { href: '/discovery/rules', label: 'Rules', icon: TerminalSquare },
 ] as const;
 
 interface SidebarProps {
@@ -131,110 +117,104 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       )}
 
       {/* Navigation */}
-      <nav className={cn('flex flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden', collapsed ? 'p-2' : 'p-3')}>
-        {/* Dashboard section label */}
-        <p
-          className={cn(
-            'mb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60 transition-[opacity,max-height] duration-250',
-            collapsed ? 'max-h-0 opacity-0 overflow-hidden mb-0 pt-0' : 'max-h-8 opacity-100 px-3',
-          )}
-        >
-          Dashboard
-        </p>
+      <nav className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden', collapsed ? 'p-2' : 'p-3')}>
+        <div className="flex flex-col gap-1">
+          {DASHBOARD_NAV_ITEMS.map(({ href, label, icon: Icon }) => {
+            const isDiscoverDetailRoute =
+              href === '/dashboard/discover' && pathname.startsWith('/dashboard/jobs');
+            const isActive =
+              href === '/dashboard'
+                ? pathname === '/dashboard'
+                : isDiscoverDetailRoute || pathname === href || pathname.startsWith(`${href}/`);
 
-        {DASHBOARD_NAV_ITEMS.map(({ href, label, icon: Icon }) => {
-          const isActive =
-            href === '/dashboard'
-              ? pathname === '/dashboard'
-              : EXACT_MATCH_ROUTES.has(href)
-                ? pathname === href
+            return (
+              <Link
+                key={href}
+                href={href}
+                title={collapsed ? label : undefined}
+                className={cn(
+                  'group flex items-center rounded-xl text-[13px] font-medium transition-all duration-150',
+                  collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5',
+                  isActive
+                    ? 'bg-sidebar-accent text-sidebar-foreground'
+                    : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground',
+                )}
+              >
+                <Icon
+                  className={cn(
+                    'h-[18px] w-[18px] shrink-0 transition-colors',
+                    isActive ? 'text-zbooni-green' : 'text-muted-foreground group-hover:text-sidebar-foreground',
+                  )}
+                />
+                <span
+                  className={cn(
+                    'truncate transition-[opacity,max-width] duration-250 ease-[cubic-bezier(0.4,0,0.2,1)]',
+                    collapsed ? 'max-w-0 opacity-0 overflow-hidden' : 'max-w-[180px] opacity-100',
+                  )}
+                >
+                  {label}
+                </span>
+                {isActive && !collapsed ? (
+                  <div className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-zbooni-green" aria-hidden="true" />
+                ) : null}
+              </Link>
+            );
+          })}
+        </div>
+
+        <div className={cn('mt-auto flex flex-col gap-1', collapsed ? 'pt-4' : 'pt-8')}>
+          {/* Discovery section label */}
+          <p
+            className={cn(
+              'mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60 transition-[opacity,max-height] duration-250',
+              collapsed ? 'max-h-0 opacity-0 overflow-hidden mb-0' : 'max-h-8 opacity-100 px-3',
+            )}
+          >
+            Dev Console
+          </p>
+
+          {DEV_CONSOLE_NAV_ITEMS.map(({ href, label, icon: Icon }) => {
+            const isActive =
+              href === '/discovery'
+                ? pathname === '/discovery'
+                : href.startsWith('/discovery#')
+                  ? pathname === '/discovery'
                 : pathname === href || pathname.startsWith(`${href}/`);
 
-          return (
-            <Link
-              key={href}
-              href={href}
-              title={collapsed ? label : undefined}
-              className={cn(
-                'group flex items-center rounded-xl text-[13px] font-medium transition-all duration-150',
-                collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5',
-                isActive
-                  ? 'bg-sidebar-accent text-sidebar-foreground'
-                  : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground',
-              )}
-            >
-              <Icon
+            return (
+              <Link
+                key={href}
+                href={href}
+                title={collapsed ? label : undefined}
                 className={cn(
-                  'h-[18px] w-[18px] shrink-0 transition-colors',
-                  isActive ? 'text-zbooni-green' : 'text-muted-foreground group-hover:text-sidebar-foreground',
-                )}
-              />
-              <span
-                className={cn(
-                  'truncate transition-[opacity,max-width] duration-250 ease-[cubic-bezier(0.4,0,0.2,1)]',
-                  collapsed ? 'max-w-0 opacity-0 overflow-hidden' : 'max-w-[180px] opacity-100',
+                  'group flex items-center rounded-xl text-[13px] font-medium transition-all duration-150',
+                  collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5',
+                  isActive
+                    ? 'bg-sidebar-accent text-sidebar-foreground'
+                    : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground',
                 )}
               >
-                {label}
-              </span>
-              {isActive && !collapsed ? (
-                <div className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-zbooni-green" aria-hidden="true" />
-              ) : null}
-            </Link>
-          );
-        })}
-
-        {/* Discovery section label */}
-        <p
-          className={cn(
-            'mb-1 mt-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60 transition-[opacity,max-height] duration-250',
-            collapsed ? 'max-h-0 opacity-0 overflow-hidden mb-0 mt-1' : 'max-h-8 opacity-100 px-3',
-          )}
-        >
-          Dev Console
-        </p>
-
-        {DEV_CONSOLE_NAV_ITEMS.map(({ href, label, icon: Icon }) => {
-          const isActive =
-            href === '/discovery'
-              ? pathname === '/discovery'
-              : href.startsWith('/discovery#')
-                ? pathname === '/discovery'
-              : pathname === href || pathname.startsWith(`${href}/`);
-
-          return (
-            <Link
-              key={href}
-              href={href}
-              title={collapsed ? label : undefined}
-              className={cn(
-                'group flex items-center rounded-xl text-[13px] font-medium transition-all duration-150',
-                collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5',
-                isActive
-                  ? 'bg-sidebar-accent text-sidebar-foreground'
-                  : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground',
-              )}
-            >
-              <Icon
-                className={cn(
-                  'h-[18px] w-[18px] shrink-0 transition-colors',
-                  isActive ? 'text-zbooni-teal' : 'text-muted-foreground group-hover:text-sidebar-foreground',
-                )}
-              />
-              <span
-                className={cn(
-                  'truncate transition-[opacity,max-width] duration-250 ease-[cubic-bezier(0.4,0,0.2,1)]',
-                  collapsed ? 'max-w-0 opacity-0 overflow-hidden' : 'max-w-[180px] opacity-100',
-                )}
-              >
-                {label}
-              </span>
-              {isActive && !collapsed ? (
-                <div className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-zbooni-teal" aria-hidden="true" />
-              ) : null}
-            </Link>
-          );
-        })}
+                <Icon
+                  className={cn(
+                    'h-[18px] w-[18px] shrink-0 transition-colors',
+                    isActive ? 'text-zbooni-teal' : 'text-muted-foreground group-hover:text-sidebar-foreground',
+                  )}
+                />
+                <span
+                  className={cn(
+                    'truncate transition-[opacity,max-width] duration-250 ease-[cubic-bezier(0.4,0,0.2,1)]',
+                    collapsed ? 'max-w-0 opacity-0 overflow-hidden' : 'max-w-[180px] opacity-100',
+                  )}
+                >
+                  {label}
+                </span>
+                {isActive && !collapsed ? (
+                  <div className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-zbooni-teal" aria-hidden="true" />
+                ) : null}
+              </Link>
+            );
+          })}
+        </div>
       </nav>
 
       {/* Footer — intentionally empty, no more workflow text */}

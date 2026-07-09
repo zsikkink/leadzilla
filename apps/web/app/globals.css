@@ -60,19 +60,19 @@
 @layer base {
   :root {
     --background: 240 15% 9%;
-    --foreground: 0 0% 96%;
+    --foreground: 0 0% 100%;
     --card: 240 12% 12%;
-    --card-foreground: 0 0% 96%;
+    --card-foreground: 0 0% 100%;
     --popover: 240 12% 14%;
-    --popover-foreground: 0 0% 96%;
+    --popover-foreground: 0 0% 100%;
     --primary: 130 100% 71%;
     --primary-foreground: 240 15% 9%;
     --secondary: 240 10% 18%;
-    --secondary-foreground: 0 0% 90%;
+    --secondary-foreground: 0 0% 100%;
     --muted: 240 10% 16%;
-    --muted-foreground: 240 5% 55%;
+    --muted-foreground: 0 0% 100%;
     --accent: 240 10% 18%;
-    --accent-foreground: 0 0% 96%;
+    --accent-foreground: 0 0% 100%;
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 98%;
     --border: 240 8% 18%;
@@ -85,11 +85,11 @@
     --chart-4: 43 96% 56%;
     --chart-5: 0 72% 51%;
     --sidebar: 240 15% 7%;
-    --sidebar-foreground: 0 0% 90%;
+    --sidebar-foreground: 0 0% 100%;
     --sidebar-primary: 130 100% 71%;
     --sidebar-primary-foreground: 240 15% 9%;
     --sidebar-accent: 240 10% 14%;
-    --sidebar-accent-foreground: 0 0% 96%;
+    --sidebar-accent-foreground: 0 0% 100%;
     --sidebar-border: 240 8% 14%;
     --sidebar-ring: 160 80% 55%;
   }
@@ -101,11 +101,68 @@
   }
   body {
     background-color: hsl(var(--background));
-    color: hsl(var(--foreground));
+    color: #fff;
     line-height: 1.6;
     font-feature-settings: "rlig" 1, "calt" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  input,
+  textarea,
+  select {
+    color: #fff;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: #fff !important;
+    opacity: 1;
+  }
+
+  :where(
+    a[href],
+    button,
+    [role='button'],
+    input[type='button'],
+    input[type='submit'],
+    input[type='reset'],
+    input[type='checkbox'],
+    input[type='radio'],
+    label[for],
+    select,
+    summary
+  ):not(:disabled):not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+
+  :where(
+    input:not([type='button']):not([type='submit']):not([type='reset']):not([type='checkbox']):not([type='radio']),
+    textarea
+  ) {
+    cursor: text;
+  }
+
+  :where(button:disabled, input:disabled, select:disabled, textarea:disabled, [aria-disabled='true']) {
+    cursor: not-allowed;
+  }
+}
+
+@layer utilities {
+  body
+    :where(
+      :not(button):not(button *):not([role='button']):not([role='button'] *):not(svg):not(svg *)
+    ):is(
+      [class*='text-muted-foreground/'],
+      [class*='text-foreground/'],
+      [class*='text-card-foreground/'],
+      [class*='text-sidebar-foreground/'],
+      [class*='text-slate-'],
+      [class*='text-gray-'],
+      [class*='text-zinc-'],
+      [class*='text-neutral-']
+    ) {
+    color: #fff !important;
   }
 }
 

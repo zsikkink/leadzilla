@@ -28,6 +28,15 @@ const UpdatePipelineSettingBodySchema = z.object({
   value: z.unknown(),
 });
 
+const STRING_PIPELINE_SETTING_KEYS = new Set([
+  'messagingBehaviorPrompt',
+  'messagingModel',
+  'messagingRole',
+  'messagingSystemPrompt',
+  'scoringModel',
+  'scoringSystemPrompt',
+]);
+
 function normalizePipelineSettingValue(key: string, value: unknown): unknown {
   if (key === 'countryCities') {
     return buildSerpApiCountryCitiesMap(value);
@@ -133,6 +142,24 @@ export function registerSettingsRoutes(app: FastifyInstance) {
         reply.status(400);
         return ErrorResponseSchema.parse({
           error: `${key} must be between 0 and 1 (inclusive)`,
+          requestId: request.id,
+        });
+      }
+    }
+
+    if (STRING_PIPELINE_SETTING_KEYS.has(key)) {
+      if (typeof value !== 'string') {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: `${key} must be a string`,
+          requestId: request.id,
+        });
+      }
+
+      if ((key === 'messagingModel' || key === 'scoringModel') && value.trim().length > 120) {
+        reply.status(400);
+        return ErrorResponseSchema.parse({
+          error: `${key} must be 120 characters or fewer`,
           requestId: request.id,
         });
       }

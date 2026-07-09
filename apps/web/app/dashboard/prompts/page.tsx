@@ -1,33 +1,40 @@
 'use client';
 
 import {
-  AlertTriangle,
-  Bot,
-  Eye,
+  ChevronDown,
   Loader2,
-  MessageSquare,
+  Lock,
   RotateCcw,
   Save,
-  ShieldCheck,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { useAuth } from '../../../src/hooks/use-auth.js';
 import {
+  DEFAULT_MESSAGING_MODEL,
   DEFAULT_MESSAGING_ROLE,
   DEFAULT_MESSAGING_SYSTEM_PROMPT,
+  DEFAULT_SCORING_SYSTEM_PROMPT,
 } from '../../../src/lib/messaging-defaults.js';
 import { buildPipelineSettingsSavePlan } from '../../../src/lib/pipeline-settings-save-plan.js';
 import { cn } from '../../../src/lib/utils.js';
 
 const PROMPT_SETTING_LABELS: Record<string, string> = {
-  messagingRole: 'Outreach Role',
-  messagingSystemPrompt: 'Outreach Instructions',
+  messagingBehaviorPrompt: 'Outreach',
+  messagingModel: 'Outreach Model',
+  scoringModel: 'Lead Scoring Model',
+  scoringSystemPrompt: 'Lead Scoring',
 };
 
-const LOCKED_OUTPUT_FORMAT =
-  'Output JSON with a single "message" object containing subject, bodyText, bodyHtml, and ctaText. The bodyText must include the final sign-off "Best,\\nLeadzilla Team".';
+const PROMPT_CENTER_SESSION_STORAGE_KEY = 'leadzilla.prompt-center.session-settings.v2';
+
+type PromptCenterEditableSettings = {
+  messagingBehaviorPrompt: string;
+  messagingModel: string;
+  scoringModel: string;
+  scoringSystemPrompt: string;
+};
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -39,44 +46,267 @@ function getErrorMessage(error: unknown): string {
   return 'unknown error';
 }
 
-function buildHookInstruction(hook: string): string {
-  const trimmed = hook.trim();
-  return trimmed.length > 0
-    ? `You MUST incorporate the following sales hook as the core angle of your message. Sales hook: "${trimmed}"`
-    : 'No specific sales hook was provided. Derive a concrete, relevant hook from the ICP description and business intelligence.';
+function readPromptCenterSessionSettings(): Partial<PromptCenterEditableSettings> {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(PROMPT_CENTER_SESSION_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw) as Partial<Record<keyof PromptCenterEditableSettings, unknown>>;
+
+    return {
+      ...(typeof parsed.messagingBehaviorPrompt === 'string'
+        ? { messagingBehaviorPrompt: parsed.messagingBehaviorPrompt }
+        : {}),
+      ...(typeof parsed.messagingModel === 'string' ? { messagingModel: parsed.messagingModel } : {}),
+      ...(typeof parsed.scoringModel === 'string' ? { scoringModel: parsed.scoringModel } : {}),
+      ...(typeof parsed.scoringSystemPrompt === 'string'
+        ? { scoringSystemPrompt: parsed.scoringSystemPrompt }
+        : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function writePromptCenterSessionSettings(settings: PromptCenterEditableSettings): void {
+  window.sessionStorage.setItem(PROMPT_CENTER_SESSION_STORAGE_KEY, JSON.stringify(settings));
+}
+
+function buildConsolidatedBehaviorPrompt(role: string, systemPrompt: string): string {
+  return [role.trim(), systemPrompt.trim()].filter(Boolean).join('\n\n---\n\n');
+}
+
+const DEFAULT_AI_BEHAVIOR_PROMPT = buildConsolidatedBehaviorPrompt(
+  DEFAULT_MESSAGING_ROLE,
+  DEFAULT_MESSAGING_SYSTEM_PROMPT,
+);
+
+function isLegacyRegionalOutreachPrompt(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return (
+    normalized.includes('mena region') ||
+    normalized.includes('uae, saudi arabia') ||
+    normalized.includes('businesses in the mena region')
+  );
+}
+
+function resolveOutreachPrompt({
+  sessionPrompt,
+  behaviorPrompt,
+  legacyRole,
+  legacySystemPrompt,
+}: {
+  sessionPrompt: string | undefined;
+  behaviorPrompt: string;
+  legacyRole: string;
+  legacySystemPrompt: string;
+}): string {
+  const candidates = [
+    sessionPrompt,
+    behaviorPrompt,
+    buildConsolidatedBehaviorPrompt(legacyRole, legacySystemPrompt),
+  ];
+  const usablePrompt = candidates.find((candidate) => {
+    const value = candidate?.trim();
+    return value && !isLegacyRegionalOutreachPrompt(value);
+  });
+  return usablePrompt ?? DEFAULT_AI_BEHAVIOR_PROMPT;
+}
+
+type PromptModelOption = {
+  value: string;
+  label: string;
+  disabled?: boolean | undefined;
+};
+
+const DEFAULT_PROMPT_MODEL_OPTION: PromptModelOption = {
+  value: DEFAULT_MESSAGING_MODEL,
+  label: `${DEFAULT_MESSAGING_MODEL} (default)`,
+};
+
+const PROMPT_MODEL_OPTIONS = [
+  DEFAULT_PROMPT_MODEL_OPTION,
+  { value: 'gpt-5.5', label: 'gpt-5.5', disabled: true },
+  { value: 'gpt-5.4', label: 'gpt-5.4', disabled: true },
+  { value: 'gpt-5.2', label: 'gpt-5.2', disabled: true },
+  { value: 'gpt-5', label: 'gpt-5', disabled: true },
+  { value: 'gpt-5.4-mini', label: 'gpt-5.4-mini', disabled: true },
+  { value: 'gpt-4.1', label: 'gpt-4.1', disabled: true },
+  { value: 'gpt-4.1-mini', label: 'gpt-4.1-mini', disabled: true },
+];
+
+const PROMPT_INPUT_ITEMS = [
+  ['Company', 'Our product and unique position'],
+  ['Business', 'Name, business, industry'],
+  ['Evidence', 'Website, Instagram, notes'],
+  ['ICP', 'Pain points, sales angle, CTA'],
+  ['Sequence', 'First message, follow-up, redraft'],
+  ['Output', 'Email or SMS/WhatsApp'],
+] as const;
+
+function PromptModelSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const effectiveModel = value.trim() || DEFAULT_MESSAGING_MODEL;
+  const modelOptions = useMemo(() => {
+    const selectedModel = value.trim();
+    if (!selectedModel || PROMPT_MODEL_OPTIONS.some((option) => option.value === selectedModel)) {
+      return PROMPT_MODEL_OPTIONS;
+    }
+    return [
+      ...PROMPT_MODEL_OPTIONS,
+      { value: selectedModel, label: `${selectedModel} (saved)`, disabled: true },
+    ];
+  }, [value]);
+  const selectedModelLabel = useMemo(() => {
+    return (
+      modelOptions
+        .find((option) => option.value === effectiveModel)?.label ?? effectiveModel
+    );
+  }, [effectiveModel, modelOptions]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (menuRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      setIsOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen]);
+
+  return (
+    <div ref={menuRef} className="flex w-full items-center gap-2 sm:w-auto">
+      <div className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-foreground">
+        Model:
+      </div>
+      <div className="relative w-full sm:w-56">
+        <button
+          type="button"
+          aria-expanded={isOpen}
+          onClick={() => setIsOpen((open) => !open)}
+          className={cn(
+            'flex h-10 w-full items-center justify-between gap-3 rounded-xl border bg-zbooni-dark/80 px-3 text-left text-sm text-foreground shadow-inner shadow-white/5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-zbooni-teal/20',
+            isOpen
+              ? 'border-zbooni-teal/70 bg-zbooni-dark/90'
+              : 'border-white/15 hover:border-white/25 hover:bg-zbooni-dark/90',
+          )}
+        >
+          <span className="truncate">{selectedModelLabel}</span>
+          <ChevronDown
+            className={cn(
+              'h-4 w-4 shrink-0 text-foreground transition-transform',
+              isOpen && 'rotate-180',
+            )}
+          />
+        </button>
+
+        {isOpen ? (
+          <div className="absolute right-0 z-50 mt-2 max-h-80 w-full overflow-auto rounded-xl border border-white/15 bg-zbooni-dark/95 p-1 shadow-2xl ring-1 ring-zbooni-teal/15">
+            <div className="space-y-0.5">
+              {modelOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  disabled={option.disabled}
+                  onClick={() => {
+                    onChange(option.value === DEFAULT_PROMPT_MODEL_OPTION.value ? '' : option.value);
+                    setIsOpen(false);
+                  }}
+                  className={cn(
+                    'flex h-9 w-full items-center justify-between gap-3 rounded-lg px-3 text-left text-sm transition-colors',
+                    option.value === effectiveModel
+                      ? 'bg-zbooni-teal/15 text-foreground'
+                      : 'text-foreground hover:bg-muted/30',
+                    option.disabled && 'cursor-not-allowed text-foreground hover:bg-transparent',
+                  )}
+                >
+                  <span className="truncate">{option.label}</span>
+                  {option.disabled ? (
+                    <span className="inline-flex shrink-0 items-center text-foreground">
+                      <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span className="sr-only">Locked</span>
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function PromptTextArea({
   label,
   description,
+  modelValue,
   value,
   rows,
   monospace,
   placeholder,
+  resetButtonLabel = 'Reset to default',
   onChange,
-  onUseDefault,
-  onClearOverride,
+  onModelChange,
+  onSave,
+  onResetDefault,
+  saveDisabled,
+  isSaving,
 }: {
   label: string;
-  description: string;
+  description?: string | undefined;
+  modelValue: string;
   value: string;
   rows: number;
   monospace?: boolean | undefined;
   placeholder: string;
+  resetButtonLabel?: string | undefined;
   onChange: (value: string) => void;
-  onUseDefault: () => void;
-  onClearOverride: () => void;
+  onModelChange: (value: string) => void;
+  onSave: () => void;
+  onResetDefault: () => void;
+  saveDisabled: boolean;
+  isSaving: boolean;
 }) {
   return (
     <section className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-      <div className="mb-4 flex items-start gap-2">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zbooni-teal/10">
-          <Bot className="h-4 w-4 text-zbooni-teal" />
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h2 className="text-lg font-bold tracking-tight">{label}</h2>
+          {description ? (
+            <p className="mt-0.5 text-[11px] text-foreground">{description}</p>
+          ) : null}
         </div>
-        <div>
-          <h2 className="text-base font-bold tracking-tight">{label}</h2>
-          <p className="mt-0.5 text-[11px] text-muted-foreground/50">{description}</p>
-        </div>
+        <PromptModelSelect value={modelValue} onChange={onModelChange} />
       </div>
       <textarea
         value={value}
@@ -84,25 +314,32 @@ function PromptTextArea({
         rows={rows}
         placeholder={placeholder}
         className={cn(
-          'w-full resize-y rounded-xl border border-border/30 bg-zbooni-dark/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none',
+          'h-[32rem] min-h-[32rem] w-full resize-y rounded-xl border border-white/15 bg-zbooni-dark/75 px-4 py-3 text-sm text-foreground shadow-inner shadow-white/5 transition-colors placeholder:text-muted-foreground/30 hover:border-white/25 hover:bg-zbooni-dark/85 focus:border-zbooni-teal/70 focus:bg-zbooni-dark/90 focus:outline-none focus:ring-2 focus:ring-zbooni-teal/15',
           monospace && 'font-mono text-[12px] leading-relaxed',
         )}
       />
-      <div className="mt-3 flex flex-wrap gap-2">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <button
           type="button"
-          onClick={onUseDefault}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
+          onClick={onSave}
+          disabled={saveDisabled}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-colors',
+            !saveDisabled
+              ? 'bg-zbooni-teal/20 text-zbooni-teal hover:bg-zbooni-teal/30'
+              : 'cursor-not-allowed bg-muted/20 text-muted-foreground/60',
+          )}
         >
-          Use Default Text
+          {isSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+          {isSaving ? 'Saving...' : 'Save'}
         </button>
         <button
           type="button"
-          onClick={onClearOverride}
+          onClick={onResetDefault}
           className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted/40"
         >
           <RotateCcw className="h-3 w-3" />
-          Clear Override
+          {resetButtonLabel}
         </button>
       </div>
     </section>
@@ -111,25 +348,16 @@ function PromptTextArea({
 
 export default function PromptCenterPage() {
   const { apiClient, isAuthenticated, isLoading: isAuthLoading } = useAuth();
-  const [messagingRole, setMessagingRole] = useState('');
-  const [messagingSystemPrompt, setMessagingSystemPrompt] = useState('');
+  const [messagingModel, setMessagingModel] = useState('');
+  const [scoringModel, setScoringModel] = useState('');
+  const [aiBehaviorPrompt, setAiBehaviorPrompt] = useState('');
+  const [scoringSystemPrompt, setScoringSystemPrompt] = useState('');
   const [isLoadingSettings, setIsLoadingSettings] = useState(true);
   const [settingsLoadError, setSettingsLoadError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
-  const [previewBuiltAt, setPreviewBuiltAt] = useState<string | null>(null);
-  const [sampleContactType, setSampleContactType] = useState<'DECISION_MAKER' | 'GENERIC_CONTACT'>('DECISION_MAKER');
-  const [sampleRecipientName, setSampleRecipientName] = useState('Ann');
-  const [sampleCompanyName, setSampleCompanyName] = useState('LAADS');
-  const [sampleHook, setSampleHook] = useState('Turn proposal-based WhatsApp conversations into paid, trackable project payments.');
-  const [sampleBusinessIntelligence, setSampleBusinessIntelligence] = useState(
-    'Company: Interior fit-out and MEP projects. Social: WhatsApp appears to be a primary inquiry channel.',
-  );
   const loadedRef = useRef(false);
   const loadedSettingsRef = useRef<Record<string, unknown> | null>(null);
-
-  const effectiveRole = messagingRole.trim() || DEFAULT_MESSAGING_ROLE;
-  const effectiveSystemPrompt = messagingSystemPrompt.trim() || DEFAULT_MESSAGING_SYSTEM_PROMPT;
 
   const loadSettings = useCallback(async () => {
     setIsLoadingSettings(true);
@@ -137,15 +365,39 @@ export default function PromptCenterPage() {
 
     try {
       const { items } = await apiClient.listPipelineSettings();
+      const nextModel = String(items.find((item) => item.key === 'messagingModel')?.value ?? '');
+      const nextScoringModel = String(items.find((item) => item.key === 'scoringModel')?.value ?? '');
+      const nextBehaviorPrompt = String(items.find((item) => item.key === 'messagingBehaviorPrompt')?.value ?? '');
       const nextRole = String(items.find((item) => item.key === 'messagingRole')?.value ?? '');
       const nextSystemPrompt = String(items.find((item) => item.key === 'messagingSystemPrompt')?.value ?? '');
+      const nextScoringSystemPrompt = String(items.find((item) => item.key === 'scoringSystemPrompt')?.value ?? '');
+      const sessionSettings = readPromptCenterSessionSettings();
+      const nextAiBehaviorPrompt = resolveOutreachPrompt({
+        sessionPrompt: sessionSettings.messagingBehaviorPrompt,
+        behaviorPrompt: nextBehaviorPrompt,
+        legacyRole: nextRole,
+        legacySystemPrompt: nextSystemPrompt,
+      });
+      const nextEditableSettings: PromptCenterEditableSettings = {
+        messagingBehaviorPrompt: nextAiBehaviorPrompt,
+        messagingModel: sessionSettings.messagingModel ?? nextModel,
+        scoringModel: sessionSettings.scoringModel ?? nextScoringModel,
+        scoringSystemPrompt: sessionSettings.scoringSystemPrompt ?? nextScoringSystemPrompt,
+      };
+      const nextVisibleScoringPrompt = nextEditableSettings.scoringSystemPrompt.trim()
+        ? nextEditableSettings.scoringSystemPrompt
+        : DEFAULT_SCORING_SYSTEM_PROMPT;
 
-      setMessagingRole(nextRole);
-      setMessagingSystemPrompt(nextSystemPrompt);
+      setMessagingModel(nextEditableSettings.messagingModel);
+      setScoringModel(nextEditableSettings.scoringModel);
+      setAiBehaviorPrompt(nextAiBehaviorPrompt);
+      setScoringSystemPrompt(nextVisibleScoringPrompt);
       setHasChanges(false);
       loadedSettingsRef.current = {
-        messagingRole: nextRole,
-        messagingSystemPrompt: nextSystemPrompt,
+        messagingBehaviorPrompt: nextAiBehaviorPrompt,
+        messagingModel: nextEditableSettings.messagingModel,
+        scoringModel: nextEditableSettings.scoringModel,
+        scoringSystemPrompt: nextVisibleScoringPrompt,
       };
     } catch (error: unknown) {
       loadedSettingsRef.current = null;
@@ -172,8 +424,10 @@ export default function PromptCenterPage() {
     }
 
     const nextSettings = {
-      messagingRole,
-      messagingSystemPrompt,
+      messagingBehaviorPrompt: aiBehaviorPrompt.trim(),
+      messagingModel: messagingModel.trim(),
+      scoringModel: scoringModel.trim(),
+      scoringSystemPrompt: scoringSystemPrompt.trim(),
     };
 
     const saveTargets = buildPipelineSettingsSavePlan({
@@ -188,158 +442,35 @@ export default function PromptCenterPage() {
     }
 
     setIsSaving(true);
-    const results: Array<
-      | { key: string; value: unknown; success: true }
-      | { key: string; success: false; errorMessage: string }
-    > = [];
 
-    for (const target of saveTargets) {
-      try {
-        await apiClient.updatePipelineSetting(target.key, target.value);
-        results.push({ key: target.key, value: target.value, success: true });
-      } catch (error: unknown) {
-        results.push({ key: target.key, success: false, errorMessage: getErrorMessage(error) });
-      }
-    }
-
-    const failed = results.filter((result): result is { key: string; success: false; errorMessage: string } => !result.success);
-    const saved = results.filter((result): result is { key: string; value: unknown; success: true } => result.success);
-
-    if (saved.length > 0) {
+    try {
+      writePromptCenterSessionSettings(nextSettings);
       loadedSettingsRef.current = {
         ...currentSettings,
-        ...Object.fromEntries(saved.map((result) => [result.key, result.value])),
+        ...nextSettings,
       };
-    }
-
-    if (failed.length > 0) {
-      toast.error(`Failed to save: ${failed.map((result) => `${result.key} (${result.errorMessage})`).join('; ')}`);
-      setHasChanges(true);
-    } else {
-      toast.success(`Saved ${saved.length} prompt setting${saved.length === 1 ? '' : 's'}.`);
+      toast.success(
+        `Saved ${saveTargets.length} prompt setting${saveTargets.length === 1 ? '' : 's'} for this session.`,
+      );
       setHasChanges(false);
+    } catch (error: unknown) {
+      toast.error(`Failed to save prompt settings in this browser session: ${getErrorMessage(error)}`);
+      setHasChanges(true);
+    } finally {
+      setIsSaving(false);
     }
-
-    setIsSaving(false);
-  }, [apiClient, messagingRole, messagingSystemPrompt]);
-
-  const preview = useMemo(() => {
-    const recipientGuidance = sampleContactType === 'GENERIC_CONTACT'
-      ? 'Recipient guidance: write to the company team, not to an individual person.'
-      : 'Recipient guidance: write to the named person while keeping the value framed around their team/business.';
-
-    return {
-      role: effectiveRole,
-      editableInstructions: effectiveSystemPrompt,
-      lockedRuntimeLayer: [
-        'MANDATORY ICP HOOK INSTRUCTION:',
-        buildHookInstruction(sampleHook),
-        '',
-        'LOCKED OUTPUT FORMAT:',
-        LOCKED_OUTPUT_FORMAT,
-        '',
-        'LOCKED SAFETY VALIDATION:',
-        'The worker still validates greeting, sign-off, message length, banned phrases, raw JSON, and re-draft feedback compliance after generation.',
-      ].join('\n'),
-      userContext: [
-        'Channel: EMAIL',
-        `Lead: ${sampleRecipientName} (${sampleRecipientName.toLowerCase()}@example.com)`,
-        `Contact type: ${sampleContactType}`,
-        sampleContactType === 'GENERIC_CONTACT' ? 'Recipient name: none verified' : `Recipient name: ${sampleRecipientName}`,
-        `Recipient email kind: ${sampleContactType === 'GENERIC_CONTACT' ? 'GENERIC' : 'PERSONAL'}`,
-        recipientGuidance,
-        `Company: ${sampleCompanyName}`,
-        'Score band: HIGH (0.82)',
-        'ICP description: Sample ICP profile description and features to pitch.',
-        '',
-        'Business Intelligence:',
-        sampleBusinessIntelligence,
-      ].join('\n'),
-    };
-  }, [
-    effectiveRole,
-    effectiveSystemPrompt,
-    sampleBusinessIntelligence,
-    sampleCompanyName,
-    sampleContactType,
-    sampleHook,
-    sampleRecipientName,
-  ]);
+  }, [aiBehaviorPrompt, messagingModel, scoringModel, scoringSystemPrompt]);
 
   const saveDisabled = !hasChanges || isSaving || isLoadingSettings || settingsLoadError !== null;
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-extrabold tracking-tight">Prompt Center</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            Controlled outreach prompt layers. Scoring, classifier, output format, and validation prompts remain locked in code.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void loadSettings()}
-            disabled={isLoadingSettings}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-muted/20 px-3.5 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/40 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isLoadingSettings ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-            Reload
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={saveDisabled}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold transition-all',
-              !saveDisabled
-                ? 'bg-zbooni-teal/20 text-zbooni-teal hover:bg-zbooni-teal/30'
-                : 'cursor-not-allowed bg-muted/20 text-muted-foreground/60',
-            )}
-          >
-            {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-            {isSaving ? 'Saving...' : 'Save Prompt Settings'}
-          </button>
-        </div>
-      </div>
-
       {settingsLoadError ? (
         <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
           <p className="font-semibold text-red-300">Prompt settings failed to load</p>
           <p className="mt-1 text-red-100/80">{settingsLoadError}. Saving is disabled until reload succeeds.</p>
         </div>
       ) : null}
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="rounded-2xl border border-zbooni-green/25 bg-zbooni-green/5 p-5">
-          <div className="flex items-center gap-2">
-            <MessageSquare className="h-4 w-4 text-zbooni-green" />
-            <h2 className="text-sm font-bold">Editable</h2>
-          </div>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Outreach role and outreach instructions used by initial drafts, re-drafts, and follow-ups.
-          </p>
-        </div>
-        <div className="rounded-2xl border border-amber-500/25 bg-amber-500/5 p-5">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-amber-300" />
-            <h2 className="text-sm font-bold">Locked</h2>
-          </div>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Output JSON shape, sign-off enforcement, validation retry rules, scoring prompts, and reply classifier prompts.
-          </p>
-        </div>
-        <div className="rounded-2xl border border-border/50 bg-card p-5">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-bold">Operator Note</h2>
-          </div>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Empty fields use the runtime defaults. Saving default text pins that text until it is cleared.
-          </p>
-        </div>
-      </div>
 
       {isLoadingSettings ? (
         <div className="flex items-center gap-2 rounded-2xl border border-border/50 bg-card p-5 text-sm text-muted-foreground">
@@ -348,134 +479,83 @@ export default function PromptCenterPage() {
         </div>
       ) : (
         <>
+          <section className="rounded-2xl border border-border/50 bg-card px-5 py-4 shadow-sm">
+            <div className="mb-3">
+              <h2 className="text-lg font-bold tracking-tight">Prompt Inputs</h2>
+              <p className="mt-0.5 text-xs text-foreground">
+                Campaign data + editable prompts determine what the AI writes.
+              </p>
+            </div>
+            <dl className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {PROMPT_INPUT_ITEMS.map(([label, value]) => (
+                <div
+                  key={label}
+                  className="rounded-xl border border-border/30 bg-zbooni-dark/25 px-3 py-2"
+                >
+                  <dt className="text-[10px] font-bold uppercase tracking-wider text-foreground">
+                    {label}
+                  </dt>
+                  <dd className="mt-0.5 text-xs leading-snug text-foreground">
+                    {value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+
           <PromptTextArea
-            label="Outreach Role"
-            description="Who the AI is and how it should behave when drafting outreach."
-            value={messagingRole}
-            rows={6}
-            placeholder="Leave empty to use the runtime default role."
+            label="Outreach"
+            modelValue={messagingModel}
+            value={aiBehaviorPrompt}
+            rows={18}
+            monospace
+            placeholder="Leave empty to use the built-in Leadzilla behavior prompt."
+            resetButtonLabel="Reset to default"
             onChange={(value) => {
-              setMessagingRole(value);
+              setAiBehaviorPrompt(value);
               setHasChanges(true);
             }}
-            onUseDefault={() => {
-              setMessagingRole(DEFAULT_MESSAGING_ROLE);
+            onModelChange={(value) => {
+              setMessagingModel(value);
               setHasChanges(true);
             }}
-            onClearOverride={() => {
-              setMessagingRole('');
+            onSave={handleSave}
+            onResetDefault={() => {
+              setAiBehaviorPrompt(DEFAULT_AI_BEHAVIOR_PROMPT);
               setHasChanges(true);
-              toast.info('Role override cleared. Save to persist.');
             }}
+            saveDisabled={saveDisabled}
+            isSaving={isSaving}
           />
 
           <PromptTextArea
-            label="Outreach Instructions"
-            description="Message structure, tone, contact awareness, proof-point usage, and outreach rules."
-            value={messagingSystemPrompt}
-            rows={14}
+            label="Lead Scoring"
+            modelValue={scoringModel}
+            value={scoringSystemPrompt}
+            rows={18}
             monospace
-            placeholder="Leave empty to use the runtime default outreach instructions."
+            placeholder="Leave empty to use the built-in Leadzilla scoring prompt."
+            resetButtonLabel="Reset to default"
             onChange={(value) => {
-              setMessagingSystemPrompt(value);
+              setScoringSystemPrompt(value);
               setHasChanges(true);
             }}
-            onUseDefault={() => {
-              setMessagingSystemPrompt(DEFAULT_MESSAGING_SYSTEM_PROMPT);
+            onModelChange={(value) => {
+              setScoringModel(value);
               setHasChanges(true);
             }}
-            onClearOverride={() => {
-              setMessagingSystemPrompt('');
+            onSave={handleSave}
+            onResetDefault={() => {
+              setScoringSystemPrompt(DEFAULT_SCORING_SYSTEM_PROMPT);
               setHasChanges(true);
-              toast.info('Outreach instruction override cleared. Save to persist.');
             }}
+            saveDisabled={saveDisabled}
+            isSaving={isSaving}
           />
+
         </>
       )}
 
-      <section className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h2 className="flex items-center gap-2 text-base font-bold tracking-tight">
-              <Eye className="h-4 w-4 text-zbooni-teal" />
-              Prompt Preview
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground/60">
-              Preview uses the text currently on this page, including unsaved edits. It does not call OpenAI or create a draft.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setPreviewBuiltAt(new Date().toLocaleString())}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-zbooni-green/15 px-3.5 py-2 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/25"
-          >
-            <Eye className="h-3.5 w-3.5" />
-            Preview Effective Prompt
-          </button>
-        </div>
-
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <label className="space-y-1.5 text-xs font-semibold text-muted-foreground">
-            Contact Type
-            <select
-              value={sampleContactType}
-              onChange={(event) => setSampleContactType(event.target.value as 'DECISION_MAKER' | 'GENERIC_CONTACT')}
-              className="h-10 w-full rounded-lg border border-border/30 bg-zbooni-dark/40 px-3 text-sm text-foreground focus:border-zbooni-teal/50 focus:outline-none"
-            >
-              <option value="DECISION_MAKER">Decision Maker</option>
-              <option value="GENERIC_CONTACT">Generic Contact</option>
-            </select>
-          </label>
-          <label className="space-y-1.5 text-xs font-semibold text-muted-foreground">
-            Recipient / Company
-            <input
-              value={sampleContactType === 'GENERIC_CONTACT' ? sampleCompanyName : sampleRecipientName}
-              onChange={(event) => {
-                if (sampleContactType === 'GENERIC_CONTACT') {
-                  setSampleCompanyName(event.target.value);
-                } else {
-                  setSampleRecipientName(event.target.value);
-                }
-              }}
-              className="h-10 w-full rounded-lg border border-border/30 bg-zbooni-dark/40 px-3 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none"
-            />
-          </label>
-          <label className="space-y-1.5 text-xs font-semibold text-muted-foreground sm:col-span-2">
-            Sample ICP Sales Hook
-            <input
-              value={sampleHook}
-              onChange={(event) => setSampleHook(event.target.value)}
-              className="h-10 w-full rounded-lg border border-border/30 bg-zbooni-dark/40 px-3 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none"
-            />
-          </label>
-          <label className="space-y-1.5 text-xs font-semibold text-muted-foreground sm:col-span-2">
-            Sample Business Intelligence
-            <textarea
-              value={sampleBusinessIntelligence}
-              onChange={(event) => setSampleBusinessIntelligence(event.target.value)}
-              rows={3}
-              className="w-full resize-y rounded-lg border border-border/30 bg-zbooni-dark/40 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-zbooni-teal/50 focus:outline-none"
-            />
-          </label>
-        </div>
-
-        {previewBuiltAt ? (
-          <div className="mt-5 space-y-4">
-            <p className="text-xs text-muted-foreground/50">Preview built {previewBuiltAt}</p>
-            {[
-              ['Editable Role Layer', preview.role],
-              ['Editable Outreach Instruction Layer', preview.editableInstructions],
-              ['Locked Runtime Layer', preview.lockedRuntimeLayer],
-              ['Example User Context', preview.userContext],
-            ].map(([title, value]) => (
-              <div key={title} className="rounded-xl border border-border/30 bg-zbooni-dark/30 p-4">
-                <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground/60">{title}</h3>
-                <pre className="max-h-72 overflow-auto whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground/90">{value}</pre>
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </section>
     </div>
   );
 }

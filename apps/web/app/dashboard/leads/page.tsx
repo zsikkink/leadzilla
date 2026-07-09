@@ -57,7 +57,7 @@ const SCORE_SOURCE_LABELS: Record<LeadDisplayScoreSource, string> = {
   NONE: '',
 };
 
-function buildMessageQueueHref(leadId: string, draftId?: string | null, pollDraft = false): string {
+function buildInboxDraftHref(leadId: string, draftId?: string | null, pollDraft = false): string {
   const params = new URLSearchParams({ leadId });
   if (draftId) {
     params.set('draftId', draftId);
@@ -65,7 +65,7 @@ function buildMessageQueueHref(leadId: string, draftId?: string | null, pollDraf
   if (pollDraft) {
     params.set('pollDraft', '1');
   }
-  return `/dashboard/messages?${params.toString()}`;
+  return `/dashboard/inbox?${params.toString()}`;
 }
 
 // ── Extract legacy score from enrichment data ──────────
@@ -476,33 +476,33 @@ export default function LeadsPage() {
         case 'QUEUED': {
           toast.success(
             forceRegenerate
-              ? `Draft regeneration queued for ${leadDisplayName}. Opening Message Queue for this lead.`
-              : `Draft generation queued for ${leadDisplayName}. Opening Message Queue for this lead.`,
+              ? `Draft regeneration queued for ${leadDisplayName}. Opening Inbox draft review.`
+              : `Draft generation queued for ${leadDisplayName}. Opening Inbox draft review.`,
           );
-          router.push(buildMessageQueueHref(leadId, null, true));
+          router.push(buildInboxDraftHref(leadId, null, true));
           break;
         }
         case 'CREATED': {
           toast.success(
             forceRegenerate
-              ? `New draft created for ${leadDisplayName}. Opening Message Queue to review it.`
-              : `Draft created for ${leadDisplayName}. Opening Message Queue to review it.`,
+              ? `New draft created for ${leadDisplayName}. Opening Inbox to review it.`
+              : `Draft created for ${leadDisplayName}. Opening Inbox to review it.`,
           );
-          router.push(buildMessageQueueHref(leadId, result.draftId));
+          router.push(buildInboxDraftHref(leadId, result.draftId));
           break;
         }
         case 'EXISTS': {
           toast.info(
             forceRegenerate
-              ? `A current draft still exists for ${leadDisplayName}. Opening Message Queue to review it.`
-              : `An initial draft already exists for ${leadDisplayName}. Opening Message Queue to review it.`,
+              ? `A current draft still exists for ${leadDisplayName}. Opening Inbox to review it.`
+              : `An initial draft already exists for ${leadDisplayName}. Opening Inbox to review it.`,
           );
-          router.push(buildMessageQueueHref(leadId, result.draftId));
+          router.push(buildInboxDraftHref(leadId, result.draftId));
           break;
         }
       }
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Failed to generate message');
+      toast.error(err instanceof Error ? err.message : 'Failed to generate draft');
     } finally {
       setGeneratingForLead(null);
     }

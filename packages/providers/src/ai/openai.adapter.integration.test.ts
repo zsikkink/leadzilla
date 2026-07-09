@@ -76,6 +76,33 @@ describe('OpenAiAdapter integration', () => {
       expect(payload.model).toBe('gpt-4o-mini');
     });
 
+    it('uses a per-generation model override when provided', async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => {
+        return new Response(
+          makeOpenAiResponse(JSON.stringify(VALID_GENERATION_RESPONSE)),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      });
+
+      const adapter = new OpenAiAdapter({
+        apiKey: 'sk-test',
+        fetchImpl: fetchMock as unknown as typeof fetch,
+      });
+
+      const result = await adapter.generateMessageVariants(
+        GENERATION_CONTEXT,
+        { model: 'gpt-4.1-mini' },
+      );
+
+      expect(result.status).toBe('success');
+      if (result.status !== 'success') throw new Error('Expected success');
+      expect(result.data.model).toBe('gpt-4.1-mini');
+
+      const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+      const payload = JSON.parse(String(requestInit?.body ?? '{}')) as { model?: string };
+      expect(payload.model).toBe('gpt-4.1-mini');
+    });
+
     it('strips markdown fences from response', async () => {
       const fencedContent = '```json\n' + JSON.stringify(VALID_GENERATION_RESPONSE) + '\n```';
       const fetchImpl = vi.fn(async () => {
@@ -160,6 +187,40 @@ describe('OpenAiAdapter integration', () => {
       expect(systemPrompt).toContain('I’m reaching out from Leadzilla. We help businesses turn customer messages into paid, trackable orders.');
       expect(systemPrompt).not.toContain('## ZBOONI POSITIONING');
       expect(systemPrompt).not.toContain('You are a senior sales development representative at Leadzilla');
+    });
+
+    it('uses consolidated behavior prompt instead of separate role and instructions', async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => {
+        return new Response(
+          makeOpenAiResponse(JSON.stringify(VALID_GENERATION_RESPONSE)),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      });
+
+      const adapter = new OpenAiAdapter({
+        apiKey: 'sk-test',
+        fetchImpl: fetchMock as unknown as typeof fetch,
+      });
+
+      const result = await adapter.generateMessageVariants({
+        ...GENERATION_CONTEXT,
+        customBehaviorPrompt: 'Act like a concise enterprise outbound strategist.',
+        customRole: 'Legacy role that should not be used',
+        customSystemPrompt: 'Legacy instructions that should not be used',
+      });
+
+      expect(result.status).toBe('success');
+
+      const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+      const payload = JSON.parse(String(requestInit?.body ?? '{}')) as {
+        messages?: Array<{ role: string; content: string }>;
+      };
+      const systemPrompt = payload.messages?.find((msg) => msg.role === 'system')?.content ?? '';
+
+      expect(systemPrompt).toContain('Act like a concise enterprise outbound strategist.');
+      expect(systemPrompt).not.toContain('Legacy role that should not be used');
+      expect(systemPrompt).not.toContain('Legacy instructions that should not be used');
+      expect(systemPrompt).toContain('MANDATORY ICP HOOK INSTRUCTION');
     });
 
     it('passes channel and contact-type context into the user prompt', async () => {
@@ -340,6 +401,31 @@ describe('OpenAiAdapter integration', () => {
       expect(payload.model).toBe('gpt-4o-mini');
     });
 
+    it('uses a per-scoring model override when provided', async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => {
+        return new Response(
+          makeOpenAiResponse(JSON.stringify(VALID_SCORING_RESPONSE)),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      });
+
+      const adapter = new OpenAiAdapter({
+        apiKey: 'sk-test',
+        fetchImpl: fetchMock as unknown as typeof fetch,
+      });
+
+      const result = await adapter.evaluateLeadScore(
+        SCORING_CONTEXT,
+        { model: 'gpt-4.1-mini' },
+      );
+
+      expect(result.status).toBe('success');
+
+      const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+      const payload = JSON.parse(String(requestInit?.body ?? '{}')) as { model?: string };
+      expect(payload.model).toBe('gpt-4.1-mini');
+    });
+
     it('scores overall Leadzilla fit rather than only ICP category fit', async () => {
       const fetchMock = vi.fn<typeof fetch>(async () => {
         return new Response(
@@ -366,12 +452,51 @@ describe('OpenAiAdapter integration', () => {
 
       expect(systemPrompt).toContain('Score how good this business is for Leadzilla overall');
       expect(systemPrompt).toContain('not merely how closely it matches the ICP search category');
-      expect(systemPrompt).toContain('marketing activity and customer acquisition');
-      expect(systemPrompt).toContain('online payment readiness');
+      expect(systemPrompt).toContain('## Priority Signals');
+      expect(systemPrompt).toContain('Marketing activity and customer acquisition');
+      expect(systemPrompt).toContain('Online payment readiness');
       expect(systemPrompt).toContain('Contactability is separate from business fit');
-      expect(systemPrompt).toContain('eCommerce, professional services, food and beverage, sports and fitness, education and training, and retail');
+      expect(systemPrompt).toContain('- eCommerce');
+      expect(systemPrompt).toContain('- Professional services');
+      expect(systemPrompt).toContain('- Food and beverage');
+      expect(systemPrompt).toContain('- Sports and fitness');
+      expect(systemPrompt).toContain('- Education and training');
+      expect(systemPrompt).toContain('- Retail');
       expect(userPrompt).toContain('Deterministic baseline score: 0.7500');
       expect(userPrompt).toContain('ICP context: UAE fintech company with 10-200 employees');
+      expect(userPrompt).toContain('Business feature evidence:');
+    });
+
+    it('uses custom scoring system prompt when provided', async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => {
+        return new Response(
+          makeOpenAiResponse(JSON.stringify(VALID_SCORING_RESPONSE)),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      });
+
+      const adapter = new OpenAiAdapter({
+        apiKey: 'sk-test',
+        fetchImpl: fetchMock as unknown as typeof fetch,
+      });
+
+      const result = await adapter.evaluateLeadScore({
+        ...SCORING_CONTEXT,
+        customSystemPrompt: 'Score only enterprise readiness and payment workflow fit.',
+      });
+
+      expect(result.status).toBe('success');
+
+      const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+      const payload = JSON.parse(String(requestInit?.body ?? '{}')) as {
+        messages?: Array<{ role: string; content: string }>;
+      };
+      const systemPrompt = payload.messages?.find((msg) => msg.role === 'system')?.content ?? '';
+      const userPrompt = payload.messages?.find((msg) => msg.role === 'user')?.content ?? '';
+
+      expect(systemPrompt).toBe('Score only enterprise readiness and payment workflow fit.');
+      expect(systemPrompt).not.toContain('Score how good this business is for Leadzilla overall');
+      expect(userPrompt).toContain('Deterministic baseline score: 0.7500');
       expect(userPrompt).toContain('Business feature evidence:');
     });
 

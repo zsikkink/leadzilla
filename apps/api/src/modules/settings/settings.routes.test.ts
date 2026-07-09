@@ -157,6 +157,60 @@ describe('settings.routes validation', () => {
     expect(body.error).toBe('auto_approve_score_max must be a number');
   });
 
+  it('rejects non-string messaging model values', async () => {
+    currentUserId = ADMIN_USER_ID;
+    prismaMock.query.mockResolvedValue({
+      rows: [{ isAdmin: true }],
+    });
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/v1/settings/pipeline/messagingModel',
+      payload: { value: { model: 'gpt-4.1-mini' } },
+    });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json() as { error: string };
+    expect(body.error).toBe('messagingModel must be a string');
+    expect(prismaMock.upsertPipelineSetting).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-string scoring model values', async () => {
+    currentUserId = ADMIN_USER_ID;
+    prismaMock.query.mockResolvedValue({
+      rows: [{ isAdmin: true }],
+    });
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/v1/settings/pipeline/scoringModel',
+      payload: { value: { model: 'gpt-4.1-mini' } },
+    });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json() as { error: string };
+    expect(body.error).toBe('scoringModel must be a string');
+    expect(prismaMock.upsertPipelineSetting).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-string scoring prompt values', async () => {
+    currentUserId = ADMIN_USER_ID;
+    prismaMock.query.mockResolvedValue({
+      rows: [{ isAdmin: true }],
+    });
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/v1/settings/pipeline/scoringSystemPrompt',
+      payload: { value: ['score enterprise fit'] },
+    });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json() as { error: string };
+    expect(body.error).toBe('scoringSystemPrompt must be a string');
+    expect(prismaMock.upsertPipelineSetting).not.toHaveBeenCalled();
+  });
+
   it('normalizes countryCities to SerpAPI discovery locations on write', async () => {
     currentUserId = ADMIN_USER_ID;
     prismaMock.query.mockResolvedValue({

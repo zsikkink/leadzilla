@@ -18,8 +18,8 @@ pnpm -v    # should print 10.14.0
 ## 1) Clone and Install
 
 ```bash
-git clone https://github.com/zsikkink/lead-flood.git
-cd lead-flood
+git clone https://github.com/zsikkink/leadzilla.git
+cd leadzilla
 nvm use
 corepack enable
 pnpm install
@@ -68,6 +68,7 @@ Before calling a deployed demo safe, verify the disabled boundary in that enviro
 ### apps/web/.env.local
 ```
 NEXT_PUBLIC_API_BASE_URL=http://localhost:5050
+NEXT_PUBLIC_API_TIMEOUT_MS=5000
 NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable-key>
 ```
@@ -76,7 +77,7 @@ The Supabase URL and publishable key are safe client-side values — ask the tea
 ### Important env rules
 - **Never leave optional vars as empty strings** — some validators treat blank as invalid. Delete the line entirely if you don't need it.
 - **`?sslmode=require`** is required on remote Supabase DB URLs.
-- **Use the direct Supabase host for local dev** (`db.<project-ref>.supabase.co`) to avoid session-pool limits during `pnpm dev`.
+- **Use the direct Supabase host for local full-stack dev** (`db.<project-ref>.supabase.co`) to avoid session-pool limits during `pnpm dev:local-stack`.
 - **`?connection_limit=3`** is required on the pooled `DATABASE_URL` when you use the Supabase pooler in Railway.
 - **URL-encode special characters** in the DB password (e.g. `!` becomes `%21`).
 
@@ -86,18 +87,21 @@ The Supabase URL and publishable key are safe client-side values — ask the tea
 pnpm dev
 ```
 
-This starts three services concurrently:
+This starts the web app only:
+- **Web** (Next.js): http://localhost:3000
+
+For the full local app/API/worker stack, run:
+
+```bash
+pnpm dev:local-stack
+```
+
+That starts:
 - **Web** (Next.js): http://localhost:3000
 - **API** (Fastify): http://localhost:5050
 - **Worker** (pg-boss): runs in background
 
-Wait for `Server listening on 0.0.0.0:5050` in the terminal — that means the API is ready and the web app will load.
-
-If `certs/supabase-root-2021-ca.pem` exists, the API and worker dev scripts now pick it up automatically. That means the normal root dev command is enough:
-
-```bash
-pnpm dev
-```
+Wait for `Server listening on 0.0.0.0:5050` before relying on API-backed demo flows. If `certs/supabase-root-2021-ca.pem` exists, the API and worker dev scripts pick it up automatically.
 
 Use `pnpm` for repo scripts. Do not use `npm install` or switch package managers.
 
@@ -110,8 +114,9 @@ pnpm --filter @lead-flood/api dev
 ## 5) Log In
 
 1. Go to http://localhost:3000
-2. Sign in with your Supabase Auth account (the team lead creates this for you in the Supabase dashboard)
-3. To access admin/discovery features, your user ID must be in the `app_admins` table — the team lead handles this
+2. For the Leadzilla demo, sign in with the visible demo credentials from the login page (`demo@example.com` / `password`) when that account exists in the target Supabase project.
+3. For non-demo local work, sign in with your Supabase Auth account (the team lead creates this for you in the Supabase dashboard).
+4. To access admin/discovery features, your user ID must be in the `app_admins` table — the team lead handles this.
 
 ## 6) Verify Everything Works
 
@@ -135,7 +140,7 @@ Frontend (Next.js :3000)  →  API (Fastify :5050)  →  Worker (pg-boss queues)
 
 - **API** handles REST endpoints, auth verification, and enqueues jobs via pg-boss
 - **Worker** processes background jobs: discovery, enrichment, scoring, and message drafting. Outbound sending is outside the current Leadzilla demo scope and must remain disabled.
-- **Web** is the dashboard — displays leads, discovery runs, analytics, settings
+- **Web** is the recruiter-facing demo dashboard. The active demo navigation is Dashboard, Discover, Leads, Prompt Center, Inbox, and ICPs; Settings and Rules live under Dev Console.
 - **Database** is a shared cloud Supabase Postgres instance (no local DB needed)
 
 For a deep dive into each pipeline stage, read `lead-flood-system-walkthrough.md` in the repo root.

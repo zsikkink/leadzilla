@@ -77,6 +77,23 @@ function parseFractionSettingValue(value: unknown): number | null {
   return parsed;
 }
 
+function isLegacyRegionalOutreachPrompt(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return (
+    normalized.includes('mena region') ||
+    normalized.includes('uae, saudi arabia') ||
+    normalized.includes('businesses in the mena region')
+  );
+}
+
+function parseOutreachPromptSettingValue(valueJson: unknown): string | null {
+  if (typeof valueJson === 'string') {
+    const value = valueJson.trim();
+    return value.length > 0 && !isLegacyRegionalOutreachPrompt(value) ? value : null;
+  }
+  return null;
+}
+
 /**
  * Batch-loads all PipelineSetting rows and merges with defaults.
  * Call once at the start of a job handler for runtime-configurable behavior.
@@ -348,16 +365,21 @@ export async function getEmailDailyLimit(): Promise<number> {
 }
 
 /**
+ * Consolidated behavior prompt override for AI message generation.
+ * Returns null when unset to allow adapter defaults or legacy settings.
+ */
+export async function getMessagingBehaviorPrompt(): Promise<string | null> {
+  const valueJson = await loadPipelineSettingValue('messagingBehaviorPrompt');
+  return parseOutreachPromptSettingValue(valueJson);
+}
+
+/**
  * Messaging role/persona override for AI generation.
  * Returns null when unset to allow adapter defaults.
  */
 export async function getMessagingRole(): Promise<string | null> {
   const valueJson = await loadPipelineSettingValue('messagingRole');
-  if (typeof valueJson === 'string') {
-    const value = valueJson.trim();
-    return value.length > 0 ? value : null;
-  }
-  return null;
+  return parseOutreachPromptSettingValue(valueJson);
 }
 
 /**
@@ -366,11 +388,7 @@ export async function getMessagingRole(): Promise<string | null> {
  */
 export async function getMessagingSystemPrompt(): Promise<string | null> {
   const valueJson = await loadPipelineSettingValue('messagingSystemPrompt');
-  if (typeof valueJson === 'string') {
-    const value = valueJson.trim();
-    return value.length > 0 ? value : null;
-  }
-  return null;
+  return parseOutreachPromptSettingValue(valueJson);
 }
 
 /**
@@ -379,6 +397,45 @@ export async function getMessagingSystemPrompt(): Promise<string | null> {
  */
 export async function getMessagingInstructions(): Promise<string | null> {
   const valueJson = await loadPipelineSettingValue('messagingInstructions');
+  if (typeof valueJson === 'string') {
+    const value = valueJson.trim();
+    return value.length > 0 ? value : null;
+  }
+  return null;
+}
+
+/**
+ * LLM model override for AI message generation.
+ * Returns null when unset so the adapter uses its environment/default model.
+ */
+export async function getMessagingModel(): Promise<string | null> {
+  const valueJson = await loadPipelineSettingValue('messagingModel');
+  if (typeof valueJson === 'string') {
+    const value = valueJson.trim();
+    return value.length > 0 ? value : null;
+  }
+  return null;
+}
+
+/**
+ * LLM model override for lead scoring.
+ * Returns null when unset so the adapter uses its environment/default model.
+ */
+export async function getScoringModel(): Promise<string | null> {
+  const valueJson = await loadPipelineSettingValue('scoringModel');
+  if (typeof valueJson === 'string') {
+    const value = valueJson.trim();
+    return value.length > 0 ? value : null;
+  }
+  return null;
+}
+
+/**
+ * Custom system prompt override for LLM lead scoring.
+ * Returns null when unset so scoring uses the provider default prompt.
+ */
+export async function getScoringSystemPrompt(): Promise<string | null> {
+  const valueJson = await loadPipelineSettingValue('scoringSystemPrompt');
   if (typeof valueJson === 'string') {
     const value = valueJson.trim();
     return value.length > 0 ? value : null;
