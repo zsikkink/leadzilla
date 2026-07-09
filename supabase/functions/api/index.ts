@@ -1708,21 +1708,24 @@ async function messageDraftIdsForIcp(icpProfileId: string): Promise<string[]> {
 }
 
 async function latestScoresByLeadId(leadIds: string[]): Promise<Map<string, Row>> {
-  if (leadIds.length === 0) {
+  const uniqueLeadIds = Array.from(new Set(leadIds.filter(Boolean)));
+  if (uniqueLeadIds.length === 0) {
     return new Map();
   }
 
-  const result = await listRows('LeadScorePrediction', {
-    select: 'id,leadId,icpProfileId,deterministicScore,logisticScore,blendedScore,scoreBand,reasonsJson,ruleEvaluationJson,predictedAt,createdAt',
-    leadId: pgIn(leadIds),
-    order: 'predictedAt.desc,createdAt.desc,id.desc',
-    limit: MAX_DEMO_ROWS,
-  });
   const scores = new Map<string, Row>();
-  for (const row of result.data) {
-    const leadId = asNullableString(row.leadId);
-    if (leadId && !scores.has(leadId)) {
-      scores.set(leadId, row);
+  for (const chunk of chunks(uniqueLeadIds, STATS_IN_FILTER_CHUNK_SIZE)) {
+    const result = await listRows('LeadScorePrediction', {
+      select: 'id,leadId,icpProfileId,deterministicScore,logisticScore,blendedScore,scoreBand,reasonsJson,ruleEvaluationJson,predictedAt,createdAt',
+      leadId: pgIn(chunk),
+      order: 'predictedAt.desc,createdAt.desc,id.desc',
+      limit: MAX_DEMO_ROWS,
+    });
+    for (const row of result.data) {
+      const leadId = asNullableString(row.leadId);
+      if (leadId && !scores.has(leadId)) {
+        scores.set(leadId, row);
+      }
     }
   }
   return scores;
@@ -1771,16 +1774,21 @@ async function latestEnrichmentByLeadId(leadIds: string[]): Promise<Map<string, 
 }
 
 async function businessesById(businessIds: string[]): Promise<Map<string, Row>> {
-  if (businessIds.length === 0) {
+  const uniqueBusinessIds = Array.from(new Set(businessIds.filter(Boolean)));
+  if (uniqueBusinessIds.length === 0) {
     return new Map();
   }
 
-  const result = await listRows('businesses', {
-    select: '*',
-    id: pgIn(businessIds),
-    limit: businessIds.length,
-  });
-  return new Map(result.data.map((row) => [asString(row.id), normalizeBusinessRow(row) as Row]));
+  const rows: Row[] = [];
+  for (const chunk of chunks(uniqueBusinessIds, STATS_IN_FILTER_CHUNK_SIZE)) {
+    const result = await listRows('businesses', {
+      select: '*',
+      id: pgIn(chunk),
+      limit: chunk.length,
+    });
+    rows.push(...result.data);
+  }
+  return new Map(rows.map((row) => [asString(row.id), normalizeBusinessRow(row) as Row]));
 }
 
 async function icpNamesById(icpIds: string[]): Promise<Map<string, string>> {
