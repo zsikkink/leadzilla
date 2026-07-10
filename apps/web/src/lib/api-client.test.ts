@@ -154,12 +154,102 @@ describe('ApiClient', () => {
     expect(calledUrl.searchParams.get('icpProfileId')).toBe(icpProfileId);
   });
 
+  it('requests the demo dashboard snapshots', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 'demo-operations',
+            workspaceSlug: 'demo',
+            version: 'test',
+            kind: 'operations',
+            generatedAt: '2026-07-09T00:00:00.000Z',
+            headline: { title: 'Operations', eyebrow: 'Demo', summary: 'Snapshot', status: 'Ready' },
+            metrics: [],
+            pipeline: [],
+            queues: [],
+            systemHealth: [],
+            recentRuns: [],
+            safety: { title: 'Safety', status: 'Disabled', detail: 'Outbound disabled.' },
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 'demo-analytics',
+            workspaceSlug: 'demo',
+            version: 'test',
+            kind: 'analytics',
+            generatedAt: '2026-07-09T00:00:00.000Z',
+            headline: { title: 'Analytics', eyebrow: 'Demo', summary: 'Snapshot', status: 'Ready' },
+            metrics: [],
+            leadFlow: {
+              totalBusinesses: 0,
+              evaluated: 0,
+              outsideFlow: 0,
+              qualified: 0,
+              notQualified: 0,
+              high: 0,
+              medium: 0,
+              low: 0,
+              unbanded: 0,
+            },
+            scoreBands: [],
+            icpPerformance: [],
+            outcomeSummary: [],
+            recommendations: [],
+            safety: { title: 'Safety', detail: 'Outbound disabled.' },
+          }),
+          { status: 200 },
+        ),
+      );
+
+    await client.getDemoOperationsDashboard();
+    await client.getDemoAnalyticsDashboard();
+
+    const operationsUrl = new URL(fetchMock.mock.calls[0]?.[0] as string);
+    const analyticsUrl = new URL(fetchMock.mock.calls[1]?.[0] as string);
+    expect(operationsUrl.pathname).toBe('/v1/demo/dashboard/operations');
+    expect(analyticsUrl.pathname).toBe('/v1/demo/dashboard/analytics');
+  });
+
   it('throws helpful error when API is unreachable', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('fetch failed'));
 
     await expect(
       client.listLeads({ page: 1, pageSize: 20, includeQualityMetrics: false }),
     ).rejects.toThrow('Unable to reach API');
+  });
+
+  it('retries retryable GET failures once', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Temporary gateway failure' }), { status: 503 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ items: [], page: 1, pageSize: 20, total: 0 }), { status: 200 }),
+      );
+
+    await client.listLeads({ page: 1, pageSize: 20, includeQualityMetrics: false });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry mutating requests', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'Temporary gateway failure' }), { status: 503 }),
+    );
+
+    await expect(
+      client.createBackupLead('lead_1', {
+        firstName: 'Grace',
+        lastName: 'Hopper',
+        email: 'grace@example.com',
+        source: 'BACKUP_CONTACT_ROTATION',
+      }),
+    ).rejects.toThrow('Temporary gateway failure');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('requests backup lead creation using the source lead route', async () => {

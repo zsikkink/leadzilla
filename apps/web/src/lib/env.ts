@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 const WebEnvSchema = z.object({
   NEXT_PUBLIC_API_BASE_URL: z.string().url().default('http://localhost:5050'),
-  NEXT_PUBLIC_API_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(5000),
+  NEXT_PUBLIC_API_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(15000),
   NEXT_PUBLIC_SUPABASE_URL: z.string().url().default('https://example.supabase.co'),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1).optional(),
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z.string().min(1).optional(),

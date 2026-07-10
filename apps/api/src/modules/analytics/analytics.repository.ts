@@ -1205,7 +1205,51 @@ function buildRollupIcpPerformance(rows: DashboardRollupRow[]): IcpPerformanceRe
     .sort((left, right) => right.leadCount - left.leadCount || left.icpProfileId.localeCompare(right.icpProfileId));
 }
 
+function scoreDistributionBandTotal(response: ScoreDistributionResponse): number {
+  return response.bands.reduce((total, band) => total + band.count, 0);
+}
+
+function scoreDistributionHistogramTotal(response: ScoreDistributionResponse): number {
+  return response.histogram.reduce((total, bucket) => total + bucket.count, 0);
+}
+
+function shouldHydrateDashboardSummaryFromDirectAnalytics(summary: DashboardSummaryResponse): boolean {
+  if (!summary.dataFreshness.qualityRollupBacked) return true;
+
+  const { funnel } = summary;
+  if (funnel.discoveredCount > 0 && funnel.qualifiedCount > funnel.discoveredCount) return true;
+  if (funnel.qualifiedCount > 0 && funnel.scoredCount === 0) return true;
+
+  return (
+    funnel.scoredCount > 0 &&
+    scoreDistributionBandTotal(summary.scoreDistribution) === 0 &&
+    scoreDistributionHistogramTotal(summary.scoreDistribution) === 0
+  );
+}
+
 export class HybridAnalyticsRepository extends PrismaAnalyticsRepository {
+  override async getDashboardSummary(input: DashboardSummaryQuery): Promise<DashboardSummaryResponse> {
+    const summary = await super.getDashboardSummary(input);
+    if (!shouldHydrateDashboardSummaryFromDirectAnalytics(summary)) {
+      return summary;
+    }
+
+    const [funnel, scoreDistribution, avgScore, icpPerformance] = await Promise.all([
+      this.getFunnel(input),
+      this.getScoreDistribution(input),
+      this.getAvgScore(input),
+      this.getIcpPerformance(input),
+    ]);
+
+    return {
+      ...summary,
+      funnel,
+      scoreDistribution,
+      avgScore,
+      icpPerformance,
+    };
+  }
+
   override async getScoreDistribution(input: ScoreDistributionQuery): Promise<ScoreDistributionResponse> {
     const from = input.from ? new Date(input.from) : null;
     const to = input.to ? new Date(input.to) : null;

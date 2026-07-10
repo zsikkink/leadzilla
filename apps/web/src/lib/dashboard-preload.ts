@@ -1,6 +1,6 @@
 import type { ApiClient } from './api-client.js';
 
-const DASHBOARD_PRELOAD_TTL_MS = 30_000;
+const DASHBOARD_PRELOAD_TTL_MS = 120_000;
 
 type DashboardCacheEntry<T> = {
   createdAt: number;
@@ -30,6 +30,8 @@ function dashboardQueryKey(name: string, query?: object): string {
 export const dashboardQueryKeys = {
   avgScore: (query?: object) => dashboardQueryKey('avg-score', query),
   dashboardSummary: (query?: object) => dashboardQueryKey('dashboard-summary', query),
+  demoAnalyticsDashboard: () => dashboardQueryKey('demo-dashboard-analytics'),
+  demoOperationsDashboard: () => dashboardQueryKey('demo-dashboard-operations'),
   discoveryRuns: (query?: object) => dashboardQueryKey('discovery-runs', query),
   drafts: (query?: object) => dashboardQueryKey('drafts', query),
   feedback: (query?: object) => dashboardQueryKey('feedback', query),
@@ -69,13 +71,12 @@ export function getCachedDashboardQuery<T>(key: string, fetcher: () => Promise<T
 }
 
 export function warmDashboardData(apiClient: ApiClient): void {
-  const analyticsFilter = {};
-  const icpsQuery = { page: 1, pageSize: 50 };
-
   void Promise.allSettled([
-    getCachedDashboardQuery(dashboardQueryKeys.icps(icpsQuery), () => apiClient.listIcps(icpsQuery)),
-    getCachedDashboardQuery(dashboardQueryKeys.dashboardSummary(analyticsFilter), () =>
-      apiClient.getDashboardSummary(analyticsFilter),
+    getCachedDashboardQuery(dashboardQueryKeys.demoOperationsDashboard(), () =>
+      apiClient.getDemoOperationsDashboard(),
+    ),
+    getCachedDashboardQuery(dashboardQueryKeys.demoAnalyticsDashboard(), () =>
+      apiClient.getDemoAnalyticsDashboard(),
     ),
   ]);
 }

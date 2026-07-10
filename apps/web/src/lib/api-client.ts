@@ -60,6 +60,11 @@ import type {
   UpdateIcpProfileRequest,
 } from '@lead-flood/contracts';
 
+import type {
+  DemoAnalyticsDashboardSnapshot,
+  DemoOperationsDashboardSnapshot,
+} from './demo-dashboard-types.js';
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -71,6 +76,10 @@ export class ApiError extends Error {
   }
 }
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
+const GET_RETRY_DELAY_MS = 150;
+const RETRYABLE_READ_STATUSES = new Set([502, 503, 504]);
+
 function toSearchParams(query: Record<string, unknown>): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
@@ -81,16 +90,30 @@ function toSearchParams(query: Record<string, unknown>): string {
   return params.toString();
 }
 
+function isAbortError(error: unknown): boolean {
+  return typeof DOMException !== 'undefined' && error instanceof DOMException && error.name === 'AbortError';
+}
+
+function isRetryableTransportError(error: unknown): boolean {
+  return isAbortError(error) || error instanceof TypeError;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+}
+
 export class ApiClient {
   constructor(
     private readonly baseUrl: string,
     private readonly getToken: () => string | null,
-    private readonly requestTimeoutMs = 5000,
+    private readonly requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
   ) {}
 
   private async request<T>(path: string, options?: RequestInit): Promise<T> {
     const token = this.getToken();
     const hasBody = options?.body !== undefined && options?.body !== null;
+    const method = options?.method?.toUpperCase() ?? 'GET';
+    const maxAttempts = method === 'GET' ? 2 : 1;
     const headers: Record<string, string> = {
       // Only set content-type for requests that have a body — Fastify rejects
       // empty bodies when content-type is application/json.
@@ -98,43 +121,58 @@ export class ApiClient {
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     };
 
-    const controller = new AbortController();
-    const timeoutHandle = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const controller = new AbortController();
+      const timeoutHandle = setTimeout(() => controller.abort(), this.requestTimeoutMs);
 
-    let response: Response;
-    try {
-      response = await fetch(`${this.baseUrl}${path}`, {
-        ...options,
-        signal: controller.signal,
-        headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
-      });
-    } catch (error: unknown) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        throw new ApiError(504, `API request timed out after ${this.requestTimeoutMs}ms`);
+      let response: Response;
+      try {
+        response = await fetch(`${this.baseUrl}${path}`, {
+          ...options,
+          signal: controller.signal,
+          headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
+        });
+      } catch (error: unknown) {
+        if (attempt < maxAttempts && isRetryableTransportError(error)) {
+          clearTimeout(timeoutHandle);
+          await delay(GET_RETRY_DELAY_MS);
+          continue;
+        }
+
+        if (isAbortError(error)) {
+          throw new ApiError(504, `API request timed out after ${this.requestTimeoutMs}ms`);
+        }
+        throw new ApiError(503, 'Unable to reach API. Check NEXT_PUBLIC_API_BASE_URL and API health.');
+      } finally {
+        clearTimeout(timeoutHandle);
       }
-      throw new ApiError(503, 'Unable to reach API. Check NEXT_PUBLIC_API_BASE_URL and API health.');
-    } finally {
-      clearTimeout(timeoutHandle);
+
+      if (response.status === 401) {
+        throw new ApiError(401, 'Session expired — please log in again');
+      }
+
+      if (!response.ok) {
+        if (attempt < maxAttempts && RETRYABLE_READ_STATUSES.has(response.status)) {
+          await delay(GET_RETRY_DELAY_MS);
+          continue;
+        }
+
+        const body = await response.json().catch(() => ({ error: 'Request failed' }));
+        throw new ApiError(
+          response.status,
+          (body as { error?: string }).error ?? 'Request failed',
+          (body as { requestId?: string }).requestId,
+        );
+      }
+
+      if (response.status === 204) {
+        return undefined as T;
+      }
+
+      return response.json() as Promise<T>;
     }
 
-    if (response.status === 401) {
-      throw new ApiError(401, 'Session expired — please log in again');
-    }
-
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({ error: 'Request failed' }));
-      throw new ApiError(
-        response.status,
-        (body as { error?: string }).error ?? 'Request failed',
-        (body as { requestId?: string }).requestId,
-      );
-    }
-
-    if (response.status === 204) {
-      return undefined as T;
-    }
-
-    return response.json() as Promise<T>;
+    throw new ApiError(503, 'Unable to reach API. Check NEXT_PUBLIC_API_BASE_URL and API health.');
   }
 
   subscribeMessageDraftEvents(
@@ -446,6 +484,14 @@ export class ApiClient {
   getDashboardSummary(query?: DashboardSummaryQuery): Promise<DashboardSummaryResponse> {
     const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
     return this.request(`/v1/analytics/dashboard-summary${qs}`);
+  }
+
+  getDemoOperationsDashboard(): Promise<DemoOperationsDashboardSnapshot> {
+    return this.request('/v1/demo/dashboard/operations');
+  }
+
+  getDemoAnalyticsDashboard(): Promise<DemoAnalyticsDashboardSnapshot> {
+    return this.request('/v1/demo/dashboard/analytics');
   }
 
   getFunnel(query?: FunnelQuery): Promise<FunnelResponse> {

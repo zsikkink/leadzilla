@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
+import { LeadFlowSankey, type LeadFlowSankeyData } from '../../../../src/components/lead-flow-sankey.js';
 import { countryName } from '../../../../src/lib/countries.js';
 
 // ── Status badge (reused from list page) ─────────────────────────────────
@@ -165,6 +166,124 @@ interface RunDetailsResponse {
   costEvents: CostEventData[];
 }
 
+type ScoreBand = 'HIGH' | 'MEDIUM' | 'LOW';
+
+const DISQUALIFICATION_REASON_LABELS: Record<string, string> = {
+  ICP_INDUSTRY_MISMATCH: 'Wrong industry',
+  NO_WEBSITE_DOMAIN: 'No website',
+  DOMAIN_NOT_RESOLVING: 'Website unreachable',
+  PARKED_DOMAIN: 'Parked domain',
+  INSUFFICIENT_REVIEWS: 'Too few reviews',
+  DNS_RESOLUTION_FAILED: 'DNS failed',
+  NO_CONTACTS_FOUND: 'No contacts found',
+  BUSINESS_NOT_FOUND: 'Business not found',
+  DECISION_MAKER_IDENTIFIED: 'No contact found',
+  LOW_DISCOVERY_SCORE: 'Low discovery score',
+  SOFT_DELETED_LEAD_EMAIL_CONFLICT: 'Duplicate lead email',
+};
+
+function readCount(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.round(value));
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function normalizeScoreBand(value: string | null | undefined): ScoreBand | null {
+  const normalized = value?.toUpperCase();
+  return normalized === 'HIGH' || normalized === 'MEDIUM' || normalized === 'LOW' ? normalized : null;
+}
+
+function businessScoreBand(business: BusinessData): ScoreBand | null {
+  const band = normalizeScoreBand(business.scoreBand);
+  if (band) return band;
+  if (business.deterministicScore === null) return null;
+  if (business.deterministicScore >= 0.67) return 'HIGH';
+  if (business.deterministicScore >= 0.34) return 'MEDIUM';
+  return 'LOW';
+}
+
+function isDisqualifiedBusiness(business: BusinessData): boolean {
+  return Boolean(business.disqualificationReason) || business.preQualified === false;
+}
+
+function formatDisqualificationReason(reason: string): string {
+  return DISQUALIFICATION_REASON_LABELS[reason] ?? reason.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function buildRunLeadFlowData(runData: Record<string, unknown>, businesses: BusinessData[]): LeadFlowSankeyData {
+  const duplicateCount = readCount(runData.alreadyKnown) ?? 0;
+  const totalFound = readCount(runData.totalFound) ?? Math.max(businesses.length + duplicateCount, 0);
+  const screenedCount =
+    readCount(runData.newBusinesses) ??
+    readCount(runData.newFound) ??
+    Math.max(0, totalFound - duplicateCount);
+  let high = 0;
+  let medium = 0;
+  let low = 0;
+  let disqualifiedFromRows = 0;
+
+  for (const business of businesses) {
+    if (isDisqualifiedBusiness(business)) {
+      disqualifiedFromRows += 1;
+      continue;
+    }
+
+    const band = businessScoreBand(business);
+    if (band === 'HIGH') high += 1;
+    else if (band === 'MEDIUM') medium += 1;
+    else if (band === 'LOW') low += 1;
+  }
+
+  const disqualified = readCount(runData.disqualified) ?? disqualifiedFromRows;
+  const accounted = high + medium + low + disqualified;
+  const unclassifiedScreened = Math.max(0, screenedCount - accounted);
+
+  return {
+    totalBusinesses: totalFound,
+    evaluated: screenedCount,
+    outsideFlow: 0,
+    duplicates: duplicateCount,
+    qualified: high + medium,
+    notQualified: disqualified,
+    high,
+    medium,
+    low: low + unclassifiedScreened,
+    unbanded: 0,
+    sourceLabel: 'Found',
+    screenedLabel: 'Screened',
+    duplicateLabel: 'Duplicates',
+    disqualifiedLabel: 'Disqualified',
+  };
+}
+
+function buildDisqualificationReasonRows(
+  runData: Record<string, unknown>,
+  businesses: BusinessData[],
+): Array<{ reason: string; count: number }> {
+  const outcome = asRecord(runData.outcome);
+  const reasons = asRecord(outcome?.disqualificationReasons);
+
+  if (reasons) {
+    const rows = Object.entries(reasons)
+      .map(([reason, count]) => ({ reason, count: readCount(count) ?? 0 }))
+      .filter((row) => row.count > 0);
+    if (rows.length > 0) return rows;
+  }
+
+  const counts = new Map<string, number>();
+  for (const business of businesses) {
+    if (!business.disqualificationReason) continue;
+    counts.set(business.disqualificationReason, (counts.get(business.disqualificationReason) ?? 0) + 1);
+  }
+
+  return Array.from(counts.entries()).map(([reason, count]) => ({ reason, count }));
+}
+
 // ── Metric card ──────────────────────────────────────────────────────────
 function MetricCard({
   label,
@@ -192,6 +311,80 @@ function MetricCard({
         </p>
       </div>
       <p className="mt-2 text-2xl font-extrabold tracking-tight">{value}</p>
+    </div>
+  );
+}
+
+function FlowMetric({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: number;
+  className: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border/20 bg-zbooni-dark/20 px-3 py-3">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/50">
+        {label}
+      </p>
+      <p className={`mt-1 text-xl font-extrabold tabular-nums ${className}`}>
+        {value.toLocaleString()}
+      </p>
+    </div>
+  );
+}
+
+function DiscoveryFlowCard({
+  flowData,
+  reasonRows,
+}: {
+  flowData: LeadFlowSankeyData;
+  reasonRows: Array<{ reason: string; count: number }>;
+}) {
+  const hasFlow = flowData.totalBusinesses > 0 || flowData.evaluated > 0;
+
+  return (
+    <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <Layers className="h-4 w-4 text-zbooni-teal" />
+        <h2 className="text-base font-bold tracking-tight">Discovery Flow</h2>
+      </div>
+      {hasFlow ? (
+        <LeadFlowSankey data={flowData} />
+      ) : (
+        <div className="rounded-xl border border-border/20 bg-zbooni-dark/20 px-4 py-8 text-center">
+          <p className="text-xs font-semibold text-muted-foreground/50">No businesses found yet</p>
+        </div>
+      )}
+      {hasFlow ? (
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <FlowMetric label="Found" value={flowData.totalBusinesses} className="text-white" />
+          <FlowMetric label="Duplicates" value={flowData.duplicates ?? 0} className="text-slate-300" />
+          <FlowMetric label="High" value={flowData.high} className="text-zbooni-green" />
+          <FlowMetric label="Medium" value={flowData.medium} className="text-yellow-300" />
+          <FlowMetric label="Low" value={flowData.low} className="text-red-300" />
+          <FlowMetric label="Disqualified" value={flowData.notQualified} className="text-red-400" />
+        </div>
+      ) : null}
+      {reasonRows.length > 0 ? (
+        <div className="mt-4 rounded-lg border border-border/20 bg-zbooni-dark/10 px-4 py-3">
+          <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground/50">
+            Disqualification Reasons
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {reasonRows.map((row) => (
+              <div key={row.reason} className="flex items-center justify-between gap-3">
+                <span className="text-xs text-foreground/70">{formatDisqualificationReason(row.reason)}</span>
+                <span className="font-mono text-xs font-bold tabular-nums text-red-400/70">
+                  {row.count}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -579,6 +772,14 @@ export default function DiscoveryRunDetailPage() {
   const authorativeLeadCount = typeof runData.converted === 'number'
     ? runData.converted
     : leads.length;
+  const runLeadFlowData = useMemo(
+    () => buildRunLeadFlowData(runData, businesses),
+    [runData, businesses],
+  );
+  const disqualificationReasonRows = useMemo(
+    () => buildDisqualificationReasonRows(runData, businesses),
+    [runData, businesses],
+  );
   const recoveryItems = useMemo(
     () =>
       businesses
@@ -829,87 +1030,12 @@ export default function DiscoveryRunDetailPage() {
         />
       </div>
 
-      {/* Outcome funnel — reads from resultJson (v2 fields or legacy outcome) */}
-      {details.data && (() => {
-        const runData = details.data.run as Record<string, unknown>;
-        const outcome = runData.outcome as OutcomeData | null;
-        // v2 resultJson fields (from Session A)
-        const totalFound = typeof runData.totalFound === 'number' ? runData.totalFound : null;
-        const alreadyKnown = typeof runData.alreadyKnown === 'number' ? runData.alreadyKnown : null;
-        const newFound = typeof runData.newFound === 'number' ? runData.newFound : null;
-        const disqualified = typeof runData.disqualified === 'number' ? runData.disqualified : null;
-        const converted = typeof runData.converted === 'number' ? runData.converted : null;
-        const hasV2 = totalFound !== null;
-
-        // If neither v2 nor legacy outcome exists, skip
-        if (!hasV2 && !outcome) return null;
-
-        const REASON_LABELS: Record<string, string> = {
-          ICP_INDUSTRY_MISMATCH: 'Wrong industry',
-          NO_WEBSITE_DOMAIN: 'No website',
-          DOMAIN_NOT_RESOLVING: 'Website unreachable',
-          PARKED_DOMAIN: 'Parked domain',
-          INSUFFICIENT_REVIEWS: 'Too few reviews',
-          DNS_RESOLUTION_FAILED: 'DNS failed',
-          NO_CONTACTS_FOUND: 'No contacts found',
-          BUSINESS_NOT_FOUND: 'Business not found',
-          DECISION_MAKER_IDENTIFIED: 'No Contact Found',
-        };
-        const reasons = outcome?.disqualificationReasons ?? {};
-        const hasReasons = Object.keys(reasons).length > 0;
-
-        // Build funnel steps: v2 format first, fallback to legacy
-        const funnelSteps = hasV2
-          ? [
-              { label: 'Found', value: totalFound!, color: 'text-blue-400' },
-              { label: 'Already Known', value: alreadyKnown ?? 0, color: 'text-muted-foreground' },
-              { label: 'New', value: newFound ?? 0, color: 'text-zbooni-teal' },
-              { label: 'Disqualified', value: disqualified ?? 0, color: 'text-red-400' },
-              { label: 'Leads', value: converted ?? authorativeLeadCount, color: 'text-zbooni-green' },
-            ]
-          : [
-              { label: 'Businesses', value: outcome!.businessesFound, color: 'text-blue-400' },
-              { label: 'Qualified', value: outcome!.businessesFound - outcome!.businessesDisqualified, color: 'text-zbooni-teal' },
-              { label: 'Leads', value: outcome!.leadsCreated, color: 'text-zbooni-green' },
-              { label: 'Drafts', value: outcome!.messagesDrafted, color: 'text-yellow-400' },
-            ];
-
-        return (
-          <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
-            <h2 className="mb-4 text-base font-bold tracking-tight">Pipeline Funnel</h2>
-            <div className="flex items-center gap-2 flex-wrap">
-              {funnelSteps.map((step, i) => (
-                <div key={step.label} className="flex items-center gap-2">
-                  {i > 0 && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/20" />}
-                  <div className="rounded-lg border border-border/20 bg-zbooni-dark/20 px-3 py-2 text-center">
-                    <p className={`text-lg font-extrabold tabular-nums ${step.color}`}>{step.value}</p>
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">{step.label}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-            {hasReasons && (
-              <div className="mt-4 rounded-lg border border-border/20 bg-zbooni-dark/10 px-4 py-3">
-                <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground/50">
-                  Disqualification Reasons
-                </p>
-                <div className="space-y-1">
-                  {Object.entries(reasons).map(([reason, count]) => (
-                    <div key={reason} className="flex items-center justify-between">
-                      <span className="text-xs text-foreground/70">
-                        {REASON_LABELS[reason] ?? reason}
-                      </span>
-                      <span className="font-mono text-xs font-bold tabular-nums text-red-400/70">
-                        {count}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        );
-      })()}
+      {details.data ? (
+        <DiscoveryFlowCard
+          flowData={runLeadFlowData}
+          reasonRows={disqualificationReasonRows}
+        />
+      ) : null}
 
       {/* Converted Leads */}
       {leads.length > 0 && (

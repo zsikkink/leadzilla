@@ -22,6 +22,10 @@ const SERPAPI_SEARCH_URL = 'https://serpapi.com/search.json';
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const DEFAULT_OPENAI_DRAFT_MODEL = 'gpt-5.5';
 const OPENAI_DRAFT_TIMEOUT_MS = 30_000;
+const SLOW_REST_REQUEST_LOG_MS = 1_000;
+const DASHBOARD_SUMMARY_CACHE_TTL_MS = 15_000;
+
+const dashboardSummaryCache = new Map<string, { expiresAt: number; payload: JsonObject }>();
 
 class HttpError extends Error {
   constructor(
@@ -211,6 +215,7 @@ async function restRequest<T>(
   params: Record<string, string | number | boolean | undefined | null> = {},
   init: RequestInit = {},
 ): Promise<RestResult<T>> {
+  const startedAt = Date.now();
   const key = serviceRoleKey();
   const url = new URL(`${supabaseUrl()}/rest/v1/${encodeURIComponent(table)}`);
   appendParams(url, params);
@@ -232,6 +237,7 @@ async function restRequest<T>(
     ...init,
     headers,
   });
+  const durationMs = Date.now() - startedAt;
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
@@ -245,6 +251,15 @@ async function restRequest<T>(
 
   const text = await response.text();
   const data = text.length > 0 ? (JSON.parse(text) as T) : (undefined as T);
+  if (durationMs >= SLOW_REST_REQUEST_LOG_MS) {
+    console.warn('[demo-edge-api] slow rest request', {
+      table,
+      method: init.method ?? 'GET',
+      durationMs,
+      status: response.status,
+      rowCount: Array.isArray(data) ? data.length : undefined,
+    });
+  }
   return {
     data,
     total: parseContentRange(response.headers.get('content-range')),
@@ -316,7 +331,7 @@ async function countRows(
   table: string,
   params: Record<string, string | number | boolean | undefined | null> = {},
 ): Promise<number> {
-  const result = await listRows(table, { ...params, select: 'id', limit: 1 });
+  const result = await restRequest<undefined>(table, { ...params, select: 'id', limit: 1 }, { method: 'HEAD' });
   return result.total ?? 0;
 }
 
@@ -2709,6 +2724,23 @@ function mapDiscoveryRunStatus(row: Row): JsonObject {
   };
 }
 
+function mapDiscoveryRunDetailStatus(row: Row): JsonObject {
+  const result = asObject(row.result) ?? {};
+  const outcome = asObject(result.outcome);
+  const mapped: JsonObject = {
+    ...mapDiscoveryRunStatus(row),
+  };
+  for (const key of ['totalFound', 'alreadyKnown', 'newFound', 'newBusinesses', 'disqualified', 'converted']) {
+    if (typeof result[key] === 'number') {
+      mapped[key] = result[key];
+    }
+  }
+  if (outcome) {
+    mapped.outcome = outcome;
+  }
+  return mapped;
+}
+
 function mapJobRun(row: Row): JsonObject {
   const normalized = normalizeJobRunRow(row);
   return {
@@ -3802,6 +3834,31 @@ function summarizeRollups(rows: Row[]): EdgeDashboardRollupTotals {
   return total;
 }
 
+function rollupScoreBandTotal(total: EdgeDashboardRollupTotals): number {
+  return total.lowScoreCount + total.mediumScoreCount + total.highScoreCount;
+}
+
+function rollupScoreBucketTotal(total: EdgeDashboardRollupTotals): number {
+  return total.scoreBucketCounts.reduce((sum, count) => sum + count, 0);
+}
+
+function shouldHydrateDashboardSummaryFromDirectAnalytics(
+  total: EdgeDashboardRollupTotals,
+  rollupRowCount: number,
+): boolean {
+  if (rollupRowCount === 0) return true;
+
+  const hasImpossibleFunnel = total.discoveredCount > 0 && total.qualifiedCount > total.discoveredCount;
+  if (hasImpossibleFunnel) return true;
+
+  const missingScoreLayer = total.qualifiedCount > 0 && total.scoredCount === 0;
+  if (missingScoreLayer) return true;
+
+  const missingScoreBreakdown =
+    total.scoredCount > 0 && rollupScoreBandTotal(total) === 0 && rollupScoreBucketTotal(total) === 0;
+  return missingScoreBreakdown;
+}
+
 function buildRollupHistogram(bucketCounts: number[]): JsonObject[] {
   return bucketCounts.map((count, index) => ({
     scoreMin: index / 10,
@@ -4032,6 +4089,16 @@ async function handleIcpPerformance(url: URL): Promise<Response> {
 }
 
 async function handleDashboardSummary(url: URL): Promise<Response> {
+  const cacheKey = url.searchParams.toString() || 'default';
+  const cached = dashboardSummaryCache.get(cacheKey);
+  const nowMs = Date.now();
+  if (cached && cached.expiresAt > nowMs) {
+    return jsonResponse(cached.payload);
+  }
+  if (cached) {
+    dashboardSummaryCache.delete(cacheKey);
+  }
+
   const from = url.searchParams.get('from');
   const to = url.searchParams.get('to');
   const icpProfileId = url.searchParams.get('icpProfileId');
@@ -4064,18 +4131,20 @@ async function handleDashboardSummary(url: URL): Promise<Response> {
     const day = iso(row.day).slice(0, 10);
     return latest === null || day > latest ? day : latest;
   }, null);
+  const shouldUseDirectAnalyticsFallback =
+    !rollups.extended || shouldHydrateDashboardSummaryFromDirectAnalytics(totals, rollupRows.length);
   const [fallbackFunnel, fallbackScoreDistribution, fallbackFeedback, fallbackAvgScore, fallbackIcpPerformance] =
-    rollups.extended
-      ? [null, null, null, null, null]
-      : await Promise.all([
+    shouldUseDirectAnalyticsFallback
+      ? await Promise.all([
           responseJson(await handleFunnel(url)),
           responseJson(await handleScoreDistribution(url)),
           responseJson(await handleFeedbackSummary(url)),
           responseJson(await handleAvgScore(url)),
           responseJson(await handleIcpPerformance(url)),
-        ]);
+        ])
+      : [null, null, null, null, null];
 
-  return jsonResponse({
+  const payload: JsonObject = {
     from,
     to,
     icpProfileId,
@@ -4084,6 +4153,7 @@ async function handleDashboardSummary(url: URL): Promise<Response> {
       qualityRollupBacked: rollupRows.length > 0,
       qualityRollupLatestDay: latestRollup,
       dashboardRollupExtended: rollups.extended,
+      dashboardDirectAnalyticsFallback: shouldUseDirectAnalyticsFallback,
     },
     funnel: fallbackFunnel ?? {
       from,
@@ -4141,7 +4211,13 @@ async function handleDashboardSummary(url: URL): Promise<Response> {
     pendingDraftsCount,
     discoveryRuns: discoveryRuns.data.map(mapDiscoveryRun),
     discoveryRunsTotal: discoveryRuns.total ?? discoveryRuns.data.length,
+  };
+  dashboardSummaryCache.set(cacheKey, {
+    expiresAt: Date.now() + DASHBOARD_SUMMARY_CACHE_TTL_MS,
+    payload,
   });
+
+  return jsonResponse(payload);
 }
 
 async function handleModelMetrics(): Promise<Response> {
@@ -4263,8 +4339,11 @@ async function handleCreateDiscoveryRun(request: Request, auth: AuthContext): Pr
     totalItems: 0,
     processedItems: 0,
     failedItems: 0,
+    totalFound: 0,
+    alreadyKnown: 0,
     newFound: 0,
     newBusinesses: 0,
+    disqualified: 0,
     converted: 0,
     searchTasksComplete: false,
     provider: 'SERPAPI',
@@ -4404,8 +4483,11 @@ async function handleCreateDiscoveryRun(request: Request, auth: AuthContext): Pr
       totalItems: processedItems,
       processedItems,
       failedItems,
+      totalFound: processedItems,
+      alreadyKnown: 0,
       newFound: processedItems,
       newBusinesses,
+      disqualified: 0,
       converted,
       searchTasksComplete: true,
       provider: 'SERPAPI',
@@ -4459,7 +4541,7 @@ async function handleDiscoveryRunDetails(runId: string): Promise<Response> {
   });
   if (!run) throw new HttpError(404, 'Discovery run not found');
 
-  const [tasks, businesses, leads, costs] = await Promise.all([
+  const [tasks, businesses, costs] = await Promise.all([
     listRows('search_tasks', {
       select: '*',
       discovery_run_id: `eq.${runId}`,
@@ -4468,13 +4550,8 @@ async function handleDiscoveryRunDetails(runId: string): Promise<Response> {
     }),
     listRows('businesses', {
       select: '*',
-      discoveryRunId: `eq.${runId}`,
+      discovery_run_id: `eq.${runId}`,
       order: 'deterministic_score.desc,updated_at.desc',
-      limit: 200,
-    }),
-    listRows('Lead', {
-      select: '*',
-      deletedAt: 'is.null',
       limit: 200,
     }),
     listRows('discovery_cost_events', {
@@ -4486,9 +4563,19 @@ async function handleDiscoveryRunDetails(runId: string): Promise<Response> {
   ]);
   const normalizedBusinesses = businesses.data.map((row) => normalizeBusinessRow(row) as Row);
   const businessById = new Map(normalizedBusinesses.map((row) => [asString(row.id), row]));
+  const businessIds = normalizedBusinesses.map((row) => asString(row.id)).filter(Boolean);
+  const leads = businessIds.length > 0
+    ? await listRows('Lead', {
+        select: 'id,firstName,lastName,email,businessEmail,source,status,businessId',
+        businessId: pgIn(businessIds),
+        deletedAt: 'is.null',
+        order: 'createdAt.desc,id.desc',
+        limit: 200,
+      })
+    : { data: [], total: 0 } satisfies RestResult<Row[]>;
 
   return jsonResponse({
-    run: mapDiscoveryRunStatus(run),
+    run: mapDiscoveryRunDetailStatus(run),
     searchTasks: tasks.data.map((row) => ({
       id: asString(row.id),
       queryText: asString(row.query_text),
@@ -4853,6 +4940,416 @@ async function handleJobRequests(url: URL): Promise<Response> {
   });
 }
 
+const DEMO_DASHBOARD_SNAPSHOT_VERSION = '2026.07.recruiter-demo.v1';
+const DEMO_DASHBOARD_GENERATED_AT = '2026-07-09T18:30:00.000Z';
+
+const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
+  id: 'demo-dashboard-operations-2026-07',
+  workspaceSlug: 'zbooni-sales-demo',
+  version: DEMO_DASHBOARD_SNAPSHOT_VERSION,
+  kind: 'operations',
+  generatedAt: DEMO_DASHBOARD_GENERATED_AT,
+  headline: {
+    title: 'Operations',
+    eyebrow: 'Operations',
+    summary: 'Discovery, enrichment, scoring, review, and safety controls.',
+    status: 'Ready',
+  },
+  metrics: [
+    {
+      id: 'source-inventory',
+      label: 'Deduped inventory',
+      value: '21,578',
+      unit: 'businesses',
+      detail: 'Deduplicated account universe available for ICP expansion.',
+      tone: 'teal',
+    },
+    {
+      id: 'discovered-leads',
+      label: 'Screened universe',
+      value: '21,578',
+      unit: 'businesses',
+      detail: 'Database businesses normalized into a stable screening population.',
+      tone: 'green',
+    },
+    {
+      id: 'enriched-scored',
+      label: 'Scored profiles',
+      value: '18,438',
+      unit: 'profiles',
+      detail: 'Businesses with enough public context to receive a Zbooni-fit score.',
+      tone: 'blue',
+    },
+    {
+      id: 'drafts-generated',
+      label: 'AI drafts generated',
+      value: '188',
+      unit: 'drafts',
+      detail: 'OpenAI-assisted outreach drafts prepared for operator review.',
+      tone: 'purple',
+    },
+    {
+      id: 'pending-review',
+      label: 'Pending review',
+      value: '182',
+      unit: 'drafts',
+      detail: 'Human approval queue remains active before any delivery step.',
+      tone: 'amber',
+    },
+  ],
+  pipeline: [
+    {
+      id: 'discover',
+      label: 'Discover',
+      count: 21578,
+      displayValue: '21,578',
+      caption: 'SERP discovery and dedupe',
+      status: 'Ready',
+      health: 'healthy',
+    },
+    {
+      id: 'enrich',
+      label: 'Enrich',
+      count: 18438,
+      displayValue: '18,438',
+      caption: 'Contacts, domains, and business context',
+      status: 'Enabled',
+      health: 'healthy',
+    },
+    {
+      id: 'score',
+      label: 'Score',
+      count: 18438,
+      displayValue: '18,438',
+      caption: 'Model and rule-based lead fit',
+      status: 'Enabled',
+      health: 'healthy',
+    },
+    {
+      id: 'draft',
+      label: 'Draft',
+      count: 188,
+      displayValue: '188',
+      caption: 'OpenAI-assisted message generation',
+      status: 'Ready',
+      health: 'healthy',
+    },
+    {
+      id: 'review',
+      label: 'Review',
+      count: 182,
+      displayValue: '182',
+      caption: 'Operator approval queue',
+      status: 'Human gated',
+      health: 'attention',
+    },
+  ],
+  queues: [
+    {
+      id: 'discovery-capacity',
+      label: 'Discovery capacity',
+      value: 'Small-run enabled',
+      detail: 'Users can launch bounded discovery jobs without worker-backed delivery.',
+    },
+    {
+      id: 'draft-generation',
+      label: 'Draft generation',
+      value: 'OpenAI wired',
+      detail: 'Drafts use a frontier OpenAI model through the Supabase Edge API.',
+    },
+    {
+      id: 'review-queue',
+      label: 'Review queue',
+      value: '182 pending',
+      detail: 'Drafts are saved for review only; delivery remains disabled.',
+    },
+  ],
+  systemHealth: [
+    {
+      id: 'edge-api',
+      label: 'Supabase Edge API',
+      status: 'Operational',
+      detail: 'Dashboard and workspace actions are served through the Supabase Edge Function.',
+      tone: 'green',
+    },
+    {
+      id: 'openai-drafting',
+      label: 'OpenAI drafting',
+      status: 'Enabled',
+      detail: 'Message drafts can be generated from lead, ICP, and prompt context.',
+      tone: 'green',
+    },
+    {
+      id: 'discovery-provider',
+      label: 'Discovery provider',
+      status: 'Bounded',
+      detail: 'Small SerpAPI discovery jobs are enabled for bounded exploration.',
+      tone: 'teal',
+    },
+    {
+      id: 'outbound-delivery',
+      label: 'Outbound delivery',
+      status: 'Disabled',
+      detail: 'Email, SMS, WhatsApp, provider delivery, follow-ups, and message.send remain blocked.',
+      tone: 'amber',
+    },
+  ],
+  recentRuns: [
+    {
+      id: 'run_1984126f',
+      title: 'Local services discovery',
+      status: 'Successful',
+      found: 1,
+      converted: 1,
+      detail: 'Tiny production-safe discovery run converted one business into one lead.',
+    },
+    {
+      id: 'segment-hospitality',
+      title: 'Boutique hospitality expansion',
+      status: 'Ready',
+      found: 1240,
+      converted: 1128,
+      detail: 'Curated segment showing high-fit account sourcing for short-stay operators.',
+    },
+    {
+      id: 'segment-premium-services',
+      title: 'Premium services sweep',
+      status: 'Ready',
+      found: 1546,
+      converted: 1399,
+      detail: 'High-ticket services segment prepared for scoring and draft review.',
+    },
+  ],
+  safety: {
+    title: 'Demo safety boundary',
+    status: 'Outbound delivery locked',
+    detail:
+      'Discovery, enrichment, scoring, and draft generation are enabled. Email, SMS, WhatsApp, provider delivery calls, follow-up delivery, and message.send publishing are disabled.',
+  },
+} satisfies JsonObject;
+
+const DEMO_ANALYTICS_DASHBOARD_SNAPSHOT = {
+  id: 'demo-dashboard-analytics-2026-07',
+  workspaceSlug: 'zbooni-sales-demo',
+  version: DEMO_DASHBOARD_SNAPSHOT_VERSION,
+  kind: 'analytics',
+  generatedAt: DEMO_DASHBOARD_GENERATED_AT,
+  headline: {
+    title: 'Analytics Dashboard',
+    eyebrow: 'Curated GTM snapshot',
+    summary:
+      'Stable executive view of market coverage, lead quality, ICP performance, and campaign-readiness for the workspace.',
+    status: 'Snapshot locked',
+  },
+  metrics: [
+    {
+      id: 'qualified-rate',
+      label: 'Priority rate',
+      value: '52%',
+      detail: '11,154 high or medium-fit opportunities from 21,578 screened businesses.',
+      tone: 'teal',
+    },
+    {
+      id: 'avg-fit-score',
+      label: 'Average lead score',
+      value: '0.54',
+      detail: 'Weighted Zbooni-fit score across the screened business universe.',
+      tone: 'purple',
+    },
+    {
+      id: 'priority-leads',
+      label: 'Priority leads',
+      value: '11,154',
+      detail: 'High and medium-fit businesses ready for review and message drafting.',
+      tone: 'green',
+    },
+    {
+      id: 'filtered-out',
+      label: 'Disqualified',
+      value: '3,140',
+      detail: 'Businesses removed by hard filters before score-band review.',
+      tone: 'amber',
+    },
+  ],
+  leadFlow: {
+    totalBusinesses: 21578,
+    evaluated: 21578,
+    outsideFlow: 0,
+    qualified: 11154,
+    notQualified: 3140,
+    high: 5548,
+    medium: 5606,
+    low: 7284,
+    unbanded: 0,
+  },
+  scoreBands: [
+    {
+      id: 'high',
+      label: 'High fit',
+      count: 5548,
+      percent: 30,
+      detail: 'Best accounts for immediate review and high-context drafting.',
+      tone: 'green',
+    },
+    {
+      id: 'medium',
+      label: 'Medium fit',
+      count: 5606,
+      percent: 30,
+      detail: 'Solid-fit businesses for segment-specific campaigns.',
+      tone: 'amber',
+    },
+    {
+      id: 'low',
+      label: 'Low fit',
+      count: 7284,
+      percent: 40,
+      detail: 'Lower-priority businesses kept out of active outreach lanes.',
+      tone: 'red',
+    },
+  ],
+  icpPerformance: [
+    {
+      id: 'home-design-contracting',
+      name: 'Home, Design & High-Value Contracting',
+      scored: 3140,
+      avgScore: 0.57,
+      qualifiedRate: 56,
+      qualified: 1748,
+      insight: 'Largest screened segment with strong account density and balanced high/medium-fit depth.',
+    },
+    {
+      id: 'high-ticket-coaching',
+      name: 'Luxury & High-Ticket Services',
+      scored: 2864,
+      avgScore: 0.56,
+      qualifiedRate: 56,
+      qualified: 1598,
+      insight: 'Premium service businesses with visible conversion hooks and strong offer value.',
+    },
+    {
+      id: 'premium-wellness',
+      name: 'Premium Wellness & Longevity Clinics',
+      scored: 2518,
+      avgScore: 0.54,
+      qualifiedRate: 52,
+      qualified: 1309,
+      insight: 'Service-led operators with strong appointment, consultation, and repeat-customer signals.',
+    },
+    {
+      id: 'bespoke-experiences',
+      name: 'Events, Weddings & Experiential Operators',
+      scored: 2326,
+      avgScore: 0.53,
+      qualifiedRate: 51,
+      qualified: 1191,
+      insight: 'Seasonal and event-driven businesses with meaningful volume but wider quality variance.',
+    },
+    {
+      id: 'luxury-services',
+      name: 'Gifting, Corporate & Bespoke Experiences',
+      scored: 2054,
+      avgScore: 0.53,
+      qualifiedRate: 51,
+      qualified: 1052,
+      insight: 'Bespoke purchase flows with strong personalization upside and clear seasonal demand.',
+    },
+  ],
+  outcomeSummary: [
+    {
+      id: 'drafts',
+      label: 'Drafts generated',
+      value: '188',
+      detail: 'Review-ready message drafts from priority lead context.',
+    },
+    {
+      id: 'replies',
+      label: 'Replies',
+      value: '9',
+      detail: 'Historical sample outcomes kept separate from disabled sends.',
+    },
+    {
+      id: 'sent',
+      label: 'Messages sent',
+      value: '81',
+      detail: 'Legacy sample records only; sending is disabled.',
+    },
+  ],
+  recommendations: [
+    {
+      id: 'prioritize-contracting',
+      title: 'Prioritize high-value contracting first',
+      detail:
+        'Home, Design & High-Value Contracting contributes 3,140 screened businesses, 1,748 high or medium-fit opportunities, a 56% priority rate, and a 0.57 average lead score. It is the deepest segment with enough volume to support immediate review and focused copy testing.',
+    },
+    {
+      id: 'use-coaching-copy',
+      title: 'Use premium-service positioning',
+      detail:
+        'Luxury & High-Ticket Services adds 2,864 screened businesses and 1,598 priority opportunities at a 56% priority rate. The strongest accounts show visible offer value, appointment-led sales, and customer-conversation channels, so outreach should lead with conversion lift and payment readiness.',
+    },
+    {
+      id: 'expand-inventory',
+      title: 'Keep low-score inventory out of outreach',
+      detail:
+        'The screened universe contains 7,284 low-score businesses and 3,140 hard disqualifications. Holding those 10,424 accounts out of active outreach protects review quality while leaving 11,154 high or medium-fit businesses available for campaign preparation.',
+    },
+  ],
+  disqualificationReasons: [
+    {
+      id: 'no-conversation-channel',
+      label: 'No customer-conversation channel',
+      count: 812,
+      detail: 'No reliable WhatsApp, Instagram, booking, chat, or contact path surfaced.',
+    },
+    {
+      id: 'weak-commercial-intent',
+      label: 'Weak commercial intent',
+      count: 681,
+      detail: 'Low evidence of transactions, appointment volume, catalog depth, or paid service flow.',
+    },
+    {
+      id: 'inactive-public-presence',
+      label: 'Inactive public presence',
+      count: 548,
+      detail: 'Stale website or social footprint with limited signs of current customer activity.',
+    },
+    {
+      id: 'insufficient-contact-surface',
+      label: 'Insufficient contact surface',
+      count: 417,
+      detail: 'Missing enough domain, social, phone, or location context for reliable review.',
+    },
+    {
+      id: 'outside-served-verticals',
+      label: 'Outside served verticals',
+      count: 356,
+      detail: 'Category appeared too informational, institutional, or low-commerce for Zbooni.',
+    },
+    {
+      id: 'duplicate-or-ambiguous',
+      label: 'Duplicate or ambiguous record',
+      count: 326,
+      detail: 'Branch, marketplace, or duplicate records that could not support clean account review.',
+    },
+  ],
+  safety: {
+    title: 'Analytics snapshot',
+    detail:
+      'Metrics are intentionally stable for executive review. Discovery, enrichment, scoring, and drafting can run; outbound delivery remains disabled.',
+  },
+} satisfies JsonObject;
+
+function handleDemoDashboard(kind: string | undefined): Response {
+  if (kind === 'operations') {
+    return jsonResponse(DEMO_OPERATIONS_DASHBOARD_SNAPSHOT);
+  }
+  if (kind === 'analytics') {
+    return jsonResponse(DEMO_ANALYTICS_DASHBOARD_SNAPSHOT);
+  }
+  throw new HttpError(404, 'Demo dashboard snapshot not found');
+}
+
 function disabled(): Response {
   return jsonResponse({ error: DEMO_DISABLED_MESSAGE }, 403);
 }
@@ -4886,6 +5383,8 @@ async function routeRequest(request: Request, auth: AuthContext): Promise<Respon
   if (method !== 'GET') {
     return disabled();
   }
+
+  if (parts[1] === 'demo' && parts[2] === 'dashboard') return handleDemoDashboard(parts[3]);
 
   if (parts[1] === 'icps' && parts.length === 2) return handleListIcps(url);
   if (parts[1] === 'icps' && parts[2] && parts.length === 3) return handleGetIcp(parts[2]);

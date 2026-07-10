@@ -1,0 +1,17 @@
+# Keep local caches and build outputs out of manual Vercel CLI uploads.
+.turbo/
+.next/
+**/.next/
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+coverage/
+playwright-report/
+.vercel/
+
+# Environment files are supplied through Vercel project env vars.
+.env
+.env.*
+**/.env
+**/.env.*

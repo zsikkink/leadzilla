@@ -278,6 +278,7 @@ model Lead {
   @@index([source])
   @@index([phone])
   @@index([deletedAt])
+  @@index([deletedAt, createdAt], map: "Lead_deletedAt_createdAt_idx")
   @@index([businessId])
 }
 
@@ -297,6 +298,7 @@ model JobExecution {
   updatedAt  DateTime  @updatedAt
 
   @@index([type])
+  @@index([type, createdAt], map: "JobExecution_type_createdAt_idx")
   @@index([status])
   @@index([leadId])
 }
@@ -549,6 +551,7 @@ model LeadScorePrediction {
 
   @@unique([leadId, icpProfileId, featureSnapshotId, modelVersionId])
   @@index([leadId, predictedAt])
+  @@index([leadId, icpProfileId, predictedAt], map: "LeadScorePrediction_leadId_icpProfileId_predictedAt_idx")
   @@index([icpProfileId, predictedAt])
   @@index([modelVersionId, predictedAt])
 }
@@ -649,6 +652,7 @@ model MessageDraft {
   @@index([leadId, createdAt])
   @@index([icpProfileId, createdAt])
   @@index([approvalStatus])
+  @@index([approvalStatus, createdAt], map: "MessageDraft_approvalStatus_createdAt_idx")
   @@index([leadId, approvalStatus])
 }
 
@@ -845,6 +849,7 @@ model Business {
   @@index([websiteDomain])
   @@index([phoneE164])
   @@index([discoveryRunId])
+  @@index([discoveryRunId, deterministicScore], map: "businesses_discovery_run_id_deterministic_score_idx")
   @@index([preQualified])
   @@map("businesses")
 }

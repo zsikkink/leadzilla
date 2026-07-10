@@ -18,7 +18,7 @@ describe('getWebEnv', () => {
   it('uses default API timeout when not set', () => {
     vi.stubEnv('NEXT_PUBLIC_API_TIMEOUT_MS', undefined);
     const env = getWebEnv();
-    expect(env.NEXT_PUBLIC_API_TIMEOUT_MS).toBe(5000);
+    expect(env.NEXT_PUBLIC_API_TIMEOUT_MS).toBe(15000);
   });
 
   it('returns configured API timeout', () => {

@@ -7,13 +7,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 type LeadFlowNodeId =
   | 'database'
   | 'evaluated'
-  | 'outside-flow'
-  | 'qualified'
+  | 'duplicates'
   | 'not-qualified'
   | 'high'
   | 'medium'
-  | 'low'
-  | 'unbanded';
+  | 'low';
 
 type LeadFlowNodeExtra = {
   id: LeadFlowNodeId;
@@ -44,23 +42,34 @@ export type LeadFlowSankeyData = {
   totalBusinesses: number;
   evaluated: number;
   outsideFlow: number;
+  duplicates?: number | undefined;
   qualified: number;
   notQualified: number;
   high: number;
   medium: number;
   low: number;
   unbanded: number;
+  sourceLabel?: string | undefined;
+  screenedLabel?: string | undefined;
+  duplicateLabel?: string | undefined;
+  disqualifiedLabel?: string | undefined;
 };
 
-const CHART_HEIGHT = 268;
-const MIN_CHART_WIDTH = 520;
+const CHART_HEIGHT = 326;
+const MIN_CHART_WIDTH = 640;
 const NODE_WIDTH = 12;
 const NODE_PADDING = 22;
-const MARGIN = {
+const WIDE_MARGIN = {
   top: 18,
-  right: 132,
+  right: 118,
   bottom: 18,
-  left: 132,
+  left: 124,
+};
+const COMPACT_MARGIN = {
+  top: 18,
+  right: 74,
+  bottom: 18,
+  left: 76,
 };
 
 const NODES: LeadFlowNodeExtra[] = [
@@ -74,40 +83,24 @@ const NODES: LeadFlowNodeExtra[] = [
   },
   {
     id: 'evaluated',
-    label: 'Evaluated',
+    label: 'Screened',
     layer: 1,
     order: 0,
     color: '#3CC8E0',
-    labelSide: 'left',
+    labelSide: 'right',
   },
   {
-    id: 'outside-flow',
-    label: 'Not evaluated',
+    id: 'duplicates',
+    label: 'Duplicates',
     layer: 1,
     order: 1,
     color: '#7B8494',
     labelSide: 'right',
   },
   {
-    id: 'qualified',
-    label: 'Qualified',
-    layer: 2,
-    order: 0,
-    color: '#3CC8E0',
-    labelSide: 'left',
-  },
-  {
-    id: 'not-qualified',
-    label: 'Not qualified',
-    layer: 2,
-    order: 1,
-    color: '#E56F73',
-    labelSide: 'right',
-  },
-  {
     id: 'high',
     label: 'High',
-    layer: 3,
+    layer: 2,
     order: 0,
     color: '#74F365',
     labelSide: 'right',
@@ -115,7 +108,7 @@ const NODES: LeadFlowNodeExtra[] = [
   {
     id: 'medium',
     label: 'Medium',
-    layer: 3,
+    layer: 2,
     order: 1,
     color: '#F4CF45',
     labelSide: 'right',
@@ -123,20 +116,34 @@ const NODES: LeadFlowNodeExtra[] = [
   {
     id: 'low',
     label: 'Low',
-    layer: 3,
+    layer: 2,
     order: 2,
     color: '#E56F73',
     labelSide: 'right',
   },
   {
-    id: 'unbanded',
-    label: 'Unscored',
-    layer: 3,
+    id: 'not-qualified',
+    label: 'Disqualified',
+    layer: 2,
     order: 3,
-    color: '#A7B0BD',
+    color: '#E56F73',
     labelSide: 'right',
   },
 ];
+
+function getNodes(data: LeadFlowSankeyData): LeadFlowNodeExtra[] {
+  const labelOverrides: Partial<Record<LeadFlowNodeId, string | undefined>> = {
+    database: data.sourceLabel,
+    evaluated: data.screenedLabel,
+    duplicates: data.duplicateLabel,
+    'not-qualified': data.disqualifiedLabel,
+  };
+
+  return NODES.map((node) => ({
+    ...node,
+    label: labelOverrides[node.id] ?? node.label,
+  }));
+}
 
 function formatCount(value: number): string {
   return Math.round(value).toLocaleString();
@@ -176,13 +183,14 @@ function getNodeCenterX(node: LeadFlowNode): number {
   return ((node.x0 ?? 0) + (node.x1 ?? 0)) / 2;
 }
 
-function getNodeLabelPosition(node: LeadFlowNode) {
+function getNodeLabelPosition(node: LeadFlowNode, width: number) {
   const centerY = getNodeCenterY(node);
+  const compact = width < 460;
 
-  if (node.id === 'not-qualified' || node.id === 'outside-flow') {
+  if (node.id === 'not-qualified' || node.id === 'duplicates') {
     return {
       anchor: 'start' as const,
-      x: (node.x1 ?? 0) + 10,
+      x: compact ? Math.min((node.x1 ?? 0) + 8, width - 62) : (node.x1 ?? 0) + 10,
       y: centerY + 4,
     };
   }
@@ -190,68 +198,42 @@ function getNodeLabelPosition(node: LeadFlowNode) {
   if (node.labelSide === 'left') {
     return {
       anchor: 'end' as const,
-      x: (node.x0 ?? 0) - 10,
+      x: compact ? Math.max((node.x0 ?? 0) - 8, 62) : (node.x0 ?? 0) - 10,
       y: centerY - 4,
     };
   }
 
   return {
     anchor: 'start' as const,
-    x: (node.x1 ?? 0) + 10,
+    x: compact ? Math.min((node.x1 ?? 0) + 8, width - 48) : (node.x1 ?? 0) + 10,
     y: centerY + 4,
   };
 }
 
 function getLinks(data: LeadFlowSankeyData): LeadFlowLinkInput[] {
-  const hasOutsideFlow = data.outsideFlow > 0;
-  const qualificationSource = hasOutsideFlow ? 'evaluated' : 'database';
-  const links: LeadFlowLinkInput[] = [];
-
-  if (hasOutsideFlow) {
-    links.push(
-      {
-        id: 'database-evaluated',
-        source: 'database',
-        target: 'evaluated',
-        value: data.evaluated,
-        color: '#3CC8E0',
-        opacity: 0.5,
-        order: 0,
-      },
-      {
-        id: 'database-outside-flow',
-        source: 'database',
-        target: 'outside-flow',
-        value: data.outsideFlow,
-        color: '#7B8494',
-        opacity: 0.22,
-        order: 1,
-      },
-    );
-  }
-
-  links.push(
+  const duplicates = Math.max(0, data.duplicates ?? 0);
+  return [
     {
-      id: 'source-qualified',
-      source: qualificationSource,
-      target: 'qualified',
-      value: data.qualified,
+      id: 'database-evaluated',
+      source: 'database',
+      target: 'evaluated',
+      value: data.evaluated,
       color: '#3CC8E0',
-      opacity: 0.6,
+      opacity: 0.46,
       order: 0,
     },
     {
-      id: 'source-not-qualified',
-      source: qualificationSource,
-      target: 'not-qualified',
-      value: data.notQualified,
-      color: '#E56F73',
-      opacity: 0.5,
+      id: 'database-duplicates',
+      source: 'database',
+      target: 'duplicates',
+      value: duplicates,
+      color: '#7B8494',
+      opacity: 0.26,
       order: 1,
     },
     {
-      id: 'qualified-high',
-      source: 'qualified',
+      id: 'evaluated-high',
+      source: 'evaluated',
       target: 'high',
       value: data.high,
       color: '#74F365',
@@ -259,8 +241,8 @@ function getLinks(data: LeadFlowSankeyData): LeadFlowLinkInput[] {
       order: 0,
     },
     {
-      id: 'qualified-medium',
-      source: 'qualified',
+      id: 'evaluated-medium',
+      source: 'evaluated',
       target: 'medium',
       value: data.medium,
       color: '#F4CF45',
@@ -268,8 +250,8 @@ function getLinks(data: LeadFlowSankeyData): LeadFlowLinkInput[] {
       order: 1,
     },
     {
-      id: 'qualified-low',
-      source: 'qualified',
+      id: 'evaluated-low',
+      source: 'evaluated',
       target: 'low',
       value: data.low,
       color: '#E56F73',
@@ -277,27 +259,20 @@ function getLinks(data: LeadFlowSankeyData): LeadFlowLinkInput[] {
       order: 2,
     },
     {
-      id: 'qualified-unbanded',
-      source: 'qualified',
-      target: 'unbanded',
-      value: data.unbanded,
-      color: '#A7B0BD',
-      opacity: 0.34,
+      id: 'evaluated-disqualified',
+      source: 'evaluated',
+      target: 'not-qualified',
+      value: data.notQualified,
+      color: '#E56F73',
+      opacity: 0.46,
       order: 3,
     },
-  );
-
-  return links;
-}
-
-function getLayoutLayer(node: LeadFlowNodeExtra, hasOutsideFlow: boolean): number {
-  if (hasOutsideFlow || node.layer === 0) return node.layer;
-  return node.layer - 1;
+  ];
 }
 
 function buildLayout(width: number, data: LeadFlowSankeyData) {
   const links = getLinks(data).filter((link) => link.value > 0);
-  const hasOutsideFlow = data.outsideFlow > 0;
+  const margin = width < 460 ? COMPACT_MARGIN : WIDE_MARGIN;
   const nodeIds = new Set<LeadFlowNodeId>();
   for (const link of links) {
     nodeIds.add(link.source);
@@ -305,10 +280,7 @@ function buildLayout(width: number, data: LeadFlowSankeyData) {
   }
 
   const graph: SankeyGraph<LeadFlowNodeExtra, LeadFlowLinkExtra> = {
-    nodes: NODES.filter((node) => nodeIds.has(node.id)).map((node) => ({
-      ...node,
-      layer: getLayoutLayer(node, hasOutsideFlow),
-    })),
+    nodes: getNodes(data).filter((node) => nodeIds.has(node.id)),
     links: links.map((link) => ({ ...link })),
   };
 
@@ -320,15 +292,74 @@ function buildLayout(width: number, data: LeadFlowSankeyData) {
     .nodeSort((a, b) => a.order - b.order)
     .linkSort((a, b) => a.order - b.order)
     .extent([
-      [MARGIN.left, MARGIN.top],
-      [width - MARGIN.right, CHART_HEIGHT - MARGIN.bottom],
+      [margin.left, margin.top],
+      [width - margin.right, CHART_HEIGHT - margin.bottom],
     ])
     .iterations(48)(graph);
 }
 
+function LeadFlowCompactSummary({ data }: { data: LeadFlowSankeyData }) {
+  const priorityBandCount = data.high + data.medium;
+  const duplicateCount = Math.max(0, data.duplicates ?? 0);
+  const sourceLabel = data.sourceLabel ?? 'Businesses';
+  const screenedLabel = data.screenedLabel ?? 'Screened businesses';
+  const duplicateLabel = data.duplicateLabel ?? 'Duplicates';
+  const disqualifiedLabel = data.disqualifiedLabel ?? 'Disqualified';
+
+  return (
+    <figure
+      aria-label="Lead flow summary from source database through screening and lead bands"
+      className="rounded-xl border border-white/[0.07] bg-black/[0.12] p-4 md:hidden"
+    >
+      <div className="grid gap-3 text-white">
+        <div>
+          <p className="text-[11px] font-bold uppercase tracking-wider text-white/60">{sourceLabel}</p>
+          <p className="mt-1 text-2xl font-extrabold tracking-tight">{formatCount(data.totalBusinesses)}</p>
+          <p className="text-xs font-medium text-white/70">business records</p>
+        </div>
+        <div className="grid grid-cols-2 gap-3 border-t border-white/[0.08] pt-3">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-wider text-zbooni-teal">{screenedLabel}</p>
+            <p className="mt-1 text-lg font-extrabold">{formatCount(data.evaluated)}</p>
+            <p className="text-xs text-white/70">ready for scoring</p>
+          </div>
+          <div>
+            {duplicateCount > 0 ? (
+              <>
+                <p className="text-[11px] font-bold uppercase tracking-wider text-white/60">{duplicateLabel}</p>
+                <p className="mt-1 text-lg font-extrabold">{formatCount(duplicateCount)}</p>
+                <p className="text-xs text-white/70">already known</p>
+              </>
+            ) : (
+              <>
+                <p className="text-[11px] font-bold uppercase tracking-wider text-zbooni-green">Priority bands</p>
+                <p className="mt-1 text-lg font-extrabold">{formatCount(priorityBandCount)}</p>
+                <p className="text-xs text-white/70">high and medium fit</p>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3 border-t border-white/[0.08] pt-3">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-wider text-white/60">Low score</p>
+            <p className="mt-1 text-lg font-extrabold">{formatCount(data.low)}</p>
+            <p className="text-xs text-white/70">kept out of priority review</p>
+          </div>
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-wider text-rose-200">{disqualifiedLabel}</p>
+            <p className="mt-1 text-lg font-extrabold">{formatCount(data.notQualified)}</p>
+            <p className="text-xs text-white/70">not in the review pool</p>
+          </div>
+        </div>
+      </div>
+    </figure>
+  );
+}
+
 export function LeadFlowSankey({ data }: { data: LeadFlowSankeyData }) {
   const { ref, width } = useElementWidth<HTMLDivElement>();
-  const hasFlowData = data.totalBusinesses > 0 || data.evaluated > 0 || data.qualified > 0;
+  const hasFlowData =
+    data.totalBusinesses > 0 || data.evaluated > 0 || data.qualified > 0 || (data.duplicates ?? 0) > 0;
   const layout = useMemo(() => {
     if (!hasFlowData) return { nodes: [], links: [] };
     return buildLayout(width, data);
@@ -349,86 +380,91 @@ export function LeadFlowSankey({ data }: { data: LeadFlowSankeyData }) {
   }
 
   return (
-    <figure ref={ref} className="overflow-hidden rounded-xl border border-white/[0.07] bg-black/[0.12] p-3">
-      <svg
-        aria-label="Lead flow from database records through qualification and lead-fit bands"
-        className="h-auto w-full"
-        role="img"
-        style={{ width }}
-        viewBox={`0 0 ${width} ${CHART_HEIGHT}`}
+    <>
+      <LeadFlowCompactSummary data={data} />
+      <figure
+        ref={ref}
+        className="hidden overflow-hidden rounded-xl border border-white/[0.07] bg-black/[0.12] p-3 md:block"
       >
-        <g fill="none">
-          {layout.links.map((link) => (
-            <path
-              key={link.id}
-              d={linkPath(link) ?? undefined}
-              stroke={link.color}
-              strokeLinecap="butt"
-              strokeOpacity={link.opacity}
-              strokeWidth={Math.max(1, link.width ?? 0)}
-            />
-          ))}
-        </g>
-
-        <g>
-          {layout.nodes.map((node) => (
-            <rect
-              key={node.id}
-              fill={node.color}
-              height={(node.y1 ?? 0) - (node.y0 ?? 0)}
-              rx={4}
-              width={(node.x1 ?? 0) - (node.x0 ?? 0)}
-              x={node.x0}
-              y={node.y0}
-            />
-          ))}
-        </g>
-
-        <g>
-          {layout.nodes.map((node) => {
-            if (node.showLabel === false) return null;
-            const labelPosition = getNodeLabelPosition(node);
-            const labelLines = splitLabel(node.label);
-            const labelX = labelPosition.x;
-            return (
-              <text
-                key={node.id}
-                fill="#FFFFFF"
-                fontSize={12}
-                fontWeight={700}
-                textAnchor={labelPosition.anchor}
-                x={labelX}
-                y={labelPosition.y}
-              >
-                <tspan x={labelX}>{formatCount(node.value ?? 0)}</tspan>
-                {labelLines.map((line, index) => (
-                  <tspan key={`${node.id}-${line}`} dy={index === 0 ? 14 : 13} x={labelX}>
-                    {line}
-                  </tspan>
-                ))}
-              </text>
-            );
-          })}
-        </g>
-
-        <g aria-hidden="true">
-          {layout.links.map((link) => {
-            const source = link.source as LeadFlowNode;
-            const target = link.target as LeadFlowNode;
-            return (
-              <line
-                key={`${link.id}-balance`}
-                opacity={0}
+        <svg
+          aria-label="Lead flow from source database through screening and lead-fit bands"
+          className="h-auto w-full"
+          role="img"
+          viewBox={`0 0 ${width} ${CHART_HEIGHT}`}
+        >
+          <g fill="none">
+            {layout.links.map((link) => (
+              <path
+                key={link.id}
+                d={linkPath(link) ?? undefined}
+                stroke={link.color}
+                strokeLinecap="butt"
+                strokeOpacity={link.opacity}
                 strokeWidth={Math.max(1, link.width ?? 0)}
-                x1={getNodeCenterX(source)}
-                x2={getNodeCenterX(target)}
-                y1={link.y0}
-                y2={link.y1}
               />
-            );
-          })}
-        </g>
-      </svg>
-    </figure>
+            ))}
+          </g>
+
+          <g>
+            {layout.nodes.map((node) => (
+              <rect
+                key={node.id}
+                fill={node.color}
+                height={(node.y1 ?? 0) - (node.y0 ?? 0)}
+                rx={4}
+                width={(node.x1 ?? 0) - (node.x0 ?? 0)}
+                x={node.x0}
+                y={node.y0}
+              />
+            ))}
+          </g>
+
+          <g>
+            {layout.nodes.map((node) => {
+              if (node.showLabel === false) return null;
+              const labelPosition = getNodeLabelPosition(node, width);
+              const labelLines = splitLabel(node.label);
+              const labelX = labelPosition.x;
+              return (
+                <text
+                  key={node.id}
+                  fill="#FFFFFF"
+                  fontSize={12}
+                  fontWeight={700}
+                  textAnchor={labelPosition.anchor}
+                  x={labelX}
+                  y={labelPosition.y}
+                >
+                  <tspan x={labelX}>{formatCount(node.value ?? 0)}</tspan>
+                  {labelLines.map((line, index) => (
+                    <tspan key={`${node.id}-${line}`} dy={index === 0 ? 14 : 13} x={labelX}>
+                      {line}
+                    </tspan>
+                  ))}
+                </text>
+              );
+            })}
+          </g>
+
+          <g aria-hidden="true">
+            {layout.links.map((link) => {
+              const source = link.source as LeadFlowNode;
+              const target = link.target as LeadFlowNode;
+              return (
+                <line
+                  key={`${link.id}-balance`}
+                  opacity={0}
+                  strokeWidth={Math.max(1, link.width ?? 0)}
+                  x1={getNodeCenterX(source)}
+                  x2={getNodeCenterX(target)}
+                  y1={link.y0}
+                  y2={link.y1}
+                />
+              );
+            })}
+          </g>
+        </svg>
+      </figure>
+    </>
   );
 }

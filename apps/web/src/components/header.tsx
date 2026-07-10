@@ -22,7 +22,7 @@ const MOBILE_NAV = [
 ] as const;
 
 function getPageTitle(pathname: string): string {
-  if (pathname === '/dashboard') return 'Dashboard';
+  if (pathname === '/dashboard' || pathname === '/dashboard/analytics') return 'Dashboard';
   if (pathname === '/dashboard/discover') return 'Discover Leads';
   if (pathname === '/dashboard/leads/businesses') return 'Business Intelligence';
   if (pathname === '/dashboard/leads/recovery') return 'Contact Recovery';
@@ -35,8 +35,6 @@ function getPageTitle(pathname: string): string {
   if (pathname === '/dashboard/prompts') return 'Prompt Center';
   if (pathname.startsWith('/dashboard/icps/')) return 'ICP Profile';
   if (pathname === '/dashboard/icps') return 'ICPs';
-  if (pathname === '/dashboard/analytics') return 'Dashboard';
-
   if (pathname === '/discovery') return 'Settings';
   if (pathname === '/discovery/lifecycle') return 'Lead Lifecycle Inspector';
   if (pathname.startsWith('/discovery/lifecycle/')) return 'Lead Lifecycle Inspector';
@@ -65,7 +63,7 @@ export function Header() {
           >
             <Menu className="h-5 w-5" />
           </button>
-          <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl">{pageTitle}</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl">{pageTitle}</h1>
         </div>
 
         <div className="flex items-center gap-3">
@@ -96,11 +94,14 @@ export function Header() {
           {MOBILE_NAV.map(({ href, label }) => {
             const isDiscoverDetailRoute =
               href === '/dashboard/discover' && pathname.startsWith('/dashboard/jobs');
+            const isDashboardRoute =
+              href === '/dashboard' && (pathname === '/dashboard' || pathname === '/dashboard/analytics');
             const isActive =
-              isDiscoverDetailRoute ||
-              pathname === href ||
-              ((href !== '/dashboard' && href !== '/discovery') &&
-                pathname.startsWith(`${href}/`));
+              href === '/dashboard'
+                ? isDashboardRoute
+                : isDiscoverDetailRoute ||
+                  pathname === href ||
+                  (href !== '/discovery' && pathname.startsWith(`${href}/`));
             return (
               <Link
                 key={href}

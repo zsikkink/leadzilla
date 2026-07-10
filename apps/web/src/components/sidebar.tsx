@@ -122,9 +122,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           {DASHBOARD_NAV_ITEMS.map(({ href, label, icon: Icon }) => {
             const isDiscoverDetailRoute =
               href === '/dashboard/discover' && pathname.startsWith('/dashboard/jobs');
+            const isDashboardRoute =
+              href === '/dashboard' && (pathname === '/dashboard' || pathname === '/dashboard/analytics');
             const isActive =
               href === '/dashboard'
-                ? pathname === '/dashboard'
+                ? isDashboardRoute
                 : isDiscoverDetailRoute || pathname === href || pathname.startsWith(`${href}/`);
 
             return (

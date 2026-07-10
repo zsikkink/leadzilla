@@ -16,14 +16,15 @@ import { useAuth } from '@/hooks/use-auth.js';
 import type { ApiClient } from '@/lib/api-client.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
-type DateRange = '7d' | '30d' | '90d' | 'all';
-
+type DateRange = '7d' | '1m' | '6m' | '1y' | 'all';
+type CurveMode = 'monotone' | 'stepAfter';
+type SummaryMode = 'latest' | 'sum';
 interface DailyBucket {
   date: string;
-  Discovered: number;
+  Activated: number;
   Qualified: number;
   Rejected: number;
-  Messaged: number;
+  Sent: number;
   Replied: number;
 }
 
@@ -31,6 +32,8 @@ interface LeadRow {
   createdAt: string;
   status: string;
 }
+
+export type PipelineTrendBucket = DailyBucket;
 
 function buildLeadListQuery(range: DateRange, page: number, icpProfileId?: string | undefined): ListLeadsQuery {
   const startDate = getStartDate(range);
@@ -80,19 +83,27 @@ async function fetchLeadRows(
 
 // Premium palette — each color chosen for WCAG contrast on dark backgrounds
 // and visual distinction from its neighbors on screen.
-const LINES = [
-  { key: 'Discovered', color: '#60A5FA', label: 'Discovered' },   // blue-400
-  { key: 'Qualified', color: '#3CC8E0', label: 'Qualified' },     // teal (zbooni-teal)
-  { key: 'Rejected', color: '#F87171', label: 'Rejected' },       // red-400
-  { key: 'Messaged', color: '#7BFF6B', label: 'Messaged' },       // zbooni-green
-  { key: 'Replied', color: '#C084FC', label: 'Replied' },         // purple-400
+const DEFAULT_LINES = [
+  { key: 'Activated', color: '#60A5FA', label: 'Activated' },       // blue-400
+  { key: 'Qualified', color: '#3CC8E0', label: 'Qualified' },       // teal (zbooni-teal)
+  { key: 'Rejected', color: '#F87171', label: 'Rejected' },         // red-400
+  { key: 'Sent', color: '#7BFF6B', label: 'Messages sent' },        // zbooni-green
+  { key: 'Replied', color: '#C084FC', label: 'Replies' },           // purple-400
 ] as const;
+
+type PipelineTrendKey = Exclude<keyof DailyBucket, 'date'>;
+
+export type PipelineTrendLine = {
+  key: PipelineTrendKey;
+  color: string;
+  label: string;
+};
 
 // ── Date range helpers ─────────────────────────────────────────────────────
 function getStartDate(range: DateRange): Date | null {
   if (range === 'all') return null;
   const now = new Date();
-  const days = range === '7d' ? 7 : range === '30d' ? 30 : 90;
+  const days = range === '7d' ? 7 : range === '1m' ? 30 : range === '6m' ? 183 : 365;
   return new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 }
 
@@ -117,7 +128,7 @@ const QUALIFIED_OR_LATER = new Set([
   'cold',
 ]);
 
-const MESSAGED_OR_LATER = new Set(['messaged', 'replied', 'cold']);
+const SENT_OR_LATER = new Set(['messaged', 'replied', 'cold']);
 const REPLIED_OR_LATER = new Set(['replied']);
 
 // ── Bucketing ──────────────────────────────────────────────────────────────
@@ -133,7 +144,7 @@ function bucketByDay(rows: LeadRow[], range: DateRange): DailyBucket[] {
 
   while (cursor <= end) {
     const key = toDateKey(cursor);
-    buckets.set(key, { date: key, Discovered: 0, Qualified: 0, Rejected: 0, Messaged: 0, Replied: 0 });
+    buckets.set(key, { date: key, Activated: 0, Qualified: 0, Rejected: 0, Sent: 0, Replied: 0 });
     cursor.setDate(cursor.getDate() + 1);
   }
 
@@ -141,21 +152,36 @@ function bucketByDay(rows: LeadRow[], range: DateRange): DailyBucket[] {
     const day = toDateKey(new Date(row.createdAt));
     let bucket = buckets.get(day);
     if (!bucket) {
-      bucket = { date: day, Discovered: 0, Qualified: 0, Rejected: 0, Messaged: 0, Replied: 0 };
+      bucket = { date: day, Activated: 0, Qualified: 0, Rejected: 0, Sent: 0, Replied: 0 };
       buckets.set(day, bucket);
     }
 
-    // Every lead counts as "discovered" on its creation date
-    bucket.Discovered += 1;
+    // Every lead counts as activated on its creation date.
+    bucket.Activated += 1;
 
     const s = row.status;
     if (QUALIFIED_OR_LATER.has(s)) bucket.Qualified += 1;
     if (s === 'rejected') bucket.Rejected += 1;
-    if (MESSAGED_OR_LATER.has(s)) bucket.Messaged += 1;
+    if (SENT_OR_LATER.has(s)) bucket.Sent += 1;
     if (REPLIED_OR_LATER.has(s)) bucket.Replied += 1;
   }
 
   return Array.from(buckets.values()).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function filterPrecomputedBuckets(data: PipelineTrendBucket[], range: DateRange): PipelineTrendBucket[] {
+  if (range === 'all' || data.length === 0) return data;
+
+  const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date));
+  const last = sorted[sorted.length - 1];
+  if (!last) return sorted;
+
+  const days = range === '7d' ? 7 : range === '1m' ? 30 : range === '6m' ? 183 : 365;
+  const start = new Date(`${last.date}T00:00:00`);
+  start.setDate(start.getDate() - days);
+  const startKey = toDateKey(start);
+
+  return sorted.filter((bucket) => bucket.date >= startKey);
 }
 
 // ── Custom tooltip ─────────────────────────────────────────────────────────
@@ -216,15 +242,46 @@ function GlassTooltip({
 }
 
 // ── Main component ─────────────────────────────────────────────────────────
-export function PipelineTimeSeriesChart({ icpProfileId }: { icpProfileId?: string | undefined } = {}) {
+export function PipelineTimeSeriesChart({
+  badge,
+  chartId = 'pipeline-trends',
+  curveMode = 'monotone',
+  defaultRange = '1m',
+  icpProfileId,
+  lines = DEFAULT_LINES,
+  precomputedData,
+  summaryMode = 'sum',
+  subtitle,
+  title = 'Pipeline Trends',
+}: {
+  badge?: string | undefined;
+  chartId?: string | undefined;
+  curveMode?: CurveMode | undefined;
+  defaultRange?: DateRange | undefined;
+  icpProfileId?: string | undefined;
+  lines?: readonly PipelineTrendLine[] | undefined;
+  precomputedData?: PipelineTrendBucket[] | undefined;
+  summaryMode?: SummaryMode | undefined;
+  subtitle?: string | undefined;
+  title?: string | undefined;
+} = {}) {
   const { apiClient, isAuthenticated, isLoading: isAuthLoading } = useAuth();
-  const [range, setRange] = useState<DateRange>('30d');
+  const [range, setRange] = useState<DateRange>(defaultRange);
   const [rows, setRows] = useState<LeadRow[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(!precomputedData);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+
+    if (precomputedData) {
+      setRows([]);
+      setError(null);
+      setIsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
 
     if (isAuthLoading) {
       return () => {
@@ -263,14 +320,17 @@ export function PipelineTimeSeriesChart({ icpProfileId }: { icpProfileId?: strin
     return () => {
       cancelled = true;
     };
-  }, [apiClient, icpProfileId, isAuthenticated, isAuthLoading, range]);
+  }, [apiClient, icpProfileId, isAuthenticated, isAuthLoading, precomputedData, range]);
 
-  const chartData = useMemo(() => bucketByDay(rows, range), [rows, range]);
-
+  const chartData = useMemo(
+    () => precomputedData ? filterPrecomputedBuckets(precomputedData, range) : bucketByDay(rows, range),
+    [precomputedData, range, rows],
+  );
   const rangeButtons: { value: DateRange; label: string }[] = [
     { value: '7d', label: '7d' },
-    { value: '30d', label: '30d' },
-    { value: '90d', label: '90d' },
+    { value: '1m', label: '1m' },
+    { value: '6m', label: '6m' },
+    { value: '1y', label: '1Y' },
     { value: 'all', label: 'All' },
   ];
 
@@ -296,14 +356,14 @@ export function PipelineTimeSeriesChart({ icpProfileId }: { icpProfileId?: strin
       <div className="relative z-10 mb-5 flex items-center justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="text-base font-bold tracking-tight text-white">Pipeline Trends</h2>
-            <span className="rounded-full border border-yellow-300/20 bg-yellow-300/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-yellow-200">
-              Directional
-            </span>
+            <h2 className="text-base font-bold tracking-tight text-white">{title}</h2>
+            {badge ? (
+              <span className="rounded-full border border-yellow-300/20 bg-yellow-300/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-yellow-200">
+                {badge}
+              </span>
+            ) : null}
           </div>
-          <p className="mt-0.5 text-[11px] text-white/40">
-            Bucketed from lead creation dates and current status, not canonical event timestamps.
-          </p>
+          {subtitle ? <p className="mt-0.5 text-[11px] text-white/40">{subtitle}</p> : null}
         </div>
 
         {/* Date range selector */}
@@ -326,7 +386,7 @@ export function PipelineTimeSeriesChart({ icpProfileId }: { icpProfileId?: strin
 
       {/* Legend */}
       <div className="relative z-10 mb-4 flex flex-wrap gap-4">
-        {LINES.map((line) => (
+        {lines.map((line) => (
           <div key={line.key} className="flex items-center gap-2">
             <span
               className="h-2 w-2 rounded-full"
@@ -363,8 +423,8 @@ export function PipelineTimeSeriesChart({ icpProfileId }: { icpProfileId?: strin
             <ResponsiveContainer width="100%" height={320}>
               <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                 <defs>
-                  {LINES.map((line) => (
-                    <linearGradient key={line.key} id={`gradient-${line.key}`} x1="0" y1="0" x2="0" y2="1">
+                  {lines.map((line) => (
+                    <linearGradient key={line.key} id={`gradient-${chartId}-${line.key}`} x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor={line.color} stopOpacity={0.35} />
                       <stop offset="60%" stopColor={line.color} stopOpacity={0.08} />
                       <stop offset="100%" stopColor={line.color} stopOpacity={0} />
@@ -405,14 +465,14 @@ export function PipelineTimeSeriesChart({ icpProfileId }: { icpProfileId?: strin
                   }}
                 />
 
-                {LINES.map((line) => (
+                {lines.map((line) => (
                   <Area
                     key={line.key}
-                    type="monotone"
+                    type={curveMode}
                     dataKey={line.key}
                     stroke={line.color}
                     strokeWidth={2.5}
-                    fill={`url(#gradient-${line.key})`}
+                    fill={`url(#gradient-${chartId}-${line.key})`}
                     fillOpacity={1}
                     dot={false}
                     activeDot={{
@@ -438,9 +498,14 @@ export function PipelineTimeSeriesChart({ icpProfileId }: { icpProfileId?: strin
 
       {/* Summary row — total counts for current range */}
       {!isLoading && !error && chartData.length > 0 ? (
-        <div className="relative z-10 mt-4 grid grid-cols-5 gap-3">
-          {LINES.map((line) => {
-            const total = chartData.reduce((sum, d) => sum + (d[line.key as keyof DailyBucket] as number), 0);
+        <div
+          className="relative z-10 mt-4 grid gap-3"
+          style={{ gridTemplateColumns: `repeat(${lines.length}, minmax(0, 1fr))` }}
+        >
+          {lines.map((line) => {
+            const total = summaryMode === 'latest'
+              ? chartData[chartData.length - 1]?.[line.key] ?? 0
+              : chartData.reduce((sum, d) => sum + d[line.key], 0);
             return (
               <div
                 key={line.key}
