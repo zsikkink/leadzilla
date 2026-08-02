@@ -2,11 +2,8 @@
 
 import {
   ArrowUpRight,
-  CheckCircle2,
   Layers3,
   Rocket,
-  ShieldCheck,
-  Sparkles,
   Target,
   Zap,
 } from 'lucide-react';
@@ -25,7 +22,6 @@ import type {
   DemoAnalyticsIcpPerformance,
   DemoAnalyticsOutcome,
   DemoDashboardMetric,
-  DemoDashboardTone,
   DemoOperationsDashboardSnapshot,
 } from '../lib/demo-dashboard-types.js';
 import {
@@ -33,7 +29,6 @@ import {
   DEMO_OPERATING_TOTALS,
   DEMO_REPORTING_PERIOD,
 } from '../lib/demo-operating-narrative.js';
-import { cn } from '../lib/utils.js';
 import {
   DemoCard,
   DemoErrorState,
@@ -42,7 +37,6 @@ import {
   DemoProgressBar,
   DemoSectionHeading,
   formatDemoCount,
-  toneClass,
 } from './demo-dashboard-ui.js';
 import {
   PipelineTimeSeriesChart,
@@ -56,7 +50,7 @@ const PIPELINE_TREND_BUCKETS: PipelineTrendBucket[] = DEMO_DASHBOARD_TREND_BUCKE
 
 const DISCOVERY_TREND_LINES: PipelineTrendLine[] = [
   { key: 'Activated', color: '#60A5FA', label: 'Screened' },
-  { key: 'Qualified', color: '#3CC8E0', label: 'Priority' },
+  { key: 'Qualified', color: '#3CC8E0', label: 'Scored' },
   { key: 'Rejected', color: '#F87171', label: 'Rejected' },
 ];
 
@@ -65,19 +59,18 @@ const MESSAGE_TREND_LINES: PipelineTrendLine[] = [
   { key: 'Replied', color: '#C084FC', label: 'Replies' },
 ];
 
-const LATEST_PIPELINE_TREND_BUCKET = PIPELINE_TREND_BUCKETS[PIPELINE_TREND_BUCKETS.length - 1];
 const MESSAGE_TREND_TOTALS = {
-  sent: LATEST_PIPELINE_TREND_BUCKET?.Sent ?? 0,
-  replied: LATEST_PIPELINE_TREND_BUCKET?.Replied ?? 0,
+  sent: DEMO_OPERATING_TOTALS.sent,
+  replied: DEMO_OPERATING_TOTALS.replies,
 };
 
-type CapabilityRow = {
-  id: string;
-  label: string;
-  status: string;
-  detail: string;
-  tone: DemoDashboardTone;
-};
+const DASHBOARD_RANGE_OPTIONS = [
+  { value: '7d', label: '1W' },
+  { value: '1m', label: '1M' },
+  { value: '3m', label: '3M' },
+  { value: '6m', label: '6M' },
+  { value: 'all', label: 'All' },
+] as const;
 
 function parseDisplayCount(value: string | undefined): number {
   const parsed = Number.parseInt((value ?? '').replace(/[^\d]/g, ''), 10);
@@ -198,57 +191,6 @@ function buildOutcomeSummary(
   return draftItem ? [draftItem, pendingReview, ...remaining] : [pendingReview, ...remaining];
 }
 
-function buildCapabilityRows(snapshot: DemoOperationsDashboardSnapshot): CapabilityRow[] {
-  const healthById = new Map(snapshot.systemHealth.map((item) => [item.id, item]));
-  const queueById = new Map(snapshot.queues.map((item) => [item.id, item]));
-
-  const edgeApi = healthById.get('edge-api');
-  const discoveryProvider = healthById.get('discovery-provider');
-  const openAiDrafting = healthById.get('openai-drafting');
-  const outboundDelivery = healthById.get('outbound-delivery');
-  const discoveryQueue = queueById.get('discovery-capacity');
-  const draftQueue = queueById.get('draft-generation');
-
-  return [
-    {
-      id: 'edge-api',
-      label: edgeApi?.label ?? 'Supabase Edge API',
-      status: edgeApi?.status ?? 'Operational',
-      detail: edgeApi?.detail ?? 'Dashboard and workspace actions are served through the Supabase Edge Function.',
-      tone: edgeApi?.tone ?? 'green',
-    },
-    {
-      id: 'discovery-provider',
-      label: discoveryProvider?.label ?? 'Discovery provider',
-      status: discoveryQueue?.value ?? discoveryProvider?.status ?? 'Enabled',
-      detail:
-        discoveryProvider?.detail ??
-        discoveryQueue?.detail ??
-        'Small discovery jobs are enabled for bounded exploration.',
-      tone: discoveryProvider?.tone ?? 'teal',
-    },
-    {
-      id: 'openai-drafting',
-      label: openAiDrafting?.label ?? 'OpenAI drafting',
-      status: draftQueue?.value ?? openAiDrafting?.status ?? 'Enabled',
-      detail:
-        draftQueue?.detail ??
-        openAiDrafting?.detail ??
-        'Message drafts can be generated from lead, ICP, and prompt context.',
-      tone: openAiDrafting?.tone ?? 'green',
-    },
-    {
-      id: 'outbound-delivery',
-      label: outboundDelivery?.label ?? 'Outbound delivery',
-      status: outboundDelivery?.status ?? 'Disabled',
-      detail:
-        outboundDelivery?.detail ??
-        'Email, SMS, WhatsApp, provider delivery, follow-ups, and message.send remain blocked.',
-      tone: outboundDelivery?.tone ?? 'amber',
-    },
-  ];
-}
-
 function LeadFlowPanel({ data }: { data: DemoAnalyticsDashboardSnapshot }) {
   return (
     <DemoCard className="h-full">
@@ -318,9 +260,8 @@ function LeadMixPieChart({ data }: { data: DemoAnalyticsDashboardSnapshot['leadF
           style={{ background: `conic-gradient(${gradient})` }}
         >
           <div className="absolute inset-[22%] flex flex-col items-center justify-center rounded-full border border-white/[0.1] bg-[#171821] text-center shadow-inner shadow-black/40">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-white/45">Screened</p>
-            <p className="mt-1 text-3xl font-extrabold tracking-tight text-white">{formatDemoCount(total)}</p>
-            <p className="mt-1 text-xs font-medium text-white/55">database leads screened</p>
+            <p className="text-3xl font-extrabold tracking-tight text-white">{formatDemoCount(total)}</p>
+            <p className="mt-1 text-xs font-medium text-white/55">leads scored</p>
           </div>
         </div>
       </div>
@@ -471,68 +412,6 @@ function OutcomeSummary({
   );
 }
 
-function Recommendations({ data }: { data: DemoAnalyticsDashboardSnapshot }) {
-  const recommendations = data.recommendations;
-
-  return (
-    <DemoCard>
-      <DemoSectionHeading
-        icon={Sparkles}
-        title="Operator Actions"
-        subtitle="The next highest-leverage actions from the completed operating period."
-      />
-      <div className="space-y-3">
-        {recommendations.map((item) => (
-          <div key={item.id} className="rounded-lg border border-white/[0.07] bg-black/[0.12] p-4">
-            <div className="flex gap-3">
-              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-zbooni-green" />
-              <div>
-                <p className="text-sm font-bold text-white">{item.title}</p>
-                <p className="mt-1 text-xs leading-5 text-white/65">{item.detail}</p>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </DemoCard>
-  );
-}
-
-function WorkspaceCapabilities({ snapshot }: { snapshot: DemoOperationsDashboardSnapshot }) {
-  const capabilities = buildCapabilityRows(snapshot);
-
-  return (
-    <DemoCard>
-      <DemoSectionHeading
-        icon={ShieldCheck}
-        title="Workspace Capabilities"
-        subtitle="Runtime status for the functions exposed in this workspace."
-      />
-      <div className="grid gap-3 2xl:grid-cols-2">
-        {capabilities.map((item) => (
-          <div key={item.id} className="rounded-lg border border-white/[0.07] bg-black/[0.12] p-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-bold text-white">{item.label}</p>
-                <p className="mt-1 text-xs leading-5 text-white/65">{polishDashboardCopy(item.detail)}</p>
-              </div>
-              <span
-                className={cn(
-                  'shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-bold',
-                  toneClass(item.tone, 'ring'),
-                  toneClass(item.tone, 'text'),
-                )}
-              >
-                {item.status}
-              </span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </DemoCard>
-  );
-}
-
 function DiscoveryRunEvidence({ snapshot }: { snapshot: DemoOperationsDashboardSnapshot }) {
   return (
     <DemoCard>
@@ -627,21 +506,6 @@ export function ConsolidatedDashboard() {
 
   return (
     <div className="mx-auto w-full max-w-[1600px] space-y-5 2xl:space-y-6">
-      <div className="flex flex-col gap-2 rounded-xl border border-white/[0.08] bg-white/[0.025] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-zbooni-teal">Two-month operating view</p>
-          <p className="mt-1 text-sm text-white/65">{DEMO_REPORTING_PERIOD} · completed reporting period</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
-          <span className="rounded-full border border-violet-300/20 bg-violet-300/[0.07] px-2.5 py-1 text-violet-200">
-            Historical outreach cohort
-          </span>
-          <span className="rounded-full border border-amber-300/20 bg-amber-300/[0.07] px-2.5 py-1 text-amber-200">
-            Current delivery locked
-          </span>
-        </div>
-      </div>
-
       <DemoMetricGrid metrics={buildHeadlineMetrics(analyticsData, operationsData)} />
 
       <div className="grid gap-5 xl:grid-cols-2">
@@ -650,27 +514,18 @@ export function ConsolidatedDashboard() {
           defaultRange="all"
           lines={DISCOVERY_TREND_LINES}
           precomputedData={PIPELINE_TREND_BUCKETS}
-          rangeOptions={[
-            { value: '1m', label: '1M' },
-            { value: 'all', label: '2M' },
-          ]}
-          subtitle="Monthly screened, high-priority, and rejected leads from the database-anchored cohort"
+          rangeOptions={DASHBOARD_RANGE_OPTIONS}
+          subtitle="Daily screened, scored, and rejected leads across the reporting period"
           title="Screening and Qualification"
         />
         <PipelineTimeSeriesChart
-          badge="Historical · delivery locked"
           chartId="message-reply-trends"
-          curveMode="stepAfter"
           defaultRange="all"
           lines={MESSAGE_TREND_LINES}
           precomputedData={PIPELINE_TREND_BUCKETS}
-          rangeOptions={[
-            { value: '1m', label: '1M' },
-            { value: 'all', label: '2M' },
-          ]}
-          summaryMode="latest"
-          subtitle="Cumulative historical messages and replies from the same cohort"
-          title="Historical Outreach"
+          rangeOptions={DASHBOARD_RANGE_OPTIONS}
+          subtitle="Daily sent messages and replies across the reporting period"
+          title="Outreach activity"
         />
       </div>
 
@@ -678,16 +533,10 @@ export function ConsolidatedDashboard() {
 
       <div className="grid items-start gap-5 2xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)]">
         <IcpPerformance rows={analyticsData.icpPerformance} />
-        <div className="space-y-5">
-          <OutcomeSummary analytics={analyticsData} operations={operationsData} />
-          <Recommendations data={analyticsData} />
-        </div>
+        <OutcomeSummary analytics={analyticsData} operations={operationsData} />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-        <WorkspaceCapabilities snapshot={operationsData} />
-        <DiscoveryRunEvidence snapshot={operationsData} />
-      </div>
+      <DiscoveryRunEvidence snapshot={operationsData} />
     </div>
   );
 }

@@ -2,18 +2,18 @@ import { prisma } from '@lead-flood/db';
 import { execSync } from 'node:child_process';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-const ZBOONI_ICP_NAMES = [
-  'Chat-First SMB Seller',
-  'High-Touch Service Business',
-  'Shopify / Ecommerce Recovery',
-  'Multi-Rep SMB Growth',
+const DEMO_ICP_NAMES = [
+  'Product-Led B2B SaaS Growth',
+  'Mid-Market GTM Teams',
+  'Vertical SaaS Operators',
+  'Enterprise Workflow & Data Platforms',
 ] as const;
 
-const EXPECTED_RULE_COUNTS: Record<(typeof ZBOONI_ICP_NAMES)[number], number> = {
-  'Chat-First SMB Seller': 11,
-  'High-Touch Service Business': 8,
-  'Shopify / Ecommerce Recovery': 7,
-  'Multi-Rep SMB Growth': 7,
+const EXPECTED_RULE_COUNTS: Record<(typeof DEMO_ICP_NAMES)[number], number> = {
+  'Product-Led B2B SaaS Growth': 7,
+  'Mid-Market GTM Teams': 8,
+  'Vertical SaaS Operators': 8,
+  'Enterprise Workflow & Data Platforms': 8,
 };
 
 function runSeedScript(): void {
@@ -28,7 +28,7 @@ async function cleanupSeededIcps(): Promise<void> {
   const profiles = await prisma.icpProfile.findMany({
     where: {
       name: {
-        in: ZBOONI_ICP_NAMES,
+        in: DEMO_ICP_NAMES,
       },
     },
     select: { id: true },
@@ -61,10 +61,10 @@ describe('icp.seed', () => {
     await cleanupSeededIcps();
   });
 
-  it('creates four active Leadzilla ICPs with stable wide-net rules and supports idempotent reruns', async () => {
+  it('creates four active U.S. B2B SaaS ICPs and supports idempotent reruns', async () => {
     runSeedScript();
 
-    for (const icpName of ZBOONI_ICP_NAMES) {
+    for (const icpName of DEMO_ICP_NAMES) {
       const icp = await prisma.icpProfile.findFirst({
         where: { name: icpName },
         include: {
@@ -83,13 +83,17 @@ describe('icp.seed', () => {
       expect(icp.qualificationLogic).toBe('WEIGHTED');
       expect(icp.createdByUserId).toBeNull();
       expect(icp.metadataJson).toMatchObject({
-        strategy: 'wide_net',
+        strategy: 'generic_b2b_saas',
       });
       expect(icp.qualificationRules).toHaveLength(EXPECTED_RULE_COUNTS[icpName]);
 
       const requiredRules = icp.qualificationRules.filter((rule) => rule.isRequired);
-      expect(requiredRules).toHaveLength(1);
-      expect(requiredRules[0]?.fieldKey).toBe('country');
+      expect(requiredRules).toHaveLength(3);
+      expect(requiredRules.map((rule) => rule.fieldKey)).toEqual([
+        'country',
+        'has_domain',
+        'has_email',
+      ]);
 
       const orderIndexes = icp.qualificationRules.map((rule) => rule.orderIndex);
       expect(orderIndexes).toEqual(
@@ -102,7 +106,7 @@ describe('icp.seed', () => {
     const allSeededIcpCount = await prisma.icpProfile.count({
       where: {
         name: {
-          in: ZBOONI_ICP_NAMES,
+          in: DEMO_ICP_NAMES,
         },
       },
     });

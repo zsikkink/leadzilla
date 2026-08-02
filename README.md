@@ -133,9 +133,12 @@ Required worker env for discovery:
 Public demo Edge Function env:
 
 - `SERPAPI_API_KEY` enables bounded recruiter-demo discovery.
+- `HUNTER_API_KEY` enables real, server-side Hunter domain enrichment from the Leads page.
+- `LEADZILLA_HUNTER_DAILY_LIMIT` caps recruiter-demo Hunter lookups (default `2`, maximum `10`).
+- `LEADZILLA_HUNTER_MONTHLY_LIMIT` preserves free-plan capacity across the month (default `40`, maximum `50`).
 - `OPENAI_API_KEY` enables live draft generation through the Supabase Edge API.
 - `OPENAI_DRAFT_MODEL` optionally overrides the default frontier draft model.
-- `LEADZILLA_CORS_ORIGINS` must include `http://localhost:3000` and `https://zacksikkink.com`.
+- `LEADZILLA_CORS_ORIGINS` must include the active local dev origins (`http://localhost:3000` and `http://localhost:3001`) and `https://zacksikkink.com`.
 
 Admin access requires your Supabase Auth user ID in the `app_admins` table:
 

@@ -1092,25 +1092,24 @@ export default function DiscoveryRunDetailPage() {
         </div>
       )}
 
-      {/* Sent to Contact Recovery */}
+      {/* Unresolved contacts */}
       {recoveryItems.length > 0 && (
         <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
           <div className="mb-4 flex items-center gap-2">
             <RefreshCw className="h-4 w-4 text-amber-400" />
-            <h2 className="text-base font-bold tracking-tight">Sent to Contact Recovery</h2>
+            <h2 className="text-base font-bold tracking-tight">Contacts unresolved</h2>
             <span className="ml-auto rounded-md bg-white/[0.04] px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums text-muted-foreground/60">
               {recoveryItems.length}
             </span>
           </div>
           <p className="mb-3 text-[11px] text-muted-foreground/50">
-            These businesses had potential but no verified contact was found. They were sent to the contact recovery pipeline for further processing.
+            These businesses matched the search criteria, but no verified decision-maker contact was available.
           </p>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {recoveryItems.map((item) => (
-              <Link
+              <div
                 key={item.business_id}
-                href="/dashboard/leads/recovery"
-                className="flex items-center gap-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 transition-colors hover:border-amber-500/30 hover:bg-amber-500/10"
+                className="flex items-center gap-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2.5"
               >
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/10">
                   <RefreshCw className="h-3.5 w-3.5 text-amber-400" />
@@ -1131,7 +1130,7 @@ export default function DiscoveryRunDetailPage() {
                 }`}>
                   {item.status}
                 </span>
-              </Link>
+              </div>
             ))}
           </div>
         </div>

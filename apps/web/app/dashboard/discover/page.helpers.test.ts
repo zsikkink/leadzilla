@@ -4,6 +4,7 @@ import {
   buildDiscoveryRequest,
   getNextSelectedIcpId,
   isPublicDemoSearchTaskLimit,
+  shouldShowDiscoveryRun,
 } from './page.helpers.js';
 
 describe('discover page helpers', () => {
@@ -42,6 +43,17 @@ describe('discover page helpers', () => {
     expect(isPublicDemoSearchTaskLimit(0)).toBe(false);
     expect(isPublicDemoSearchTaskLimit(6)).toBe(false);
     expect(isPublicDemoSearchTaskLimit(1.5)).toBe(false);
+  });
+
+  it('shows active runs and completed runs with processed output', () => {
+    expect(shouldShowDiscoveryRun('QUEUED', 0, 5)).toBe(true);
+    expect(shouldShowDiscoveryRun('RUNNING', 0, 5)).toBe(true);
+    expect(shouldShowDiscoveryRun('SUCCEEDED', 10, 5)).toBe(true);
+    expect(shouldShowDiscoveryRun('SUCCEEDED', 10, 5, true)).toBe(false);
+    expect(shouldShowDiscoveryRun('SUCCEEDED', 0, 5)).toBe(false);
+    expect(shouldShowDiscoveryRun('SUCCEEDED', 100, 25)).toBe(false);
+    expect(shouldShowDiscoveryRun('PARTIAL', 8, 5)).toBe(false);
+    expect(shouldShowDiscoveryRun('FAILED', 0, 5)).toBe(false);
   });
 
   it('refuses to build a request without ICPs and country set', () => {

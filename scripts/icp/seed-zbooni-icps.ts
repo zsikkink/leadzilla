@@ -1,8 +1,8 @@
 import { prisma } from '@lead-flood/db';
 
-const SUPPORTED_COUNTRIES = ['AE', 'SA', 'JO', 'EG'] as const;
+const UNITED_STATES = ['US'] as const;
 
-interface ZbooniRuleDefinition {
+interface QualificationRuleDefinition {
   name: string;
   fieldName: string;
   operator: 'EQ' | 'NEQ' | 'GT' | 'GTE' | 'LT' | 'LTE' | 'IN' | 'NOT_IN' | 'CONTAINS';
@@ -12,180 +12,243 @@ interface ZbooniRuleDefinition {
   orderIndex: number;
 }
 
-interface ZbooniIcpDefinition {
+interface DemoIcpDefinition {
   name: string;
+  legacySourceName: string;
   purpose: string;
   targetIndustries: string[];
+  minCompanySize: number;
+  maxCompanySize: number;
   featureList: string[];
-  rules: ZbooniRuleDefinition[];
+  metadata: Record<string, unknown>;
+  rules: QualificationRuleDefinition[];
 }
 
-export const ZBOONI_ICP_DEFINITIONS: readonly ZbooniIcpDefinition[] = [
+const baselineRules = (): QualificationRuleDefinition[] => [
   {
-    name: 'Chat-First SMB Seller',
-    purpose: 'High-intent SMB sellers that are conversation-first and socially active.',
-    targetIndustries: ['Retail', 'Fashion', 'Food & Beverage', 'Beauty'],
-    featureList: [
-      'Catalog (CShop) to pre-list services and share them directly via chat',
-      'Multiple payment methods (Amex, Apple Pay, Google Pay, PayPal, etc.)',
-      'Live payment link editing without creating new links',
-      'In-app discount creation',
-      'Promo code creation and management',
-      'WhatsApp marketing campaigns for new customer acquisition',
+    name: 'United States market',
+    fieldName: 'country',
+    operator: 'IN',
+    expectedValue: [...UNITED_STATES],
+    isRequired: true,
+    weight: 0,
+    orderIndex: 1,
+  },
+  {
+    name: 'Company domain available',
+    fieldName: 'has_domain',
+    operator: 'EQ',
+    expectedValue: true,
+    isRequired: true,
+    weight: 0,
+    orderIndex: 2,
+  },
+  {
+    name: 'Business email available',
+    fieldName: 'has_email',
+    operator: 'EQ',
+    expectedValue: true,
+    isRequired: true,
+    weight: 0,
+    orderIndex: 3,
+  },
+];
+
+const antiFitRule = (orderIndex: number): QualificationRuleDefinition => ({
+  name: 'Consumer ecommerce anti-fit',
+  fieldName: 'pure_self_serve_ecom',
+  operator: 'EQ',
+  expectedValue: true,
+  isRequired: false,
+  weight: -3,
+  orderIndex,
+});
+
+export const DEMO_ICP_DEFINITIONS: readonly DemoIcpDefinition[] = [
+  {
+    name: 'Product-Led B2B SaaS Growth',
+    legacySourceName: 'High-Ticket Coaching & Advisory',
+    purpose:
+      'U.S.-based B2B SaaS companies with 25–150 employees that pair self-service acquisition with sales-assisted expansion. This profile prioritizes visible product signals, a contactable buying team, and clear commercial intent.',
+    targetIndustries: [
+      'B2B SaaS',
+      'Developer Tools',
+      'Collaboration Software',
+      'Analytics Software',
     ],
+    minCompanySize: 25,
+    maxCompanySize: 150,
+    featureList: [
+      'Account research grounded in public company evidence',
+      'Fit scoring that separates immediate review from nurture',
+      'Decision-maker discovery across a growing buying committee',
+      'Human-reviewed outreach drafts with account context preserved',
+    ],
+    metadata: {
+      priority: 'P1',
+      strategy: 'generic_b2b_saas',
+      salesHook:
+        'When product-led volume outpaces manual qualification, the next operating question is which accounts merit a sales-assisted follow-up.',
+      salesAngles: [
+        'Trial-to-sales handoff',
+        'High-intent account prioritization',
+        'Buying-committee context',
+      ],
+      averageTicket: 'Mid-market ACV',
+      volumePotential: 'High',
+      salesCycle: '30–60 days',
+      revenuePotential: 'High',
+    },
     rules: [
+      ...baselineRules(),
       {
-        name: 'Country in supported MENA region',
-        fieldName: 'country',
-        operator: 'IN',
-        expectedValue: [...SUPPORTED_COUNTRIES],
-        isRequired: true,
-        weight: 0,
-        orderIndex: 1,
-      },
-      {
-        name: 'Industry supported',
-        fieldName: 'industry_supported',
-        operator: 'EQ',
-        expectedValue: true,
-        isRequired: false,
-        weight: 2,
-        orderIndex: 2,
-      },
-      {
-        name: 'Has WhatsApp',
-        fieldName: 'has_whatsapp',
+        name: 'Pricing page detected',
+        fieldName: 'apify_has_pricing_tiers',
         operator: 'EQ',
         expectedValue: true,
         isRequired: false,
         weight: 3,
-        orderIndex: 3,
-      },
-      {
-        name: 'Has Instagram',
-        fieldName: 'has_instagram',
-        operator: 'EQ',
-        expectedValue: true,
-        isRequired: false,
-        weight: 2,
         orderIndex: 4,
       },
       {
-        name: 'Accepts online payments',
-        fieldName: 'accepts_online_payments',
+        name: 'Analytics instrumentation detected',
+        fieldName: 'has_analytics',
+        operator: 'EQ',
+        expectedValue: true,
+        isRequired: false,
+        weight: 2,
+        orderIndex: 5,
+      },
+      {
+        name: 'Decision-maker identified',
+        fieldName: 'decision_maker_count',
+        operator: 'GT',
+        expectedValue: 0,
+        isRequired: false,
+        weight: 3,
+        orderIndex: 6,
+      },
+      antiFitRule(7),
+    ],
+  },
+  {
+    name: 'Mid-Market GTM Teams',
+    legacySourceName: 'Home, Design & High-Value Contracting',
+    purpose:
+      'U.S.-based SaaS companies with established revenue teams, a repeatable sales motion, and enough market presence to support targeted account selection. Strong candidates show a visible go-to-market stack and multiple commercial stakeholders.',
+    targetIndustries: [
+      'Revenue Operations Software',
+      'Sales Software',
+      'Marketing Automation',
+      'Customer Data Platforms',
+    ],
+    minCompanySize: 100,
+    maxCompanySize: 750,
+    featureList: [
+      'Segment-level account selection for focused pipeline creation',
+      'Contact enrichment that consolidates commercial context',
+      'Score explanations that make prioritization reviewable',
+      'Draft generation that keeps operators in control of outreach',
+    ],
+    metadata: {
+      priority: 'P1',
+      strategy: 'generic_b2b_saas',
+      salesHook:
+        'Established revenue teams need a reliable way to decide where research time will create the most pipeline leverage.',
+      salesAngles: ['Revenue-team capacity', 'Account prioritization', 'Multi-threaded outreach'],
+      averageTicket: 'Mid-market to enterprise ACV',
+      volumePotential: 'Medium–High',
+      salesCycle: '45–90 days',
+      revenuePotential: 'High',
+    },
+    rules: [
+      ...baselineRules(),
+      {
+        name: 'CRM footprint detected',
+        fieldName: 'has_crm',
         operator: 'EQ',
         expectedValue: true,
         isRequired: false,
         weight: 3,
+        orderIndex: 4,
+      },
+      {
+        name: 'LinkedIn company presence',
+        fieldName: 'has_linkedin',
+        operator: 'EQ',
+        expectedValue: true,
+        isRequired: false,
+        weight: 2,
         orderIndex: 5,
       },
       {
-        name: 'Review count above 10',
-        fieldName: 'review_count',
+        name: 'Broad technology footprint',
+        fieldName: 'tech_stack_size',
         operator: 'GT',
-        expectedValue: 10,
+        expectedValue: 5,
         isRequired: false,
         weight: 2,
         orderIndex: 6,
       },
       {
-        name: 'Follower count above 500',
-        fieldName: 'follower_count',
-        operator: 'GT',
-        expectedValue: 500,
+        name: 'Senior commercial contact identified',
+        fieldName: 'found_csuite_decision_maker',
+        operator: 'EQ',
+        expectedValue: true,
         isRequired: false,
-        weight: 1,
+        weight: 3,
         orderIndex: 7,
       },
-      {
-        name: 'Physical address present',
-        fieldName: 'physical_address_present',
-        operator: 'EQ',
-        expectedValue: true,
-        isRequired: false,
-        weight: 1,
-        orderIndex: 8,
-      },
-      {
-        name: 'Recent activity detected',
-        fieldName: 'recent_activity',
-        operator: 'EQ',
-        expectedValue: true,
-        isRequired: false,
-        weight: 2,
-        orderIndex: 9,
-      },
-      {
-        name: 'Custom order signals',
-        fieldName: 'custom_order_signals',
-        operator: 'EQ',
-        expectedValue: true,
-        isRequired: false,
-        weight: 2,
-        orderIndex: 10,
-      },
-      {
-        name: 'Pure self-serve ecom anti-fit',
-        fieldName: 'pure_self_serve_ecom',
-        operator: 'EQ',
-        expectedValue: true,
-        isRequired: false,
-        weight: -3,
-        orderIndex: 11,
-      },
+      antiFitRule(8),
     ],
   },
   {
-    name: 'High-Touch Service Business',
-    purpose: 'Service-led SMBs where conversational and assisted sales motions perform well.',
-    targetIndustries: ['Professional Services', 'Education', 'Fitness'],
-    featureList: [
-      'Customizable payment links allowing staged or package-based payments',
-      'Multiple payment methods (Amex, Apple Pay, Google Pay, PayPal, Tabby, Tamara, etc.)',
-      'CRM to track client history, program enrolment, and notes',
-      'Promo code and discount creation for cohorts or referrals',
-      'WhatsApp marketing campaigns to re-engage past clients for new programs',
-      'Instant customer receipt generation',
+    name: 'Vertical SaaS Operators',
+    legacySourceName: 'Premium Wellness & Longevity Clinics',
+    purpose:
+      'U.S.-based vertical SaaS companies serving a defined operating market such as healthcare, financial services, HR, or property management. The profile favors companies with an established platform, public product positioning, and a clear path to commercial scale.',
+    targetIndustries: [
+      'Healthcare Software',
+      'Financial Software',
+      'HR Software',
+      'Property Management Software',
     ],
+    minCompanySize: 50,
+    maxCompanySize: 500,
+    featureList: [
+      'Industry-specific account research and qualification',
+      'Signal-based prioritization across specialized markets',
+      'Decision-maker and company enrichment in one workflow',
+      'Evidence-led messaging drafts for operator approval',
+    ],
+    metadata: {
+      priority: 'P2',
+      strategy: 'generic_b2b_saas',
+      salesHook:
+        'Vertical SaaS teams often have a well-defined market but limited time to translate fragmented public signals into a focused account list.',
+      salesAngles: [
+        'Vertical-market precision',
+        'Commercial signal capture',
+        'Focused expansion accounts',
+      ],
+      averageTicket: 'Vertical SaaS ACV',
+      volumePotential: 'Medium',
+      salesCycle: '45–90 days',
+      revenuePotential: 'Medium–High',
+    },
     rules: [
+      ...baselineRules(),
       {
-        name: 'Country in supported MENA region',
-        fieldName: 'country',
-        operator: 'IN',
-        expectedValue: [...SUPPORTED_COUNTRIES],
-        isRequired: true,
-        weight: 0,
-        orderIndex: 1,
-      },
-      {
-        name: 'Industry in service set',
-        fieldName: 'industry',
-        operator: 'IN',
-        expectedValue: ['Professional Services', 'Education', 'Fitness'],
-        isRequired: false,
-        weight: 2,
-        orderIndex: 2,
-      },
-      {
-        name: 'Accepts online payments',
-        fieldName: 'accepts_online_payments',
+        name: 'Pricing page detected',
+        fieldName: 'apify_has_pricing_tiers',
         operator: 'EQ',
         expectedValue: true,
         isRequired: false,
-        weight: 2,
-        orderIndex: 3,
-      },
-      {
-        name: 'Review count above 25',
-        fieldName: 'review_count',
-        operator: 'GT',
-        expectedValue: 25,
-        isRequired: false,
-        weight: 2,
+        weight: 3,
         orderIndex: 4,
       },
       {
-        name: 'Has booking/contact form',
+        name: 'Product contact path detected',
         fieldName: 'has_booking_or_contact_form',
         operator: 'EQ',
         expectedValue: true,
@@ -194,7 +257,7 @@ export const ZBOONI_ICP_DEFINITIONS: readonly ZbooniIcpDefinition[] = [
         orderIndex: 5,
       },
       {
-        name: 'Recent activity detected',
+        name: 'Active company presence',
         fieldName: 'recent_activity',
         operator: 'EQ',
         expectedValue: true,
@@ -203,156 +266,65 @@ export const ZBOONI_ICP_DEFINITIONS: readonly ZbooniIcpDefinition[] = [
         orderIndex: 6,
       },
       {
-        name: 'Variable pricing detected',
-        fieldName: 'variable_pricing_detected',
-        operator: 'EQ',
-        expectedValue: true,
+        name: 'Decision-maker identified',
+        fieldName: 'decision_maker_count',
+        operator: 'GT',
+        expectedValue: 0,
         isRequired: false,
-        weight: 2,
+        weight: 3,
         orderIndex: 7,
       },
-      {
-        name: 'Physical location present',
-        fieldName: 'physical_location',
-        operator: 'EQ',
-        expectedValue: true,
-        isRequired: false,
-        weight: 1,
-        orderIndex: 8,
-      },
+      antiFitRule(8),
     ],
   },
   {
-    name: 'Shopify / Ecommerce Recovery',
-    purpose: 'SMB ecommerce stores with signal for cart recovery and conversion lift.',
-    targetIndustries: ['Ecommerce', 'Retail'],
-    featureList: [
-      'Support for large one-off payments on a single link (up to AED 1M per link)',
-      'Multiple payment methods (Amex, Apple Pay, Google Pay, PayPal, etc.)',
-      'Multi-MID support for failed transactions, enabling retries via alternate MIDs',
-      'Immediate live support via call or WhatsApp for urgent or failed transactions',
-      'Catalog (CShop) to pre-list services and share them directly via chat',
-      'CRM to track customer order history and add internal notes',
+    name: 'Enterprise Workflow & Data Platforms',
+    legacySourceName: 'Gifting, Corporate & Bespoke Experiences',
+    purpose:
+      'U.S.-based software companies selling workflow, data, cloud, or security platforms into larger organizations. This profile focuses on companies with a deeper technology footprint and enough public evidence to support a measured enterprise account motion.',
+    targetIndustries: [
+      'Cloud Software',
+      'Cybersecurity',
+      'Data Infrastructure',
+      'IT Management Software',
     ],
+    minCompanySize: 250,
+    maxCompanySize: 2000,
+    featureList: [
+      'Research-backed account briefs for complex buying teams',
+      'Fit scoring that highlights enterprise-commercial readiness',
+      'Contact enrichment across technical and business stakeholders',
+      'Draft assistance that preserves evidence and human review',
+    ],
+    metadata: {
+      priority: 'P1',
+      strategy: 'generic_b2b_saas',
+      salesHook:
+        'Enterprise motions need fewer assumptions and better account context before a team commits scarce research and outreach capacity.',
+      salesAngles: [
+        'Enterprise account context',
+        'Technical and commercial stakeholders',
+        'Evidence-backed prioritization',
+      ],
+      averageTicket: 'Enterprise ACV',
+      volumePotential: 'Selective',
+      salesCycle: '90–180 days',
+      revenuePotential: 'Very High',
+    },
     rules: [
+      ...baselineRules(),
       {
-        name: 'Country in supported MENA region',
-        fieldName: 'country',
-        operator: 'IN',
-        expectedValue: [...SUPPORTED_COUNTRIES],
-        isRequired: true,
-        weight: 0,
-        orderIndex: 1,
-      },
-      {
-        name: 'Shopify detected',
-        fieldName: 'shopify_detected',
-        operator: 'EQ',
-        expectedValue: true,
+        name: 'Broad technology footprint',
+        fieldName: 'tech_stack_size',
+        operator: 'GT',
+        expectedValue: 8,
         isRequired: false,
         weight: 3,
-        orderIndex: 2,
-      },
-      {
-        name: 'Instagram active',
-        fieldName: 'has_instagram',
-        operator: 'EQ',
-        expectedValue: true,
-        isRequired: false,
-        weight: 2,
-        orderIndex: 3,
-      },
-      {
-        name: 'Review count above 50',
-        fieldName: 'review_count',
-        operator: 'GT',
-        expectedValue: 50,
-        isRequired: false,
-        weight: 2,
         orderIndex: 4,
       },
       {
-        name: 'Follower count above 3000',
-        fieldName: 'follower_count',
-        operator: 'GT',
-        expectedValue: 3000,
-        isRequired: false,
-        weight: 2,
-        orderIndex: 5,
-      },
-      {
-        name: 'Accepts online payments',
-        fieldName: 'accepts_online_payments',
-        operator: 'EQ',
-        expectedValue: true,
-        isRequired: false,
-        weight: 1,
-        orderIndex: 6,
-      },
-      {
-        name: 'Abandonment signal detected',
-        fieldName: 'abandonment_signal_detected',
-        operator: 'EQ',
-        expectedValue: true,
-        isRequired: false,
-        weight: 2,
-        orderIndex: 7,
-      },
-    ],
-  },
-  {
-    name: 'Multi-Rep SMB Growth',
-    purpose: 'Growing SMBs where multi-staff workflows and engagement predict expansion.',
-    targetIndustries: ['Retail', 'Services', 'Hospitality'],
-    featureList: [
-      'Support for large one-off payments on a single link (up to AED 1M per link)',
-      'Customizable payment links allowing partial payments (deposit/balance/add-ons)',
-      'International card acceptance',
-      'Multiple payment methods (Amex, Apple Pay, Google Pay, PayPal, etc.)',
-      'Easy reconciliation to track payments, customers, and VAT',
-      'Catalog (CShop) to pre-list services and upsells via chat or QR code',
-      'CRM to track guest history, preferences, and add internal notes',
-    ],
-    rules: [
-      {
-        name: 'Country in supported MENA region',
-        fieldName: 'country',
-        operator: 'IN',
-        expectedValue: [...SUPPORTED_COUNTRIES],
-        isRequired: true,
-        weight: 0,
-        orderIndex: 1,
-      },
-      {
-        name: 'Multi staff detected',
-        fieldName: 'multi_staff_detected',
-        operator: 'EQ',
-        expectedValue: true,
-        isRequired: false,
-        weight: 3,
-        orderIndex: 2,
-      },
-      {
-        name: 'Review count above 100',
-        fieldName: 'review_count',
-        operator: 'GT',
-        expectedValue: 100,
-        isRequired: false,
-        weight: 2,
-        orderIndex: 3,
-      },
-      {
-        name: 'Follower growth signal',
-        fieldName: 'follower_growth_signal',
-        operator: 'EQ',
-        expectedValue: true,
-        isRequired: false,
-        weight: 2,
-        orderIndex: 4,
-      },
-      {
-        name: 'High engagement signal',
-        fieldName: 'high_engagement_signal',
+        name: 'CRM footprint detected',
+        fieldName: 'has_crm',
         operator: 'EQ',
         expectedValue: true,
         isRequired: false,
@@ -360,96 +332,107 @@ export const ZBOONI_ICP_DEFINITIONS: readonly ZbooniIcpDefinition[] = [
         orderIndex: 5,
       },
       {
-        name: 'Physical store present',
-        fieldName: 'physical_store_present',
-        operator: 'EQ',
-        expectedValue: true,
+        name: 'Multiple public company channels',
+        fieldName: 'social_link_count',
+        operator: 'GT',
+        expectedValue: 2,
         isRequired: false,
-        weight: 1,
+        weight: 2,
         orderIndex: 6,
       },
       {
-        name: 'Accepts online payments',
-        fieldName: 'accepts_online_payments',
+        name: 'Senior commercial contact identified',
+        fieldName: 'found_csuite_decision_maker',
         operator: 'EQ',
         expectedValue: true,
         isRequired: false,
-        weight: 2,
+        weight: 3,
         orderIndex: 7,
       },
+      antiFitRule(8),
     ],
   },
 ] as const;
 
+const LEGACY_ICP_NAMES = [
+  'Boutique Hospitality & Short-Stay Operators',
+  'Digital Gift Card Reseller - Multi-Brand Marketplace',
+  'Education & Training Providers',
+  'Events, Weddings & Experiential Operators',
+  'Gifting, Corporate & Bespoke Experiences',
+  'High-Ticket Coaching & Advisory',
+  'Home, Design & High-Value Contracting',
+  'Luxury & High-Ticket Services',
+  'Premium Wellness & Longevity Clinics',
+  'UAE After-School Activity Providers',
+  'Chat-First SMB Seller',
+  'High-Touch Service Business',
+  'Shopify / Ecommerce Recovery',
+  'Multi-Rep SMB Growth',
+] as const;
+
 export interface SeedResult {
-  createdIcpCount: number;
+  activeIcpCount: number;
+  archivedIcpCount: number;
   ruleCountsByIcp: Array<{ icpName: string; icpProfileId: string; ruleCount: number }>;
 }
 
-export async function seedZbooniIcps(): Promise<SeedResult> {
+export async function seedDemoIcps(): Promise<SeedResult> {
   const summary: SeedResult = {
-    createdIcpCount: 0,
+    activeIcpCount: 0,
+    archivedIcpCount: 0,
     ruleCountsByIcp: [],
   };
 
-  for (const definition of ZBOONI_ICP_DEFINITIONS) {
-    const existing = await prisma.icpProfile.findFirst({
-      where: { name: definition.name },
-      select: { id: true },
-    });
-
+  for (const definition of DEMO_ICP_DEFINITIONS) {
+    const [existingDemoIcp, legacyIcp] = await Promise.all([
+      prisma.icpProfile.findFirst({ where: { name: definition.name }, select: { id: true } }),
+      prisma.icpProfile.findFirst({
+        where: { name: definition.legacySourceName },
+        select: { id: true },
+      }),
+    ]);
+    const sourceIcp = existingDemoIcp ?? legacyIcp;
     const icpData = {
+      name: definition.name,
       description: definition.purpose,
       qualificationLogic: 'WEIGHTED' as const,
       metadataJson: {
-        seededBy: 'scripts/icp/seed-zbooni-icps.ts',
-        strategy: 'wide_net',
-        purpose: definition.purpose,
+        seededBy: 'scripts/icp/seed-demo-icps.ts',
+        ...definition.metadata,
       },
-      targetCountries: [...SUPPORTED_COUNTRIES],
+      targetCountries: [...UNITED_STATES],
       targetIndustries: definition.targetIndustries,
+      minCompanySize: definition.minCompanySize,
+      maxCompanySize: definition.maxCompanySize,
+      requiredTechnologies: [],
+      excludedDomains: [],
       featureList: definition.featureList,
       isActive: true,
       createdByUserId: null,
     };
+    const icp = sourceIcp
+      ? await prisma.icpProfile.update({ where: { id: sourceIcp.id }, data: icpData })
+      : await prisma.icpProfile.create({ data: icpData });
 
-    const icp = existing
-      ? await prisma.icpProfile.update({
-          where: { id: existing.id },
-          data: icpData,
-        })
-      : await prisma.icpProfile.create({
-          data: {
-            name: definition.name,
-            ...icpData,
-          },
-        });
-
-    await prisma.qualificationRule.deleteMany({
-      where: {
+    await prisma.qualificationRule.deleteMany({ where: { icpProfileId: icp.id } });
+    await prisma.qualificationRule.createMany({
+      data: definition.rules.map((rule) => ({
         icpProfileId: icp.id,
-      },
+        name: rule.name,
+        ruleType: rule.isRequired ? 'HARD_FILTER' : 'WEIGHTED',
+        isRequired: rule.isRequired,
+        fieldKey: rule.fieldName,
+        operator: rule.operator,
+        valueJson: rule.expectedValue as never,
+        weight: rule.isRequired ? null : rule.weight,
+        orderIndex: rule.orderIndex,
+        priority: rule.orderIndex,
+        isActive: true,
+      })),
     });
 
-    for (const rule of definition.rules) {
-      await prisma.qualificationRule.create({
-        data: {
-          icpProfileId: icp.id,
-          name: rule.name,
-          ruleType: rule.isRequired ? 'HARD_FILTER' : 'WEIGHTED',
-          isRequired: rule.isRequired,
-          fieldKey: rule.fieldName,
-          operator: rule.operator,
-          valueJson: rule.expectedValue as never,
-          weight: rule.isRequired ? null : rule.weight,
-          orderIndex: rule.orderIndex,
-          priority: rule.orderIndex,
-          isActive: true,
-        },
-      });
-    }
-
-    summary.createdIcpCount += 1;
+    summary.activeIcpCount += 1;
     summary.ruleCountsByIcp.push({
       icpName: definition.name,
       icpProfileId: icp.id,
@@ -457,28 +440,49 @@ export async function seedZbooniIcps(): Promise<SeedResult> {
     });
   }
 
+  const remainingLegacyProfiles = await prisma.icpProfile.findMany({
+    where: { name: { in: [...LEGACY_ICP_NAMES] } },
+    select: { id: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  if (remainingLegacyProfiles.length > 0) {
+    await prisma.qualificationRule.deleteMany({
+      where: { icpProfileId: { in: remainingLegacyProfiles.map((profile) => profile.id) } },
+    });
+    await Promise.all(
+      remainingLegacyProfiles.map((profile, index) =>
+        prisma.icpProfile.update({
+          where: { id: profile.id },
+          data: {
+            name: `Archived demo profile ${index + 1}`,
+            description: 'Historical demo data retained for reporting continuity.',
+            metadataJson: { demoArchive: true },
+            targetCountries: [],
+            targetIndustries: [],
+            minCompanySize: null,
+            maxCompanySize: null,
+            requiredTechnologies: [],
+            excludedDomains: [],
+            featureList: [],
+            isActive: false,
+          },
+        }),
+      ),
+    );
+    summary.archivedIcpCount = remainingLegacyProfiles.length;
+  }
+
   return summary;
 }
 
 async function run(): Promise<void> {
-  const result = await seedZbooniIcps();
-
-  console.log(
-    JSON.stringify(
-      {
-        event: 'icp.seed.completed',
-        createdIcpCount: result.createdIcpCount,
-        ruleCountsByIcp: result.ruleCountsByIcp,
-      },
-      null,
-      2,
-    ),
-  );
+  const result = await seedDemoIcps();
+  console.log(JSON.stringify({ event: 'icp.seed.completed', ...result }, null, 2));
 }
 
 run()
   .catch((error: unknown) => {
-    console.error('Failed to seed Zbooni ICP profiles', error);
+    console.error('Failed to seed demo ICP profiles', error);
     process.exitCode = 1;
   })
   .finally(async () => {

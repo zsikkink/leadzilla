@@ -8,8 +8,6 @@ import { useAuth } from '../hooks/use-auth.js';
 function getPageTitle(pathname: string): string {
   if (pathname === '/dashboard' || pathname === '/dashboard/analytics') return 'Dashboard';
   if (pathname === '/dashboard/discover') return 'Discover Leads';
-  if (pathname === '/dashboard/leads/businesses') return 'Business Intelligence';
-  if (pathname === '/dashboard/leads/recovery') return 'Contact Recovery';
   if (pathname.startsWith('/dashboard/leads/')) return 'Lead Detail';
   if (pathname === '/dashboard/leads') return 'Leads';
   if (pathname === '/dashboard/messages') return 'Inbox';

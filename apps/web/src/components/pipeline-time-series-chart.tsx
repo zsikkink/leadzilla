@@ -12,12 +12,12 @@ import {
   YAxis,
 } from 'recharts';
 
-import { useAuth } from '@/hooks/use-auth.js';
-import type { ApiClient } from '@/lib/api-client.js';
-import { toSafeDisplayErrorMessage } from '@/lib/error-messages.js';
+import { useAuth } from '../hooks/use-auth.js';
+import type { ApiClient } from '../lib/api-client.js';
+import { toSafeDisplayErrorMessage } from '../lib/error-messages.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
-type DateRange = '7d' | '1m' | '6m' | '1y' | 'all';
+type DateRange = '7d' | '1m' | '3m' | '6m' | '1y' | 'all';
 type CurveMode = 'monotone' | 'stepAfter';
 type SummaryMode = 'latest' | 'sum';
 interface DailyBucket {
@@ -112,7 +112,7 @@ export type PipelineTrendLine = {
 function getStartDate(range: DateRange): Date | null {
   if (range === 'all') return null;
   const now = new Date();
-  const days = range === '7d' ? 7 : range === '1m' ? 30 : range === '6m' ? 183 : 365;
+  const days = range === '7d' ? 7 : range === '1m' ? 30 : range === '3m' ? 92 : range === '6m' ? 183 : 365;
   return new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 }
 
@@ -124,6 +124,9 @@ function formatLabel(dateStr: string, range: DateRange): string {
   const d = new Date(dateStr + 'T00:00:00');
   if (range === '7d') {
     return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+  if (range === 'all') {
+    return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
   }
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
@@ -178,12 +181,30 @@ function bucketByDay(rows: LeadRow[], range: DateRange): DailyBucket[] {
   return Array.from(buckets.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function filterPrecomputedBuckets(data: PipelineTrendBucket[], range: DateRange): PipelineTrendBucket[] {
+export function filterPrecomputedBuckets(data: PipelineTrendBucket[], range: DateRange): PipelineTrendBucket[] {
   const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date));
-  if (range === 'all' || sorted.length === 0) return sorted;
+  if (sorted.length === 0) return sorted;
 
-  const bucketCount = range === '6m' ? 6 : range === '1y' ? 12 : 1;
-  return sorted.slice(-bucketCount);
+  const days = range === '7d' ? 7 : range === '1m' ? 30 : range === '3m' ? 92 : range === '6m' ? 183 : 365;
+  const end = new Date(`${sorted[sorted.length - 1]!.date}T00:00:00Z`);
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+  const bucketsByDate = new Map(sorted.map((bucket) => [bucket.date, bucket]));
+  const timeline: PipelineTrendBucket[] = [];
+
+  for (const cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+    const date = cursor.toISOString().slice(0, 10);
+    timeline.push(bucketsByDate.get(date) ?? {
+      date,
+      Activated: 0,
+      Qualified: 0,
+      Rejected: 0,
+      Sent: 0,
+      Replied: 0,
+    });
+  }
+
+  return timeline;
 }
 
 // ── Custom tooltip ─────────────────────────────────────────────────────────

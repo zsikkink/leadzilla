@@ -14,7 +14,6 @@ import {
   Tag,
   Wifi,
 } from 'lucide-react';
-import Link from 'next/link';
 
 import { countryName } from '../lib/countries.js';
 import {
@@ -321,7 +320,6 @@ export function AboutBusinessCard(props: AboutBusinessCardProps) {
     contactPhones = [],
     country = null,
     icpProfileName = null,
-    businessId = null,
   } = props;
 
   const locationParts = [
@@ -345,8 +343,8 @@ export function AboutBusinessCard(props: AboutBusinessCardProps) {
       </h2>
 
       <div className="space-y-4">
-        {/* Inline pills: Category + ICP + Website + Business Intel */}
-        {(category || icpProfileName || websiteDomain || businessId) && (
+        {/* Inline pills: Category + ICP + Website */}
+        {(category || icpProfileName || websiteDomain) && (
           <div className="flex flex-wrap items-center gap-2">
             {category && (
               <span className="rounded-full bg-zbooni-teal/10 px-2.5 py-0.5 text-[11px] font-semibold text-zbooni-teal">
@@ -369,15 +367,6 @@ export function AboutBusinessCard(props: AboutBusinessCardProps) {
                 <ExternalLink className="h-3 w-3" />
                 {websiteDomain}
               </a>
-            )}
-            {businessId && (
-              <Link
-                href={`/dashboard/leads/businesses?selected=${businessId}`}
-                className="inline-flex items-center gap-1 rounded-full border border-border/30 px-2.5 py-0.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:text-zbooni-teal"
-              >
-                <Building2 className="h-3 w-3" />
-                Business Intel
-              </Link>
             )}
           </div>
         )}

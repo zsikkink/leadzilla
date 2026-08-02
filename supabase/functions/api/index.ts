@@ -16,6 +16,14 @@ import {
   resolveEdgeDiscoveryTerminalStatus,
 } from './discovery-limits.ts';
 import {
+  HunterDomainSearchError,
+  normalizeHunterDomain,
+  resolveHunterQuotaLimit,
+  searchHunterDomainContacts,
+  type EdgeHunterContact,
+  utcMonthStart,
+} from './hunter-domain-search.ts';
+import {
   isPublicPipelineSettingKey,
   sanitizePublicOperationalJson,
   toPublicDeliveryFailureCode,
@@ -39,6 +47,8 @@ const SERPAPI_SEARCH_URL = 'https://serpapi.com/search.json';
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const DEFAULT_OPENAI_DRAFT_MODEL = 'gpt-5.5';
 const OPENAI_DRAFT_TIMEOUT_MS = 30_000;
+const DEFAULT_EDGE_HUNTER_DAILY_LIMIT = 2;
+const DEFAULT_EDGE_HUNTER_MONTHLY_LIMIT = 40;
 const SLOW_REST_REQUEST_LOG_MS = 1_000;
 const DASHBOARD_SUMMARY_CACHE_TTL_MS = 15_000;
 const DEMO_READINESS_CACHE_TTL_MS = 30_000;
@@ -101,6 +111,16 @@ interface OpenAiDraftContent {
   bodyHtml: string | null;
   ctaText: string | null;
   qualityScore: number | null;
+}
+
+interface EdgeHunterCandidate {
+  email: string;
+  firstName: string;
+  lastName: string;
+  name: string;
+  title: string | null;
+  seniority: 'executive' | 'director' | 'manager' | 'other';
+  positionRank: number;
 }
 
 interface EdgeLocalBusiness {
@@ -1275,11 +1295,165 @@ function scoreLeadBusinessSignals(lead: Row, business: Row | null): {
   };
 }
 
+const HUNTER_EXECUTIVE_KEYWORDS = [
+  'owner',
+  'founder',
+  'ceo',
+  'chief',
+  'president',
+  'managing director',
+] as const;
+const HUNTER_DIRECTOR_KEYWORDS = ['director', 'head', 'vp', 'vice president', 'principal', 'partner'] as const;
+const HUNTER_MANAGER_KEYWORDS = ['manager', 'lead', 'supervisor'] as const;
+const GENERIC_LEAD_EMAIL_LOCAL_PARTS = new Set([
+  'admin',
+  'contact',
+  'hello',
+  'hi',
+  'info',
+  'mail',
+  'office',
+  'sales',
+  'support',
+  'team',
+]);
+
+function edgeHunterDailyLimit(): number {
+  return resolveHunterQuotaLimit(
+    Deno.env.get('LEADZILLA_HUNTER_DAILY_LIMIT'),
+    DEFAULT_EDGE_HUNTER_DAILY_LIMIT,
+    10,
+  );
+}
+
+function edgeHunterMonthlyLimit(): number {
+  return resolveHunterQuotaLimit(
+    Deno.env.get('LEADZILLA_HUNTER_MONTHLY_LIMIT'),
+    DEFAULT_EDGE_HUNTER_MONTHLY_LIMIT,
+    50,
+  );
+}
+
+function hunterSeniority(title: string | null): EdgeHunterCandidate['seniority'] {
+  if (!title) return 'other';
+  const normalized = title.toLowerCase();
+  if (HUNTER_EXECUTIVE_KEYWORDS.some((keyword) => normalized.includes(keyword))) return 'executive';
+  if (HUNTER_DIRECTOR_KEYWORDS.some((keyword) => normalized.includes(keyword))) return 'director';
+  if (HUNTER_MANAGER_KEYWORDS.some((keyword) => normalized.includes(keyword))) return 'manager';
+  return 'other';
+}
+
+function hunterPositionRank(title: string | null): number {
+  const seniority = hunterSeniority(title);
+  if (seniority === 'executive') return 0;
+  if (seniority === 'director') return 1;
+  if (seniority === 'manager') return 2;
+  return 99;
+}
+
+function toEdgeHunterCandidate(contact: EdgeHunterContact): EdgeHunterCandidate | null {
+  if (contact.type === 'generic') return null;
+  const firstName = contact.firstName?.trim() ?? '';
+  const lastName = contact.lastName?.trim() ?? '';
+  if (!firstName || !lastName) return null;
+  return {
+    email: contact.email.trim().toLowerCase(),
+    firstName,
+    lastName,
+    name: `${firstName} ${lastName}`,
+    title: contact.position,
+    seniority: hunterSeniority(contact.position),
+    positionRank: hunterPositionRank(contact.position),
+  };
+}
+
+function isGenericLeadEmail(email: string | null | undefined): boolean {
+  if (!email || !email.includes('@')) return true;
+  const normalized = email.trim().toLowerCase();
+  const [localPart, domain] = normalized.split('@');
+  return (
+    domain === 'lead-flood.invalid'
+    || domain === 'leadzilla.demo'
+    || domain === 'placeholder.local'
+    || localPart?.startsWith('no-email') === true
+    || localPart?.startsWith('unknown') === true
+    || localPart?.startsWith('hello+') === true
+    || (localPart ? GENERIC_LEAD_EMAIL_LOCAL_PARTS.has(localPart) : false)
+  );
+}
+
+function shouldReplaceLeadContact(lead: Row): boolean {
+  const name = `${asString(lead.firstName)} ${asString(lead.lastName)}`.trim().toLowerCase();
+  return (
+    isGenericLeadEmail(asNullableString(lead.email))
+    || name === ''
+    || name === 'unknown contact'
+    || name === 'generic contact'
+  );
+}
+
+async function persistEdgeHunterContacts(
+  businessId: string,
+  leadId: string,
+  contacts: EdgeHunterContact[],
+  now: string,
+): Promise<EdgeHunterCandidate[]> {
+  const candidates = contacts
+    .map(toEdgeHunterCandidate)
+    .filter((candidate): candidate is EdgeHunterCandidate => candidate !== null);
+  if (candidates.length === 0) {
+    await updateRows<Row>('business_conversions', {
+      businessId: `eq.${businessId}`,
+      leadId: `eq.${leadId}`,
+    }, { hunterContactJson: contacts });
+    return candidates;
+  }
+
+  const existing = await listRows('business_contacts', {
+    select: 'email',
+    businessId: `eq.${businessId}`,
+    limit: 500,
+  }, 'none');
+  const existingEmails = new Set(
+    existing.data
+      .map((row) => asNullableString(row.email)?.toLowerCase() ?? null)
+      .filter((email): email is string => email !== null),
+  );
+  const newCandidates = candidates.filter((candidate) => !existingEmails.has(candidate.email));
+
+  if (newCandidates.length > 0) {
+    await insertRows<Row>('business_contacts', newCandidates.map((candidate) => ({
+      id: crypto.randomUUID(),
+      businessId,
+      name: candidate.name,
+      title: candidate.title,
+      email: candidate.email,
+      phone: null,
+      linkedinUrl: null,
+      seniority: candidate.seniority,
+      positionRank: candidate.positionRank,
+      source: 'hunter',
+      createdAt: now,
+      updatedAt: now,
+    })));
+  }
+
+  await updateRows<Row>('business_conversions', {
+    businessId: `eq.${businessId}`,
+    leadId: `eq.${leadId}`,
+  }, { hunterContactJson: contacts });
+  return candidates;
+}
+
 function buildEdgeEnrichmentPayload(input: {
   lead: Row;
   business: Row | null;
   icpProfileId: string;
   scoring: ReturnType<typeof scoreLeadBusinessSignals>;
+  hunter?: {
+    domain: string;
+    contacts: EdgeHunterContact[];
+  } | undefined;
 }): JsonObject {
   const normalizedBusiness = normalizeBusinessRow(input.business);
   const businessName = asNullableString(normalizedBusiness?.name);
@@ -1287,7 +1461,10 @@ function buildEdgeEnrichmentPayload(input: {
   const phone = asNullableString(input.lead.phone) ?? asNullableString(normalizedBusiness?.phoneE164);
   return {
     edgeEnrichment: true,
-    provider: 'EDGE_DEMO',
+    provider: input.hunter ? 'HUNTER' : 'EDGE_DEMO',
+    source: input.hunter ? 'manual_lead_enrich' : 'edge_demo_enrichment',
+    contacts: input.hunter?.contacts ?? [],
+    hunterDomain: input.hunter?.domain ?? null,
     companyName: businessName,
     businessName,
     industry: asNullableString(normalizedBusiness?.category),
@@ -1418,6 +1595,10 @@ async function createEdgeEnrichmentAndScore(input: {
   icpProfileId: string;
   discoveryRecordId?: string | null | undefined;
   now?: string | undefined;
+  hunter?: {
+    domain: string;
+    contacts: EdgeHunterContact[];
+  } | undefined;
 }): Promise<{ enrichment: Row; snapshot: Row; prediction: Row }> {
   const now = input.now ?? new Date().toISOString();
   const leadId = asString(input.lead.id);
@@ -1427,28 +1608,38 @@ async function createEdgeEnrichmentAndScore(input: {
     business: input.business,
     icpProfileId: input.icpProfileId,
     scoring,
+    hunter: input.hunter,
   });
+  const hunterRequestKey = input.hunter ? `hunter:edge:${leadId}` : null;
   const enrichment = await insertRow<Row>('LeadEnrichmentRecord', {
     id: newId('enrich'),
     leadId,
     provider: 'HUNTER',
     status: 'COMPLETED',
     attempt: 1,
-    providerRecordId: `edge-${edgeHash(`${leadId}:${now}`)}`,
+    providerRecordId: input.hunter
+      ? `hunter-domain-${edgeHash(input.hunter.domain)}`
+      : `edge-${edgeHash(`${leadId}:${now}`)}`,
     normalizedPayload,
-    rawPayload: {
-      edgeDemo: true,
-      lead: {
-        id: leadId,
-        email: asNullableString(input.lead.email),
-        businessEmail: asNullableString(input.lead.businessEmail),
-      },
-      business: normalizeBusinessRow(input.business),
-    },
+    rawPayload: input.hunter
+      ? {
+          source: 'hunter_domain_search',
+          domain: input.hunter.domain,
+          contacts: input.hunter.contacts,
+        }
+      : {
+          edgeDemo: true,
+          lead: {
+            id: leadId,
+            email: asNullableString(input.lead.email),
+            businessEmail: asNullableString(input.lead.businessEmail),
+          },
+          business: normalizeBusinessRow(input.business),
+        },
     errorCode: null,
     errorMessage: null,
     enrichedAt: now,
-    requestKey: `edge:${leadId}:${edgeHash(now)}`,
+    requestKey: hunterRequestKey ?? `edge:${leadId}:${edgeHash(now)}`,
     createdAt: now,
     updatedAt: now,
   });
@@ -1496,12 +1687,41 @@ async function createEdgeEnrichmentAndScore(input: {
     createdAt: now,
   });
 
+  const normalizedBusiness = normalizeBusinessRow(input.business);
+  const businessId = asNullableString(input.lead.businessId);
+  const hunterCandidates = input.hunter && businessId
+    ? await persistEdgeHunterContacts(businessId, leadId, input.hunter.contacts, now)
+    : [];
+  const topHunterCandidate = hunterCandidates[0] ?? null;
+  const replaceLeadContact = topHunterCandidate !== null && shouldReplaceLeadContact(input.lead);
+  const existingLeadWithHunterEmail = replaceLeadContact && topHunterCandidate
+    ? await singleRow('Lead', {
+        select: 'id',
+        email: `eq.${topHunterCandidate.email}`,
+        deletedAt: 'is.null',
+      })
+    : null;
+  const fallbackPhone = asNullableString(input.lead.phone) ?? asNullableString(normalizedBusiness?.phoneE164);
+
   await updateRows<Row>('Lead', { id: `eq.${leadId}` }, {
     status: nextLeadStatus(asString(input.lead.status, 'new'), scoring.deterministicScore),
     enrichmentData: normalizedPayload,
-    decisionMakerTitle: asNullableString(input.lead.decisionMakerTitle) ?? 'Owner / Operator',
-    phone: asNullableString(input.lead.phone) ?? asNullableString(normalizeBusinessRow(input.business)?.phoneE164),
-    phoneSource: 'EDGE_ENRICHMENT',
+    decisionMakerTitle: replaceLeadContact
+      ? topHunterCandidate?.title
+      : asNullableString(input.lead.decisionMakerTitle) ?? (input.hunter ? null : 'Owner / Operator'),
+    ...(replaceLeadContact && topHunterCandidate
+      ? {
+          firstName: topHunterCandidate.firstName,
+          lastName: topHunterCandidate.lastName,
+          ...(existingLeadWithHunterEmail ? {} : { email: topHunterCandidate.email }),
+        }
+      : {}),
+    ...(fallbackPhone
+      ? {
+          phone: fallbackPhone,
+          phoneSource: asNullableString(input.lead.phoneSource) ?? 'EDGE_ENRICHMENT',
+        }
+      : {}),
     updatedAt: now,
   });
 
@@ -2098,7 +2318,9 @@ function mapLeadListRow(
     businessScoreBand: asNullableString(biz?.scoreBand),
     businessName: asNullableString(biz?.name),
     decisionMakerTitle: asNullableString(lead.decisionMakerTitle),
-    hunterEnrichmentUsed: false,
+    hunterEnrichmentUsed:
+      asString(enrichment?.provider) === 'HUNTER'
+      && asObject(enrichment?.rawPayload)?.edgeDemo !== true,
   };
 }
 
@@ -3338,14 +3560,83 @@ async function handleEnrichLead(leadId: string): Promise<Response> {
   }
 
   const businessId = asNullableString(lead.businessId);
+  if (!businessId) {
+    throw new HttpError(422, 'This lead is not connected to a company that Hunter can enrich');
+  }
   const [business, icpProfileId] = await Promise.all([
-    businessId ? singleRow('businesses', { select: '*', id: `eq.${businessId}` }) : Promise.resolve(null),
+    singleRow('businesses', { select: '*', id: `eq.${businessId}` }),
     resolveLeadIcpProfileId(leadId),
   ]);
+  const domain = normalizeHunterDomain(asNullableString(normalizeBusinessRow(business)?.websiteDomain));
+  if (!domain) {
+    throw new HttpError(422, 'This company does not have a website domain that Hunter can search');
+  }
+
+  const requestKey = `hunter:edge:${leadId}`;
+  const existingEnrichment = await singleRow('LeadEnrichmentRecord', {
+    select: 'id',
+    requestKey: `eq.${requestKey}`,
+  });
+  if (existingEnrichment) {
+    return jsonResponse({
+      jobId: asString(existingEnrichment.id),
+      status: 'QUEUED',
+      provider: 'HUNTER',
+    }, 202);
+  }
+
+  const now = new Date();
+  const today = new Date(now);
+  today.setUTCHours(0, 0, 0, 0);
+  const [hunterRunsToday, hunterRunsThisMonth] = await Promise.all([
+    countRows('LeadEnrichmentRecord', {
+      provider: 'eq.HUNTER',
+      requestKey: 'like.hunter:edge:*',
+      createdAt: `gte.${today.toISOString()}`,
+    }),
+    countRows('LeadEnrichmentRecord', {
+      provider: 'eq.HUNTER',
+      requestKey: 'like.hunter:edge:*',
+      createdAt: `gte.${utcMonthStart(now).toISOString()}`,
+    }),
+  ]);
+  if (hunterRunsToday >= edgeHunterDailyLimit()) {
+    throw new HttpError(429, 'The demo enrichment allowance has been reached for today');
+  }
+  if (hunterRunsThisMonth >= edgeHunterMonthlyLimit()) {
+    throw new HttpError(429, 'The demo enrichment allowance has been reached for this month');
+  }
+
+  const hunterApiKey = normalizeOptionalString(Deno.env.get('HUNTER_API_KEY'));
+  if (!hunterApiKey) {
+    throw new HttpError(503, 'Hunter enrichment is temporarily unavailable');
+  }
+
+  let contacts: EdgeHunterContact[];
+  try {
+    contacts = await searchHunterDomainContacts({
+      apiKey: hunterApiKey,
+      domain,
+      baseUrl: normalizeOptionalString(Deno.env.get('HUNTER_BASE_URL')) ?? undefined,
+    });
+  } catch (error: unknown) {
+    if (error instanceof HunterDomainSearchError) {
+      if (error.statusCode === 429) {
+        throw new HttpError(429, 'Hunter is temporarily rate limited. Please try again shortly.');
+      }
+      if (error.retryable) {
+        throw new HttpError(503, 'Hunter enrichment is temporarily unavailable');
+      }
+      throw new HttpError(502, 'Hunter could not enrich this company');
+    }
+    throw error;
+  }
+
   const result = await createEdgeEnrichmentAndScore({
     lead,
     business,
     icpProfileId,
+    hunter: { domain, contacts },
   });
 
   return jsonResponse({
@@ -5190,7 +5481,7 @@ async function handleJobRequests(url: URL): Promise<Response> {
   });
 }
 
-const DEMO_DASHBOARD_SNAPSHOT_VERSION = '2026.08.two-month-db-anchored.v2';
+const DEMO_DASHBOARD_SNAPSHOT_VERSION = '2026.08.two-month-db-anchored.v5';
 const DEMO_DASHBOARD_GENERATED_AT = '2026-08-01T14:00:00.000Z';
 
 const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
@@ -5209,15 +5500,15 @@ const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
     {
       id: 'source-inventory',
       label: 'Database leads',
-      value: '4,907',
+      value: '5,007',
       unit: 'leads',
-      detail: '4,906 discovery-linked leads plus one manually added lead.',
+      detail: 'A curated two-month lead inventory for the recruiter-demo workspace.',
       tone: 'teal',
     },
     {
       id: 'discovered-leads',
       label: 'Screened universe',
-      value: '4,907',
+      value: '5,007',
       unit: 'leads',
       detail: 'Active, non-deleted database leads in the screening population.',
       tone: 'green',
@@ -5225,7 +5516,7 @@ const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
     {
       id: 'enriched-scored',
       label: 'Scored profiles',
-      value: '4,428',
+      value: '4,528',
       unit: 'profiles',
       detail: 'Businesses with enough public context to receive a Leadzilla fit score.',
       tone: 'blue',
@@ -5251,8 +5542,8 @@ const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
     {
       id: 'discover',
       label: 'Discover',
-      count: 4907,
-      displayValue: '4,907',
+      count: 5007,
+      displayValue: '5,007',
       caption: 'SERP discovery and dedupe',
       status: 'Ready',
       health: 'healthy',
@@ -5260,8 +5551,8 @@ const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
     {
       id: 'enrich',
       label: 'Enrich',
-      count: 4428,
-      displayValue: '4,428',
+      count: 4528,
+      displayValue: '4,528',
       caption: 'Contacts, domains, and business context',
       status: 'Enabled',
       health: 'healthy',
@@ -5269,8 +5560,8 @@ const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
     {
       id: 'score',
       label: 'Score',
-      count: 4428,
-      displayValue: '4,428',
+      count: 4528,
+      displayValue: '4,528',
       caption: 'Model and rule-based lead fit',
       status: 'Enabled',
       health: 'healthy',
@@ -5357,9 +5648,9 @@ const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
       id: 'demo-run-2026-07-icp-expansion',
       title: 'July · ICP expansion and review',
       status: 'Complete',
-      found: 2693,
-      converted: 2429,
-      detail: '2,429 scored and 1,378 high-priority leads in the latest completed month.',
+      found: 2793,
+      converted: 2529,
+      detail: '2,529 scored and 1,378 high-priority leads in the latest completed month.',
     },
   ],
   safety: {
@@ -5387,8 +5678,8 @@ const DEMO_ANALYTICS_DASHBOARD_SNAPSHOT = {
     {
       id: 'qualified-rate',
       label: 'Priority rate',
-      value: '57.1%',
-      detail: '2,528 high-fit opportunities from 4,428 scored leads.',
+      value: '55.8%',
+      detail: '2,528 high-fit opportunities from 4,528 scored leads.',
       tone: 'teal',
     },
     {
@@ -5414,14 +5705,14 @@ const DEMO_ANALYTICS_DASHBOARD_SNAPSHOT = {
     },
   ],
   leadFlow: {
-    totalBusinesses: 4907,
-    evaluated: 4428,
+    totalBusinesses: 5007,
+    evaluated: 4528,
     outsideFlow: 0,
     qualified: 2528,
     notQualified: 479,
     high: 2528,
     medium: 1845,
-    low: 55,
+    low: 155,
     unbanded: 0,
   },
   scoreBands: [
@@ -5429,7 +5720,7 @@ const DEMO_ANALYTICS_DASHBOARD_SNAPSHOT = {
       id: 'high',
       label: 'High fit',
       count: 2528,
-      percent: 57,
+      percent: 56,
       detail: 'Best accounts for immediate review and high-context drafting.',
       tone: 'green',
     },
@@ -5437,109 +5728,55 @@ const DEMO_ANALYTICS_DASHBOARD_SNAPSHOT = {
       id: 'medium',
       label: 'Medium fit',
       count: 1845,
-      percent: 42,
+      percent: 41,
       detail: 'Solid-fit businesses for segment-specific campaigns.',
       tone: 'amber',
     },
     {
       id: 'low',
       label: 'Low fit',
-      count: 55,
-      percent: 1,
+      count: 155,
+      percent: 3,
       detail: 'Lower-priority leads kept out of active outreach lanes.',
       tone: 'red',
     },
   ],
   icpPerformance: [
     {
-      id: 'high-ticket-coaching',
-      name: 'High-Ticket Coaching & Advisory',
-      scored: 692,
-      avgScore: 0.660,
-      qualifiedRate: 50,
-      qualified: 345,
-      insight: 'The largest active-review segment, with 345 high-priority leads and a similarly sized nurture pool.',
+      id: 'product-led-b2b-saas-growth',
+      name: 'Product-Led B2B SaaS Growth',
+      scored: 1240,
+      avgScore: 0.700,
+      qualifiedRate: 59,
+      qualified: 728,
+      insight: 'The largest priority cohort, with product signals and visible buying teams supporting timely sales-assisted follow-up.',
     },
     {
-      id: 'home-design-contracting',
-      name: 'Home, Design & High-Value Contracting',
-      scored: 663,
-      avgScore: 0.676,
-      qualifiedRate: 66,
-      qualified: 436,
-      insight: 'The deepest high-priority segment, with 436 leads available for focused copy testing.',
+      id: 'mid-market-gtm-teams',
+      name: 'Mid-Market GTM Teams',
+      scored: 1170,
+      avgScore: 0.680,
+      qualifiedRate: 57,
+      qualified: 663,
+      insight: 'The deepest revenue-team cohort, with mature go-to-market stacks and enough commercial context for focused review.',
     },
     {
-      id: 'premium-wellness',
-      name: 'Premium Wellness & Longevity Clinics',
-      scored: 605,
-      avgScore: 0.646,
-      qualifiedRate: 50,
-      qualified: 304,
-      insight: 'Consultation and booking signals produced 304 high-priority opportunities for operator review.',
+      id: 'vertical-saas-operators',
+      name: 'Vertical SaaS Operators',
+      scored: 1070,
+      avgScore: 0.650,
+      qualifiedRate: 55,
+      qualified: 586,
+      insight: 'Specialized-market companies form a balanced priority cohort for vertical-specific research and messaging tests.',
     },
     {
-      id: 'bespoke-gifting',
-      name: 'Gifting, Corporate & Bespoke Experiences',
-      scored: 585,
-      avgScore: 0.692,
-      qualifiedRate: 65,
-      qualified: 381,
-      insight: 'One of the strongest priority rates in the scaled portfolio, supported by visible seasonal demand.',
-    },
-    {
-      id: 'high-ticket-services',
-      name: 'Luxury & High-Ticket Services',
-      scored: 537,
-      avgScore: 0.654,
-      qualifiedRate: 52,
-      qualified: 280,
-      insight: 'Appointment-led sales and visible offer value produced 280 high-priority leads.',
-    },
-    {
-      id: 'education-training',
-      name: 'Education & Training Providers',
-      scored: 505,
-      avgScore: 0.658,
+      id: 'enterprise-workflow-data-platforms',
+      name: 'Enterprise Workflow & Data Platforms',
+      scored: 1048,
+      avgScore: 0.640,
       qualifiedRate: 53,
-      qualified: 267,
-      insight: 'A balanced high/medium mix gives the segment room for both direct review and nurture testing.',
-    },
-    {
-      id: 'boutique-hospitality',
-      name: 'Boutique Hospitality & Short-Stay Operators',
-      scored: 396,
-      avgScore: 0.682,
-      qualifiedRate: 62,
-      qualified: 246,
-      insight: 'Booking, guest-service, and inquiry-routing signals produced 246 high-priority leads.',
-    },
-    {
-      id: 'events-experiential',
-      name: 'Events, Weddings & Experiential Operators',
-      scored: 390,
-      avgScore: 0.693,
-      qualifiedRate: 67,
-      qualified: 263,
-      insight: 'The highest priority rate in the portfolio, with 263 high-fit leads despite seasonal demand patterns.',
-    },
-    {
-      id: 'uae-after-school',
-      name: 'UAE After-School Activity Providers',
-      scored: 52,
-      avgScore: 0.507,
-      qualifiedRate: 12,
-      qualified: 6,
-      insight: 'An early-stage segment with six high-priority leads and a larger medium-fit validation cohort.',
-    },
-    {
-      id: 'digital-gift-card',
-      name: 'Digital Gift Card Reseller - Multi-Brand Marketplace',
-      scored: 3,
-      avgScore: 0.467,
-      qualifiedRate: 0,
-      qualified: 0,
-      insight: 'The three-lead validation sample remains medium fit and is not yet ready for priority outreach.',
+      qualified: 551,
+      insight: 'A selective enterprise segment where strong public technology signals support a measured account-based motion.',
     },
   ],
   outcomeSummary: [
@@ -5576,14 +5813,14 @@ const DEMO_ANALYTICS_DASHBOARD_SNAPSHOT = {
   ],
   recommendations: [
     {
-      id: 'prioritize-contracting',
-      title: 'Protect Home & Design review capacity',
-      detail: '436 high-priority leads make this the deepest immediate-review segment; clear the three overdue drafts before expanding volume.',
+      id: 'prioritize-product-led',
+      title: 'Protect product-led review capacity',
+      detail: '728 priority accounts make this the deepest immediate-review segment; clear the three overdue drafts before expanding volume.',
     },
     {
-      id: 'expand-gifting',
-      title: 'Expand the gifting playbook',
-      detail: 'Gifting produced a 65% priority rate: 381 high-fit leads from 585 scored profiles.',
+      id: 'expand-gtm-playbook',
+      title: 'Expand the mid-market GTM playbook',
+      detail: 'Mid-market GTM teams produced a 57% priority rate: 663 high-fit accounts from 1,170 scored profiles.',
     },
     {
       id: 'nurture-medium-fit',

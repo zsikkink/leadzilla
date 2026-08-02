@@ -98,14 +98,14 @@ function DiscoverPreview() {
   const runs = [
     {
       name: 'July · ICP expansion and review',
-      query: 'Education, events, gifting, and high-consideration operators',
+      query: 'Revenue teams, vertical SaaS, and enterprise workflow platforms',
       found: '2,693',
       converted: '2,429',
       status: 'Complete',
     },
     {
       name: 'June · Initial scored inventory',
-      query: 'Home, design, premium services, hospitality, and wellness operators',
+      query: 'Product-led SaaS, developer tools, and analytics software',
       found: '2,214',
       converted: '1,999',
       status: 'Complete',
@@ -282,7 +282,6 @@ function IcpsPreview() {
           icon={Target}
           title="Ideal Customer Profiles"
           subtitle="Representative segments ranked by screened volume and priority rate."
-          action={<PreviewButton>Create ICP</PreviewButton>}
         />
         <div className="space-y-3">
           {ICPS.map((icp) => (

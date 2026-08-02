@@ -22,6 +22,11 @@ import {
   parseScoreQualificationThreshold,
 } from '../../../src/lib/lead-draft-gating.js';
 import { cn } from '../../../src/lib/utils.js';
+import {
+  getLeadCompanyLabel,
+  getLeadContactName,
+  getLeadEmailLabel,
+} from './page.helpers.js';
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
@@ -41,9 +46,9 @@ const SCORE_OPTIONS = [
 ];
 
 const SORT_OPTIONS = [
-  { value: 'created_desc', label: 'Newest first' },
-  { value: 'score_desc', label: 'Score high to low' },
-  { value: 'score_asc', label: 'Score low to high' },
+  { value: 'created_desc', label: 'Newest' },
+  { value: 'score_desc', label: 'Highest score' },
+  { value: 'score_asc', label: 'Lowest score' },
 ];
 
 const PAGE_SIZE_OPTIONS = [
@@ -576,9 +581,9 @@ export default function LeadsPage() {
       {activeTab === 'active' && (
         <>
           {/* Filters */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          <div className="grid grid-cols-2 gap-2 pb-1 sm:flex sm:flex-wrap sm:items-center">
             <CustomSelect
-              className="w-[7.5rem] shrink-0 [&>button]:w-full [&>button]:justify-between [&>button]:text-xs"
+              className="w-full sm:w-[7.5rem] sm:shrink-0 [&>button]:w-full [&>button]:justify-between [&>button]:text-xs"
               value={statusFilter ?? ''}
               onChange={(v) => {
                 setStatusFilter((v || undefined) as LeadStatus | undefined);
@@ -588,7 +593,7 @@ export default function LeadsPage() {
               placeholder="All statuses"
             />
             <CustomSelect
-              className="w-[6.5rem] shrink-0 [&>button]:w-full [&>button]:justify-between [&>button]:text-xs"
+              className="w-full sm:w-[6.5rem] sm:shrink-0 [&>button]:w-full [&>button]:justify-between [&>button]:text-xs"
               value={scoreBandFilter ?? ''}
               onChange={(v) => {
                 setScoreBandFilter((v || undefined) as LeadScoreBand | undefined);
@@ -603,22 +608,22 @@ export default function LeadsPage() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search leads..."
-              className="h-9 w-36 shrink-0 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-xs text-foreground placeholder:text-muted-foreground/40 focus:border-zbooni-teal/50 focus:outline-none focus:ring-2 focus:ring-zbooni-teal/20"
+              className="col-span-2 h-9 w-full rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-xs text-foreground placeholder:text-muted-foreground/40 focus:border-zbooni-teal/50 focus:outline-none focus:ring-2 focus:ring-zbooni-teal/20 sm:col-span-1 sm:w-36 sm:shrink-0"
             />
 
-            <div className="ml-auto flex shrink-0 items-center gap-2">
+            <div className="col-span-2 grid grid-cols-2 gap-2 sm:ml-auto sm:flex sm:shrink-0 sm:items-center">
               <CustomSelect
-                className="w-40 [&>button]:w-full [&>button]:justify-between [&>button]:text-xs"
+                className="w-full sm:w-40 [&>button]:w-full [&>button]:justify-between [&>button]:text-xs"
                 value={sortBy}
                 onChange={(v) => {
                   setSortBy(v as LeadListSortBy);
                   setPage(1);
                 }}
                 options={SORT_OPTIONS}
-                placeholder="Score high to low"
+                placeholder="Highest score"
               />
               <CustomSelect
-                className="w-32 [&>button]:w-full [&>button]:justify-between [&>button]:text-xs"
+                className="w-full sm:w-32 [&>button]:w-full [&>button]:justify-between [&>button]:text-xs"
                 value={String(pageSize)}
                 onChange={(v) => {
                   setPageSize(parseInt(v, 10) || 20);
@@ -644,50 +649,19 @@ export default function LeadsPage() {
             </div>
           ) : null}
 
-          {isQualificationThresholdLoading ? (
-            <div className="flex items-center gap-3 rounded-xl border border-border/50 bg-card/60 px-4 py-3 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-              <p>Loading pipeline settings. Draft generation is temporarily disabled.</p>
-            </div>
-          ) : null}
-
-          {qualificationThresholdError ? (
-            <div className="flex flex-col gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
-                <p>
-                  Draft controls are refreshing. Lead review remains available.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => void loadQualificationThreshold()}
-                disabled={isQualificationThresholdLoading}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/15 px-3 py-2 text-xs font-semibold text-amber-100 transition-colors hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isQualificationThresholdLoading ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                )}
-                Retry Load
-              </button>
-            </div>
-          ) : null}
-
           {/* Table */}
           <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-border/50 bg-card shadow-sm">
             <div className="max-h-[calc(100vh-320px)] overflow-auto">
               <table className="w-full text-sm">
                 <thead className="sticky top-0 z-10">
                   <tr className="border-b border-border/50 bg-card text-left">
-                    <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Name</th>
-                    <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Company</th>
-                    <th className="hidden px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground lg:table-cell">Position</th>
-                    <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
-                    <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Score</th>
-                    <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Created</th>
-                    <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Actions</th>
+                    <th className="px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:px-4">Name</th>
+                    <th className="hidden px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground md:table-cell">Company</th>
+                    <th className="hidden px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground xl:table-cell">Position</th>
+                    <th className="hidden px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:table-cell">Status</th>
+                    <th className="px-2 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:px-4">Score</th>
+                    <th className="hidden px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:table-cell">Created</th>
+                    <th className="hidden px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground xl:table-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -702,6 +676,13 @@ export default function LeadsPage() {
                     // Use API-provided fields first, then fall back to enrichment extraction
                     const companyName = lead.businessName ?? extractCompanyName(enrichmentRaw);
                     const position = lead.decisionMakerTitle ?? extractPosition(enrichmentRaw);
+                    const companyLabel = getLeadCompanyLabel(companyName ?? lead.businessCategory);
+                    const contactName = getLeadContactName({
+                      firstName: lead.firstName,
+                      lastName: lead.lastName,
+                      companyName: companyLabel,
+                    });
+                    const emailLabel = getLeadEmailLabel(lead.email);
 
                     return (
                       <tr
@@ -709,31 +690,39 @@ export default function LeadsPage() {
                         className="border-b border-border/30 transition-colors last:border-0 hover:bg-accent/50"
                       >
                         <td
-                          className="cursor-pointer px-4 py-3"
+                          className="cursor-pointer px-3 py-3 sm:px-4"
                           onClick={() => router.push(`/dashboard/leads/${lead.id}`)}
                         >
-                          <p className="font-medium">{lead.firstName} {lead.lastName}</p>
-                          <p className="mt-0.5 text-[11px] text-muted-foreground/60">{lead.email}</p>
+                          <p className="max-w-64 font-medium leading-5">{contactName}</p>
+                          <p className={cn(
+                            'mt-0.5 text-[11px]',
+                            emailLabel ? 'text-muted-foreground/60' : 'text-zbooni-teal/70',
+                          )}>
+                            {emailLabel ?? 'Decision-maker research underway'}
+                          </p>
+                          <div className="mt-2 sm:hidden">
+                            <LeadStatusBadge status={lead.status} />
+                          </div>
                         </td>
                         <td
-                          className="cursor-pointer px-4 py-3 text-muted-foreground"
+                          className="hidden cursor-pointer px-4 py-3 text-muted-foreground md:table-cell"
                           onClick={() => router.push(`/dashboard/leads/${lead.id}`)}
                         >
-                          {companyName || lead.businessCategory || (
+                          {companyLabel || (
                             <span className="text-muted-foreground/30">&mdash;</span>
                           )}
                         </td>
-                        <td className="hidden px-4 py-3 lg:table-cell">
+                        <td className="hidden px-4 py-3 xl:table-cell">
                           {position ? (
                             <span className="text-xs text-muted-foreground">{position}</span>
                           ) : (
-                            <span className="text-muted-foreground/30">&mdash;</span>
+                            <span className="text-xs text-muted-foreground/45">Role research underway</span>
                           )}
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="hidden px-4 py-3 sm:table-cell">
                           <LeadStatusBadge status={lead.status} />
                         </td>
-                        <td className="px-4 py-3 text-right">
+                        <td className="px-2 py-3 text-right sm:px-4">
                           {displayScore !== null ? (
                             <div className="flex flex-col items-end gap-1">
                               <span
@@ -748,7 +737,7 @@ export default function LeadsPage() {
                               >
                                 {(displayScore * 100).toFixed(0)}
                               </span>
-                              <div className="flex items-center justify-end gap-1.5">
+                              <div className="hidden items-center justify-end gap-1.5 sm:flex">
                                 {displayScoreBand ? (
                                   <ScoreBandBadge band={displayScoreBand} />
                                 ) : null}
@@ -763,10 +752,10 @@ export default function LeadsPage() {
                             <span className="text-xs text-muted-foreground/40">No score yet</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-muted-foreground">
+                        <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">
                           {new Date(lead.createdAt).toLocaleDateString()}
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="hidden px-4 py-3 xl:table-cell">
                           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                             {lead.status === 'qualified' && (
                               <button
@@ -849,14 +838,32 @@ export default function LeadsPage() {
                     );
                   })}
                   {leads.isLoading ? (
-                    <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
-                        <div className="flex items-center justify-center gap-2">
-                          <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
-                          Loading leads...
-                        </div>
-                      </td>
-                    </tr>
+                    Array.from({ length: 8 }, (_, index) => (
+                      <tr key={`lead-skeleton-${index}`} className="border-b border-border/30 last:border-0">
+                        <td className="px-3 py-4 sm:px-4">
+                          <div className="h-3.5 w-28 animate-pulse rounded bg-white/[0.08]" />
+                          <div className="mt-2 h-2.5 w-36 animate-pulse rounded bg-white/[0.045]" />
+                        </td>
+                        <td className="hidden px-4 py-4 md:table-cell">
+                          <div className="h-3 w-36 animate-pulse rounded bg-white/[0.055]" />
+                        </td>
+                        <td className="hidden px-4 py-4 xl:table-cell">
+                          <div className="h-3 w-24 animate-pulse rounded bg-white/[0.055]" />
+                        </td>
+                        <td className="hidden px-4 py-4 sm:table-cell">
+                          <div className="h-5 w-16 animate-pulse rounded-full bg-zbooni-teal/[0.08]" />
+                        </td>
+                        <td className="px-2 py-4 sm:px-4">
+                          <div className="ml-auto h-4 w-8 animate-pulse rounded bg-zbooni-green/[0.08]" />
+                        </td>
+                        <td className="hidden px-4 py-4 sm:table-cell">
+                          <div className="h-3 w-16 animate-pulse rounded bg-white/[0.045]" />
+                        </td>
+                        <td className="hidden px-4 py-4 xl:table-cell">
+                          <div className="h-5 w-20 animate-pulse rounded bg-white/[0.045]" />
+                        </td>
+                      </tr>
+                    ))
                   ) : null}
                   {!leads.isLoading && (leads.data?.items ?? []).length === 0 ? (
                     <tr>
@@ -871,7 +878,7 @@ export default function LeadsPage() {
 
             {/* Pagination footer */}
             {leads.data ? (
-              <div className="flex items-center justify-between border-t border-border/50 px-4 py-3">
+              <div className="flex flex-col gap-2 border-t border-border/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-xs text-muted-foreground">
                   Showing{' '}
                   {Math.min((leads.data.page - 1) * leads.data.pageSize + 1, leads.data.total)}
@@ -879,7 +886,7 @@ export default function LeadsPage() {
                   {Math.min(leads.data.page * leads.data.pageSize, leads.data.total)} of{' '}
                   {(activeLeadInventory.data?.total ?? leads.data.total).toLocaleString()}
                 </p>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center justify-end gap-1.5">
                   <button
                     type="button"
                     disabled={page <= 1}

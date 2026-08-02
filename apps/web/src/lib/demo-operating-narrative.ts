@@ -86,19 +86,19 @@ export type DemoInboxConversation = {
   events: DemoInboxTimelineEvent[];
 };
 
-export const DEMO_NARRATIVE_VERSION = '2026.08.two-month-db-anchored.v3';
+export const DEMO_NARRATIVE_VERSION = '2026.08.two-month-db-anchored.v5';
 export const DEMO_REPORTING_PERIOD = 'June – July 2026';
 export const DEMO_SNAPSHOT_GENERATED_AT = '2026-08-01T14:00:00.000Z';
 
-// Captured from the production demo database on 2026-08-01. Active leads exclude
-// soft-deleted rows; score bands use the latest prediction per lead.
+// Curated recruiter-demo snapshot. The values are intentionally fixed and
+// internally reconciled across the dashboard, inbox, and lead surfaces.
 export const DEMO_DATABASE_SNAPSHOT = {
-  databaseLeads: 4907,
+  databaseLeads: 5007,
   rejectedLeads: 479,
-  scoredLeads: 4428,
+  scoredLeads: 4528,
   highPriorityLeads: 2528,
   mediumFitLeads: 1845,
-  lowFitLeads: 55,
+  lowFitLeads: 155,
   messageDrafts: 189,
   averageScore: 0.667,
 } as const;
@@ -123,11 +123,11 @@ export const DEMO_OPERATING_MONTHS: readonly DemoOperatingMonth[] = [
     month: '2026-07',
     label: 'Jul',
     milestone: 'Expanded the strongest ICPs and introduced reply-driven follow-up review.',
-    sourceRecords: 2693,
+    sourceRecords: 2793,
     duplicatesMerged: 0,
-    screened: 2693,
+    screened: 2793,
     disqualified: 264,
-    scored: 2429,
+    scored: 2529,
     priority: 1378,
     drafts: 107,
     sent: 95,
@@ -170,21 +170,6 @@ export const DEMO_OPERATING_TOTALS = {
   lowFit: DEMO_DATABASE_SNAPSHOT.lowFitLeads,
   averageScore: DEMO_DATABASE_SNAPSHOT.averageScore,
 } as const;
-
-let cumulativeSent = 0;
-let cumulativeReplies = 0;
-export const DEMO_DASHBOARD_TREND_BUCKETS = DEMO_OPERATING_MONTHS.map((month) => {
-  cumulativeSent += month.sent;
-  cumulativeReplies += month.replies;
-  return {
-    date: `${month.month}-01`,
-    Activated: month.screened,
-    Qualified: month.priority,
-    Rejected: month.disqualified,
-    Sent: cumulativeSent,
-    Replied: cumulativeReplies,
-  };
-});
 
 const FEATURED_DEMO_LEADS: readonly DemoLead[] = [
   {
@@ -555,13 +540,55 @@ const REPLY_TEMPLATES: readonly {
   { body: 'Thanks for reaching out. We are not looking to change this workflow right now, but I appreciate the context.', classification: 'NOT_INTERESTED' },
 ] as const;
 
-function supportingSendTimestamp(month: 5 | 6, index: number, total: number): string {
+const JUNE_DAILY_SEND_TARGETS = JUNE_BUSINESS_DAYS.map((_, index) => (index < 4 ? 4 : 3));
+const JULY_DAILY_SEND_TARGETS = JULY_BUSINESS_DAYS.map((_, index) => (
+  index === 0 || index === 7 || index === 14 ? 5 : 4
+));
+
+function featuredOutboundCount(month: 5 | 6, day: number): number {
+  return FEATURED_DEMO_INBOX_CONVERSATIONS.reduce((total, conversation) => (
+    total + conversation.events.filter((event) => (
+      event.kind === 'message'
+      && event.direction === 'outbound'
+      && new Date(event.timestamp).getUTCMonth() === month
+      && new Date(event.timestamp).getUTCDate() === day
+    )).length
+  ), 0);
+}
+
+function buildSupportingSendSchedule(month: 5 | 6): readonly string[] {
   const businessDays = month === 5 ? JUNE_BUSINESS_DAYS : JULY_BUSINESS_DAYS;
-  const dayIndex = Math.min(businessDays.length - 1, Math.floor((index * businessDays.length) / total));
-  const day = businessDays[dayIndex] ?? 1;
-  const hour = 13 + (index % 9);
-  const minute = [4, 11, 18, 26, 34, 41, 49, 56][Math.floor(index / 9) % 8] ?? 8;
-  return new Date(Date.UTC(2026, month, day, hour, minute)).toISOString();
+  const targets = month === 5 ? JUNE_DAILY_SEND_TARGETS : JULY_DAILY_SEND_TARGETS;
+  const schedule: string[] = [];
+
+  businessDays.forEach((day, dayIndex) => {
+    const target = targets[dayIndex] ?? 0;
+    const supportingCount = target - featuredOutboundCount(month, day);
+    if (supportingCount < 0) {
+      throw new Error(`Featured outreach exceeds the daily target for 2026-${month + 1}-${day}`);
+    }
+
+    for (let slot = 0; slot < supportingCount; slot += 1) {
+      const hour = [13, 15, 17, 19, 20][slot] ?? 20;
+      const minute = [8, 17, 29, 42, 51][(dayIndex + slot) % 5] ?? 8;
+      schedule.push(new Date(Date.UTC(2026, month, day, hour, minute)).toISOString());
+    }
+  });
+
+  return schedule;
+}
+
+const SUPPORTING_SEND_SCHEDULES = {
+  5: buildSupportingSendSchedule(5),
+  6: buildSupportingSendSchedule(6),
+} as const;
+
+function supportingSendTimestamp(month: 5 | 6, index: number): string {
+  const timestamp = SUPPORTING_SEND_SCHEDULES[month][index];
+  if (!timestamp) {
+    throw new Error(`No supporting send timestamp for ${month === 5 ? 'June' : 'July'} message ${index + 1}`);
+  }
+  return timestamp;
 }
 
 function nextBusinessReplyTimestamp(sentAt: string, replyIndex: number): string {
@@ -589,10 +616,9 @@ function supportingConversation(
   index: number,
   month: 5 | 6,
   monthIndex: number,
-  monthTotal: number,
   replyIndex: number | null,
 ): DemoInboxConversation {
-  const sentAt = supportingSendTimestamp(month, monthIndex, monthTotal);
+  const sentAt = supportingSendTimestamp(month, monthIndex);
   const subject = OUTBOUND_SUBJECTS[index % OUTBOUND_SUBJECTS.length] ?? OUTBOUND_SUBJECTS[0];
   const outbound: DemoInboxMessageEvent = {
     id: `support-${String(index + 1).padStart(3, '0')}-outbound`,
@@ -675,17 +701,123 @@ const SUPPORTING_DEMO_INBOX_CONVERSATIONS: readonly DemoInboxConversation[] = SU
   const isJune = index < 70;
   const monthIndex = isJune ? index : index - 70;
   const replyPositions = isJune
-    ? [4, 11, 18, 25, 32, 39, 45, 50, 55]
-    : [5, 13, 21, 29, 37, 45, 51, 56, 60];
+    ? [2, 14, 15, 29, 30, 31, 43, 44, 55]
+    : [4, 5, 17, 28, 29, 46, 47, 55, 60];
   const position = replyPositions.indexOf(monthIndex);
   const replyIndex = position >= 0 ? position : null;
-  return supportingConversation(lead, index, isJune ? 5 : 6, monthIndex, isJune ? 70 : 88, replyIndex);
+  return supportingConversation(lead, index, isJune ? 5 : 6, monthIndex, replyIndex);
 });
 
 export const DEMO_INBOX_CONVERSATIONS: readonly DemoInboxConversation[] = [
   ...FEATURED_DEMO_INBOX_CONVERSATIONS,
   ...SUPPORTING_DEMO_INBOX_CONVERSATIONS,
 ];
+
+type DashboardTrendBucket = {
+  date: string;
+  Activated: number;
+  Qualified: number;
+  Rejected: number;
+  Sent: number;
+  Replied: number;
+};
+
+function reportingDateKey(month: 5 | 6, day: number): string {
+  return new Date(Date.UTC(2026, month, day)).toISOString().slice(0, 10);
+}
+
+// Daily screening volume varies substantially. Rejections move inversely to
+// screening quality, and scored is calculated as the remaining daily volume.
+const DAILY_SCREENING_SIGNALS = {
+  5: [
+    0.35, 1.55, 0.62, 1.34, 0.48, 1.72, 0.43, 1.16, 1.51, 0.52, 0.92,
+    1.63, 0.31, 1.27, 0.70, 1.44, 0.38, 1.76, 0.76, 1.39, 0.50, 1.10,
+  ],
+  6: [
+    1.42, 0.48, 1.66, 0.72, 1.28, 0.36, 1.58, 0.65, 1.12, 0.42, 1.74,
+    0.83, 1.31, 0.34, 1.49, 0.58, 1.68, 0.77, 1.20, 0.45, 1.57, 0.69,
+    1.05,
+  ],
+} as const satisfies Record<5 | 6, readonly number[]>;
+
+function distributeWeightedTotal(total: number, weights: readonly number[]): readonly number[] {
+  const weightTotal = weights.reduce((sum, weight) => sum + weight, 0);
+  if (weightTotal <= 0) return weights.map(() => 0);
+
+  const rawValues = weights.map((weight) => (weight / weightTotal) * total);
+  const allocations = rawValues.map((value) => Math.floor(value));
+  const remaining = total - allocations.reduce((sum, value) => sum + value, 0);
+  const remainderOrder = rawValues
+    .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
+    .sort((left, right) => right.remainder - left.remainder || left.index - right.index);
+
+  remainderOrder.slice(0, remaining).forEach(({ index }) => {
+    allocations[index] = (allocations[index] ?? 0) + 1;
+  });
+
+  return allocations;
+}
+
+function addMonthlyScreeningOutcomes(
+  buckets: Map<string, DashboardTrendBucket>,
+  month: 5 | 6,
+  screenedTotal: number,
+  rejectedTotal: number,
+): void {
+  const businessDays = month === 5 ? JUNE_BUSINESS_DAYS : JULY_BUSINESS_DAYS;
+  const screeningSignals = DAILY_SCREENING_SIGNALS[month];
+  if (screeningSignals.length !== businessDays.length) {
+    throw new Error(`Screening signals do not match the ${month === 5 ? 'June' : 'July'} business-day calendar`);
+  }
+
+  const screenedAllocations = distributeWeightedTotal(screenedTotal, screeningSignals);
+  const rejectedAllocations = distributeWeightedTotal(
+    rejectedTotal,
+    screeningSignals.map((signal) => 2 - signal),
+  );
+
+  businessDays.forEach((day, index) => {
+    const bucket = buckets.get(reportingDateKey(month, day));
+    if (!bucket) return;
+    const screened = screenedAllocations[index] ?? 0;
+    const rejected = rejectedAllocations[index] ?? 0;
+    if (rejected > screened) {
+      throw new Error(`Rejected volume exceeds screened volume on ${reportingDateKey(month, day)}`);
+    }
+    bucket.Activated += screened;
+    bucket.Qualified += screened - rejected;
+    bucket.Rejected += rejected;
+  });
+}
+
+function buildDashboardTrendBuckets(): readonly DashboardTrendBucket[] {
+  const buckets = new Map<string, DashboardTrendBucket>();
+  const lastReportingDay = new Date(Date.UTC(2026, 6, 31));
+
+  for (const cursor = new Date(Date.UTC(2026, 5, 1)); cursor <= lastReportingDay; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+    const date = cursor.toISOString().slice(0, 10);
+    buckets.set(date, { date, Activated: 0, Qualified: 0, Rejected: 0, Sent: 0, Replied: 0 });
+  }
+
+  const june = DEMO_OPERATING_MONTHS[0]!;
+  const july = DEMO_OPERATING_MONTHS[1]!;
+  addMonthlyScreeningOutcomes(buckets, 5, june.screened, june.disqualified);
+  addMonthlyScreeningOutcomes(buckets, 6, july.screened, july.disqualified);
+
+  for (const conversation of DEMO_INBOX_CONVERSATIONS) {
+    for (const event of conversation.events) {
+      if (event.kind !== 'message') continue;
+      const bucket = buckets.get(event.timestamp.slice(0, 10));
+      if (!bucket) continue;
+      if (event.direction === 'outbound') bucket.Sent += 1;
+      if (event.direction === 'inbound') bucket.Replied += 1;
+    }
+  }
+
+  return Array.from(buckets.values());
+}
+
+export const DEMO_DASHBOARD_TREND_BUCKETS = buildDashboardTrendBuckets();
 
 export const DEMO_INBOX_DRAFTS: readonly DemoInboxDraft[] = [
   {

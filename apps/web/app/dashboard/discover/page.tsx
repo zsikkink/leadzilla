@@ -38,6 +38,7 @@ import {
   buildDiscoveryRequest,
   getNextSelectedIcpId,
   PUBLIC_DEMO_SEARCH_TASKS,
+  shouldShowDiscoveryRun,
 } from './page.helpers.js';
 
 const SEARCH_TASK_OPTIONS = ['5', '10', '25', '50', '100', '250', '500', '1000'] as const;
@@ -570,6 +571,17 @@ export default function DiscoverPage() {
   const runBatches = useMemo(
     () => groupRunsIntoBatches(discoveryRuns.data?.runs ?? [], icps.data?.items),
     [discoveryRuns.data, icps.data],
+  );
+  const visibleRunBatches = useMemo(
+    () => runBatches
+      .filter((batch) => shouldShowDiscoveryRun(
+        batch.overallStatus,
+        batch.totalProcessed,
+        batch.totalTaskLimit,
+        batch.errorMessages.length > 0,
+      ))
+      .slice(0, 6),
+    [runBatches],
   );
 
   const displayedCountryCodes = useMemo<DiscoveryCountryCodeContract[]>(
@@ -1359,10 +1371,10 @@ export default function DiscoverPage() {
           <div>
             <h2 className="flex items-center gap-2 text-base font-bold tracking-tight">
               <Zap className="h-4 w-4 text-zbooni-green" />
-              Previous Discovery Runs
+              Recent Discovery Runs
             </h2>
             <p className="mt-0.5 text-xs text-muted-foreground/50">
-              Recent jobs are consolidated here so discovery setup and run history stay in one place.
+              Active jobs and the latest completed runs with processed results.
             </p>
           </div>
           <button
@@ -1382,21 +1394,21 @@ export default function DiscoverPage() {
           </div>
         ) : null}
 
-        {runBatches.length === 0 && discoveryRuns.data ? (
+        {visibleRunBatches.length === 0 && discoveryRuns.data ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="mb-3 flex h-16 w-16 items-center justify-center rounded-2xl bg-zbooni-dark/60">
               <Search className="h-7 w-7 text-muted-foreground/40" />
             </div>
-            <p className="font-medium text-muted-foreground/60">No discovery runs yet</p>
+            <p className="font-medium text-muted-foreground/60">No completed discovery runs yet</p>
             <p className="mt-1 max-w-sm text-sm text-muted-foreground/40">
-              Configure search above and start discovering leads.
+              Configure the search above to create the first run.
             </p>
           </div>
         ) : null}
 
-        {runBatches.length > 0 ? (
+        {visibleRunBatches.length > 0 ? (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {runBatches.map((batch) => {
+            {visibleRunBatches.map((batch) => {
               const statusColors: Record<string, string> = {
                 QUEUED: 'bg-gray-500/15 text-gray-400',
                 RUNNING: 'bg-zbooni-teal/15 text-zbooni-teal',
@@ -1407,7 +1419,7 @@ export default function DiscoverPage() {
               const statusLabels: Record<string, string> = {
                 QUEUED: 'QUEUED',
                 RUNNING: 'RUNNING',
-                SUCCEEDED: 'SUCCEEDED',
+                SUCCEEDED: 'COMPLETED',
                 FAILED: 'INCOMPLETE',
                 PARTIAL: 'LIMITED RESULTS',
               };
@@ -1419,7 +1431,9 @@ export default function DiscoverPage() {
                     ? 'Completed'
                     : 'Running...'
                 : 'Queued';
-              const firstWords = batch.icpNames.map((n) => n.split(/\s+/)[0] ?? n);
+              const firstWords = batch.icpNames.map((name) =>
+                (name.split(/\s+/)[0] ?? name).replace(/[,&]+$/g, ''),
+              );
               const icpLabel = firstWords.length <= 3
                 ? firstWords.join(' & ')
                 : `${firstWords.slice(0, 2).join(' & ')} +${firstWords.length - 2}`;
@@ -1451,7 +1465,13 @@ export default function DiscoverPage() {
                       ) : null}
                     </div>
                     <span className="text-[10px] tabular-nums text-muted-foreground/50">
-                      {new Date(batch.createdAt).toLocaleString()}
+                      {new Intl.DateTimeFormat('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit',
+                      }).format(new Date(batch.createdAt))}
                     </span>
                   </div>
 
@@ -1470,7 +1490,7 @@ export default function DiscoverPage() {
                         ))}
                         {batch.totalTaskLimit > 0 ? (
                           <span className="rounded bg-muted/20 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                            {batch.totalTaskLimit} search tasks
+                            {batch.totalTaskLimit}-task budget
                           </span>
                         ) : null}
                       </div>
@@ -1482,7 +1502,7 @@ export default function DiscoverPage() {
                     <ProgressBar
                       processed={batch.totalProcessed}
                       total={batch.totalItems || 1}
-                      label="tasks"
+                      label="items"
                     />
                   ) : null}
 

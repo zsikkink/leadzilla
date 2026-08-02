@@ -26,11 +26,11 @@ describe('two-month recruiter operating narrative', () => {
     }
 
     expect(DEMO_OPERATING_TOTALS).toMatchObject({
-      sourceRecords: 4907,
+      sourceRecords: 5007,
       duplicatesMerged: 0,
-      screened: 4907,
+      screened: 5007,
       disqualified: 479,
-      scored: 4428,
+      scored: 4528,
       priority: 2528,
       drafts: 189,
       sent: 165,
@@ -48,16 +48,63 @@ describe('two-month recruiter operating narrative', () => {
       + DEMO_OPERATING_TOTALS.mediumFit
       + DEMO_OPERATING_TOTALS.lowFit,
     );
-    expect(DEMO_DASHBOARD_TREND_BUCKETS).toHaveLength(2);
-    expect(DEMO_DASHBOARD_TREND_BUCKETS.at(-1)).toMatchObject({
-      Sent: DEMO_OPERATING_TOTALS.sent,
-      Replied: DEMO_OPERATING_TOTALS.replies,
-    });
+    expect(DEMO_DASHBOARD_TREND_BUCKETS).toHaveLength(61);
+    expect(DEMO_DASHBOARD_TREND_BUCKETS.at(0)?.date).toBe('2026-06-01');
+    expect(DEMO_DASHBOARD_TREND_BUCKETS.at(-1)?.date).toBe('2026-07-31');
+    expect(DEMO_DASHBOARD_TREND_BUCKETS.reduce((total, bucket) => total + bucket.Activated, 0))
+      .toBe(DEMO_OPERATING_TOTALS.screened);
+    expect(DEMO_DASHBOARD_TREND_BUCKETS.reduce((total, bucket) => total + bucket.Qualified, 0))
+      .toBe(DEMO_OPERATING_TOTALS.scored);
+    expect(DEMO_DASHBOARD_TREND_BUCKETS.reduce((total, bucket) => total + bucket.Rejected, 0))
+      .toBe(DEMO_OPERATING_TOTALS.disqualified);
+    expect(DEMO_DASHBOARD_TREND_BUCKETS.reduce((total, bucket) => total + bucket.Sent, 0))
+      .toBe(DEMO_OPERATING_TOTALS.sent);
+    expect(DEMO_DASHBOARD_TREND_BUCKETS.reduce((total, bucket) => total + bucket.Replied, 0))
+      .toBe(DEMO_OPERATING_TOTALS.replies);
+
+    const qualificationBusinessDays = DEMO_DASHBOARD_TREND_BUCKETS.filter((bucket) => bucket.Activated > 0);
+    expect(qualificationBusinessDays.map((bucket) => bucket.Activated)).toEqual([
+      35, 157, 63, 136, 49, 174, 44, 118, 153, 53, 93,
+      165, 31, 129, 71, 146, 39, 178, 77, 141, 51, 111,
+      170, 57, 198, 86, 153, 43, 189, 78, 134, 50, 208,
+      99, 156, 41, 178, 69, 201, 92, 143, 54, 187, 82, 125,
+    ]);
+
+    expect(DEMO_DASHBOARD_TREND_BUCKETS.every(
+      (bucket) => bucket.Qualified + bucket.Rejected === bucket.Activated,
+    )).toBe(true);
+
+    const scoredValues = qualificationBusinessDays.map((bucket) => bucket.Qualified);
+    const rejectedValues = qualificationBusinessDays.map((bucket) => bucket.Rejected);
+    const scoredMean = scoredValues.reduce((total, value) => total + value, 0) / scoredValues.length;
+    const rejectedMean = rejectedValues.reduce((total, value) => total + value, 0) / rejectedValues.length;
+    const covariance = scoredValues.reduce(
+      (total, value, index) => total + (value - scoredMean) * ((rejectedValues[index] ?? 0) - rejectedMean),
+      0,
+    );
+    const scoredDeviation = Math.sqrt(
+      scoredValues.reduce((total, value) => total + (value - scoredMean) ** 2, 0),
+    );
+    const rejectedDeviation = Math.sqrt(
+      rejectedValues.reduce((total, value) => total + (value - rejectedMean) ** 2, 0),
+    );
+
+    expect(Math.max(...qualificationBusinessDays.map((bucket) => bucket.Activated))
+      - Math.min(...qualificationBusinessDays.map((bucket) => bucket.Activated))).toBeGreaterThanOrEqual(160);
+    expect(Math.max(...scoredValues) - Math.min(...scoredValues)).toBeGreaterThanOrEqual(180);
+    expect(Math.max(...rejectedValues) - Math.min(...rejectedValues)).toBeGreaterThanOrEqual(15);
+    expect(covariance / (scoredDeviation * rejectedDeviation)).toBeLessThan(-0.9);
+
+    const sendDays = DEMO_DASHBOARD_TREND_BUCKETS.filter((bucket) => bucket.Sent > 0);
+    const replyDays = DEMO_DASHBOARD_TREND_BUCKETS.filter((bucket) => bucket.Replied > 0);
+    expect(sendDays).toHaveLength(45);
+    expect(sendDays.every((bucket) => bucket.Sent >= 3 && bucket.Sent <= 5)).toBe(true);
+    expect(replyDays.length).toBeLessThan(DEMO_OPERATING_TOTALS.replies);
   });
 
   it('keeps ICP performance on the same scored and priority totals', () => {
     const icps = DEMO_ANALYTICS_DASHBOARD_SNAPSHOT.icpPerformance;
-    expect(icps).toHaveLength(10);
+    expect(icps).toHaveLength(4);
     expect(icps.reduce((total, icp) => total + icp.scored, 0)).toBe(DEMO_OPERATING_TOTALS.scored);
     expect(icps.reduce((total, icp) => total + icp.qualified, 0)).toBe(DEMO_OPERATING_TOTALS.priority);
 

@@ -46,7 +46,7 @@ Recruiter-facing UI may call the blocked direct-message channel SMS. That is int
 ## 2. Current architecture truth
 
 - Frontend runtime: `apps/web` is a Next.js app targeting Vercel. Supabase browser auth/session is still used client-side. Discovery-admin leads/search-task reads now go through the Next admin proxy, but some other operational reads still go browser-direct elsewhere in the web app.
-- Recruiter demo API runtime: the public Vercel deployment points `NEXT_PUBLIC_API_BASE_URL` and `API_BASE_URL` at the Supabase Edge Function API. That Edge API supports read routes plus bounded discovery, enrichment, scoring, and OpenAI draft-generation jobs.
+- Recruiter demo API runtime: the public Vercel deployment points `NEXT_PUBLIC_API_BASE_URL` and `API_BASE_URL` at the Supabase Edge Function API. That Edge API supports read routes plus bounded SerpAPI discovery, server-side Hunter domain enrichment, scoring, and OpenAI draft-generation jobs.
 - Historical full-platform API runtime: `apps/api` remains the protected Fastify operational boundary for the full service path. It verifies Supabase JWTs, owns `/ready`, owner-scopes normal discovery reads, and enforces discovery-admin access with `x-admin-key` plus server-side `app_admins` membership.
 - Worker runtime: `apps/worker` remains the server-only background execution path for the full service. It is not part of the public recruiter demo runtime; worker-backed and outbound actions stay disabled in the demo.
 - Database/auth: Supabase Postgres + Auth.
