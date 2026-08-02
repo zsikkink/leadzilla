@@ -3,6 +3,12 @@ import type {
   DiscoveryCountryCodeContract,
 } from '@lead-flood/contracts';
 
+export const PUBLIC_DEMO_SEARCH_TASKS = 5;
+
+export function isPublicDemoSearchTaskLimit(value: number): boolean {
+  return Number.isInteger(value) && value === PUBLIC_DEMO_SEARCH_TASKS;
+}
+
 export function getNextSelectedIcpId(
   currentSelectedIcpIds: string[],
   clickedIcpId: string,
@@ -23,7 +29,11 @@ export function buildDiscoveryRequest(input: {
   searchTaskLimit: number;
   requestedByUserId?: string | undefined;
 }): CreateDiscoveryRunRequest | null {
-  if (input.selectedIcpIds.length === 0 || input.countries.length === 0) {
+  if (
+    input.selectedIcpIds.length === 0 ||
+    input.countries.length === 0 ||
+    !isPublicDemoSearchTaskLimit(input.searchTaskLimit)
+  ) {
     return null;
   }
 

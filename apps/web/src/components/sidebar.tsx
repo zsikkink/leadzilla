@@ -12,10 +12,10 @@ import {
   Rocket,
   Settings,
   Target,
-  TerminalSquare,
   Users,
 } from 'lucide-react';
 
+import { withAppBasePath } from '../lib/app-path.js';
 import { cn } from '../lib/utils.js';
 
 const DASHBOARD_NAV_ITEMS = [
@@ -25,11 +25,7 @@ const DASHBOARD_NAV_ITEMS = [
   { href: '/dashboard/prompts', label: 'Prompt Center', icon: Bot },
   { href: '/dashboard/inbox', label: 'Inbox', icon: Inbox },
   { href: '/dashboard/icps', label: 'ICPs', icon: Target },
-] as const;
-
-const DEV_CONSOLE_NAV_ITEMS = [
   { href: '/discovery', label: 'Settings', icon: Settings },
-  { href: '/discovery/rules', label: 'Rules', icon: TerminalSquare },
 ] as const;
 
 interface SidebarProps {
@@ -43,10 +39,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   return (
     <aside
       className={cn(
-        'hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex',
+        'flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar',
         'sticky top-0 h-screen',
         'transition-[width] duration-250 ease-[cubic-bezier(0.4,0,0.2,1)]',
-        collapsed ? 'w-[68px]' : 'w-[260px]',
+        collapsed ? 'w-[68px]' : 'w-[68px] lg:w-[260px]',
       )}
     >
       {/* Brand + collapse toggle */}
@@ -54,11 +50,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         <div
           className={cn(
             'flex items-center gap-3 overflow-hidden',
-            collapsed ? 'px-0 justify-center w-full' : 'px-5 flex-1 min-w-0',
+            collapsed ? 'w-full justify-center px-0' : 'justify-center px-0 lg:min-w-0 lg:flex-1 lg:px-5',
           )}
         >
           <Image
-            src="/brand/L-logo.svg"
+            src={withAppBasePath('/brand/L-logo.svg')}
             alt=""
             width={48}
             height={48}
@@ -67,7 +63,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           <div
             className={cn(
               'flex flex-col overflow-hidden transition-[opacity,max-width] duration-250 ease-[cubic-bezier(0.4,0,0.2,1)]',
-              collapsed ? 'max-w-0 opacity-0' : 'max-w-[160px] opacity-100',
+              collapsed ? 'max-w-0 opacity-0' : 'max-w-0 opacity-0 lg:max-w-[160px] lg:opacity-100',
             )}
           >
             <span className="truncate text-[15px] font-bold leading-tight tracking-tight text-sidebar-foreground">
@@ -83,7 +79,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             type="button"
             onClick={onToggle}
             className={cn(
-              'mr-3 flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+              'mr-3 hidden h-7 w-7 shrink-0 items-center justify-center rounded-md lg:flex',
               'text-muted-foreground/60 transition-colors duration-150',
               'hover:bg-sidebar-accent hover:text-sidebar-foreground',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
@@ -98,7 +94,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
       {/* Expand button when collapsed — sits below the brand area */}
       {collapsed && (
-        <div className="flex justify-center border-b border-sidebar-border py-2">
+        <div className="hidden justify-center border-b border-sidebar-border py-2 lg:flex">
           <button
             type="button"
             onClick={onToggle}
@@ -117,7 +113,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       )}
 
       {/* Navigation */}
-      <nav className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden', collapsed ? 'p-2' : 'p-3')}>
+      <nav className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden', collapsed ? 'p-2' : 'p-2 lg:p-3')}>
         <div className="flex flex-col gap-1">
           {DASHBOARD_NAV_ITEMS.map(({ href, label, icon: Icon }) => {
             const isDiscoverDetailRoute =
@@ -127,16 +123,21 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             const isActive =
               href === '/dashboard'
                 ? isDashboardRoute
-                : isDiscoverDetailRoute || pathname === href || pathname.startsWith(`${href}/`);
+                : href === '/discovery'
+                  ? pathname === href
+                  : isDiscoverDetailRoute || pathname === href || pathname.startsWith(`${href}/`);
 
             return (
               <Link
                 key={href}
                 href={href}
-                title={collapsed ? label : undefined}
+                prefetch={false}
+                title={label}
                 className={cn(
                   'group flex items-center rounded-xl text-[13px] font-medium transition-all duration-150',
-                  collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5',
+                  collapsed
+                    ? 'justify-center px-0 py-2.5'
+                    : 'justify-center px-0 py-2.5 lg:justify-start lg:gap-3 lg:px-3',
                   isActive
                     ? 'bg-sidebar-accent text-sidebar-foreground'
                     : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground',
@@ -151,67 +152,13 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 <span
                   className={cn(
                     'truncate transition-[opacity,max-width] duration-250 ease-[cubic-bezier(0.4,0,0.2,1)]',
-                    collapsed ? 'max-w-0 opacity-0 overflow-hidden' : 'max-w-[180px] opacity-100',
+                    collapsed ? 'max-w-0 overflow-hidden opacity-0' : 'max-w-0 overflow-hidden opacity-0 lg:max-w-[180px] lg:opacity-100',
                   )}
                 >
                   {label}
                 </span>
                 {isActive && !collapsed ? (
-                  <div className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-zbooni-green" aria-hidden="true" />
-                ) : null}
-              </Link>
-            );
-          })}
-        </div>
-
-        <div className={cn('mt-auto flex flex-col gap-1', collapsed ? 'pt-4' : 'pt-8')}>
-          {/* Discovery section label */}
-          <p
-            className={cn(
-              'mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60 transition-[opacity,max-height] duration-250',
-              collapsed ? 'max-h-0 opacity-0 overflow-hidden mb-0' : 'max-h-8 opacity-100 px-3',
-            )}
-          >
-            Dev Console
-          </p>
-
-          {DEV_CONSOLE_NAV_ITEMS.map(({ href, label, icon: Icon }) => {
-            const isActive =
-              href === '/discovery'
-                ? pathname === '/discovery'
-                : href.startsWith('/discovery#')
-                  ? pathname === '/discovery'
-                : pathname === href || pathname.startsWith(`${href}/`);
-
-            return (
-              <Link
-                key={href}
-                href={href}
-                title={collapsed ? label : undefined}
-                className={cn(
-                  'group flex items-center rounded-xl text-[13px] font-medium transition-all duration-150',
-                  collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5',
-                  isActive
-                    ? 'bg-sidebar-accent text-sidebar-foreground'
-                    : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground',
-                )}
-              >
-                <Icon
-                  className={cn(
-                    'h-[18px] w-[18px] shrink-0 transition-colors',
-                    isActive ? 'text-zbooni-teal' : 'text-muted-foreground group-hover:text-sidebar-foreground',
-                  )}
-                />
-                <span
-                  className={cn(
-                    'truncate transition-[opacity,max-width] duration-250 ease-[cubic-bezier(0.4,0,0.2,1)]',
-                    collapsed ? 'max-w-0 opacity-0 overflow-hidden' : 'max-w-[180px] opacity-100',
-                  )}
-                >
-                  {label}
-                </span>
-                {isActive && !collapsed ? (
-                  <div className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-zbooni-teal" aria-hidden="true" />
+                  <div className="ml-auto hidden h-1.5 w-1.5 shrink-0 rounded-full bg-zbooni-green lg:block" aria-hidden="true" />
                 ) : null}
               </Link>
             );

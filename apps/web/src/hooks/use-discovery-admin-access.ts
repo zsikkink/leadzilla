@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 
+import { withAppBasePath } from '@/lib/app-path.js';
+import { toSafeApiErrorMessage, toSafeDisplayErrorMessage } from '@/lib/error-messages.js';
 import { getSupabaseBrowserClient } from '@/lib/supabase-client.js';
 
 const AUTH_TOKEN_STORAGE_KEY = 'lf_access_token';
@@ -47,9 +49,10 @@ async function checkDiscoveryAdminAccess(): Promise<void> {
     headers.set('authorization', `Bearer ${accessToken}`);
   }
 
-  const response = await fetch('/api/admin/search-tasks?page=1&pageSize=1&sortBy=updated_desc', {
-    headers,
-  });
+  const response = await fetch(
+    withAppBasePath('/api/admin/search-tasks?page=1&pageSize=1&sortBy=updated_desc'),
+    { headers },
+  );
   if (response.ok) {
     return;
   }
@@ -57,7 +60,7 @@ async function checkDiscoveryAdminAccess(): Promise<void> {
   const body = await response.json().catch(() => null);
   throw new DiscoveryAdminAccessError(
     response.status,
-    (body as { error?: string } | null)?.error ?? 'Admin access check failed',
+    toSafeApiErrorMessage(response.status, (body as { error?: string } | null)?.error),
   );
 }
 
@@ -97,9 +100,10 @@ export function useDiscoveryAdminAccess(): DiscoveryAdminAccessState {
             ? 'Admin access is required for this surface.'
             : error instanceof DiscoveryAdminAccessError && error.status === 401
               ? 'Sign in is required before using this surface.'
-              : error instanceof Error
-                ? error.message
-                : 'Failed to verify admin access';
+              : toSafeDisplayErrorMessage(
+                  error,
+                  'Admin access is being verified. Please try again in a moment.',
+                );
 
         setState({
           isAllowed: false,

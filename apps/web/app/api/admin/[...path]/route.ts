@@ -117,7 +117,10 @@ async function proxyAdminRequest(request: NextRequest, params: { path?: string[]
   } catch (error: unknown) {
     return Response.json(
       {
-        error: error instanceof Error ? error.message : 'Admin proxy configuration error',
+        error:
+          error instanceof AdminProxyRouteError && error.status < 500
+            ? error.message
+            : 'The admin service is temporarily unavailable.',
       },
       { status: error instanceof AdminProxyRouteError ? error.status : 500 },
     );
@@ -146,10 +149,10 @@ async function proxyAdminRequest(request: NextRequest, params: { path?: string[]
       headers: sanitizeResponseHeaders(upstreamResponse.headers),
     });
   } catch (error: unknown) {
+    console.error('Admin proxy upstream request failed', error);
     return Response.json(
       {
-        error: 'Failed to reach upstream admin API',
-        detail: error instanceof Error ? error.message : 'unknown error',
+        error: 'The admin service is temporarily unavailable.',
       },
       { status: 502 },
     );

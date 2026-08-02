@@ -1,8 +1,8 @@
 # LEADZILLA Documentation
 
-This repository is Leadzilla: a demo-hosted version of the original Zbooni lead-generation platform. The current demo goal is bounded discovery/scoring, working message drafting, disabled outbound sending, retained Zbooni-discovered demo leads, rewritten Leadzilla-neutral ICPs where needed, and recruiter-facing UI polish without broad new feature development.
+This repository is Leadzilla: a recruiter-facing demo version of a real lead-generation platform. The current demo goal is bounded discovery/scoring, working message drafting, disabled outbound sending, retained demo leads, rewritten Leadzilla-neutral ICPs where needed, and recruiter-facing UI polish without broad new feature development.
 
-The active demo navigation is intentionally compact: Dashboard, Discover, Leads, Prompt Center, Inbox, and ICPs. Settings and Rules remain separated under the Dev Console area for operator/admin review. Recommendations, Deals, the standalone Analytics page, and the separate Messages page are not active demo surfaces; legacy routes redirect where needed.
+The active demo navigation is intentionally compact: Dashboard, Discover, Leads, Prompt Center, Inbox, ICPs, and Settings. Settings is a bundled read-only workspace-policy snapshot; qualification rules stay within their relevant ICP profiles. Recommendations, Deals, the standalone Analytics page, the standalone Rules page, and the separate Messages page are not active demo surfaces; legacy routes redirect where needed.
 
 ## Current Canonical Docs
 

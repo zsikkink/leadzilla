@@ -16,7 +16,6 @@ import {
   Search,
   Settings2,
   Target,
-  TrendingUp,
   Zap,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -30,16 +29,19 @@ import {
   countryName,
   toDiscoveryCountryCode,
 } from '../../../src/lib/countries.js';
+import {
+  toSafeDisplayErrorMessage,
+  uniqueDiscoveryRunNotices,
+} from '../../../src/lib/error-messages.js';
 import { cn } from '../../../src/lib/utils.js';
 import {
   buildDiscoveryRequest,
   getNextSelectedIcpId,
+  PUBLIC_DEMO_SEARCH_TASKS,
 } from './page.helpers.js';
 
-const MIN_SEARCH_TASK_LIMIT = 1;
-const MAX_SEARCH_TASK_LIMIT = 1000;
 const SEARCH_TASK_OPTIONS = ['5', '10', '25', '50', '100', '250', '500', '1000'] as const;
-const DEMO_SEARCH_TASK_LIMIT = '5';
+const DEMO_SEARCH_TASK_LIMIT = String(PUBLIC_DEMO_SEARCH_TASKS);
 const DEFAULT_DISCOVERY_COUNTRY_CODES = ['AE', 'SA', 'JO', 'EG'] as const satisfies readonly DiscoveryCountryCodeContract[];
 const DEFAULT_DISCOVERY_COUNTRY_ORDER = new Map<DiscoveryCountryCodeContract, number>(
   DEFAULT_DISCOVERY_COUNTRY_CODES.map((country, index) => [country, index]),
@@ -414,7 +416,7 @@ function buildBatch(
   const overallStatus = runs.reduce<PipelineRunStatus>((worst, r) => {
     return (STATUS_PRIORITY[r.status] ?? 5) < (STATUS_PRIORITY[worst] ?? 5) ? r.status : worst;
   }, 'SUCCEEDED');
-  const errors = runs.map((r) => r.errorMessage).filter((e): e is string => e !== null);
+  const errors = uniqueDiscoveryRunNotices(runs.map((r) => r.errorMessage));
   const startedAt = runs.map((r) => r.startedAt).filter((s): s is string => s !== null).sort()[0] ?? null;
   const finishedAt = runs.every((r) => r.finishedAt) ? runs.map((r) => r.finishedAt).filter((s): s is string => s !== null).sort().reverse()[0] ?? null : null;
 
@@ -442,7 +444,7 @@ function parseSearchTaskLimit(value: string): number | null {
   }
 
   const parsed = Number.parseInt(normalized, 10);
-  if (parsed < MIN_SEARCH_TASK_LIMIT || parsed > MAX_SEARCH_TASK_LIMIT) {
+  if (parsed !== PUBLIC_DEMO_SEARCH_TASKS) {
     return null;
   }
 
@@ -868,7 +870,7 @@ export default function DiscoverPage() {
     if (missingCityCountries.length > 0) {
       setShowTargetingControls(true);
       setSubmitError(
-        `Add at least one city for ${missingCityCountries.map((country) => countryName(country)).join(', ')} in Controls & Settings before starting discovery.`,
+        `Demo market coverage is unavailable for ${missingCityCountries.map((country) => countryName(country)).join(', ')}. Choose a country with configured coverage.`,
       );
       return;
     }
@@ -908,7 +910,12 @@ export default function DiscoverPage() {
 
       setRunsRefreshKey((k) => k + 1);
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : 'Failed to start discovery');
+      setSubmitError(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t start this discovery run. Please try again.',
+        ),
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -1042,41 +1049,11 @@ export default function DiscoverPage() {
     );
   };
 
-  const isRunning = hasActiveRuns;
-
   return (
     <div className="space-y-6">
       <p className="text-sm text-muted-foreground/80">
         Find, enrich, deduplicate, and score new leads automatically.
       </p>
-
-      {/* Discovery Workflow */}
-      <div className="rounded-2xl border border-border/50 bg-card p-4 shadow-sm">
-        <div className="mb-3">
-          <h2 className="text-base font-bold tracking-tight">Lead Discovery</h2>
-          <p className="mt-1 text-sm text-muted-foreground/70">
-            Run one job to turn ICPs and regions into scored leads.
-          </p>
-        </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
-          {[
-            { title: 'Set Scope', icon: Target },
-            { title: 'Search', icon: Search },
-            { title: 'Enrich', icon: TrendingUp },
-            { title: 'Score', icon: Zap },
-          ].map(({ title, icon: Icon }, idx) => (
-            <div key={title} className="relative flex items-center gap-2">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zbooni-teal/10">
-                <Icon className="h-4 w-4 text-zbooni-teal" />
-              </div>
-              <p className="text-sm font-semibold text-foreground">{title}</p>
-              {idx < 3 ? (
-                <ChevronRight className="absolute -right-1 top-2 hidden h-4 w-4 text-muted-foreground/20 sm:block" />
-              ) : null}
-            </div>
-          ))}
-        </div>
-      </div>
 
       {/* Configuration Form */}
       <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
@@ -1084,7 +1061,7 @@ export default function DiscoverPage() {
           {/* Search task budget */}
           <div>
             <div className="mb-3 flex items-center gap-2">
-              <label htmlFor="search-task-limit" className="text-sm font-semibold">Number of Search Tasks</label>
+              <p className="text-sm font-semibold">Search Task Budget</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {SEARCH_TASK_OPTIONS.map((option) => {
@@ -1123,15 +1100,15 @@ export default function DiscoverPage() {
                 className="h-10 w-24 cursor-not-allowed rounded-xl border border-border/40 bg-background px-3 py-2 text-center text-sm font-mono text-foreground opacity-40 placeholder:text-muted-foreground/60 focus:border-zbooni-teal/50 focus:outline-none"
               />
             </div>
+            <p className="mt-2 text-xs text-muted-foreground/70">
+              Public demo runs use a fixed budget of five provider search tasks.
+            </p>
 
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={handleStartDiscovery}
-                disabled={
-                  isSubmitting ||
-                  !!isRunning
-                }
+                disabled={isSubmitting}
                 className="inline-flex h-10 w-full items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-zbooni-green to-zbooni-teal px-6 text-sm font-bold text-zbooni-dark shadow-lg shadow-zbooni-green/20 transition-all hover:shadow-xl hover:shadow-zbooni-green/30 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
               >
                 {isSubmitting ? (
@@ -1141,9 +1118,7 @@ export default function DiscoverPage() {
                 )}
                 {isSubmitting
                   ? 'Creating...'
-                  : isRunning
-                    ? 'Run Active...'
-                    : 'Create Run'}
+                  : 'Create Run'}
               </button>
 
               <button
@@ -1159,13 +1134,13 @@ export default function DiscoverPage() {
             </div>
             {showSearchTaskLimitError && parsedSearchTaskLimit === null ? (
               <p className="mt-2 text-xs text-red-400">
-                Enter a whole number from {MIN_SEARCH_TASK_LIMIT} to {MAX_SEARCH_TASK_LIMIT}.
+                Public demo runs require exactly {PUBLIC_DEMO_SEARCH_TASKS} search tasks.
               </p>
             ) : null}
 
             {submitError ? (
-              <div className="mt-3 flex items-center gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">
-                <AlertCircle className="h-4 w-4 shrink-0" />
+              <div className="mt-3 flex items-center gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+                <AlertCircle className="h-4 w-4 shrink-0 text-amber-300" />
                 {submitError}
               </div>
             ) : null}
@@ -1217,13 +1192,13 @@ export default function DiscoverPage() {
                   ) : null}
 
                   {!icps.isLoading && icps.error ? (
-                    <div className="flex items-center gap-3 rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-400">
-                      <AlertCircle className="h-4 w-4 shrink-0" />
-                      <span className="flex-1">Failed to load ICP profiles: {icps.error}</span>
+                    <div className="flex items-center gap-3 rounded-lg bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                      <AlertCircle className="h-4 w-4 shrink-0 text-amber-300" />
+                      <span className="flex-1">ICP profiles are refreshing. Try again in a moment.</span>
                       <button
                         type="button"
                         onClick={icps.refetch}
-                        className="shrink-0 rounded-md bg-red-500/20 px-2.5 py-1 text-xs font-semibold text-red-300 transition-colors hover:bg-red-500/30"
+                        className="shrink-0 rounded-md bg-amber-500/20 px-2.5 py-1 text-xs font-semibold text-amber-100 transition-colors hover:bg-amber-500/30"
                       >
                         Retry
                       </button>
@@ -1426,8 +1401,15 @@ export default function DiscoverPage() {
                 QUEUED: 'bg-gray-500/15 text-gray-400',
                 RUNNING: 'bg-zbooni-teal/15 text-zbooni-teal',
                 SUCCEEDED: 'bg-zbooni-green/15 text-zbooni-green',
-                FAILED: 'bg-red-500/15 text-red-400',
+                FAILED: 'bg-amber-500/15 text-amber-300',
                 PARTIAL: 'bg-yellow-500/15 text-yellow-400',
+              };
+              const statusLabels: Record<string, string> = {
+                QUEUED: 'QUEUED',
+                RUNNING: 'RUNNING',
+                SUCCEEDED: 'SUCCEEDED',
+                FAILED: 'INCOMPLETE',
+                PARTIAL: 'LIMITED RESULTS',
               };
               const isTerminal = batch.overallStatus === 'SUCCEEDED' || batch.overallStatus === 'FAILED' || batch.overallStatus === 'PARTIAL';
               const duration = batch.startedAt
@@ -1460,7 +1442,7 @@ export default function DiscoverPage() {
                           statusColors[batch.overallStatus] ?? 'bg-muted/20 text-muted-foreground',
                         )}
                       >
-                        {batch.overallStatus}
+                        {statusLabels[batch.overallStatus] ?? batch.overallStatus}
                       </span>
                       {batch.runs.length > 1 ? (
                         <span className="text-[10px] text-muted-foreground/40">
@@ -1511,7 +1493,7 @@ export default function DiscoverPage() {
                     </span>
                     {batch.totalFailed > 0 ? (
                       <span>
-                        Failed: <strong className="text-red-400">{batch.totalFailed}</strong>
+                        Not completed: <strong className="text-amber-300">{batch.totalFailed}</strong>
                       </span>
                     ) : null}
                     <span className="ml-auto">{duration}</span>
@@ -1519,13 +1501,13 @@ export default function DiscoverPage() {
 
                   {/* Errors */}
                   {batch.errorMessages.length > 0 ? (
-                    <p className="mt-2 truncate rounded bg-red-500/10 px-2 py-1 text-[10px] text-red-400" title={batch.errorMessages.join('; ')}>
+                    <p className="mt-2 rounded bg-amber-500/10 px-2 py-1 text-[10px] text-amber-200">
                       {batch.errorMessages[0]}
                     </p>
                   ) : null}
                   {batch.overallStatus === 'PARTIAL' ? (
                     <p className="mt-2 rounded bg-yellow-500/10 px-2 py-1 text-[10px] text-yellow-300">
-                      Partial completion: {batch.totalFailed} item{batch.totalFailed === 1 ? '' : 's'} failed while other items succeeded.
+                      Completed with partial coverage: {batch.totalFailed} item{batch.totalFailed === 1 ? '' : 's'} not completed.
                     </p>
                   ) : null}
                 </Link>

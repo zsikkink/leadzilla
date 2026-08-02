@@ -25,6 +25,10 @@ import { CustomSelect } from '@/components/custom-select.js';
 import { useAuth } from '@/hooks/use-auth.js';
 import { useApiQuery } from '@/hooks/use-api-query.js';
 import { cn } from '@/lib/utils.js';
+import {
+  toDiscoveryRunNotice,
+  toSafeDisplayErrorMessage,
+} from '@/lib/error-messages.js';
 
 import {
   fetchJobRequests,
@@ -368,9 +372,10 @@ export default function JobsPage() {
       } else {
         setRequestsData(null);
         setRequestsError(
-          requestsResult.reason instanceof Error
-            ? requestsResult.reason.message
-            : 'Failed to load job requests',
+          toSafeDisplayErrorMessage(
+            requestsResult.reason,
+            'Job request history is refreshing.',
+          ),
         );
       }
 
@@ -380,7 +385,12 @@ export default function JobsPage() {
 
       setJobsData(runsResult.value);
     } catch (loadError: unknown) {
-      setError(loadError instanceof Error ? loadError.message : 'Failed to load jobs');
+      setError(
+        toSafeDisplayErrorMessage(
+          loadError,
+          'Pipeline activity is refreshing. Please try again in a moment.',
+        ),
+      );
     } finally {
       setLoading(false);
     }
@@ -446,7 +456,12 @@ export default function JobsPage() {
       setLastTriggeredRunId(result.jobRunId);
       await loadData();
     } catch (runError: unknown) {
-      setError(runError instanceof Error ? runError.message : 'Failed to request seed job');
+      setError(
+        toSafeDisplayErrorMessage(
+          runError,
+          'Couldn’t start the discovery seed request. Please try again.',
+        ),
+      );
     }
   };
 
@@ -457,7 +472,12 @@ export default function JobsPage() {
       setLastTriggeredRunId(result.jobRunId);
       await loadData();
     } catch (runError: unknown) {
-      setError(runError instanceof Error ? runError.message : 'Failed to request discovery run');
+      setError(
+        toSafeDisplayErrorMessage(
+          runError,
+          'Couldn’t start the discovery request. Please try again.',
+        ),
+      );
     }
   };
 
@@ -495,8 +515,8 @@ export default function JobsPage() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
-          <strong>Error:</strong> {error}
+        <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-100">
+          <strong>Pipeline note:</strong> {error}
         </div>
       )}
 
@@ -703,7 +723,7 @@ export default function JobsPage() {
                   <th className="px-4 py-2.5">Requested</th>
                   <th className="px-4 py-2.5">Claimed By</th>
                   <th className="px-4 py-2.5">Job Run</th>
-                  <th className="px-4 py-2.5">Error</th>
+                  <th className="px-4 py-2.5">Note</th>
                 </tr>
               </thead>
               <tbody>
@@ -728,7 +748,9 @@ export default function JobsPage() {
                           </Link>
                         ) : '-'}
                       </td>
-                      <td className="px-4 py-2.5 max-w-[200px] truncate font-mono text-xs text-red-400/70">{request.errorText ?? '-'}</td>
+                      <td className="max-w-[200px] truncate px-4 py-2.5 font-mono text-xs text-amber-300/70">
+                        {toDiscoveryRunNotice(request.errorText) ?? '-'}
+                      </td>
                     </tr>
                   ))
                 ) : requestsError ? (

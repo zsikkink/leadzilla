@@ -36,6 +36,7 @@ import {
   fetchAdminBusinesses,
   queryFromBusinessFilters,
 } from '@/lib/discovery-admin.js';
+import { toSafeDisplayErrorMessage } from '@/lib/error-messages.js';
 import { cn } from '@/lib/utils.js';
 import { countryName } from '@/lib/countries.js';
 import { sortTeamMembers } from '@/lib/team-members.js';
@@ -809,7 +810,12 @@ export default function BusinessIntelligencePage() {
       setBusinesses(response.items.map(mapAdminBusinessRow));
       setTotal(response.total);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load businesses');
+      setError(
+        toSafeDisplayErrorMessage(
+          err,
+          'Business intelligence is refreshing. Please try again in a moment.',
+        ),
+      );
     } finally {
       setIsLoading(false);
     }
@@ -869,7 +875,11 @@ export default function BusinessIntelligencePage() {
         </div>
       </div>
 
-      {error && <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</div>}
+      {error && (
+        <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-100">
+          {error}
+        </div>
+      )}
 
       {/* Search */}
       <div className="rounded-2xl border border-border/50 bg-card p-4 shadow-sm">

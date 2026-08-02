@@ -6,8 +6,8 @@ import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
-import { ApiError } from '../../../src/lib/api-client.js';
 import { MENA_COUNTRIES, countryName, toDiscoveryCountryCodes } from '../../../src/lib/countries.js';
+import { toSafeDisplayErrorMessage } from '../../../src/lib/error-messages.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 
@@ -166,13 +166,12 @@ export default function IcpsPage() {
       closeModal();
       void icps.refetch();
     } catch (err: unknown) {
-      if (err instanceof ApiError) {
-        setFormError(err.message);
-      } else if (err instanceof Error) {
-        setFormError(err.message);
-      } else {
-        setFormError('Failed to create ICP profile');
-      }
+      setFormError(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t create this profile. Review the selected options and try again.',
+        ),
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -181,12 +180,9 @@ export default function IcpsPage() {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-extrabold tracking-tight">ICP Profiles</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            {icps.data ? `${icpItems.length} profiles configured` : 'Loading...'}
-          </p>
-        </div>
+        <p className="text-sm text-muted-foreground">
+          {icps.data ? `${icpItems.length} profiles configured` : 'Loading...'}
+        </p>
         <button
           type="button"
           onClick={openModal}
@@ -198,7 +194,16 @@ export default function IcpsPage() {
       </div>
 
       {icps.error ? (
-        <p className="text-sm text-destructive">{icps.error}</p>
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-100">
+          <span>ICP profiles are refreshing. Previously loaded profiles remain available.</span>
+          <button
+            type="button"
+            onClick={() => void icps.refetch()}
+            className="shrink-0 rounded-lg border border-amber-400/30 px-3 py-1.5 text-xs font-semibold text-amber-100 transition-colors hover:bg-amber-400/10"
+          >
+            Refresh
+          </button>
+        </div>
       ) : null}
 
       {icps.isLoading ? (
@@ -251,7 +256,7 @@ export default function IcpsPage() {
               ))}
             </div>
             <div className="mt-3 flex items-center gap-1.5 border-t border-border/30 pt-3">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Rules</span>
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">Qualification signals</span>
               <span className="ml-auto text-sm font-bold text-muted-foreground">
                 {icp.qualificationRules?.length ?? 0}
               </span>

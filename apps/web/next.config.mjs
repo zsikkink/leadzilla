@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  basePath: '/leadzilla',
   reactStrictMode: true,
   async headers() {
     return [

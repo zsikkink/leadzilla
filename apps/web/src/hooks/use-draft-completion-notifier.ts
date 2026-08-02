@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 
 import type { ApiClient } from '../lib/api-client.js';
+import { toSafeDisplayErrorMessage } from '../lib/error-messages.js';
 
 interface DraftCompletionTarget {
   leadId: string;
@@ -55,7 +56,12 @@ export function useDraftCompletionNotifier({
         },
         onError: (error) => {
           stopListening();
-          toast.error(error.message);
+          toast.info(
+            toSafeDisplayErrorMessage(
+              error,
+              'Draft generation is still processing. Refresh the drafts in a moment.',
+            ),
+          );
         },
       },
     );

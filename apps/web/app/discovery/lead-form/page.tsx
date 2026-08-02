@@ -12,6 +12,10 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { getWebEnv } from '../../../src/lib/env';
+import {
+  toSafeApiErrorMessage,
+  toSafeDisplayErrorMessage,
+} from '../../../src/lib/error-messages.js';
 
 interface LeadFormState {
   firstName: string;
@@ -24,10 +28,10 @@ async function parseErrorMessage(response: Response): Promise<string> {
   const body = await response.json().catch(() => null);
   const parsed = ErrorResponseSchema.safeParse(body);
   if (parsed.success) {
-    return parsed.data.error;
+    return toSafeApiErrorMessage(response.status, parsed.data.error);
   }
 
-  return 'Request failed';
+  return toSafeApiErrorMessage(response.status, null);
 }
 
 export default function DiscoveryLeadFormPage() {
@@ -83,7 +87,12 @@ export default function DiscoveryLeadFormPage() {
 
       } catch (loadError: unknown) {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : 'Unable to load lead status');
+          setError(
+            toSafeDisplayErrorMessage(
+              loadError,
+              'Lead processing status is refreshing. Please try again in a moment.',
+            ),
+          );
         }
       }
     };
@@ -121,7 +130,12 @@ export default function DiscoveryLeadFormPage() {
       setLead(null);
       setJob(null);
     } catch (submitError: unknown) {
-      setError(submitError instanceof Error ? submitError.message : 'Unable to create lead');
+      setError(
+        toSafeDisplayErrorMessage(
+          submitError,
+          'Couldn’t create this lead. Please try again.',
+        ),
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -197,8 +211,8 @@ export default function DiscoveryLeadFormPage() {
         </form>
 
         {error ? (
-          <p style={{ color: '#b91c1c', marginTop: 10 }}>
-            <strong>Error:</strong> {error}
+          <p style={{ color: '#b7791f', marginTop: 10 }}>
+            <strong>Pipeline note:</strong> {error}
           </p>
         ) : null}
       </div>

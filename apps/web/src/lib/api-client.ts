@@ -64,6 +64,15 @@ import type {
   DemoAnalyticsDashboardSnapshot,
   DemoOperationsDashboardSnapshot,
 } from './demo-dashboard-types.js';
+import {
+  DEMO_ANALYTICS_DASHBOARD_SNAPSHOT,
+  DEMO_OPERATIONS_DASHBOARD_SNAPSHOT,
+} from './demo-dashboard-snapshots.js';
+import {
+  LIVE_DATA_REFRESH_MESSAGE,
+  toSafeApiErrorMessage,
+  toSafeDisplayErrorMessage,
+} from './error-messages.js';
 
 export class ApiError extends Error {
   constructor(
@@ -77,6 +86,7 @@ export class ApiError extends Error {
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
+const DISCOVERY_RUN_REQUEST_TIMEOUT_MS = 120000;
 const GET_RETRY_DELAY_MS = 150;
 const RETRYABLE_READ_STATUSES = new Set([502, 503, 504]);
 
@@ -109,7 +119,11 @@ export class ApiClient {
     private readonly requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
   ) {}
 
-  private async request<T>(path: string, options?: RequestInit): Promise<T> {
+  private async request<T>(
+    path: string,
+    options?: RequestInit,
+    timeoutMs = this.requestTimeoutMs,
+  ): Promise<T> {
     const token = this.getToken();
     const hasBody = options?.body !== undefined && options?.body !== null;
     const method = options?.method?.toUpperCase() ?? 'GET';
@@ -123,7 +137,7 @@ export class ApiClient {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const controller = new AbortController();
-      const timeoutHandle = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+      const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
       let response: Response;
       try {
@@ -140,9 +154,9 @@ export class ApiClient {
         }
 
         if (isAbortError(error)) {
-          throw new ApiError(504, `API request timed out after ${this.requestTimeoutMs}ms`);
+          throw new ApiError(504, LIVE_DATA_REFRESH_MESSAGE);
         }
-        throw new ApiError(503, 'Unable to reach API. Check NEXT_PUBLIC_API_BASE_URL and API health.');
+        throw new ApiError(503, LIVE_DATA_REFRESH_MESSAGE);
       } finally {
         clearTimeout(timeoutHandle);
       }
@@ -160,7 +174,7 @@ export class ApiClient {
         const body = await response.json().catch(() => ({ error: 'Request failed' }));
         throw new ApiError(
           response.status,
-          (body as { error?: string }).error ?? 'Request failed',
+          toSafeApiErrorMessage(response.status, (body as { error?: string }).error),
           (body as { requestId?: string }).requestId,
         );
       }
@@ -172,7 +186,7 @@ export class ApiClient {
       return response.json() as Promise<T>;
     }
 
-    throw new ApiError(503, 'Unable to reach API. Check NEXT_PUBLIC_API_BASE_URL and API health.');
+    throw new ApiError(503, LIVE_DATA_REFRESH_MESSAGE);
   }
 
   subscribeMessageDraftEvents(
@@ -221,7 +235,14 @@ export class ApiClient {
         handlers.onTimeout?.();
       } else if (eventName === 'error') {
         const parsed = JSON.parse(rawData) as { error?: string };
-        handlers.onError?.(new Error(parsed.error ?? 'Message draft notifications are unavailable.'));
+        handlers.onError?.(
+          new Error(
+            toSafeDisplayErrorMessage(
+              parsed.error,
+              'Message draft notifications are unavailable.',
+            ),
+          ),
+        );
       }
     };
 
@@ -270,9 +291,12 @@ export class ApiClient {
           return;
         }
         handlers.onError?.(
-          error instanceof Error
-            ? error
-            : new Error('Message draft notifications are unavailable.'),
+          new Error(
+            toSafeDisplayErrorMessage(
+              error,
+              'Message draft notifications are unavailable.',
+            ),
+          ),
         );
       });
 
@@ -487,11 +511,11 @@ export class ApiClient {
   }
 
   getDemoOperationsDashboard(): Promise<DemoOperationsDashboardSnapshot> {
-    return this.request('/v1/demo/dashboard/operations');
+    return Promise.resolve(DEMO_OPERATIONS_DASHBOARD_SNAPSHOT);
   }
 
   getDemoAnalyticsDashboard(): Promise<DemoAnalyticsDashboardSnapshot> {
-    return this.request('/v1/demo/dashboard/analytics');
+    return Promise.resolve(DEMO_ANALYTICS_DASHBOARD_SNAPSHOT);
   }
 
   getFunnel(query?: FunnelQuery): Promise<FunnelResponse> {
@@ -559,10 +583,14 @@ export class ApiClient {
 
   // ── Discovery ───────────────────────────────────
   createDiscoveryRun(data: CreateDiscoveryRunRequest): Promise<CreateDiscoveryRunResponse> {
-    return this.request('/v1/discovery/runs', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
+    return this.request(
+      '/v1/discovery/runs',
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      },
+      DISCOVERY_RUN_REQUEST_TIMEOUT_MS,
+    );
   }
 
   getDiscoveryRunStatus(runId: string): Promise<DiscoveryRunStatusResponse> {

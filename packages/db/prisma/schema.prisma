@@ -422,6 +422,7 @@ model LeadEnrichmentRecord {
 
   @@index([leadId, provider, createdAt])
   @@index([leadId, provider, status])
+  @@index([leadId, enrichedAt(sort: Desc), createdAt(sort: Desc), id(sort: Desc)], map: "LeadEnrichmentRecord_leadId_enrichedAt_createdAt_id_idx")
 }
 
 model LeadFeatureSnapshot {
@@ -554,6 +555,7 @@ model LeadScorePrediction {
   @@index([leadId, icpProfileId, predictedAt], map: "LeadScorePrediction_leadId_icpProfileId_predictedAt_idx")
   @@index([icpProfileId, predictedAt])
   @@index([modelVersionId, predictedAt])
+  @@index([predictedAt, id], map: "LeadScorePrediction_predictedAt_id_read_idx")
 }
 
 model ApolloRevealAttempt {
@@ -654,6 +656,7 @@ model MessageDraft {
   @@index([approvalStatus])
   @@index([approvalStatus, createdAt], map: "MessageDraft_approvalStatus_createdAt_idx")
   @@index([leadId, approvalStatus])
+  @@index([createdAt(sort: Desc), id(sort: Desc)], map: "MessageDraft_createdAt_id_idx")
 }
 
 model MessageVariant {
@@ -851,6 +854,8 @@ model Business {
   @@index([discoveryRunId])
   @@index([discoveryRunId, deterministicScore], map: "businesses_discovery_run_id_deterministic_score_idx")
   @@index([preQualified])
+  @@index([createdAt(sort: Desc), id(sort: Desc)], map: "businesses_created_at_id_idx")
+  @@index([updatedAt(sort: Desc), id(sort: Desc)], map: "businesses_updated_at_id_idx")
   @@map("businesses")
 }
 

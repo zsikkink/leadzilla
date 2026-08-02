@@ -4,6 +4,8 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { AlertCircle } from 'lucide-react';
 
+import { withAppBasePath } from '../../src/lib/app-path.js';
+
 export default function ForgotPasswordPage() {
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
@@ -24,7 +26,7 @@ export default function ForgotPasswordPage() {
         <div className="mb-8 text-center">
           <div className="mb-4 inline-block">
             <Image
-              src="/brand/leadzilla-wordmark.svg"
+              src={withAppBasePath('/brand/leadzilla-wordmark.svg')}
               alt="Leadzilla"
               width={220}
               height={50}

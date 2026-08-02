@@ -57,7 +57,7 @@ describe('discovery admin job proxy', () => {
     await fetchJobRuns('?page=1&pageSize=20');
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe('/api/admin/jobs/runs?page=1&pageSize=20');
+    expect(url).toBe('/leadzilla/api/admin/jobs/runs?page=1&pageSize=20');
     const headers = new Headers((init as RequestInit | undefined)?.headers);
     expect(headers.get('authorization')).toBe('Bearer stored-token');
   });
@@ -78,7 +78,7 @@ describe('discovery admin job proxy', () => {
     await fetchJobRequests('?page=1&pageSize=20');
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe('/api/admin/jobs/requests?page=1&pageSize=20');
+    expect(url).toBe('/leadzilla/api/admin/jobs/requests?page=1&pageSize=20');
     const headers = new Headers((init as RequestInit | undefined)?.headers);
     expect(headers.get('authorization')).toBe('Bearer stored-token');
   });
@@ -121,7 +121,7 @@ describe('discovery admin job proxy', () => {
     const result = await fetchAdminLeads('?page=2&pageSize=10&sortBy=score_desc&countries=AE,SA&city=Dubai&hasWhatsapp=true');
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe('/api/admin/leads?page=2&pageSize=10&sortBy=score_desc&countries=AE%2CSA&city=Dubai&hasWhatsapp=true');
+    expect(url).toBe('/leadzilla/api/admin/leads?page=2&pageSize=10&sortBy=score_desc&countries=AE%2CSA&city=Dubai&hasWhatsapp=true');
     const headers = new Headers((init as RequestInit | undefined)?.headers);
     expect(headers.get('authorization')).toBe('Bearer stored-token');
     expect(result).toEqual({
@@ -204,7 +204,7 @@ describe('discovery admin job proxy', () => {
     const result = await fetchAdminBusinesses('?page=1&pageSize=30&q=alpha');
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe('/api/admin/businesses?page=1&pageSize=30&q=alpha');
+    expect(url).toBe('/leadzilla/api/admin/businesses?page=1&pageSize=30&q=alpha');
     const headers = new Headers((init as RequestInit | undefined)?.headers);
     expect(headers.get('authorization')).toBe('Bearer stored-token');
     expect(result.items[0]?.leadId).toBe('lead_1');
@@ -268,7 +268,7 @@ describe('discovery admin job proxy', () => {
     const result = await fetchAdminBusinessDetail('biz_1');
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe('/api/admin/businesses/biz_1');
+    expect(url).toBe('/leadzilla/api/admin/businesses/biz_1');
     const headers = new Headers((init as RequestInit | undefined)?.headers);
     expect(headers.get('authorization')).toBe('Bearer stored-token');
     expect(result.business.id).toBe('biz_1');
@@ -319,7 +319,7 @@ describe('discovery admin job proxy', () => {
     const result = await fetchAdminLeadDetail('biz_1');
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe('/api/admin/leads/biz_1');
+    expect(url).toBe('/leadzilla/api/admin/leads/biz_1');
     const headers = new Headers((init as RequestInit | undefined)?.headers);
     expect(headers.get('authorization')).toBe('Bearer stored-token');
     expect(result.lead.id).toBe('biz_1');
@@ -359,7 +359,7 @@ describe('discovery admin job proxy', () => {
     const result = await fetchAdminSearchTasks('?page=2&pageSize=5&sortBy=attempts_desc&status=FAILED&taskType=SERP_GOOGLE_LOCAL&countryCode=ae&timeBucket=2026-W08');
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe('/api/admin/search-tasks?page=2&pageSize=5&sortBy=attempts_desc&status=FAILED&taskType=SERP_GOOGLE_LOCAL&countryCode=ae&timeBucket=2026-W08');
+    expect(url).toBe('/leadzilla/api/admin/search-tasks?page=2&pageSize=5&sortBy=attempts_desc&status=FAILED&taskType=SERP_GOOGLE_LOCAL&countryCode=ae&timeBucket=2026-W08');
     const headers = new Headers((init as RequestInit | undefined)?.headers);
     expect(headers.get('authorization')).toBe('Bearer stored-token');
     expect(result.items[0]?.id).toBe('task_1');
@@ -418,7 +418,7 @@ describe('discovery admin job proxy', () => {
     const result = await fetchAdminSearchTaskDetail('task_1');
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe('/api/admin/search-tasks/task_1');
+    expect(url).toBe('/leadzilla/api/admin/search-tasks/task_1');
     const headers = new Headers((init as RequestInit | undefined)?.headers);
     expect(headers.get('authorization')).toBe('Bearer stored-token');
     expect(result.task.id).toBe('task_1');
@@ -441,7 +441,7 @@ describe('discovery admin job proxy', () => {
     await expect(checkDiscoveryAdminAccess()).resolves.toBeUndefined();
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe('/api/admin/search-tasks?page=1&pageSize=1&sortBy=updated_desc');
+    expect(url).toBe('/leadzilla/api/admin/search-tasks?page=1&pageSize=1&sortBy=updated_desc');
     const headers = new Headers((init as RequestInit | undefined)?.headers);
     expect(headers.get('authorization')).toBe('Bearer stored-token');
   });
@@ -456,8 +456,26 @@ describe('discovery admin job proxy', () => {
 
     await expect(checkDiscoveryAdminAccess()).rejects.toMatchObject({
       name: 'AdminProxyError',
-      message: 'Forbidden',
+      message: 'This action is not available in the demo workspace.',
       status: 403,
+    });
+  });
+
+  it('does not expose raw upstream database errors', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error:
+            'Database query failed for businesses (409): duplicate key value violates unique constraint "businesses_phone_idx"',
+        }),
+        { status: 409 },
+      ),
+    );
+
+    await expect(fetchJobRuns('?page=1&pageSize=20')).rejects.toMatchObject({
+      name: 'AdminProxyError',
+      message: 'This item changed while you were working. Refresh and try again.',
+      status: 409,
     });
   });
 
@@ -477,7 +495,7 @@ describe('discovery admin job proxy', () => {
     await triggerDiscoverySeed({ profile: 'small', maxTasks: 10 });
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe('/api/admin/jobs/discovery/seed');
+    expect(url).toBe('/leadzilla/api/admin/jobs/discovery/seed');
     expect((init as RequestInit | undefined)?.method).toBe('POST');
 
     const headers = new Headers((init as RequestInit | undefined)?.headers);

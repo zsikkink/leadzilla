@@ -36,16 +36,6 @@ type PromptCenterEditableSettings = {
   scoringSystemPrompt: string;
 };
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-  if (typeof error === 'string' && error.trim().length > 0) {
-    return error;
-  }
-  return 'unknown error';
-}
-
 function readPromptCenterSessionSettings(): Partial<PromptCenterEditableSettings> {
   if (typeof window === 'undefined') {
     return {};
@@ -399,9 +389,26 @@ export default function PromptCenterPage() {
         scoringModel: nextEditableSettings.scoringModel,
         scoringSystemPrompt: nextVisibleScoringPrompt,
       };
-    } catch (error: unknown) {
-      loadedSettingsRef.current = null;
-      setSettingsLoadError(getErrorMessage(error));
+    } catch {
+      const sessionSettings = readPromptCenterSessionSettings();
+      const fallbackSettings: PromptCenterEditableSettings = {
+        messagingBehaviorPrompt:
+          sessionSettings.messagingBehaviorPrompt ?? DEFAULT_AI_BEHAVIOR_PROMPT,
+        messagingModel: sessionSettings.messagingModel ?? DEFAULT_MESSAGING_MODEL,
+        scoringModel: sessionSettings.scoringModel ?? DEFAULT_MESSAGING_MODEL,
+        scoringSystemPrompt:
+          sessionSettings.scoringSystemPrompt ?? DEFAULT_SCORING_SYSTEM_PROMPT,
+      };
+
+      setMessagingModel(fallbackSettings.messagingModel);
+      setScoringModel(fallbackSettings.scoringModel);
+      setAiBehaviorPrompt(fallbackSettings.messagingBehaviorPrompt);
+      setScoringSystemPrompt(fallbackSettings.scoringSystemPrompt);
+      loadedSettingsRef.current = fallbackSettings;
+      setSettingsLoadError(
+        'Live prompt settings are refreshing. Curated defaults are loaded for this session.',
+      );
+      setHasChanges(false);
     } finally {
       setIsLoadingSettings(false);
     }
@@ -453,22 +460,22 @@ export default function PromptCenterPage() {
         `Saved ${saveTargets.length} prompt setting${saveTargets.length === 1 ? '' : 's'} for this session.`,
       );
       setHasChanges(false);
-    } catch (error: unknown) {
-      toast.error(`Failed to save prompt settings in this browser session: ${getErrorMessage(error)}`);
+    } catch {
+      toast.info('Browser storage is unavailable, so these prompt edits were not saved.');
       setHasChanges(true);
     } finally {
       setIsSaving(false);
     }
   }, [aiBehaviorPrompt, messagingModel, scoringModel, scoringSystemPrompt]);
 
-  const saveDisabled = !hasChanges || isSaving || isLoadingSettings || settingsLoadError !== null;
+  const saveDisabled = !hasChanges || isSaving || isLoadingSettings;
 
   return (
     <div className="space-y-6">
       {settingsLoadError ? (
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-          <p className="font-semibold text-red-300">Prompt settings failed to load</p>
-          <p className="mt-1 text-red-100/80">{settingsLoadError}. Saving is disabled until reload succeeds.</p>
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+          <p className="font-semibold text-amber-200">Using curated prompt defaults</p>
+          <p className="mt-1 text-amber-100/80">{settingsLoadError}</p>
         </div>
       ) : null}
 

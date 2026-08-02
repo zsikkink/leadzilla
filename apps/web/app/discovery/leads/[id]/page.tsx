@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { AdminLeadDetailResponse } from '@lead-flood/contracts';
 
 import { fetchAdminLeadDetail } from '../../../../src/lib/discovery-admin';
+import { toSafeDisplayErrorMessage } from '../../../../src/lib/error-messages.js';
 
 export default function DiscoveryLeadDetailPage() {
   const params = useParams<{ id: string }>();
@@ -25,7 +26,12 @@ export default function DiscoveryLeadDetailPage() {
       const result = await fetchAdminLeadDetail(leadId);
       setData(result);
     } catch (loadError: unknown) {
-      setError(loadError instanceof Error ? loadError.message : 'Failed to load lead detail');
+      setError(
+        toSafeDisplayErrorMessage(
+          loadError,
+          'This lead summary is refreshing. Please try again in a moment.',
+        ),
+      );
     } finally {
       setLoading(false);
     }
@@ -48,8 +54,8 @@ export default function DiscoveryLeadDetailPage() {
 
         {loading ? <p>Loading lead detail...</p> : null}
         {error ? (
-          <p style={{ color: '#b91c1c' }}>
-            <strong>Error:</strong> {error}
+          <p style={{ color: '#b7791f' }}>
+            <strong>Pipeline note:</strong> {error}
           </p>
         ) : null}
 

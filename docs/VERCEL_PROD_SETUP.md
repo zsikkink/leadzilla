@@ -2,6 +2,10 @@
 
 The web app runs on Vercel and calls the API. Do not run Postgres on Vercel.
 
+Production URL: `https://zacksikkink.com/leadzilla`.
+The Next.js app is built with `basePath: '/leadzilla'`; DNS points only the
+`zacksikkink.com` hostname at Vercel, while the application owns the path prefix.
+
 Current production note: as of 2026-07-09 the recruiter demo no longer uses a
 Railway API. Vercel `NEXT_PUBLIC_API_BASE_URL` and `API_BASE_URL` should point
 to the Supabase Edge Function API:
@@ -25,6 +29,7 @@ Set for both Preview and Production (with environment-specific values):
 
 - `NEXT_PUBLIC_API_BASE_URL`
 - `API_BASE_URL`
+- `NEXT_PUBLIC_SITE_URL` (`https://zacksikkink.com/leadzilla` in Production)
 - `ADMIN_API_KEY` (server-only; used by `apps/web` route handlers for `/api/admin/*`)
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
@@ -48,9 +53,12 @@ Set on the Supabase Edge Function project:
 - `OPENAI_DRAFT_MODEL` (optional; defaults to the current frontier draft model)
 - `LEADZILLA_CORS_ORIGINS`
 
+`LEADZILLA_CORS_ORIGINS` must include comma-separated origin values only:
+`http://localhost:3000` and `https://zacksikkink.com` (without `/leadzilla`).
+
 Set for migration/ops workflows:
 
-- `SUPABASE_PROJECT_REF=cbcgrzvqidtrtrtnzlso`
+- `SUPABASE_PROJECT_REF=pjeezkwvsxyiuzaglwck`
 - `SUPABASE_ACCESS_TOKEN` (or use `supabase login` where scripts run)
 - `SUPABASE_DB_PASSWORD` (when CLI cannot prompt)
 - `SUPABASE_SERVICE_ROLE_KEY` only if explicitly needed by your ops flow (never commit)

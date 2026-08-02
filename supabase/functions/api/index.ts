@@ -5,6 +5,26 @@ import {
   SCORED_LEAD_STATUSES,
   SENT_MESSAGE_STATUSES,
 } from '../../../packages/contracts/src/metrics.contract.ts';
+import {
+  canCreateEdgeSearchTask,
+  canInspectEdgeDiscoveryResult,
+  EDGE_DISCOVERY_DEFAULT_SEARCH_TASKS,
+  EDGE_DISCOVERY_MAX_RESULTS,
+  EDGE_DISCOVERY_MAX_SEARCH_TASKS,
+  isEdgeDiscoverySearchTaskLimit,
+  resolveDiscoveryProgressTotal,
+  resolveEdgeDiscoveryTerminalStatus,
+} from './discovery-limits.ts';
+import {
+  isPublicPipelineSettingKey,
+  sanitizePublicOperationalJson,
+  toPublicDeliveryFailureCode,
+  toPublicOperationalError,
+} from './public-error-message.ts';
+import {
+  applyRestCountPreference,
+  type RestCountPreference,
+} from './rest-count-preference.ts';
 
 type JsonObject = Record<string, unknown>;
 type Row = Record<string, unknown>;
@@ -15,17 +35,16 @@ const DEMO_DISABLED_MESSAGE =
 const MAX_DEMO_ROWS = 1000;
 const STATS_PAGE_SIZE = 1000;
 const STATS_IN_FILTER_CHUNK_SIZE = 200;
-const EDGE_DISCOVERY_MAX_RESULTS = 10;
-const EDGE_DISCOVERY_MAX_SERPAPI_CALLS = 5;
-const EDGE_DISCOVERY_DEFAULT_LIMIT = 5;
 const SERPAPI_SEARCH_URL = 'https://serpapi.com/search.json';
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const DEFAULT_OPENAI_DRAFT_MODEL = 'gpt-5.5';
 const OPENAI_DRAFT_TIMEOUT_MS = 30_000;
 const SLOW_REST_REQUEST_LOG_MS = 1_000;
 const DASHBOARD_SUMMARY_CACHE_TTL_MS = 15_000;
+const DEMO_READINESS_CACHE_TTL_MS = 30_000;
 
 const dashboardSummaryCache = new Map<string, { expiresAt: number; payload: JsonObject }>();
+let demoReadinessCacheExpiresAt = 0;
 
 class HttpError extends Error {
   constructor(
@@ -183,6 +202,9 @@ function emptyResponse(status = 204): Response {
 
 function errorResponse(error: unknown): Response {
   if (error instanceof HttpError) {
+    if (error.status >= 500) {
+      return jsonResponse({ error: 'Live service is temporarily unavailable' }, error.status);
+    }
     return jsonResponse(
       { error: error.expose ? error.message : 'Internal server error' },
       error.status,
@@ -190,7 +212,79 @@ function errorResponse(error: unknown): Response {
   }
 
   console.error('[demo-edge-api] unhandled error', error);
-  return jsonResponse({ error: 'Internal server error' }, 500);
+  return jsonResponse({ error: 'Live service is temporarily unavailable' }, 500);
+}
+
+function normalizeErrorFragment(value: string): string {
+  return value.trim().replace(/\s+/g, ' ');
+}
+
+function compactRepeatedErrorMessage(message: string): string {
+  const fragments = message
+    .split(/\s*;\s*/)
+    .map(normalizeErrorFragment)
+    .filter((fragment) => fragment.length > 0);
+  if (fragments.length === 0) {
+    return 'Unknown error';
+  }
+
+  const seen = new Set<string>();
+  const uniqueFragments: string[] = [];
+  for (const fragment of fragments) {
+    const key = fragment.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    uniqueFragments.push(fragment);
+  }
+
+  return uniqueFragments.join('; ');
+}
+
+function uniqueErrorMessages(messages: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const uniqueMessages: string[] = [];
+  for (const message of messages) {
+    const compacted = compactRepeatedErrorMessage(message);
+    const key = compacted.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    uniqueMessages.push(compacted);
+  }
+  return uniqueMessages;
+}
+
+function readRestErrorDetail(body: string): string | null {
+  const trimmed = body.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as JsonObject;
+    const message = normalizeOptionalString(parsed.message);
+    const details = normalizeOptionalString(parsed.details);
+    const hint = normalizeOptionalString(parsed.hint);
+    const code = normalizeOptionalString(parsed.code);
+    const parts = uniqueErrorMessages([
+      ...(message ? [message] : []),
+      ...(details ? [details] : []),
+      ...(hint ? [`Hint: ${hint}`] : []),
+      ...(code ? [`Code: ${code}`] : []),
+    ]);
+    return parts.length > 0 ? parts.join(' ') : null;
+  } catch {
+    return compactRepeatedErrorMessage(trimmed).slice(0, 300);
+  }
+}
+
+function formatRestRequestError(table: string, status: number, body: string): string {
+  const detail = readRestErrorDetail(body);
+  const base = `Database query failed for ${table} (${status})`;
+  return detail ? `${base}: ${detail}` : base;
 }
 
 function parseContentRange(value: string | null): number | null {
@@ -214,6 +308,7 @@ async function restRequest<T>(
   table: string,
   params: Record<string, string | number | boolean | undefined | null> = {},
   init: RequestInit = {},
+  countPreference: RestCountPreference = 'exact',
 ): Promise<RestResult<T>> {
   const startedAt = Date.now();
   const key = serviceRoleKey();
@@ -229,9 +324,7 @@ async function restRequest<T>(
   if (init.body !== undefined && !headers.has('content-type')) {
     headers.set('content-type', 'application/json');
   }
-  if (!headers.has('prefer')) {
-    headers.set('prefer', 'count=exact');
-  }
+  applyRestCountPreference(headers, countPreference);
 
   const response = await fetch(url, {
     ...init,
@@ -246,7 +339,7 @@ async function restRequest<T>(
       status: response.status,
       body: body.slice(0, 500),
     });
-    throw new HttpError(502, 'Database query failed', false);
+    throw new HttpError(502, formatRestRequestError(table, response.status, body), false);
   }
 
   const text = await response.text();
@@ -315,15 +408,16 @@ async function updateRows<T extends Row>(
 async function listRows(
   table: string,
   params: Record<string, string | number | boolean | undefined | null> = {},
+  countPreference: RestCountPreference = 'exact',
 ): Promise<RestResult<Row[]>> {
-  return restRequest<Row[]>(table, params);
+  return restRequest<Row[]>(table, params, {}, countPreference);
 }
 
 async function singleRow(
   table: string,
   params: Record<string, string | number | boolean | undefined | null>,
 ): Promise<Row | null> {
-  const result = await listRows(table, { ...params, limit: 1 });
+  const result = await listRows(table, { ...params, limit: 1 }, 'none');
   return result.data[0] ?? null;
 }
 
@@ -347,7 +441,7 @@ async function listAllRows(
       ...params,
       offset,
       limit: STATS_PAGE_SIZE,
-    });
+    }, 'none');
     rows.push(...result.data);
 
     if (result.data.length < STATS_PAGE_SIZE) {
@@ -825,7 +919,8 @@ function parseCreateDiscoveryRunBody(value: unknown): EdgeDiscoveryRequest {
   const countries = parseEdgeStringArray(body.countries).map((country) => country.toUpperCase());
   const cities = parseEdgeStringArray(body.cities);
   const advancedSettings = asObject(body.advancedSettings);
-  const limitValue = body.limit === undefined ? EDGE_DISCOVERY_DEFAULT_LIMIT : Number(body.limit);
+  const limitValue =
+    body.limit === undefined ? EDGE_DISCOVERY_DEFAULT_SEARCH_TASKS : Number(body.limit);
 
   if (icpProfileIds.length === 0 && !icpProfileId) {
     throw new HttpError(400, 'Either icpProfileIds or icpProfileId is required');
@@ -836,6 +931,12 @@ function parseCreateDiscoveryRunBody(value: unknown): EdgeDiscoveryRequest {
   if (!Number.isInteger(limitValue) || limitValue < 1) {
     throw new HttpError(400, 'Discovery run limit must be a positive integer');
   }
+  if (!isEdgeDiscoverySearchTaskLimit(limitValue)) {
+    throw new HttpError(
+      400,
+      `Public demo discovery runs use a fixed budget of ${EDGE_DISCOVERY_MAX_SEARCH_TASKS} search tasks.`,
+    );
+  }
 
   return {
     ...(icpProfileId ? { icpProfileId } : {}),
@@ -844,7 +945,7 @@ function parseCreateDiscoveryRunBody(value: unknown): EdgeDiscoveryRequest {
     ...(cities.length > 0 ? { cities } : {}),
     includeWebsiteAnalysis: body.includeWebsiteAnalysis !== false,
     includeSocialMediaAnalysis: body.includeSocialMediaAnalysis !== false,
-    limit: Math.min(limitValue, EDGE_DISCOVERY_MAX_RESULTS),
+    limit: limitValue,
     ...(advancedSettings
       ? {
           advancedSettings: {
@@ -1287,7 +1388,7 @@ function mapScorePrediction(row: Row): JsonObject {
     logisticScore: asNumber(row.logisticScore),
     blendedScore: asNumber(row.blendedScore),
     scoreBand: asString(row.scoreBand, 'LOW'),
-    reasonsJson: row.reasonsJson ?? {},
+    reasonsJson: sanitizePublicOperationalJson(row.reasonsJson ?? {}),
     predictedAt: iso(row.predictedAt),
     createdAt: iso(row.createdAt),
   };
@@ -1303,7 +1404,7 @@ function mapFeatureSnapshot(row: Row): JsonObject {
     snapshotVersion: asNumber(row.snapshotVersion, 1),
     sourceVersion: asString(row.sourceVersion, 'edge-demo-v1'),
     featureVectorHash: asString(row.featureVectorHash),
-    featuresJson: row.featuresJson ?? {},
+    featuresJson: sanitizePublicOperationalJson(row.featuresJson ?? {}),
     ruleMatchCount: asNumber(row.ruleMatchCount),
     hardFilterPassed: asBoolean(row.hardFilterPassed),
     computedAt: iso(row.computedAt),
@@ -1450,21 +1551,74 @@ async function fetchSerpApiMapsResults(input: {
   url.searchParams.set('q', input.query);
   url.searchParams.set('gl', input.countryCode.toLowerCase());
   url.searchParams.set('hl', 'en');
-  if (input.city) {
-    url.searchParams.set('location', `${input.city}, ${input.countryCode}`);
-  }
   url.searchParams.set('api_key', readEnv('SERPAPI_API_KEY'));
 
   const response = await fetch(url, { method: 'GET' });
   const body = asObject(await response.json().catch(() => ({}))) ?? {};
-  if (!response.ok) {
-    throw new HttpError(502, `SerpAPI request failed with status ${response.status}`);
-  }
   const providerError = normalizeOptionalString(body.error);
+  if (!response.ok) {
+    console.error('[demo-edge-api] SerpAPI request failed', {
+      status: response.status,
+      error: providerError,
+    });
+    throw new HttpError(
+      502,
+      providerError
+        ? `SerpAPI request failed with status ${response.status}: ${providerError}`
+        : `SerpAPI request failed with status ${response.status}`,
+      false,
+    );
+  }
   if (providerError) {
-    throw new HttpError(502, `SerpAPI request failed: ${providerError}`);
+    console.error('[demo-edge-api] SerpAPI returned an error', {
+      status: response.status,
+      error: providerError,
+    });
+    throw new HttpError(502, `SerpAPI request failed: ${providerError}`, false);
   }
   return body;
+}
+
+type EdgeDiscoveryPersistResult =
+  | {
+      status: 'created';
+      businessId: string;
+      leadId: string;
+      deterministicScore: number;
+      websiteDomain: string | null;
+    }
+  | {
+      status: 'already_known';
+      businessId: string;
+      deterministicScore: number | null;
+      websiteDomain: string | null;
+    };
+
+async function findExistingEdgeBusiness(
+  phoneE164: string | null,
+  websiteDomain: string | null,
+): Promise<Row | null> {
+  if (phoneE164) {
+    const byPhone = await singleRow('businesses', {
+      select: 'id,deterministic_score,score_band,website_domain',
+      phone_e164: `eq.${phoneE164}`,
+    });
+    if (byPhone) {
+      return normalizeBusinessRow(byPhone) as Row;
+    }
+  }
+
+  if (websiteDomain) {
+    const byDomain = await singleRow('businesses', {
+      select: 'id,deterministic_score,score_band,website_domain',
+      website_domain: `eq.${websiteDomain}`,
+    });
+    if (byDomain) {
+      return normalizeBusinessRow(byDomain) as Row;
+    }
+  }
+
+  return null;
 }
 
 async function persistEdgeDiscoveryBusiness(input: {
@@ -1474,10 +1628,20 @@ async function persistEdgeDiscoveryBusiness(input: {
   queryHash: string;
   local: EdgeLocalBusiness;
   now: string;
-}): Promise<{ businessId: string; leadId: string; deterministicScore: number; websiteDomain: string | null }> {
+}): Promise<EdgeDiscoveryPersistResult> {
   const signals = businessSignals(input.local);
   const websiteDomain = businessDomainFromUrl(input.local.websiteUrl);
   const phoneE164 = normalizePhone(input.local.phone, input.local.countryCode);
+  const existingBusiness = await findExistingEdgeBusiness(phoneE164, websiteDomain);
+  if (existingBusiness) {
+    return {
+      status: 'already_known',
+      businessId: asString(existingBusiness.id),
+      deterministicScore: asNullableNumber(existingBusiness.deterministicScore),
+      websiteDomain: asNullableString(existingBusiness.websiteDomain),
+    };
+  }
+
   const business = await insertRow<Row>('businesses', {
     id: newId('biz'),
     name: input.local.name,
@@ -1584,6 +1748,7 @@ async function persistEdgeDiscoveryBusiness(input: {
   });
 
   return {
+    status: 'created',
     businessId,
     leadId,
     deterministicScore: signals.deterministicScore,
@@ -1630,7 +1795,14 @@ function readRunProgress(result: unknown): { totalItems: number; processedItems:
   const payload = asObject(result) ?? {};
   const newFound = asNumber(payload.newFound, 0);
   const newBusinesses = asNumber(payload.newBusinesses, 0);
-  const totalItems = newFound > 0 ? newFound : newBusinesses > 0 ? newBusinesses : asNumber(payload.totalItems, 0);
+  const processedItems = asNumber(payload.processedItems, 0);
+  const totalItems = resolveDiscoveryProgressTotal({
+    edgeMode: payload.edgeMode === true,
+    totalItems: asNumber(payload.totalItems, 0),
+    newFound,
+    newBusinesses,
+    processedItems,
+  });
   const explicitLeadFailures = asNumber(payload.leadFailedItems, 0);
   const failedItems =
     explicitLeadFailures > 0
@@ -1639,7 +1811,7 @@ function readRunProgress(result: unknown): { totalItems: number; processedItems:
 
   return {
     totalItems,
-    processedItems: asNumber(payload.processedItems, 0),
+    processedItems,
     failedItems,
   };
 }
@@ -1735,7 +1907,7 @@ async function latestScoresByLeadId(leadIds: string[]): Promise<Map<string, Row>
       leadId: pgIn(chunk),
       order: 'predictedAt.desc,createdAt.desc,id.desc',
       limit: MAX_DEMO_ROWS,
-    });
+    }, 'none');
     for (const row of result.data) {
       const leadId = asNullableString(row.leadId);
       if (leadId && !scores.has(leadId)) {
@@ -1756,7 +1928,7 @@ async function latestDiscoveryByLeadId(leadIds: string[]): Promise<Map<string, R
     leadId: pgIn(leadIds),
     order: 'discoveredAt.desc,createdAt.desc,id.desc',
     limit: MAX_DEMO_ROWS,
-  });
+  }, 'none');
   const records = new Map<string, Row>();
   for (const row of result.data) {
     const leadId = asNullableString(row.leadId);
@@ -1777,7 +1949,7 @@ async function latestEnrichmentByLeadId(leadIds: string[]): Promise<Map<string, 
     leadId: pgIn(leadIds),
     order: 'enrichedAt.desc,createdAt.desc,id.desc',
     limit: MAX_DEMO_ROWS,
-  });
+  }, 'none');
   const records = new Map<string, Row>();
   for (const row of result.data) {
     const leadId = asNullableString(row.leadId);
@@ -1800,7 +1972,7 @@ async function businessesById(businessIds: string[]): Promise<Map<string, Row>> 
       select: '*',
       id: pgIn(chunk),
       limit: chunk.length,
-    });
+    }, 'none');
     rows.push(...result.data);
   }
   return new Map(rows.map((row) => [asString(row.id), normalizeBusinessRow(row) as Row]));
@@ -1815,7 +1987,7 @@ async function icpNamesById(icpIds: string[]): Promise<Map<string, string>> {
     select: 'id,name',
     id: pgIn(icpIds),
     limit: icpIds.length,
-  });
+  }, 'none');
   return new Map(result.data.map((row) => [asString(row.id), asString(row.name)]));
 }
 
@@ -1829,7 +2001,7 @@ async function businessContactsByBusinessId(businessIds: string[]): Promise<Map<
     businessId: pgIn(businessIds),
     order: 'positionRank.asc,name.asc',
     limit: MAX_DEMO_ROWS,
-  });
+  }, 'none');
   const grouped = new Map<string, Row[]>();
   for (const row of result.data) {
     const businessId = asNullableString(row.businessId);
@@ -1845,14 +2017,14 @@ function mapIcp(row: Row, rules?: Row[]): JsonObject {
     name: asString(row.name),
     description: asNullableString(row.description),
     qualificationLogic: asString(row.qualificationLogic, 'WEIGHTED'),
-    metadataJson: asObject(row.metadataJson),
+    metadataJson: sanitizePublicOperationalJson(asObject(row.metadataJson)),
     targetIndustries: asArray<string>(row.targetIndustries),
     targetCountries: asArray<string>(row.targetCountries),
     minCompanySize: asNullableNumber(row.minCompanySize),
     maxCompanySize: asNullableNumber(row.maxCompanySize),
     requiredTechnologies: asArray<string>(row.requiredTechnologies),
     excludedDomains: asArray<string>(row.excludedDomains),
-    featureList: row.featureList ?? null,
+    featureList: sanitizePublicOperationalJson(row.featureList ?? null),
     isActive: asBoolean(row.isActive, true),
     createdByUserId: asNullableString(row.createdByUserId),
     createdAt: iso(row.createdAt),
@@ -1873,7 +2045,7 @@ function mapRule(row: Row): JsonObject {
     isRequired: asBoolean(row.isRequired),
     fieldKey: asString(row.fieldKey),
     operator: asString(row.operator),
-    valueJson: row.valueJson ?? null,
+    valueJson: sanitizePublicOperationalJson(row.valueJson ?? null),
     weight: asNullableNumber(row.weight),
     orderIndex: asNumber(row.orderIndex, 100),
     isActive: asBoolean(row.isActive, true),
@@ -1903,7 +2075,7 @@ function mapLeadListRow(
     email: asString(lead.email, 'unknown@example.invalid'),
     source: asString(lead.source, 'demo'),
     status: asString(lead.status, 'new'),
-    error: asNullableString(lead.error),
+    error: toPublicOperationalError(asNullableString(lead.error), 'lead'),
     createdAt: iso(lead.createdAt),
     updatedAt: iso(lead.updatedAt),
     latestIcpProfileId,
@@ -1913,9 +2085,11 @@ function mapLeadListRow(
     displayScore: scoreValue ?? businessScore,
     displayScoreBand: scoreBandValue,
     displayScoreSource: scoreValue !== null ? 'AI_SCORE' : businessScore !== null ? 'BUSINESS_SCORE' : 'NONE',
-    latestDiscoveryRawPayload: discovery?.rawPayload ?? null,
-    latestEnrichmentNormalizedPayload: enrichment?.normalizedPayload ?? lead.enrichmentData ?? null,
-    latestEnrichmentRawPayload: enrichment?.rawPayload ?? null,
+    latestDiscoveryRawPayload: sanitizePublicOperationalJson(discovery?.rawPayload ?? null),
+    latestEnrichmentNormalizedPayload: sanitizePublicOperationalJson(
+      enrichment?.normalizedPayload ?? lead.enrichmentData ?? null,
+    ),
+    latestEnrichmentRawPayload: sanitizePublicOperationalJson(enrichment?.rawPayload ?? null),
     businessCountryCode: asNullableString(biz?.countryCode),
     businessCountry: asNullableString(biz?.country),
     businessCity: asNullableString(biz?.city),
@@ -1958,8 +2132,8 @@ function mapLeadDetail(
     email: asString(lead.email, 'unknown@example.invalid'),
     source: asString(lead.source, 'demo'),
     status: asString(lead.status, 'new'),
-    enrichmentData: lead.enrichmentData ?? null,
-    error: asNullableString(lead.error),
+    enrichmentData: sanitizePublicOperationalJson(lead.enrichmentData ?? null),
+    error: toPublicOperationalError(asNullableString(lead.error), 'lead'),
     createdAt: iso(lead.createdAt),
     updatedAt: iso(lead.updatedAt),
     businessCountryCode: asNullableString(biz?.countryCode),
@@ -1976,10 +2150,10 @@ function mapLeadDetail(
     websiteDomain: asNullableString(biz?.websiteDomain),
     icpProfileName,
     businessContacts: contacts.map(mapBusinessContact),
-    businessProfileRaw: biz ?? null,
+    businessProfileRaw: sanitizePublicOperationalJson(biz ?? null),
     conversionContext: {
       businessInsights: asNullableString(conversion?.businessInsights),
-      metadata: conversion?.metadata ?? null,
+      metadata: sanitizePublicOperationalJson(conversion?.metadata ?? null),
     },
   };
 }
@@ -1993,7 +2167,7 @@ function mapDraft(row: Row, variants: Row[]): JsonObject {
     promptVersion: asString(row.promptVersion, 'demo'),
     generatedByModel: asString(row.generatedByModel, 'demo'),
     groundingKnowledgeIds: asArray<string>(row.groundingKnowledgeIds),
-    groundingContextJson: row.groundingContextJson ?? null,
+    groundingContextJson: sanitizePublicOperationalJson(row.groundingContextJson ?? null),
     approvalStatus: asString(row.approvalStatus, 'PENDING'),
     approvedByUserId: asNullableString(row.approvedByUserId),
     approvedAt: nullableIso(row.approvedAt),
@@ -2638,6 +2812,13 @@ async function handleGenerateDraft(request: Request): Promise<Response> {
 }
 
 function mapSend(row: Row): JsonObject {
+  const storedFailureCode = asNullableString(row.failureCode);
+  const failureCode = toPublicDeliveryFailureCode(storedFailureCode);
+  const failureReason =
+    failureCode === 'OUTBOUND_DISABLED'
+      ? DEMO_DISABLED_MESSAGE
+      : toPublicOperationalError(asNullableString(row.failureReason), 'delivery');
+
   return {
     id: asString(row.id),
     leadId: asString(row.leadId),
@@ -2655,8 +2836,8 @@ function mapSend(row: Row): JsonObject {
     followUpNumber: asNullableNumber(row.followUpNumber),
     nextFollowUpAfter: nullableIso(row.nextFollowUpAfter),
     providerConversationId: asNullableString(row.providerConversationId),
-    failureCode: asNullableString(row.failureCode),
-    failureReason: asNullableString(row.failureReason),
+    failureCode,
+    failureReason,
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
   };
@@ -2672,7 +2853,7 @@ function mapFeedbackEvent(row: Row): JsonObject {
     source: asString(row.source, 'MANUAL'),
     providerEventId: asNullableString(row.providerEventId),
     dedupeKey: asString(row.dedupeKey),
-    payloadJson: row.payloadJson ?? null,
+    payloadJson: sanitizePublicOperationalJson(row.payloadJson ?? null),
     replyText: asNullableString(row.replyText),
     replyClassification: asNullableString(row.replyClassification),
     occurredAt: iso(row.occurredAt),
@@ -2701,7 +2882,7 @@ function mapDiscoveryRun(row: Row): JsonObject {
     countries: asArray<string>(payload.countries),
     limit: asNumber(payload.limit),
     converted: typeof result.converted === 'number' ? result.converted : undefined,
-    errorMessage: asNullableString(row.error),
+    errorMessage: toPublicOperationalError(asNullableString(row.error), 'discovery_run'),
     currentStage: currentStage(row.result, asString(row.status)),
   };
 }
@@ -2717,7 +2898,7 @@ function mapDiscoveryRunStatus(row: Row): JsonObject {
     failedItems: progress.failedItems,
     startedAt: nullableIso(row.startedAt),
     endedAt: nullableIso(row.finishedAt),
-    errorMessage: asNullableString(row.error),
+    errorMessage: toPublicOperationalError(asNullableString(row.error), 'discovery_run'),
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
     currentStage: currentStage(row.result, asString(row.status)),
@@ -2736,7 +2917,7 @@ function mapDiscoveryRunDetailStatus(row: Row): JsonObject {
     }
   }
   if (outcome) {
-    mapped.outcome = outcome;
+    mapped.outcome = sanitizePublicOperationalJson(outcome);
   }
   return mapped;
 }
@@ -2750,10 +2931,10 @@ function mapJobRun(row: Row): JsonObject {
     finishedAt: nullableIso(normalized.finishedAt),
     durationMs: asNullableNumber(normalized.durationMs),
     status: asString(normalized.status, 'RUNNING'),
-    paramsJson: normalized.paramsJson ?? {},
-    countersJson: normalized.countersJson ?? null,
-    resourceJson: normalized.resourceJson ?? null,
-    errorText: asNullableString(normalized.errorText),
+    paramsJson: sanitizePublicOperationalJson(normalized.paramsJson ?? {}),
+    countersJson: sanitizePublicOperationalJson(normalized.countersJson ?? null),
+    resourceJson: sanitizePublicOperationalJson(normalized.resourceJson ?? null),
+    errorText: toPublicOperationalError(asNullableString(normalized.errorText), 'job'),
     createdAt: iso(normalized.createdAt),
     updatedAt: iso(normalized.updatedAt),
   };
@@ -2764,7 +2945,7 @@ function mapJobRequest(row: Row): JsonObject {
     id: asNumber(row.id),
     requestType: asString(row.request_type),
     status: asString(row.status),
-    paramsJson: row.params_json ?? {},
+    paramsJson: sanitizePublicOperationalJson(row.params_json ?? {}),
     requestedBy: asString(row.requested_by),
     claimedBy: asNullableString(row.claimed_by),
     createdAt: iso(row.created_at),
@@ -2772,7 +2953,7 @@ function mapJobRequest(row: Row): JsonObject {
     claimedAt: nullableIso(row.claimed_at),
     startedAt: nullableIso(row.started_at),
     finishedAt: nullableIso(row.finished_at),
-    errorText: asNullableString(row.error_text),
+    errorText: toPublicOperationalError(asNullableString(row.error_text), 'job'),
     jobRunId: asNullableString(row.job_run_id),
     idempotencyKey: asNullableString(row.idempotency_key),
   };
@@ -2802,8 +2983,8 @@ function mapAdminBusiness(row: Row, leadId: string | null = null, leadBlendedSco
     instagramHandle: asNullableString(normalized.instagramHandle),
     preQualified: typeof normalized.preQualified === 'boolean' ? normalized.preQualified : null,
     disqualificationReason: asNullableString(normalized.disqualificationReason),
-    apifyWebsiteScrapeJson: normalized.apifyWebsiteScrapeJson ?? null,
-    apifyInstagramScrapeJson: normalized.apifyInstagramScrapeJson ?? null,
+    apifyWebsiteScrapeJson: sanitizePublicOperationalJson(normalized.apifyWebsiteScrapeJson ?? null),
+    apifyInstagramScrapeJson: sanitizePublicOperationalJson(normalized.apifyInstagramScrapeJson ?? null),
     websiteScrapedAt: nullableIso(normalized.websiteScrapedAt),
     instagramScrapedAt: nullableIso(normalized.instagramScrapedAt),
     manualReviewStatus: asNullableString(recovery?.status),
@@ -2906,7 +3087,7 @@ function mapContactRecoveryItem(row: Row, business: Row | undefined, icpName: st
       preQualified: typeof normalizedBusiness?.preQualified === 'boolean' ? normalizedBusiness.preQualified : null,
       disqualificationReason: asNullableString(normalizedBusiness?.disqualificationReason),
     },
-    snapshot,
+    snapshot: sanitizePublicOperationalJson(snapshot),
   };
 }
 
@@ -2923,7 +3104,7 @@ function mapSearchTask(row: Row): JsonObject {
     attempts: asNumber(row.attempts),
     runAfter: iso(row.run_after),
     lastResultHash: asNullableString(row.last_result_hash),
-    error: asNullableString(row.error),
+    error: toPublicOperationalError(asNullableString(row.error), 'search_task'),
     updatedAt: iso(row.updated_at),
     createdAt: iso(row.created_at),
   };
@@ -2950,6 +3131,19 @@ async function handleListIcps(url: URL): Promise<Response> {
     pageSize,
     total: result.total ?? result.data.length,
   });
+}
+
+async function handleDemoReadiness(): Promise<Response> {
+  const now = Date.now();
+  if (demoReadinessCacheExpiresAt <= now) {
+    await singleRow('IcpProfile', {
+      select: 'id',
+      isActive: 'eq.true',
+    });
+    demoReadinessCacheExpiresAt = now + DEMO_READINESS_CACHE_TTL_MS;
+  }
+
+  return jsonResponse({ ok: true, service: 'demo-edge-api', database: 'ok' });
 }
 
 async function handleGetIcp(icpId: string): Promise<Response> {
@@ -3209,7 +3403,9 @@ async function handleLatestLeadDeterministicScore(leadId: string, url: URL): Pro
     predictionId: asNullableString(prediction?.id),
     deterministicScore: prediction ? asNumber(prediction.deterministicScore) : null,
     reasonCodes,
-    ruleEvaluation: Array.isArray(prediction?.ruleEvaluationJson) ? prediction.ruleEvaluationJson : [],
+    ruleEvaluation: sanitizePublicOperationalJson(
+      Array.isArray(prediction?.ruleEvaluationJson) ? prediction.ruleEvaluationJson : [],
+    ),
     predictedAt: prediction ? iso(prediction.predictedAt) : null,
   });
 }
@@ -3932,7 +4128,9 @@ async function listDashboardRollups(
 }
 
 async function handleScoreDistribution(url: URL): Promise<Response> {
-  const params: Record<string, string | number> = {};
+  const params: Record<string, string | number> = {
+    order: 'predictedAt.asc,id.asc',
+  };
   const icpProfileId = url.searchParams.get('icpProfileId');
   if (icpProfileId) params.icpProfileId = `eq.${icpProfileId}`;
   const modelVersionId = url.searchParams.get('modelVersionId');
@@ -4009,6 +4207,7 @@ async function handleDailyQualityTrends(url: URL): Promise<Response> {
 async function handleAvgScore(url: URL): Promise<Response> {
   const params: Record<string, string | number> = {
     select: 'leadId,icpProfileId,blendedScore,predictedAt,createdAt',
+    order: 'predictedAt.asc,id.asc',
   };
   const icpProfileId = url.searchParams.get('icpProfileId');
   if (icpProfileId) params.icpProfileId = `eq.${icpProfileId}`;
@@ -4042,6 +4241,7 @@ async function handleAvgScore(url: URL): Promise<Response> {
 async function handleIcpPerformance(url: URL): Promise<Response> {
   const params: Record<string, string | number> = {
     select: 'leadId,icpProfileId,blendedScore,scoreBand,predictedAt,createdAt',
+    order: 'predictedAt.asc,id.asc',
   };
   const icpProfileId = url.searchParams.get('icpProfileId');
   if (icpProfileId) params.icpProfileId = `eq.${icpProfileId}`;
@@ -4375,16 +4575,22 @@ async function handleCreateDiscoveryRun(request: Request, auth: AuthContext): Pr
   let processedItems = 0;
   let failedItems = 0;
   let newBusinesses = 0;
+  let alreadyKnown = 0;
   let converted = 0;
   let taskCount = 0;
+  let inspectedResultCount = 0;
   const errors: string[] = [];
-  const limit = Math.min(input.limit ?? EDGE_DISCOVERY_DEFAULT_LIMIT, EDGE_DISCOVERY_MAX_RESULTS);
+  const searchTaskLimit = input.limit ?? EDGE_DISCOVERY_DEFAULT_SEARCH_TASKS;
   const cities = input.cities && input.cities.length > 0 ? input.cities : [null];
 
   for (const icp of icps) {
     for (const countryCode of input.countries) {
       for (const city of cities) {
-        if (processedItems >= limit || taskCount >= EDGE_DISCOVERY_MAX_SERPAPI_CALLS) {
+        if (!canCreateEdgeSearchTask({
+          taskCount,
+          searchTaskLimit,
+          inspectedResultCount,
+        })) {
           break;
         }
 
@@ -4426,11 +4632,15 @@ async function handleCreateDiscoveryRun(request: Request, auth: AuthContext): Pr
           const serpApiPayload = await fetchSerpApiMapsResults({ query, countryCode, city });
           const minReviewCount = input.advancedSettings?.minReviewCount ?? 0;
           const businesses = normalizeSerpApiLocalBusinesses(serpApiPayload, countryCode)
-            .filter((business) => (business.reviewCount ?? 0) >= minReviewCount)
-            .slice(0, Math.max(0, limit - processedItems));
+            .filter((business) => (business.reviewCount ?? 0) >= minReviewCount);
+          const persistedProviderIds: string[] = [];
 
           for (const local of businesses) {
-            await persistEdgeDiscoveryBusiness({
+            if (!canInspectEdgeDiscoveryResult(inspectedResultCount)) {
+              break;
+            }
+
+            const persistResult = await persistEdgeDiscoveryBusiness({
               runId,
               taskId: asString(task.id),
               icpProfileId: icp.id,
@@ -4438,32 +4648,55 @@ async function handleCreateDiscoveryRun(request: Request, auth: AuthContext): Pr
               local,
               now: new Date().toISOString(),
             });
+            inspectedResultCount += 1;
+            persistedProviderIds.push(local.providerRecordId);
+            if (persistResult.status === 'already_known') {
+              alreadyKnown += 1;
+              continue;
+            }
             processedItems += 1;
             newBusinesses += 1;
             converted += 1;
           }
 
-          await insertRow<Row>('discovery_cost_events', {
-            id: newId('cost'),
-            discoveryRunId: runId,
-            provider: 'SERPAPI',
-            costCents: 0,
-            apiCallType: 'google_maps_search',
-            businessId: null,
-            leadId: null,
-            recordedAt: new Date().toISOString(),
-            createdAt: new Date().toISOString(),
-          });
+          try {
+            await insertRow<Row>('discovery_cost_events', {
+              id: newId('cost'),
+              discoveryRunId: runId,
+              provider: 'SERPAPI',
+              costCents: 0,
+              apiCallType: 'google_maps_search',
+              businessId: null,
+              leadId: null,
+              recordedAt: new Date().toISOString(),
+              createdAt: new Date().toISOString(),
+            });
+          } catch (costError) {
+            console.error('[demo-edge-api] discovery cost telemetry failed', {
+              runId,
+              taskId: asString(task.id),
+              error: costError,
+            });
+          }
 
           await updateRows<Row>('search_tasks', { id: `eq.${asString(task.id)}` }, {
             status: 'DONE',
-            last_result_hash: edgeHash(JSON.stringify(businesses.map((business) => business.providerRecordId))),
+            last_result_hash: edgeHash(JSON.stringify(persistedProviderIds)),
             error: null,
             updated_at: new Date().toISOString(),
           });
         } catch (error) {
           failedItems += 1;
-          const message = error instanceof Error ? error.message : 'Discovery task failed';
+          console.error('[demo-edge-api] discovery task failed', {
+            runId,
+            taskId: asString(task.id),
+            error,
+          });
+          const message =
+            toPublicOperationalError(
+              error instanceof Error ? error.message : 'Discovery task failed',
+              'search_task',
+            ) ?? 'This search task could not be completed.';
           errors.push(message);
           await updateRows<Row>('search_tasks', { id: `eq.${asString(task.id)}` }, {
             status: 'FAILED',
@@ -4476,15 +4709,21 @@ async function handleCreateDiscoveryRun(request: Request, auth: AuthContext): Pr
   }
 
   const finishedAt = new Date().toISOString();
-  const terminalStatus = processedItems > 0 ? 'completed' : 'failed';
+  const totalFound = inspectedResultCount;
+  const terminalStatus = resolveEdgeDiscoveryTerminalStatus({
+    taskCount,
+    failedTaskCount: failedItems,
+    persistedResultCount: inspectedResultCount,
+  });
+  const storedErrors = uniqueErrorMessages(errors);
   await updateRows<Row>('JobExecution', { id: `eq.${runId}` }, {
     status: terminalStatus,
     result: {
-      totalItems: processedItems,
-      processedItems,
+      totalItems: totalFound,
+      processedItems: totalFound,
       failedItems,
-      totalFound: processedItems,
-      alreadyKnown: 0,
+      totalFound,
+      alreadyKnown,
       newFound: processedItems,
       newBusinesses,
       disqualified: 0,
@@ -4494,7 +4733,10 @@ async function handleCreateDiscoveryRun(request: Request, auth: AuthContext): Pr
       edgeMode: true,
       taskCount,
     },
-    error: errors.length > 0 ? errors.join('; ').slice(0, 1000) : null,
+    error:
+      storedErrors.length > 0
+        ? toPublicOperationalError(storedErrors.join('; '), 'discovery_run')
+        : null,
     finishedAt,
     updatedAt: finishedAt,
   });
@@ -4584,7 +4826,7 @@ async function handleDiscoveryRunDetails(runId: string): Promise<Response> {
       status: asString(row.status),
       resultsCount: 0,
       provider: asString(row.task_type),
-      error: asNullableString(row.error),
+      error: toPublicOperationalError(asNullableString(row.error), 'search_task'),
     })),
     businesses: normalizedBusinesses.map((row) => ({
       id: asString(row.id),
@@ -4653,9 +4895,12 @@ async function handleDiscoveryRecords(url: URL): Promise<Response> {
       providerCursor: asNullableString(row.providerCursor),
       queryHash: asString(row.queryHash),
       status: asString(row.status, 'DISCOVERED'),
-      rawPayload: row.rawPayload ?? {},
-      provenanceJson: row.provenanceJson ?? null,
-      errorMessage: asNullableString(row.errorMessage),
+      rawPayload: sanitizePublicOperationalJson(row.rawPayload ?? {}),
+      provenanceJson: sanitizePublicOperationalJson(row.provenanceJson ?? null),
+      errorMessage: toPublicOperationalError(
+        asNullableString(row.errorMessage),
+        'discovery_record',
+      ),
       discoveredAt: iso(row.discoveredAt),
       createdAt: iso(row.createdAt),
     })),
@@ -4692,15 +4937,20 @@ async function handleSettings(): Promise<Response> {
     limit: 200,
   });
   return jsonResponse({
-    items: result.data.map((row) => ({
-      key: asString(row.key),
-      value: row.valueJson ?? null,
-      updatedAt: iso(row.updatedAt),
-    })),
+    items: result.data
+      .filter((row) => isPublicPipelineSettingKey(row.key))
+      .map((row) => ({
+        key: asString(row.key),
+        value: sanitizePublicOperationalJson(row.valueJson ?? null),
+        updatedAt: iso(row.updatedAt),
+      })),
   });
 }
 
 async function handleSetting(key: string): Promise<Response> {
+  if (!isPublicPipelineSettingKey(key)) {
+    throw new HttpError(404, 'Pipeline setting not found');
+  }
   const row = await singleRow('pipeline_settings', {
     select: '*',
     key: `eq.${key}`,
@@ -4708,7 +4958,7 @@ async function handleSetting(key: string): Promise<Response> {
   if (!row) throw new HttpError(404, 'Pipeline setting not found');
   return jsonResponse({
     key: asString(row.key),
-    value: row.valueJson ?? null,
+    value: sanitizePublicOperationalJson(row.valueJson ?? null),
     updatedAt: iso(row.updatedAt),
   });
 }
@@ -4769,7 +5019,7 @@ async function handleAdminLeadDetail(id: string): Promise<Response> {
       sourceType: asString(row.source_type),
       sourceUrl: asString(row.source_url),
       serpapiResultId: asNullableString(row.serpapi_result_id),
-      rawJson: row.raw_json ?? {},
+      rawJson: sanitizePublicOperationalJson(row.raw_json ?? {}),
       createdAt: iso(row.created_at),
       searchTask: null,
     })),
@@ -4873,7 +5123,7 @@ async function handleSearchTaskDetail(id: string): Promise<Response> {
   return jsonResponse({
     task: {
       ...mapSearchTask(task),
-      paramsJson: task.params_json ?? {},
+      paramsJson: sanitizePublicOperationalJson(task.params_json ?? {}),
       page: asNumber(task.page, 1),
       derivedParams: {
         engine: null,
@@ -4940,50 +5190,50 @@ async function handleJobRequests(url: URL): Promise<Response> {
   });
 }
 
-const DEMO_DASHBOARD_SNAPSHOT_VERSION = '2026.07.recruiter-demo.v1';
-const DEMO_DASHBOARD_GENERATED_AT = '2026-07-09T18:30:00.000Z';
+const DEMO_DASHBOARD_SNAPSHOT_VERSION = '2026.08.two-month-db-anchored.v2';
+const DEMO_DASHBOARD_GENERATED_AT = '2026-08-01T14:00:00.000Z';
 
 const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
-  id: 'demo-dashboard-operations-2026-07',
-  workspaceSlug: 'zbooni-sales-demo',
+  id: 'demo-dashboard-operations-2026-08',
+  workspaceSlug: 'leadzilla-recruiter-demo',
   version: DEMO_DASHBOARD_SNAPSHOT_VERSION,
   kind: 'operations',
   generatedAt: DEMO_DASHBOARD_GENERATED_AT,
   headline: {
     title: 'Operations',
     eyebrow: 'Operations',
-    summary: 'Discovery, enrichment, scoring, review, and safety controls.',
-    status: 'Ready',
+    summary: 'Discovery, scoring, review, and historical outcomes across June – July 2026.',
+    status: 'Two-month operating view',
   },
   metrics: [
     {
       id: 'source-inventory',
-      label: 'Deduped inventory',
-      value: '21,578',
-      unit: 'businesses',
-      detail: 'Deduplicated account universe available for ICP expansion.',
+      label: 'Database leads',
+      value: '4,907',
+      unit: 'leads',
+      detail: '4,906 discovery-linked leads plus one manually added lead.',
       tone: 'teal',
     },
     {
       id: 'discovered-leads',
       label: 'Screened universe',
-      value: '21,578',
-      unit: 'businesses',
-      detail: 'Database businesses normalized into a stable screening population.',
+      value: '4,907',
+      unit: 'leads',
+      detail: 'Active, non-deleted database leads in the screening population.',
       tone: 'green',
     },
     {
       id: 'enriched-scored',
       label: 'Scored profiles',
-      value: '18,438',
+      value: '4,428',
       unit: 'profiles',
-      detail: 'Businesses with enough public context to receive a Zbooni-fit score.',
+      detail: 'Businesses with enough public context to receive a Leadzilla fit score.',
       tone: 'blue',
     },
     {
       id: 'drafts-generated',
       label: 'AI drafts generated',
-      value: '188',
+      value: '189',
       unit: 'drafts',
       detail: 'OpenAI-assisted outreach drafts prepared for operator review.',
       tone: 'purple',
@@ -4991,9 +5241,9 @@ const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
     {
       id: 'pending-review',
       label: 'Pending review',
-      value: '182',
+      value: '12',
       unit: 'drafts',
-      detail: 'Human approval queue remains active before any delivery step.',
+      detail: 'Three drafts are older than the 24-hour review target.',
       tone: 'amber',
     },
   ],
@@ -5001,8 +5251,8 @@ const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
     {
       id: 'discover',
       label: 'Discover',
-      count: 21578,
-      displayValue: '21,578',
+      count: 4907,
+      displayValue: '4,907',
       caption: 'SERP discovery and dedupe',
       status: 'Ready',
       health: 'healthy',
@@ -5010,8 +5260,8 @@ const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
     {
       id: 'enrich',
       label: 'Enrich',
-      count: 18438,
-      displayValue: '18,438',
+      count: 4428,
+      displayValue: '4,428',
       caption: 'Contacts, domains, and business context',
       status: 'Enabled',
       health: 'healthy',
@@ -5019,8 +5269,8 @@ const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
     {
       id: 'score',
       label: 'Score',
-      count: 18438,
-      displayValue: '18,438',
+      count: 4428,
+      displayValue: '4,428',
       caption: 'Model and rule-based lead fit',
       status: 'Enabled',
       health: 'healthy',
@@ -5028,8 +5278,8 @@ const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
     {
       id: 'draft',
       label: 'Draft',
-      count: 188,
-      displayValue: '188',
+      count: 189,
+      displayValue: '189',
       caption: 'OpenAI-assisted message generation',
       status: 'Ready',
       health: 'healthy',
@@ -5037,11 +5287,11 @@ const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
     {
       id: 'review',
       label: 'Review',
-      count: 182,
-      displayValue: '182',
-      caption: 'Operator approval queue',
-      status: 'Human gated',
-      health: 'attention',
+      count: 177,
+      displayValue: '177',
+      caption: '12 drafts remain in the operator queue',
+      status: '93.7% reviewed',
+      health: 'healthy',
     },
   ],
   queues: [
@@ -5060,8 +5310,8 @@ const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
     {
       id: 'review-queue',
       label: 'Review queue',
-      value: '182 pending',
-      detail: 'Drafts are saved for review only; delivery remains disabled.',
+      value: '12 waiting',
+      detail: 'Three drafts are older than 24 hours; delivery remains disabled.',
     },
   ],
   systemHealth: [
@@ -5096,28 +5346,20 @@ const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
   ],
   recentRuns: [
     {
-      id: 'run_1984126f',
-      title: 'Local services discovery',
-      status: 'Successful',
-      found: 1,
-      converted: 1,
-      detail: 'Tiny production-safe discovery run converted one business into one lead.',
+      id: 'demo-run-2026-06-initial-inventory',
+      title: 'June · Initial scored inventory',
+      status: 'Complete',
+      found: 2214,
+      converted: 1999,
+      detail: '1,999 scored and 1,150 high-priority leads in the initial operating cohort.',
     },
     {
-      id: 'segment-hospitality',
-      title: 'Boutique hospitality expansion',
-      status: 'Ready',
-      found: 1240,
-      converted: 1128,
-      detail: 'Curated segment showing high-fit account sourcing for short-stay operators.',
-    },
-    {
-      id: 'segment-premium-services',
-      title: 'Premium services sweep',
-      status: 'Ready',
-      found: 1546,
-      converted: 1399,
-      detail: 'High-ticket services segment prepared for scoring and draft review.',
+      id: 'demo-run-2026-07-icp-expansion',
+      title: 'July · ICP expansion and review',
+      status: 'Complete',
+      found: 2693,
+      converted: 2429,
+      detail: '2,429 scored and 1,378 high-priority leads in the latest completed month.',
     },
   ],
   safety: {
@@ -5129,8 +5371,8 @@ const DEMO_OPERATIONS_DASHBOARD_SNAPSHOT = {
 } satisfies JsonObject;
 
 const DEMO_ANALYTICS_DASHBOARD_SNAPSHOT = {
-  id: 'demo-dashboard-analytics-2026-07',
-  workspaceSlug: 'zbooni-sales-demo',
+  id: 'demo-dashboard-analytics-2026-08',
+  workspaceSlug: 'leadzilla-recruiter-demo',
   version: DEMO_DASHBOARD_SNAPSHOT_VERSION,
   kind: 'analytics',
   generatedAt: DEMO_DASHBOARD_GENERATED_AT,
@@ -5138,201 +5380,218 @@ const DEMO_ANALYTICS_DASHBOARD_SNAPSHOT = {
     title: 'Analytics Dashboard',
     eyebrow: 'Curated GTM snapshot',
     summary:
-      'Stable executive view of market coverage, lead quality, ICP performance, and campaign-readiness for the workspace.',
-    status: 'Snapshot locked',
+      'Executive view of market coverage, lead quality, review throughput, and historical outcomes across June – July 2026.',
+    status: 'Two-month operating view',
   },
   metrics: [
     {
       id: 'qualified-rate',
       label: 'Priority rate',
-      value: '52%',
-      detail: '11,154 high or medium-fit opportunities from 21,578 screened businesses.',
+      value: '57.1%',
+      detail: '2,528 high-fit opportunities from 4,428 scored leads.',
       tone: 'teal',
     },
     {
       id: 'avg-fit-score',
       label: 'Average lead score',
-      value: '0.54',
-      detail: 'Weighted Zbooni-fit score across the screened business universe.',
+      value: '0.67',
+      detail: 'Weighted Leadzilla fit score across the screened business universe.',
       tone: 'purple',
     },
     {
       id: 'priority-leads',
       label: 'Priority leads',
-      value: '11,154',
-      detail: 'High and medium-fit businesses ready for review and message drafting.',
+      value: '2,528',
+      detail: 'High-fit leads ready for immediate review and message drafting.',
       tone: 'green',
     },
     {
       id: 'filtered-out',
-      label: 'Disqualified',
-      value: '3,140',
-      detail: 'Businesses removed by hard filters before score-band review.',
+      label: 'Rejected',
+      value: '479',
+      detail: 'Database leads held in the separate rejected-review lane.',
       tone: 'amber',
     },
   ],
   leadFlow: {
-    totalBusinesses: 21578,
-    evaluated: 21578,
+    totalBusinesses: 4907,
+    evaluated: 4428,
     outsideFlow: 0,
-    qualified: 11154,
-    notQualified: 3140,
-    high: 5548,
-    medium: 5606,
-    low: 7284,
+    qualified: 2528,
+    notQualified: 479,
+    high: 2528,
+    medium: 1845,
+    low: 55,
     unbanded: 0,
   },
   scoreBands: [
     {
       id: 'high',
       label: 'High fit',
-      count: 5548,
-      percent: 30,
+      count: 2528,
+      percent: 57,
       detail: 'Best accounts for immediate review and high-context drafting.',
       tone: 'green',
     },
     {
       id: 'medium',
       label: 'Medium fit',
-      count: 5606,
-      percent: 30,
+      count: 1845,
+      percent: 42,
       detail: 'Solid-fit businesses for segment-specific campaigns.',
       tone: 'amber',
     },
     {
       id: 'low',
       label: 'Low fit',
-      count: 7284,
-      percent: 40,
-      detail: 'Lower-priority businesses kept out of active outreach lanes.',
+      count: 55,
+      percent: 1,
+      detail: 'Lower-priority leads kept out of active outreach lanes.',
       tone: 'red',
     },
   ],
   icpPerformance: [
     {
-      id: 'home-design-contracting',
-      name: 'Home, Design & High-Value Contracting',
-      scored: 3140,
-      avgScore: 0.57,
-      qualifiedRate: 56,
-      qualified: 1748,
-      insight: 'Largest screened segment with strong account density and balanced high/medium-fit depth.',
+      id: 'high-ticket-coaching',
+      name: 'High-Ticket Coaching & Advisory',
+      scored: 692,
+      avgScore: 0.660,
+      qualifiedRate: 50,
+      qualified: 345,
+      insight: 'The largest active-review segment, with 345 high-priority leads and a similarly sized nurture pool.',
     },
     {
-      id: 'high-ticket-coaching',
-      name: 'Luxury & High-Ticket Services',
-      scored: 2864,
-      avgScore: 0.56,
-      qualifiedRate: 56,
-      qualified: 1598,
-      insight: 'Premium service businesses with visible conversion hooks and strong offer value.',
+      id: 'home-design-contracting',
+      name: 'Home, Design & High-Value Contracting',
+      scored: 663,
+      avgScore: 0.676,
+      qualifiedRate: 66,
+      qualified: 436,
+      insight: 'The deepest high-priority segment, with 436 leads available for focused copy testing.',
     },
     {
       id: 'premium-wellness',
       name: 'Premium Wellness & Longevity Clinics',
-      scored: 2518,
-      avgScore: 0.54,
-      qualifiedRate: 52,
-      qualified: 1309,
-      insight: 'Service-led operators with strong appointment, consultation, and repeat-customer signals.',
+      scored: 605,
+      avgScore: 0.646,
+      qualifiedRate: 50,
+      qualified: 304,
+      insight: 'Consultation and booking signals produced 304 high-priority opportunities for operator review.',
     },
     {
-      id: 'bespoke-experiences',
-      name: 'Events, Weddings & Experiential Operators',
-      scored: 2326,
-      avgScore: 0.53,
-      qualifiedRate: 51,
-      qualified: 1191,
-      insight: 'Seasonal and event-driven businesses with meaningful volume but wider quality variance.',
-    },
-    {
-      id: 'luxury-services',
+      id: 'bespoke-gifting',
       name: 'Gifting, Corporate & Bespoke Experiences',
-      scored: 2054,
-      avgScore: 0.53,
-      qualifiedRate: 51,
-      qualified: 1052,
-      insight: 'Bespoke purchase flows with strong personalization upside and clear seasonal demand.',
+      scored: 585,
+      avgScore: 0.692,
+      qualifiedRate: 65,
+      qualified: 381,
+      insight: 'One of the strongest priority rates in the scaled portfolio, supported by visible seasonal demand.',
+    },
+    {
+      id: 'high-ticket-services',
+      name: 'Luxury & High-Ticket Services',
+      scored: 537,
+      avgScore: 0.654,
+      qualifiedRate: 52,
+      qualified: 280,
+      insight: 'Appointment-led sales and visible offer value produced 280 high-priority leads.',
+    },
+    {
+      id: 'education-training',
+      name: 'Education & Training Providers',
+      scored: 505,
+      avgScore: 0.658,
+      qualifiedRate: 53,
+      qualified: 267,
+      insight: 'A balanced high/medium mix gives the segment room for both direct review and nurture testing.',
+    },
+    {
+      id: 'boutique-hospitality',
+      name: 'Boutique Hospitality & Short-Stay Operators',
+      scored: 396,
+      avgScore: 0.682,
+      qualifiedRate: 62,
+      qualified: 246,
+      insight: 'Booking, guest-service, and inquiry-routing signals produced 246 high-priority leads.',
+    },
+    {
+      id: 'events-experiential',
+      name: 'Events, Weddings & Experiential Operators',
+      scored: 390,
+      avgScore: 0.693,
+      qualifiedRate: 67,
+      qualified: 263,
+      insight: 'The highest priority rate in the portfolio, with 263 high-fit leads despite seasonal demand patterns.',
+    },
+    {
+      id: 'uae-after-school',
+      name: 'UAE After-School Activity Providers',
+      scored: 52,
+      avgScore: 0.507,
+      qualifiedRate: 12,
+      qualified: 6,
+      insight: 'An early-stage segment with six high-priority leads and a larger medium-fit validation cohort.',
+    },
+    {
+      id: 'digital-gift-card',
+      name: 'Digital Gift Card Reseller - Multi-Brand Marketplace',
+      scored: 3,
+      avgScore: 0.467,
+      qualifiedRate: 0,
+      qualified: 0,
+      insight: 'The three-lead validation sample remains medium fit and is not yet ready for priority outreach.',
     },
   ],
   outcomeSummary: [
     {
       id: 'drafts',
       label: 'Drafts generated',
-      value: '188',
-      detail: 'Review-ready message drafts from priority lead context.',
+      value: '189',
+      detail: 'Actual OpenAI-assisted draft records in the demo database snapshot.',
     },
     {
       id: 'replies',
       label: 'Replies',
-      value: '9',
-      detail: 'Historical sample outcomes kept separate from disabled sends.',
+      value: '23',
+      detail: 'Historical replies from the two-month outreach cohort.',
     },
     {
       id: 'sent',
       label: 'Messages sent',
-      value: '81',
-      detail: 'Legacy sample records only; sending is disabled.',
+      value: '165',
+      detail: 'Historical messages only; current sending is disabled.',
+    },
+    {
+      id: 'meetings',
+      label: 'Meetings booked',
+      value: '6',
+      detail: 'Confirmed meetings attributed to the historical reply cohort.',
+    },
+    {
+      id: 'reply-rate',
+      label: 'Reply rate',
+      value: '13.9%',
+      detail: 'Replies divided by historical delivered messages in the two-month cohort.',
     },
   ],
   recommendations: [
     {
       id: 'prioritize-contracting',
-      title: 'Prioritize high-value contracting first',
-      detail:
-        'Home, Design & High-Value Contracting contributes 3,140 screened businesses, 1,748 high or medium-fit opportunities, a 56% priority rate, and a 0.57 average lead score. It is the deepest segment with enough volume to support immediate review and focused copy testing.',
+      title: 'Protect Home & Design review capacity',
+      detail: '436 high-priority leads make this the deepest immediate-review segment; clear the three overdue drafts before expanding volume.',
     },
     {
-      id: 'use-coaching-copy',
-      title: 'Use premium-service positioning',
-      detail:
-        'Luxury & High-Ticket Services adds 2,864 screened businesses and 1,598 priority opportunities at a 56% priority rate. The strongest accounts show visible offer value, appointment-led sales, and customer-conversation channels, so outreach should lead with conversion lift and payment readiness.',
+      id: 'expand-gifting',
+      title: 'Expand the gifting playbook',
+      detail: 'Gifting produced a 65% priority rate: 381 high-fit leads from 585 scored profiles.',
     },
     {
-      id: 'expand-inventory',
-      title: 'Keep low-score inventory out of outreach',
-      detail:
-        'The screened universe contains 7,284 low-score businesses and 3,140 hard disqualifications. Holding those 10,424 accounts out of active outreach protects review quality while leaving 11,154 high or medium-fit businesses available for campaign preparation.',
+      id: 'nurture-medium-fit',
+      title: 'Build a measured medium-fit nurture lane',
+      detail: '1,845 medium-fit leads provide enough depth for controlled copy testing without diluting the high-priority review queue.',
     },
   ],
-  disqualificationReasons: [
-    {
-      id: 'no-conversation-channel',
-      label: 'No customer-conversation channel',
-      count: 812,
-      detail: 'No reliable WhatsApp, Instagram, booking, chat, or contact path surfaced.',
-    },
-    {
-      id: 'weak-commercial-intent',
-      label: 'Weak commercial intent',
-      count: 681,
-      detail: 'Low evidence of transactions, appointment volume, catalog depth, or paid service flow.',
-    },
-    {
-      id: 'inactive-public-presence',
-      label: 'Inactive public presence',
-      count: 548,
-      detail: 'Stale website or social footprint with limited signs of current customer activity.',
-    },
-    {
-      id: 'insufficient-contact-surface',
-      label: 'Insufficient contact surface',
-      count: 417,
-      detail: 'Missing enough domain, social, phone, or location context for reliable review.',
-    },
-    {
-      id: 'outside-served-verticals',
-      label: 'Outside served verticals',
-      count: 356,
-      detail: 'Category appeared too informational, institutional, or low-commerce for Zbooni.',
-    },
-    {
-      id: 'duplicate-or-ambiguous',
-      label: 'Duplicate or ambiguous record',
-      count: 326,
-      detail: 'Branch, marketplace, or duplicate records that could not support clean account review.',
-    },
-  ],
+  disqualificationReasons: [],
   safety: {
     title: 'Analytics snapshot',
     detail:
@@ -5384,6 +5643,9 @@ async function routeRequest(request: Request, auth: AuthContext): Promise<Respon
     return disabled();
   }
 
+  if (parts[1] === 'demo' && parts[2] === 'readiness' && parts.length === 3) {
+    return handleDemoReadiness();
+  }
   if (parts[1] === 'demo' && parts[2] === 'dashboard') return handleDemoDashboard(parts[3]);
 
   if (parts[1] === 'icps' && parts.length === 2) return handleListIcps(url);

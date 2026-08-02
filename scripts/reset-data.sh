@@ -206,9 +206,7 @@ echo -e "${GREEN}=========================================${NC}"
 echo
 echo "UI verification required after restart:"
 echo "  1. /dashboard/leads -> 0 total leads"
-echo "  2. /discovery/debug -> 0 leads"
-echo "  3. /discovery/lifecycle -> 0 leads"
-echo "  4. /dashboard/leads/businesses -> 0 businesses discovered"
-echo "  5. /dashboard/jobs and /discovery/jobs -> 0 runs"
-echo "  6. Analytics and inbox surfaces -> empty or zero state values"
+echo "  2. /dashboard/leads/businesses -> 0 businesses discovered"
+echo "  3. /dashboard/jobs and /discovery/jobs -> 0 runs"
+echo "  4. Analytics and inbox surfaces -> empty or zero state values"
 echo

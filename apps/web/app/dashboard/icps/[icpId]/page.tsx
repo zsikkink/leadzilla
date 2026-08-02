@@ -33,6 +33,10 @@ import { CustomSelect } from '../../../../src/components/custom-select.js';
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
 import { countryName } from '../../../../src/lib/countries.js';
+import {
+  toSafeApiErrorMessage,
+  toSafeDisplayErrorMessage,
+} from '../../../../src/lib/error-messages.js';
 
 interface EditableFieldProps {
   label: string;
@@ -246,7 +250,7 @@ function CountrySelector({
     }
   }, [editing, countries]);
 
-  // Countries come from pipeline_settings (Controls & Settings page) — the single source of truth
+  // Countries come from pipeline_settings; the recruiter-facing Settings page is read-only.
   const available = pipelineCountries
     .filter((c) => !draft.includes(c))
     .sort((left, right) => countryName(left).localeCompare(countryName(right)));
@@ -312,7 +316,7 @@ function CountrySelector({
             />
           ) : (
             <p className="text-[10px] text-muted-foreground/50 italic">
-              All countries assigned. Add more in Controls & Settings.
+              All configured workspace countries are already assigned.
             </p>
           )}
           <div className="flex items-center gap-1.5">
@@ -926,13 +930,20 @@ function IcpRulesSection({
       );
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+        throw new Error(
+          toSafeApiErrorMessage(res.status, (body as { error?: string }).error),
+        );
       }
       toast.success('Weight updated');
       setEditingWeights((prev) => { const next = { ...prev }; delete next[ruleId]; return next; });
       onRulesChanged();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update weight');
+      toast.info(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t update this weight. Please try again.',
+        ),
+      );
     } finally {
       setSavingWeightId(null);
     }
@@ -1109,7 +1120,12 @@ export default function IcpDetailPage() {
       toast.success('ICP profile deleted');
       router.push('/dashboard/icps');
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete ICP profile');
+      toast.info(
+        toSafeDisplayErrorMessage(
+          err,
+          'This profile could not be removed yet. It may still be linked to active demo data.',
+        ),
+      );
     } finally {
       setDeleting(false);
       setShowDeleteConfirm(false);
@@ -1133,7 +1149,7 @@ export default function IcpDetailPage() {
     [icpId],
   );
 
-  // Load countries from pipeline_settings (Controls & Settings) — single source of truth
+  // Load countries from pipeline_settings; the recruiter-facing Settings page is read-only.
   const pipelineSettings = useApiQuery(
     useCallback(() => apiClient.listPipelineSettings(), [apiClient]),
   );
@@ -1161,7 +1177,12 @@ export default function IcpDetailPage() {
       toast.success('ICP saved');
       return true;
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save ICP');
+      toast.info(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t save this profile update. Please try again.',
+        ),
+      );
       return false;
     } finally {
       setSaving(false);
@@ -1169,7 +1190,30 @@ export default function IcpDetailPage() {
   };
 
   if (icp.error) {
-    return <p className="text-sm text-destructive">{icp.error}</p>;
+    return (
+      <div className="rounded-2xl border border-amber-500/25 bg-card p-6 text-sm shadow-sm">
+        <p className="font-semibold text-foreground">This ICP profile is refreshing.</p>
+        <p className="mt-1 text-muted-foreground">
+          Return to the profile list or retry in a moment.
+        </p>
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            onClick={() => void icp.refetch()}
+            className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground"
+          >
+            Refresh
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push('/dashboard/icps')}
+            className="rounded-lg border border-border/50 px-3 py-2 text-xs font-semibold text-muted-foreground"
+          >
+            Back to ICPs
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (icp.isLoading || !profile) {

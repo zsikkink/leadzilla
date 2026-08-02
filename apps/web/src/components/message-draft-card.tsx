@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 
 import { useAuth } from '../hooks/use-auth.js';
 import type { ApiClient } from '../lib/api-client.js';
+import { toSafeDisplayErrorMessage } from '../lib/error-messages.js';
 
 interface MessageDraftCardProps {
   draft: MessageDraftResponse;
@@ -70,19 +71,19 @@ function getInitialSendBadge(
   }
 
   if (initialSend.status === 'FAILED' && initialSend.failureCode === 'SUPPRESSED') {
-    return {
-      label: 'Suppressed',
-      className: 'bg-orange-500/15 text-orange-300',
-      detail: initialSend.failureReason ?? undefined,
-    };
+      return {
+        label: 'Suppressed',
+        className: 'bg-orange-500/15 text-orange-300',
+        detail: 'Delivery was skipped by workspace safety checks.',
+      };
   }
 
   if (initialSend.status === 'FAILED' && initialSend.failureCode === 'OUTBOUND_DISABLED') {
-    return {
-      label: 'Delivery Disabled',
-      className: 'bg-amber-500/15 text-amber-300',
-      detail: initialSend.failureReason ?? undefined,
-    };
+      return {
+        label: 'Delivery Disabled',
+        className: 'bg-amber-500/15 text-amber-300',
+        detail: 'Outbound delivery is disabled in this demo.',
+      };
   }
 
   switch (initialSend.status) {
@@ -100,7 +101,7 @@ function getInitialSendBadge(
       return {
         label: 'Delivery Unresolved',
         className: 'bg-amber-500/15 text-amber-300',
-        detail: initialSend.failureReason ?? undefined,
+        detail: 'Delivery status is awaiting review.',
       };
     case 'SENT':
       return {
@@ -121,13 +122,13 @@ function getInitialSendBadge(
       return {
         label: 'Bounced',
         className: 'bg-red-500/15 text-red-400',
-        detail: initialSend.failureReason ?? undefined,
+        detail: 'The recipient server did not accept this historical message.',
       };
     case 'FAILED':
       return {
         label: 'Failed',
         className: 'bg-red-500/15 text-red-400',
-        detail: initialSend.failureReason ?? undefined,
+        detail: 'Delivery was not completed.',
       };
   }
 
@@ -188,7 +189,12 @@ function VariantEditor({
       setIsEditing(false);
       onAction();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save changes');
+      toast.info(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t save this draft change. Please try again.',
+        ),
+      );
     } finally {
       setIsSaving(false);
     }
@@ -397,7 +403,12 @@ export function MessageDraftCard({
       toast.success('Draft approved. No message was sent.');
       onAction();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Approval failed');
+      setError(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t approve this draft. Please try again.',
+        ),
+      );
     } finally {
       setActionInProgress(null);
     }
@@ -443,9 +454,12 @@ export function MessageDraftCard({
 
       onAction();
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to re-draft message';
+      const message = toSafeDisplayErrorMessage(
+        err,
+        'Couldn’t start the re-draft. Please try again.',
+      );
       setError(message);
-      toast.error(message);
+      toast.info(message);
     } finally {
       setActionInProgress(null);
     }
@@ -548,7 +562,7 @@ export function MessageDraftCard({
             ))}
           </div>
 
-          {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
+          {error ? <p className="mt-2 text-xs text-amber-300">{error}</p> : null}
         </div>
       ) : null}
     </div>

@@ -15,6 +15,10 @@ import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 import { getWebEnv } from '../../../src/lib/env.js';
 import {
+  toSafeApiErrorMessage,
+  toSafeDisplayErrorMessage,
+} from '../../../src/lib/error-messages.js';
+import {
   parseScoreQualificationThreshold,
 } from '../../../src/lib/lead-draft-gating.js';
 import { cn } from '../../../src/lib/utils.js';
@@ -113,13 +117,10 @@ function extractPosition(enrichmentData: unknown): string | null {
 }
 
 function getErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-  if (typeof error === 'string' && error.trim().length > 0) {
-    return error;
-  }
-  return 'unknown error';
+  return toSafeDisplayErrorMessage(
+    error,
+    'Draft controls are refreshing. Please try again in a moment.',
+  );
 }
 
 // ── Reason badge colors ─────────────────────────────────
@@ -164,7 +165,7 @@ interface LeadsTableState {
   searchQuery: string;
 }
 
-const LEADS_TABLE_STATE_STORAGE_KEY = 'lead-flood:leads-table-state:v1';
+const LEADS_TABLE_STATE_STORAGE_KEY = 'lead-flood:leads-table-state:v3';
 
 const DEFAULT_LEADS_TABLE_STATE: LeadsTableState = {
   page: 1,
@@ -299,9 +300,7 @@ export default function LeadsPage() {
       setQualificationThreshold(value);
     } catch (error: unknown) {
       setQualificationThreshold(null);
-      setQualificationThresholdError(
-        `Failed to load pipeline settings: ${getErrorMessage(error)}`,
-      );
+      setQualificationThresholdError(getErrorMessage(error));
     } finally {
       setIsQualificationThresholdLoading(false);
     }
@@ -361,6 +360,20 @@ export default function LeadsPage() {
     [page, pageSize, statusFilter, scoreBandFilter, sortBy, debouncedSearch],
   );
 
+  const activeLeadInventory = useApiQuery(
+    useCallback(
+      () =>
+        apiClient.listLeads({
+          page: 1,
+          pageSize: 1,
+          includeQualityMetrics: false,
+          sortBy: 'created_desc',
+        }),
+      [apiClient],
+    ),
+    [apiClient],
+  );
+
   const totalPages = leads.data ? Math.ceil(leads.data.total / leads.data.pageSize) : 0;
 
   // Load rejected leads via API when tab is "rejected"
@@ -377,7 +390,7 @@ export default function LeadsPage() {
           setRejectedLeads(result.items);
         }
       } catch {
-        if (!cancelled) toast.error('Failed to load rejected leads');
+        if (!cancelled) toast.info('Rejected leads are refreshing.');
       } finally {
         if (!cancelled) setRejectedLoading(false);
       }
@@ -409,12 +422,14 @@ export default function LeadsPage() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null) as { error?: string } | null;
-        throw new Error(body?.error ?? `Reject failed (${res.status})`);
+        throw new Error(toSafeApiErrorMessage(res.status, body?.error));
       }
       toast.success(`${firstName} ${lastName} rejected`);
       leads.refetch();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Failed to reject lead');
+      toast.info(
+        toSafeDisplayErrorMessage(err, 'This lead is still in the review queue. Please retry.'),
+      );
     } finally {
       setRejectingLead(null);
     }
@@ -432,12 +447,14 @@ export default function LeadsPage() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null) as { error?: string } | null;
-        throw new Error(body?.error ?? `Unreject failed (${res.status})`);
+        throw new Error(toSafeApiErrorMessage(res.status, body?.error));
       }
       toast.success(`${firstName ?? ''} ${lastName ?? ''} restored`);
       setRejectedLeads((prev) => prev.filter((r) => r.leadId !== leadId));
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Failed to restore lead');
+      toast.info(
+        toSafeDisplayErrorMessage(err, 'Couldn’t restore this lead. Please try again.'),
+      );
     } finally {
       setUnrejectingLead(null);
     }
@@ -502,7 +519,12 @@ export default function LeadsPage() {
         }
       }
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Failed to generate draft');
+      toast.info(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t start draft generation. Please try again.',
+        ),
+      );
     } finally {
       setGeneratingForLead(null);
     }
@@ -515,7 +537,12 @@ export default function LeadsPage() {
       toast.success(`Hunter enrichment queued for ${displayName || 'this lead'}`);
       leads.refetch();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Failed to queue Hunter enrichment');
+      toast.info(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t start enrichment. Please try again.',
+        ),
+      );
     } finally {
       setEnrichingLead(null);
     }
@@ -543,24 +570,15 @@ export default function LeadsPage() {
 
   return (
     <div className="flex h-full flex-col space-y-5">
-      <div>
-        <h1 className="text-2xl font-extrabold tracking-tight">Leads</h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          {leads.data ? `${leads.data.total} total leads` : 'Loading...'}
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground/60">
-          Qualified leads stay in operator review until you generate the initial draft. Sending then depends on approval or auto-approval settings.
-        </p>
-      </div>
-
       <LeadsNav active={activeTab === 'rejected' ? 'rejected' : 'main'} />
 
       {/* ────── Active tab ────── */}
       {activeTab === 'active' && (
         <>
           {/* Filters */}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
             <CustomSelect
+              className="w-[7.5rem] shrink-0 [&>button]:w-full [&>button]:justify-between [&>button]:text-xs"
               value={statusFilter ?? ''}
               onChange={(v) => {
                 setStatusFilter((v || undefined) as LeadStatus | undefined);
@@ -570,6 +588,7 @@ export default function LeadsPage() {
               placeholder="All statuses"
             />
             <CustomSelect
+              className="w-[6.5rem] shrink-0 [&>button]:w-full [&>button]:justify-between [&>button]:text-xs"
               value={scoreBandFilter ?? ''}
               onChange={(v) => {
                 setScoreBandFilter((v || undefined) as LeadScoreBand | undefined);
@@ -584,20 +603,22 @@ export default function LeadsPage() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search leads..."
-              className="h-9 w-48 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-zbooni-teal/50 focus:outline-none focus:ring-2 focus:ring-zbooni-teal/20"
+              className="h-9 w-36 shrink-0 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-xs text-foreground placeholder:text-muted-foreground/40 focus:border-zbooni-teal/50 focus:outline-none focus:ring-2 focus:ring-zbooni-teal/20"
             />
 
-            <div className="ml-auto flex items-center gap-2">
+            <div className="ml-auto flex shrink-0 items-center gap-2">
               <CustomSelect
+                className="w-40 [&>button]:w-full [&>button]:justify-between [&>button]:text-xs"
                 value={sortBy}
                 onChange={(v) => {
                   setSortBy(v as LeadListSortBy);
                   setPage(1);
                 }}
                 options={SORT_OPTIONS}
-                placeholder="Newest first"
+                placeholder="Score high to low"
               />
               <CustomSelect
+                className="w-32 [&>button]:w-full [&>button]:justify-between [&>button]:text-xs"
                 value={String(pageSize)}
                 onChange={(v) => {
                   setPageSize(parseInt(v, 10) || 20);
@@ -610,13 +631,13 @@ export default function LeadsPage() {
           </div>
 
           {leads.error ? (
-            <div className="flex items-center gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
-              <AlertTriangle className="h-4 w-4 shrink-0 text-red-300" />
-              <p className="flex-1">Failed to load leads: {leads.error}. This can happen with slow database connections — try again.</p>
+            <div className="flex items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-300" />
+              <p className="flex-1">Lead data is refreshing. Try again in a moment.</p>
               <button
                 type="button"
                 onClick={() => leads.refetch()}
-                className="shrink-0 rounded-lg bg-red-500/15 px-3 py-1.5 text-xs font-semibold text-red-100 transition-colors hover:bg-red-500/25"
+                className="shrink-0 rounded-lg bg-amber-500/15 px-3 py-1.5 text-xs font-semibold text-amber-100 transition-colors hover:bg-amber-500/25"
               >
                 Retry
               </button>
@@ -631,18 +652,18 @@ export default function LeadsPage() {
           ) : null}
 
           {qualificationThresholdError ? (
-            <div className="flex flex-col gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-3">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
                 <p>
-                  {qualificationThresholdError}. Draft generation is disabled until a retry succeeds.
+                  Draft controls are refreshing. Lead review remains available.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => void loadQualificationThreshold()}
                 disabled={isQualificationThresholdLoading}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/15 px-3 py-2 text-xs font-semibold text-red-100 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/15 px-3 py-2 text-xs font-semibold text-amber-100 transition-colors hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isQualificationThresholdLoading ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -852,10 +873,11 @@ export default function LeadsPage() {
             {leads.data ? (
               <div className="flex items-center justify-between border-t border-border/50 px-4 py-3">
                 <p className="text-xs text-muted-foreground">
+                  Showing{' '}
                   {Math.min((leads.data.page - 1) * leads.data.pageSize + 1, leads.data.total)}
                   &ndash;
                   {Math.min(leads.data.page * leads.data.pageSize, leads.data.total)} of{' '}
-                  {leads.data.total} leads
+                  {(activeLeadInventory.data?.total ?? leads.data.total).toLocaleString()}
                 </p>
                 <div className="flex items-center gap-1.5">
                   <button
@@ -870,7 +892,9 @@ export default function LeadsPage() {
                     </svg>
                   </button>
                   <span className="inline-flex h-9 items-center px-2 text-xs text-muted-foreground">
-                    {page} / {totalPages}
+                    {sortBy === 'score_desc' || sortBy === 'score_asc'
+                      ? `Page ${page}`
+                      : `${page} / ${totalPages}`}
                   </span>
                   <button
                     type="button"

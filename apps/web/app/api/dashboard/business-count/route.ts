@@ -20,19 +20,27 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   const upstreamUrl = `${sanitizeBaseUrl(apiBaseUrl)}/v1/admin/businesses?page=1&pageSize=1`;
-  const upstreamResponse = await fetch(upstreamUrl, {
-    headers: {
-      authorization: authHeader,
-      'x-admin-key': adminApiKey,
-    },
-  });
+  let upstreamResponse: Response;
+  try {
+    upstreamResponse = await fetch(upstreamUrl, {
+      headers: {
+        authorization: authHeader,
+        'x-admin-key': adminApiKey,
+      },
+    });
+  } catch (error: unknown) {
+    console.error('Dashboard business-count request failed', error);
+    return Response.json({ error: 'Dashboard count is temporarily unavailable' }, { status: 503 });
+  }
 
   const body = await upstreamResponse.json().catch(() => null);
   if (!upstreamResponse.ok) {
+    console.error('Dashboard business-count upstream rejected request', {
+      status: upstreamResponse.status,
+      requestId: typeof body?.requestId === 'string' ? body.requestId : undefined,
+    });
     return Response.json(
-      {
-        error: typeof body?.error === 'string' ? body.error : 'Failed to load business count',
-      },
+      { error: 'Dashboard count is temporarily unavailable' },
       { status: upstreamResponse.status },
     );
   }

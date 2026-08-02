@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server';
 import { GET, POST } from '../../app/api/admin/[...path]/route.js';
 
 const originalApiBaseUrl = process.env.API_BASE_URL;
+const originalPublicApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 const originalAdminApiKey = process.env.ADMIN_API_KEY;
 
 describe('web admin proxy route', () => {
@@ -14,6 +15,12 @@ describe('web admin proxy route', () => {
       delete process.env.API_BASE_URL;
     } else {
       process.env.API_BASE_URL = originalApiBaseUrl;
+    }
+
+    if (originalPublicApiBaseUrl === undefined) {
+      delete process.env.NEXT_PUBLIC_API_BASE_URL;
+    } else {
+      process.env.NEXT_PUBLIC_API_BASE_URL = originalPublicApiBaseUrl;
     }
 
     if (originalAdminApiKey === undefined) {
@@ -101,5 +108,44 @@ describe('web admin proxy route', () => {
 
     expect(response.status).toBe(201);
     await expect(response.json()).resolves.toEqual({ ok: true });
+  });
+
+  it('does not expose missing server configuration details', async () => {
+    delete process.env.API_BASE_URL;
+    delete process.env.NEXT_PUBLIC_API_BASE_URL;
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+
+    const request = new NextRequest('https://web.example.com/api/admin/leads', {
+      headers: { authorization: 'Bearer user-token' },
+    });
+    const response = await GET(request, {
+      params: Promise.resolve({ path: ['leads'] }),
+    });
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: 'The admin service is temporarily unavailable.',
+    });
+  });
+
+  it('does not expose upstream transport errors', async () => {
+    process.env.API_BASE_URL = 'https://api.example.com';
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(
+      new Error('connect ECONNREFUSED postgres.internal:5432'),
+    );
+
+    const request = new NextRequest('https://web.example.com/api/admin/leads', {
+      headers: { authorization: 'Bearer user-token' },
+    });
+    const response = await GET(request, {
+      params: Promise.resolve({ path: ['leads'] }),
+    });
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: 'The admin service is temporarily unavailable.',
+    });
   });
 });

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { JobRunDetailResponse } from '@lead-flood/contracts';
 
 import { fetchJobRunDetail } from '../../../../src/lib/discovery-admin';
+import { toDiscoveryRunNotice, toSafeDisplayErrorMessage } from '../../../../src/lib/error-messages.js';
 
 function statusClassName(status: string): string {
   switch (status) {
@@ -40,7 +41,12 @@ export default function JobRunDetailPage() {
       const result = await fetchJobRunDetail(runId);
       setData(result);
     } catch (loadError: unknown) {
-      setError(loadError instanceof Error ? loadError.message : 'Failed to load run detail');
+      setError(
+        toSafeDisplayErrorMessage(
+          loadError,
+          'This job summary is refreshing. Please try again in a moment.',
+        ),
+      );
     } finally {
       setLoading(false);
     }
@@ -62,8 +68,8 @@ export default function JobRunDetailPage() {
 
       {loading ? <p>Loading run detail...</p> : null}
       {error ? (
-        <p style={{ color: '#b91c1c' }}>
-          <strong>Error:</strong> {error}
+        <p style={{ color: '#b7791f' }}>
+          <strong>Pipeline note:</strong> {error}
         </p>
       ) : null}
 
@@ -79,7 +85,9 @@ export default function JobRunDetailPage() {
             finished: {data.run.finishedAt ? new Date(data.run.finishedAt).toLocaleString() : '-'}
           </p>
           <p className="mono">duration_ms: {data.run.durationMs ?? '-'}</p>
-          <p className="mono">error: {data.run.errorText ?? '-'}</p>
+          <p className="mono">
+            note: {toDiscoveryRunNotice(data.run.errorText) ?? '-'}
+          </p>
 
           <details style={{ marginTop: 10 }} open>
             <summary>params_json</summary>

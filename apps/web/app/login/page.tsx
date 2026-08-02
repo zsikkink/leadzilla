@@ -10,10 +10,14 @@ import {
   clearDashboardPreloadCache,
   warmDashboardData,
 } from '../../src/lib/dashboard-preload.js';
+import { withAppBasePath } from '../../src/lib/app-path.js';
+import {
+  DEMO_EMAIL,
+  DEMO_PASSWORD,
+  toLoginErrorMessage,
+} from '../../src/lib/demo-preview.js';
 import { getWebEnv } from '../../src/lib/env.js';
 
-const DEMO_EMAIL = 'demo@example.com';
-const DEMO_PASSWORD = 'password';
 const LOGIN_PREVIEW_NOTICE_SESSION_KEY = 'leadzilla:show-login-preview-notice';
 
 export default function LoginPage() {
@@ -47,18 +51,16 @@ export default function LoginPage() {
       warmDashboardData(
         new ApiClient(env.NEXT_PUBLIC_API_BASE_URL, () => session.token, env.NEXT_PUBLIC_API_TIMEOUT_MS),
       );
-      try {
-        window.sessionStorage.setItem(LOGIN_PREVIEW_NOTICE_SESSION_KEY, 'true');
-      } catch {
-        // Ignore unavailable storage; login should continue normally.
+      if (session.sessionMode === 'live') {
+        try {
+          window.sessionStorage.setItem(LOGIN_PREVIEW_NOTICE_SESSION_KEY, 'true');
+        } catch {
+          // Ignore unavailable storage; login should continue normally.
+        }
       }
       router.replace('/dashboard');
     } catch (submitError: unknown) {
-      if (submitError instanceof Error) {
-        setError(submitError.message);
-      } else {
-        setError('Login failed — please try again');
-      }
+      setError(toLoginErrorMessage(submitError));
     } finally {
       setIsSubmitting(false);
     }
@@ -76,7 +78,7 @@ export default function LoginPage() {
         <div className="mb-20 text-center">
           <div className="mb-3">
             <Image
-              src="/brand/leadzilla-wordmark.svg"
+              src={withAppBasePath('/brand/leadzilla-wordmark.svg')}
               alt="Leadzilla"
               width={504}
               height={115}

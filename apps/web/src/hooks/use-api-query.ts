@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
+import { toSafeDisplayErrorMessage } from '../lib/error-messages.js';
+
 interface UseApiQueryResult<T> {
   data: T | null;
   error: string | null;
@@ -36,7 +38,7 @@ export function useApiQuery<T>(
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Request failed');
+          setError(toSafeDisplayErrorMessage(err));
           setIsLoading(false);
         }
       });

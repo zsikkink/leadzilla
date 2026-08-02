@@ -140,7 +140,7 @@ Frontend (Next.js :3000)  →  API (Fastify :5050)  →  Worker (pg-boss queues)
 
 - **API** handles REST endpoints, auth verification, and enqueues jobs via pg-boss
 - **Worker** processes background jobs: discovery, enrichment, scoring, and message drafting. Outbound sending is outside the current Leadzilla demo scope and must remain disabled.
-- **Web** is the recruiter-facing demo dashboard. The active demo navigation is Dashboard, Discover, Leads, Prompt Center, Inbox, and ICPs; Settings and Rules live under Dev Console.
+- **Web** is the recruiter-facing demo dashboard. The active demo navigation is Dashboard, Discover, Leads, Prompt Center, Inbox, ICPs, and Settings. Settings is read-only in the recruiter demo, while qualification rules stay within their relevant ICP profiles.
 - **Database** is a shared cloud Supabase Postgres instance (no local DB needed)
 
 For a deep dive into each pipeline stage, read `lead-flood-system-walkthrough.md` in the repo root.

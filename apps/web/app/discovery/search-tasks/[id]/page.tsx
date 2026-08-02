@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { AdminSearchTaskDetailResponse } from '@lead-flood/contracts';
 
 import { fetchAdminSearchTaskDetail } from '../../../../src/lib/discovery-admin';
+import { toDiscoveryRunNotice, toSafeDisplayErrorMessage } from '../../../../src/lib/error-messages.js';
 
 export default function SearchTaskDetailPage() {
   const params = useParams<{ id: string }>();
@@ -25,7 +26,12 @@ export default function SearchTaskDetailPage() {
       const result = await fetchAdminSearchTaskDetail(taskId);
       setData(result);
     } catch (loadError: unknown) {
-      setError(loadError instanceof Error ? loadError.message : 'Failed to load task detail');
+      setError(
+        toSafeDisplayErrorMessage(
+          loadError,
+          'This search task is refreshing. Please try again in a moment.',
+        ),
+      );
     } finally {
       setLoading(false);
     }
@@ -47,8 +53,8 @@ export default function SearchTaskDetailPage() {
         </p>
         {loading ? <p>Loading task detail...</p> : null}
         {error ? (
-          <p style={{ color: '#b91c1c' }}>
-            <strong>Error:</strong> {error}
+          <p style={{ color: '#b7791f' }}>
+            <strong>Pipeline note:</strong> {error}
           </p>
         ) : null}
 
@@ -66,7 +72,7 @@ export default function SearchTaskDetailPage() {
             <p className="mono">attempts: {data.task.attempts}</p>
             <p className="mono">query: {data.task.queryText}</p>
             <p className="mono">last_result_hash: {data.task.lastResultHash ?? '-'}</p>
-            <p className="mono">error: {data.task.error ?? '-'}</p>
+            <p className="mono">note: {toDiscoveryRunNotice(data.task.error) ?? '-'}</p>
             <p className="mono">
               derived: engine={data.task.derivedParams.engine ?? '-'} q=
               {data.task.derivedParams.q ?? '-'}

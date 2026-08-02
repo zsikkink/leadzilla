@@ -14,6 +14,7 @@ import {
 
 import { useAuth } from '@/hooks/use-auth.js';
 import type { ApiClient } from '@/lib/api-client.js';
+import { toSafeDisplayErrorMessage } from '@/lib/error-messages.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type DateRange = '7d' | '1m' | '6m' | '1y' | 'all';
@@ -90,6 +91,14 @@ const DEFAULT_LINES = [
   { key: 'Sent', color: '#7BFF6B', label: 'Messages sent' },        // zbooni-green
   { key: 'Replied', color: '#C084FC', label: 'Replies' },           // purple-400
 ] as const;
+
+const DEFAULT_RANGE_OPTIONS: readonly { value: DateRange; label: string }[] = [
+  { value: '7d', label: '7d' },
+  { value: '1m', label: '1m' },
+  { value: '6m', label: '6m' },
+  { value: '1y', label: '1Y' },
+  { value: 'all', label: 'All' },
+];
 
 type PipelineTrendKey = Exclude<keyof DailyBucket, 'date'>;
 
@@ -170,18 +179,11 @@ function bucketByDay(rows: LeadRow[], range: DateRange): DailyBucket[] {
 }
 
 function filterPrecomputedBuckets(data: PipelineTrendBucket[], range: DateRange): PipelineTrendBucket[] {
-  if (range === 'all' || data.length === 0) return data;
-
   const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date));
-  const last = sorted[sorted.length - 1];
-  if (!last) return sorted;
+  if (range === 'all' || sorted.length === 0) return sorted;
 
-  const days = range === '7d' ? 7 : range === '1m' ? 30 : range === '6m' ? 183 : 365;
-  const start = new Date(`${last.date}T00:00:00`);
-  start.setDate(start.getDate() - days);
-  const startKey = toDateKey(start);
-
-  return sorted.filter((bucket) => bucket.date >= startKey);
+  const bucketCount = range === '6m' ? 6 : range === '1y' ? 12 : 1;
+  return sorted.slice(-bucketCount);
 }
 
 // ── Custom tooltip ─────────────────────────────────────────────────────────
@@ -233,7 +235,7 @@ function GlassTooltip({
             {entry.name}
           </span>
           <span style={{ fontSize: '13px', fontWeight: 700, color: '#fff' }}>
-            {entry.value}
+            {entry.value.toLocaleString()}
           </span>
         </div>
       ))}
@@ -250,6 +252,7 @@ export function PipelineTimeSeriesChart({
   icpProfileId,
   lines = DEFAULT_LINES,
   precomputedData,
+  rangeOptions = DEFAULT_RANGE_OPTIONS,
   summaryMode = 'sum',
   subtitle,
   title = 'Pipeline Trends',
@@ -261,6 +264,7 @@ export function PipelineTimeSeriesChart({
   icpProfileId?: string | undefined;
   lines?: readonly PipelineTrendLine[] | undefined;
   precomputedData?: PipelineTrendBucket[] | undefined;
+  rangeOptions?: readonly { value: DateRange; label: string }[] | undefined;
   summaryMode?: SummaryMode | undefined;
   subtitle?: string | undefined;
   title?: string | undefined;
@@ -310,7 +314,12 @@ export function PipelineTimeSeriesChart({
         setIsLoading(false);
       } catch (err: unknown) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Failed to load chart data');
+          setError(
+            toSafeDisplayErrorMessage(
+              err,
+              'The activity chart is refreshing.',
+            ),
+          );
           setIsLoading(false);
         }
       }
@@ -326,17 +335,9 @@ export function PipelineTimeSeriesChart({
     () => precomputedData ? filterPrecomputedBuckets(precomputedData, range) : bucketByDay(rows, range),
     [precomputedData, range, rows],
   );
-  const rangeButtons: { value: DateRange; label: string }[] = [
-    { value: '7d', label: '7d' },
-    { value: '1m', label: '1m' },
-    { value: '6m', label: '6m' },
-    { value: '1y', label: '1Y' },
-    { value: 'all', label: 'All' },
-  ];
-
   return (
     <div
-      className="relative overflow-hidden rounded-2xl border border-white/[0.08] p-6 shadow-xl"
+      className="relative overflow-hidden rounded-2xl border border-white/[0.08] p-4 shadow-xl sm:p-6"
       style={{
         background: 'linear-gradient(135deg, rgba(28,28,46,0.7) 0%, rgba(37,37,64,0.5) 50%, rgba(28,28,46,0.7) 100%)',
         backdropFilter: 'blur(24px)',
@@ -353,8 +354,8 @@ export function PipelineTimeSeriesChart({
       />
 
       {/* Header */}
-      <div className="relative z-10 mb-5 flex items-center justify-between">
-        <div>
+      <div className="relative z-10 mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
             <h2 className="text-base font-bold tracking-tight text-white">{title}</h2>
             {badge ? (
@@ -363,16 +364,18 @@ export function PipelineTimeSeriesChart({
               </span>
             ) : null}
           </div>
-          {subtitle ? <p className="mt-0.5 text-[11px] text-white/40">{subtitle}</p> : null}
+          {subtitle ? <p className="mt-1 text-[11px] leading-5 text-white/60">{subtitle}</p> : null}
         </div>
 
         {/* Date range selector */}
-        <div className="flex gap-1 rounded-lg border border-white/[0.08] bg-white/[0.04] p-0.5">
-          {rangeButtons.map((btn) => (
+        <div className="flex w-fit max-w-full shrink-0 gap-1 overflow-x-auto rounded-lg border border-white/[0.08] bg-white/[0.04] p-0.5">
+          {rangeOptions.map((btn) => (
             <button
               key={btn.value}
+              type="button"
+              aria-pressed={range === btn.value}
               onClick={() => setRange(btn.value)}
-              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all duration-200 ${
+              className={`min-h-8 rounded-md px-3 py-1.5 text-xs font-semibold transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-zbooni-teal/40 ${
                 range === btn.value
                   ? 'bg-gradient-to-r from-[#3CC8E0]/30 to-[#7BFF6B]/20 text-white shadow-sm shadow-[#3CC8E0]/20'
                   : 'text-white/50 hover:text-white/80 hover:bg-white/[0.06]'
@@ -403,24 +406,25 @@ export function PipelineTimeSeriesChart({
       {/* Chart */}
       <div className="relative z-10">
         {isLoading ? (
-          <div className="flex h-[320px] items-center justify-center">
-            <div className="flex items-center gap-2 text-sm text-white/40">
+          <div className="flex h-[240px] items-center justify-center sm:h-[280px] xl:h-[300px]">
+            <div className="flex items-center gap-2 text-sm text-white/60">
               <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-[#3CC8E0]" />
               Loading chart data...
             </div>
           </div>
         ) : error ? (
-          <div className="flex h-[320px] items-center justify-center">
-            <p className="text-sm text-red-400/80">{error}</p>
+          <div className="flex h-[240px] items-center justify-center sm:h-[280px] xl:h-[300px]">
+            <p className="text-sm text-amber-200/80">{error}</p>
           </div>
         ) : (
-          <>
-            <style>{`
-              .recharts-wrapper { outline: none !important; }
-              .recharts-surface { outline: none !important; }
-              .recharts-surface:focus { outline: none !important; }
-            `}</style>
-            <ResponsiveContainer width="100%" height={320}>
+          <div className="h-[240px] sm:h-[280px] xl:h-[300px]">
+            <ResponsiveContainer
+              width="100%"
+              height="100%"
+              minWidth={0}
+              minHeight={240}
+              initialDimension={{ width: 600, height: 240 }}
+            >
               <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                 <defs>
                   {lines.map((line) => (
@@ -440,7 +444,7 @@ export function PipelineTimeSeriesChart({
 
                 <XAxis
                   dataKey="date"
-                  tick={{ fontSize: 10, fontWeight: 500, fill: 'rgba(255,255,255,0.35)' }}
+                  tick={{ fontSize: 10, fontWeight: 500, fill: 'rgba(255,255,255,0.58)' }}
                   axisLine={false}
                   tickLine={false}
                   tickFormatter={(val: string) => formatLabel(val, range)}
@@ -449,7 +453,7 @@ export function PipelineTimeSeriesChart({
                 />
 
                 <YAxis
-                  tick={{ fontSize: 10, fontWeight: 500, fill: 'rgba(255,255,255,0.35)' }}
+                  tick={{ fontSize: 10, fontWeight: 500, fill: 'rgba(255,255,255,0.58)' }}
                   axisLine={false}
                   tickLine={false}
                   allowDecimals={false}
@@ -492,16 +496,13 @@ export function PipelineTimeSeriesChart({
                 ))}
               </AreaChart>
             </ResponsiveContainer>
-          </>
+          </div>
         )}
       </div>
 
       {/* Summary row — total counts for current range */}
       {!isLoading && !error && chartData.length > 0 ? (
-        <div
-          className="relative z-10 mt-4 grid gap-3"
-          style={{ gridTemplateColumns: `repeat(${lines.length}, minmax(0, 1fr))` }}
-        >
+        <div className="relative z-10 mt-4 flex flex-wrap gap-3">
           {lines.map((line) => {
             const total = summaryMode === 'latest'
               ? chartData[chartData.length - 1]?.[line.key] ?? 0
@@ -509,7 +510,7 @@ export function PipelineTimeSeriesChart({
             return (
               <div
                 key={line.key}
-                className="rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-2 text-center transition-all duration-200 hover:bg-white/[0.06]"
+                className="min-w-[110px] flex-1 rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-2 text-center transition-all duration-200 hover:bg-white/[0.06]"
               >
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">{line.label}</p>
                 <p className="mt-0.5 text-lg font-bold tabular-nums" style={{ color: line.color }}>

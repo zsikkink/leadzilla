@@ -126,7 +126,7 @@ export function DemoSectionHeading({
   action?: ReactNode | undefined;
 }) {
   return (
-    <div className="mb-4 flex items-start justify-between gap-4">
+    <div className="mb-4 flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
       <div className="flex min-w-0 items-center gap-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/[0.08] bg-white/[0.06]">
           <Icon className="h-4 w-4 text-zbooni-teal" />
@@ -136,7 +136,7 @@ export function DemoSectionHeading({
           {subtitle ? <p className="mt-0.5 text-sm text-white/70">{subtitle}</p> : null}
         </div>
       </div>
-      {action ?? null}
+      {action ? <div className="shrink-0 self-start">{action}</div> : null}
     </div>
   );
 }
@@ -146,7 +146,7 @@ export function DemoMetricGrid({ metrics }: { metrics: DemoDashboardMetric[] }) 
     metrics.length >= 5 ? 'xl:grid-cols-3 2xl:grid-cols-5' : 'xl:grid-cols-4';
 
   return (
-    <div className={cn('grid gap-4 lg:grid-cols-2', desktopColumns)}>
+    <div className={cn('grid gap-4 sm:grid-cols-2', desktopColumns)}>
       {metrics.map((metric) => (
         <DemoMetricCard key={metric.id} metric={metric} />
       ))}
@@ -212,7 +212,7 @@ export function DemoErrorState({
   onRetry: () => void;
 }) {
   return (
-    <DemoCard className="border-red-400/30 bg-red-500/10">
+    <DemoCard className="border-amber-400/25 bg-amber-500/[0.06]">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm font-semibold text-white">{error}</p>
         <button

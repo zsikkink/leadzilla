@@ -2,16 +2,18 @@
 
 Demo-oriented AI-assisted lead discovery, enrichment, scoring, and message-drafting platform for B2B sales.
 
-This checkout is Leadzilla: a demo-hosted version of the platform originally built for Zbooni. The public demo is designed for a recruiter or hiring team to open from a resume link and immediately see a polished, enterprise-grade AI sales platform. The demo target is intentionally narrow:
+This checkout is Leadzilla: a recruiter-facing demo version of a real outbound and lead-generation platform. The public demo is designed for a recruiter or hiring team to open from a resume link and immediately see a polished, enterprise-grade AI sales platform. The demo target is intentionally narrow:
 
 - small, bounded discovery, enrichment, and scoring jobs should work end to end
 - message drafting should work for qualified leads
 - outbound message sending must remain disabled
-- existing Zbooni-discovered leads can remain as demo data
-- Zbooni-specific ICPs and copy can be rewritten into Leadzilla-neutral demo profiles
+- existing discovered leads can remain as demo data
+- any client-specific ICPs and copy should be rewritten into Leadzilla-neutral demo profiles
 - bug removal and UI/UX simplification are in scope; new feature development is not
 
-Code is still the source of truth. Outbound delivery is currently disabled in API and worker code for the Leadzilla demo; approvals are review records and do not send email or WhatsApp.
+Code is still the source of truth. Outbound delivery is currently disabled in API and worker code for the Leadzilla demo; approvals are review records and do not send email or direct-message delivery.
+
+The UI may describe the blocked direct-message channel as SMS because the demo audience is now an East Coast-based recruiting audience, where SMS is more familiar than WhatsApp. Internally, the historical delivery channel is still named `WHATSAPP`; that label mismatch is intentional copy localization, not a send-safety gap.
 
 ## Current Demo Surface
 
@@ -42,7 +44,7 @@ Recommendations, Deals, the standalone Analytics page, and the separate Messages
 - The active canonical migration chain is every SQL file in `supabase/migrations/`, starting at:
   - `supabase/migrations/20260314210837_lead_flood_dev_baseline.sql`
   and currently extending through:
-  - `supabase/migrations/20260504010000_restrict_lead_score_prediction_model_version_delete.sql`
+  - `supabase/migrations/20260709160000_add_demo_performance_indexes.sql`
 - The old pre-reconciliation migration chain is archived for auditability in:
   - `supabase/migrations-archived/pre-reconciliation/`
 - Runtime DB access is intentionally dual-stack during the Prisma-to-Postgres transition:
@@ -133,6 +135,7 @@ Public demo Edge Function env:
 - `SERPAPI_API_KEY` enables bounded recruiter-demo discovery.
 - `OPENAI_API_KEY` enables live draft generation through the Supabase Edge API.
 - `OPENAI_DRAFT_MODEL` optionally overrides the default frontier draft model.
+- `LEADZILLA_CORS_ORIGINS` must include `http://localhost:3000` and `https://zacksikkink.com`.
 
 Admin access requires your Supabase Auth user ID in the `app_admins` table:
 

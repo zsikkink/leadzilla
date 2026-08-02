@@ -1,11 +1,11 @@
 'use client';
 
 /**
- * INBOX DATA: All data is REAL from the API.
+ * INBOX DATA: live operator data remains API-backed.
  * - Conversation list: fetched via apiClient.listSends() — actual MessageSend records
  * - Lead names: resolved via apiClient.getLead() for each unique leadId
  * - Conversation threads: fetched via apiClient.getConversation(leadId)
- * - No fake/seed data is hardcoded here. If the inbox appears empty, there are no sends in the DB.
+ * - The recruiter demo account receives a separate read-only conversation showcase.
  */
 
 import type {
@@ -34,9 +34,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { MessageDraftCard } from '../../../src/components/message-draft-card.js';
+import { DemoInboxShowcase } from '../../../src/components/demo-inbox-showcase.js';
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
 import { useDraftCompletionNotifier } from '../../../src/hooks/use-draft-completion-notifier.js';
+import { DEMO_EMAIL } from '../../../src/lib/demo-preview.js';
+import { toSafeDisplayErrorMessage } from '../../../src/lib/error-messages.js';
 
 // Mirrors the worker/provider default until the API exposes runtime sender config.
 const OUTBOUND_EMAIL = 'outbound@leadzilla.example';
@@ -129,7 +132,7 @@ interface LeadConversationSummary {
   hasProblem: boolean;
 }
 
-export default function InboxPage() {
+function LiveInboxPage() {
   const { apiClient } = useAuth();
   const searchParams = useSearchParams();
   const requestedLeadId = searchParams.get('leadId');
@@ -538,7 +541,12 @@ export default function InboxPage() {
       refreshMessaging();
       toast.success('Reply draft saved. Review it in Inbox draft review. No message was sent.');
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : 'Failed to save reply draft');
+      toast.info(
+        toSafeDisplayErrorMessage(
+          error,
+          'Couldn’t save this reply draft. Please try again.',
+        ),
+      );
     } finally {
       setManualDraftAction(null);
     }
@@ -631,6 +639,18 @@ export default function InboxPage() {
             <div className="flex items-center justify-center p-8 text-sm text-muted-foreground">
               <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
               <span className="ml-2">Loading...</span>
+            </div>
+          ) : (sends.error || drafts.error) && filtered.length === 0 && filteredDrafts.length === 0 ? (
+            <div className="flex flex-col items-center justify-center p-8 text-center">
+              <RefreshCw className="mb-2 h-8 w-8 text-amber-300/50" />
+              <p className="text-sm text-amber-100/80">Live messaging activity is refreshing.</p>
+              <button
+                type="button"
+                onClick={refreshMessaging}
+                className="mt-3 rounded-lg border border-amber-300/25 px-3 py-1.5 text-xs font-semibold text-amber-100 transition-colors hover:bg-amber-300/10"
+              >
+                Refresh activity
+              </button>
             </div>
           ) : filtered.length === 0 && filteredDrafts.length === 0 ? (
             <div className="flex flex-col items-center justify-center p-8 text-center">
@@ -772,9 +792,21 @@ export default function InboxPage() {
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {conversation.error ? (
+                <div className="rounded-xl border border-amber-300/20 bg-amber-300/5 px-4 py-3 text-sm text-amber-100/80">
+                  {visibleConversationEntries.length > 0
+                    ? 'Conversation history is refreshing. Existing messages remain available below.'
+                    : 'Conversation history is refreshing.'}
+                </div>
+              ) : null}
+
               {visibleConversationEntries.length === 0 ? (
                 <p className="text-center text-sm text-muted-foreground/60">
-                  {activeFolder === 'TRASH' ? 'No trashed messages in this conversation' : 'No messages in this conversation'}
+                  {conversation.error
+                    ? 'Live conversation history is temporarily unavailable.'
+                    : activeFolder === 'TRASH'
+                      ? 'No trashed messages in this conversation'
+                      : 'No messages in this conversation'}
                 </p>
               ) : null}
 
@@ -916,7 +948,7 @@ export default function InboxPage() {
                     Write a reply
                   </div>
                   <p className="mt-0.5 text-xs text-muted-foreground/60">
-                    Saves an email draft for {selectedLeadDetails?.email ?? 'this lead'}; outbound delivery is disabled for the demo.
+                    Save an email draft for {selectedLeadDetails?.email ?? 'this lead'}.
                   </p>
                 </div>
                 {!selectedIcpProfileId ? (
@@ -939,10 +971,7 @@ export default function InboxPage() {
                   rows={4}
                   className="w-full resize-none rounded-lg border border-border/50 bg-zbooni-dark/40 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-[11px] text-muted-foreground/55">
-                    The draft is saved for review only; outbound delivery is disabled for the demo.
-                  </p>
+                <div className="flex items-center justify-end">
                   <button
                     type="button"
                     disabled={manualDraftAction === 'saving' || !manualBody.trim() || !selectedIcpProfileId}
@@ -965,4 +994,21 @@ export default function InboxPage() {
       </div>
     </div>
   );
+}
+
+export default function InboxPage() {
+  const { user } = useAuth();
+  const searchParams = useSearchParams();
+  const hasExplicitLiveTarget = Boolean(
+    searchParams.get('leadId')
+    || searchParams.get('draftId')
+    || searchParams.get('pollDraft') === '1',
+  );
+  const isRecruiterDemo = user?.email.trim().toLowerCase() === DEMO_EMAIL;
+
+  if (isRecruiterDemo && !hasExplicitLiveTarget) {
+    return <DemoInboxShowcase />;
+  }
+
+  return <LiveInboxPage />;
 }

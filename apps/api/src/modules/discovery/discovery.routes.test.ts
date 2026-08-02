@@ -368,7 +368,7 @@ describe('discovery.routes ownership scoping', () => {
       payload: {
         icpProfileId: 'icp_1',
         countries: ['AE'],
-        limit: 10,
+        limit: 5,
         requestedByUserId: 'user_b',
       },
     });
@@ -385,6 +385,7 @@ describe('discovery.routes ownership scoping', () => {
           payload: expect.objectContaining({
             requestedByUserId: 'user_a',
             icpProfileIds: ['icp_1'],
+            limit: 5,
           }),
         }),
       }),
@@ -437,5 +438,46 @@ describe('discovery.routes ownership scoping', () => {
       }),
     );
     expect(enqueueDiscoveryRun).not.toHaveBeenCalled();
+  });
+
+  it('defaults an omitted search-task budget to the fixed public demo value', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/discovery/runs',
+      payload: {
+        icpProfileId: 'icp_1',
+        countries: ['AE'],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(prismaMock.jobExecution.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: 'discovery.run',
+          payload: expect.objectContaining({ limit: 5 }),
+        }),
+      }),
+    );
+  });
+
+  it.each([4, 6])('rejects a %i-task discovery run outside the fixed public demo budget', async (limit) => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/discovery/runs',
+      payload: {
+        icpProfileId: 'icp_1',
+        countries: ['AE'],
+        limit,
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: 'Public demo discovery runs use a fixed budget of 5 search tasks.',
+      requestId: expect.any(String),
+    });
+    expect(prismaMock.jobExecution.create).not.toHaveBeenCalled();
+    expect(prismaMock.outboxEvent.create).not.toHaveBeenCalled();
   });
 });

@@ -8,7 +8,7 @@ Code is still the source of truth. This doc is the fastest orientation path for 
 
 ## 1.1 Leadzilla demo target as of 2026-07-08
 
-This repository is Leadzilla: a demo-hosted version of the outbound / lead-generation platform originally built for Zbooni.
+This repository is Leadzilla: a recruiter-facing demo version of a real outbound / lead-generation platform.
 
 The primary presentation goal is recruiter-facing polish. A recruiter or hiring team should be able to open the resume-linked demo and immediately read it as a refined, credible, enterprise-grade AI sales platform. The repo still contains historical/full-production paths and known architectural debt; current demo work should favor a coherent visible product over broad internal rewrites unless those rewrites are explicitly requested.
 
@@ -18,8 +18,8 @@ The intended demo slice is intentionally narrow:
 - Scoring should be functional enough to qualify or reject discovered/demo leads.
 - Message drafting should be functional for qualified leads.
 - Outbound message sending must remain disabled.
-- Existing Zbooni-discovered leads may remain as demo data.
-- Zbooni-specific ICPs, prompts, and copy may be rewritten into Leadzilla-neutral demo profiles.
+- Existing discovered leads may remain as demo data.
+- Client-specific ICPs, prompts, and copy should be rewritten into Leadzilla-neutral demo profiles before they appear in recruiter-facing UI.
 - Bug removal and UI/UX simplification are in scope.
 - New features are out of scope unless explicitly approved.
 
@@ -30,15 +30,18 @@ Confirmed current implementation facts:
 - Direct API send requests reject with the Leadzilla demo outbound-disabled error.
 - Worker `message.send`, auto-approved draft enqueue, manual approval recovery, queued-send recovery, and `message.send` outbox replay are blocked for the demo.
 - `apps/worker/src/env.ts` still defines `MESSAGING_ENABLED`, but the demo send-disabled boundary is enforced in code rather than by that env var.
-- The active web navigation is intentionally compact: Dashboard, Discover, Leads, Prompt Center, Inbox, and ICPs. Settings and Rules remain under the Dev Console area.
+- The active web navigation is intentionally compact: Dashboard, Discover, Leads, Prompt Center, Inbox, ICPs, and Settings. Settings is a bundled read-only workspace-policy snapshot; qualification rules stay within their relevant ICP profiles.
 - The Dashboard now consolidates the older overview/analytics surfaces. `/dashboard/analytics` redirects to `/dashboard`; the removed Deals and Recommendations pages are no longer active demo surfaces.
 - The Dashboard lead-flow Sankey represents the full business table count, splits evaluated versus not evaluated records, and then shows qualification and score-band flow. The web app also has an authenticated `/api/dashboard/business-count` fallback for demo deployments where the remote funnel response is stale.
 - The Discover page is the single bounded discovery/enrichment/scoring job setup surface. Its top card is compact and describes the flow as Set Scope -> Search -> Enrich -> Score; only the safe demo search-task count is selectable.
 - The Prompt Center exposes prompt inputs, editable outreach and lead-scoring prompt logic, and per-prompt model selectors. Advanced model options are visible but locked for demo credibility; only the default demo model is selectable.
 - The Inbox now owns draft review and conversation-style messaging. `/dashboard/messages` redirects to `/dashboard/inbox` while preserving query parameters.
 - The web API request timeout defaults to 5 seconds (`NEXT_PUBLIC_API_TIMEOUT_MS=5000`) so stalled demo API calls fail quickly instead of making the UI feel frozen.
+- Recruiter-facing request failures and persisted job/provider/database error fields are mapped to concise operational notices; raw backend details remain server-side, while public business contact data is unchanged.
 
-For demo work, keep outbound provider credentials unset unless the product scope explicitly changes. The current demo contract is draft review only: no email or WhatsApp delivery.
+For demo work, keep outbound provider credentials unset unless the product scope explicitly changes. The current demo contract is draft review only: no email or direct-message delivery.
+
+Recruiter-facing UI may call the blocked direct-message channel SMS. That is intentional copy localization for the East Coast-based recruiting audience, where SMS is more familiar than WhatsApp. The runtime channel and historical code paths may still use the `WHATSAPP` enum/name internally; this is not a safety problem as long as delivery remains blocked in API, worker, outbox, recovery, and provider paths.
 
 ## 2. Current architecture truth
 
@@ -57,7 +60,7 @@ This section is historical verification for the older Railway-backed topology, n
 - Before the handoff push on 2026-05-07, local `main` matched `origin/main` at `6d31eefe20bb3a5c3d318b7b90bb58afcd3edb57`.
 - Latest local validation on 2026-05-07 passed `pnpm typecheck`, `pnpm lint`, targeted API/worker/provider tests for changed seams, `pnpm build`, Supabase production migration verification, and Docker builds for the API/worker/web runtime images.
 - `pnpm test:unit` was also attempted, but the `@lead-flood/db` phase-1 query tests require the local disposable Postgres on `localhost:5434`; that local database was not running. Do not point those fixture-writing tests at production.
-- Production SQL migrations have been applied through `20260504010000_restrict_lead_score_prediction_model_version_delete.sql`.
+- Historical production SQL migration proof from 2026-05-07 only covered migrations through `20260504010000_restrict_lead_score_prediction_model_version_delete.sql`; the local active migration chain now extends through `20260709160000_add_demo_performance_indexes.sql`.
 - The latest GitHub Actions production deploy attempts built images and applied/no-oped migrations, but failed the production API readiness check.
 - Railway currently reports `lead-flood-api` and `lead-flood-worker` as `FAILED` / `stopped`.
 - `https://lead-flood-production.up.railway.app/health` currently returns Railway `404 Application not found`.
@@ -125,14 +128,14 @@ This section is historical verification for the older Railway-backed topology, n
 
 ## 5. Intended target state
 
-- Leadzilla runs as a demo version of the original Zbooni platform.
+- Leadzilla runs as a polished recruiter-facing demo of the original platform.
 - The demo supports bounded discovery/scoring and message drafting.
 - The active recruiter-facing UI is intentionally simplified to Dashboard, Discover, Leads, Prompt Center, Inbox, and ICPs.
 - The Dashboard is the single overview/analytics page; old analytics links redirect to it.
 - The Inbox is the single messaging/review page; old Messages links redirect to it.
 - Deals and Recommendations are not active demo pages.
 - Outbound sending is disabled by a hard runtime guard, not just by missing provider credentials.
-- Existing Zbooni-discovered leads may remain as demo data, while Zbooni-specific ICPs/copy should move toward Leadzilla-neutral language.
+- Existing discovered leads may remain as demo data, while client-specific ICPs/copy should move toward Leadzilla-neutral language before recruiter-facing display.
 - `apps/web` runs on Vercel.
 - `apps/api` is intended to run as a separately operated Railway API service; it is currently blocked/stopped until Railway billing/deploy is fixed.
 - `apps/worker` is intended to run as a separately operated Railway worker service; it is currently blocked/stopped until Railway billing/deploy is fixed.
@@ -160,8 +163,8 @@ The Leadzilla demo goal now takes precedence over older full-production handoff 
    - Why in this order: drafting is in scope, but sending is not.
    - Do not combine with yet: outbound delivery, follow-up automation, or new messaging channels.
 
-4. Rewrite Zbooni-specific ICPs/copy where needed
-   - What: convert Zbooni-specific ICPs, prompts, and labels into Leadzilla-neutral demo language while preserving useful discovered lead data.
+4. Rewrite client-specific ICPs/copy where needed
+   - What: convert client-specific ICPs, prompts, and labels into Leadzilla-neutral demo language while preserving useful discovered lead data.
    - Why in this order: demo data can remain useful, but the product framing should not look like a client handoff.
    - Do not combine with yet: seed/schema changes unless the existing seed path cannot support the copy change.
 

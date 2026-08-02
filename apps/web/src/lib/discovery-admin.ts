@@ -36,6 +36,8 @@ import {
 } from '@lead-flood/contracts';
 
 import { getWebEnv } from './env.js';
+import { toSafeApiErrorMessage } from './error-messages.js';
+import { withAppBasePath } from './app-path.js';
 
 export type { JobRequestListQuery, JobRequestListResponse } from '@lead-flood/contracts';
 
@@ -110,7 +112,7 @@ async function requestAdminProxy<T>(
 
   let response: Response;
   try {
-    response = await fetch(`/api/admin/${path}`, {
+    response = await fetch(withAppBasePath(`/api/admin/${path}`), {
       ...init,
       headers,
     });
@@ -122,7 +124,10 @@ async function requestAdminProxy<T>(
   if (!response.ok) {
     throw new AdminProxyError(
       response.status,
-      (body as { error?: string } | null)?.error ?? 'Admin request failed',
+      toSafeApiErrorMessage(
+        response.status,
+        (body as { error?: string } | null)?.error,
+      ),
     );
   }
 

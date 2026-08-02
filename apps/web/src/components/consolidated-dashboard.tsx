@@ -28,6 +28,11 @@ import type {
   DemoDashboardTone,
   DemoOperationsDashboardSnapshot,
 } from '../lib/demo-dashboard-types.js';
+import {
+  DEMO_DASHBOARD_TREND_BUCKETS,
+  DEMO_OPERATING_TOTALS,
+  DEMO_REPORTING_PERIOD,
+} from '../lib/demo-operating-narrative.js';
 import { cn } from '../lib/utils.js';
 import {
   DemoCard,
@@ -45,46 +50,14 @@ import {
   type PipelineTrendLine,
 } from './pipeline-time-series-chart.js';
 
-const EVIDENCE_BACKED_RECOMMENDATIONS = [
-  {
-    id: 'prioritize-contracting',
-    title: 'Prioritize high-value contracting first',
-    detail:
-      'Home, Design & High-Value Contracting contributes 3,140 screened businesses, 1,748 high or medium-fit opportunities, a 56% priority rate, and a 0.57 average lead score. It is the deepest segment with enough volume to support immediate review and focused copy testing.',
-  },
-  {
-    id: 'use-coaching-copy',
-    title: 'Use premium-service positioning',
-    detail:
-      'Luxury & High-Ticket Services adds 2,864 screened businesses and 1,598 priority opportunities at a 56% priority rate. The strongest accounts show visible offer value, appointment-led sales, and customer-conversation channels, so outreach should lead with conversion lift and payment readiness.',
-  },
-  {
-    id: 'expand-inventory',
-    title: 'Keep low-score inventory out of outreach',
-    detail:
-      'The screened universe contains 7,284 low-score businesses and 3,140 hard disqualifications. Holding those 10,424 accounts out of active outreach protects review quality while leaving 11,154 high or medium-fit businesses available for campaign preparation.',
-  },
-] as const;
-
-const PIPELINE_TREND_BUCKETS: PipelineTrendBucket[] = [
-  { date: '2026-04-24', Activated: 980, Qualified: 494, Rejected: 136, Sent: 3, Replied: 0 },
-  { date: '2026-05-01', Activated: 1260, Qualified: 650, Rejected: 178, Sent: 7, Replied: 0 },
-  { date: '2026-05-08', Activated: 1485, Qualified: 760, Rejected: 214, Sent: 12, Replied: 1 },
-  { date: '2026-05-15', Activated: 1640, Qualified: 842, Rejected: 236, Sent: 17, Replied: 1 },
-  { date: '2026-05-22', Activated: 1785, Qualified: 925, Rejected: 260, Sent: 23, Replied: 2 },
-  { date: '2026-05-29', Activated: 1875, Qualified: 970, Rejected: 276, Sent: 30, Replied: 3 },
-  { date: '2026-06-05', Activated: 1940, Qualified: 1005, Rejected: 286, Sent: 37, Replied: 4 },
-  { date: '2026-06-12', Activated: 2050, Qualified: 1060, Rejected: 302, Sent: 45, Replied: 5 },
-  { date: '2026-06-19', Activated: 2155, Qualified: 1120, Rejected: 318, Sent: 53, Replied: 6 },
-  { date: '2026-06-26', Activated: 2225, Qualified: 1165, Rejected: 330, Sent: 62, Replied: 7 },
-  { date: '2026-07-03', Activated: 2258, Qualified: 1190, Rejected: 338, Sent: 71, Replied: 8 },
-  { date: '2026-07-09', Activated: 1925, Qualified: 973, Rejected: 266, Sent: 81, Replied: 9 },
-];
+const PIPELINE_TREND_BUCKETS: PipelineTrendBucket[] = DEMO_DASHBOARD_TREND_BUCKETS.map(
+  (bucket) => ({ ...bucket }),
+);
 
 const DISCOVERY_TREND_LINES: PipelineTrendLine[] = [
   { key: 'Activated', color: '#60A5FA', label: 'Screened' },
   { key: 'Qualified', color: '#3CC8E0', label: 'Priority' },
-  { key: 'Rejected', color: '#F87171', label: 'Disqualified' },
+  { key: 'Rejected', color: '#F87171', label: 'Rejected' },
 ];
 
 const MESSAGE_TREND_LINES: PipelineTrendLine[] = [
@@ -97,157 +70,6 @@ const MESSAGE_TREND_TOTALS = {
   sent: LATEST_PIPELINE_TREND_BUCKET?.Sent ?? 0,
   replied: LATEST_PIPELINE_TREND_BUCKET?.Replied ?? 0,
 };
-
-const STATIC_DEMO_LEAD_FLOW = {
-  totalBusinesses: 21578,
-  evaluated: 21578,
-  outsideFlow: 0,
-  qualified: 11154,
-  notQualified: 3140,
-  high: 5548,
-  medium: 5606,
-  low: 7284,
-  unbanded: 0,
-};
-
-const STATIC_DEMO_ANALYTICS_METRICS: DemoDashboardMetric[] = [
-  {
-    id: 'qualified-rate',
-    label: 'Priority rate',
-    value: '52%',
-    detail: '11,154 high or medium-fit opportunities from 21,578 screened businesses.',
-    tone: 'teal',
-  },
-  {
-    id: 'avg-fit-score',
-    label: 'Average lead score',
-    value: '0.54',
-    detail: 'Weighted Zbooni-fit score across the screened business universe.',
-    tone: 'purple',
-  },
-  {
-    id: 'priority-leads',
-    label: 'Priority leads',
-    value: '11,154',
-    detail: 'High and medium-fit businesses ready for review and message drafting.',
-    tone: 'green',
-  },
-  {
-    id: 'filtered-out',
-    label: 'Disqualified',
-    value: '3,140',
-    detail: 'Businesses removed by hard filters before score-band review.',
-    tone: 'amber',
-  },
-];
-
-const STATIC_DEMO_ICP_PERFORMANCE: DemoAnalyticsIcpPerformance[] = [
-  {
-    id: 'home-design-contracting',
-    name: 'Home, Design & High-Value Contracting',
-    scored: 3140,
-    avgScore: 0.57,
-    qualifiedRate: 56,
-    qualified: 1748,
-    insight: 'Largest screened segment with strong account density and balanced high/medium-fit depth.',
-  },
-  {
-    id: 'high-ticket-services',
-    name: 'Luxury & High-Ticket Services',
-    scored: 2864,
-    avgScore: 0.56,
-    qualifiedRate: 56,
-    qualified: 1598,
-    insight: 'Premium service businesses with visible conversion hooks and strong offer value.',
-  },
-  {
-    id: 'premium-wellness',
-    name: 'Premium Wellness & Longevity Clinics',
-    scored: 2518,
-    avgScore: 0.54,
-    qualifiedRate: 52,
-    qualified: 1309,
-    insight: 'Service-led operators with strong appointment, consultation, and repeat-customer signals.',
-  },
-  {
-    id: 'events-experiential',
-    name: 'Events, Weddings & Experiential Operators',
-    scored: 2326,
-    avgScore: 0.53,
-    qualifiedRate: 51,
-    qualified: 1191,
-    insight: 'Seasonal and event-driven businesses with meaningful volume but wider quality variance.',
-  },
-  {
-    id: 'bespoke-gifting',
-    name: 'Gifting, Corporate & Bespoke Experiences',
-    scored: 2054,
-    avgScore: 0.53,
-    qualifiedRate: 51,
-    qualified: 1052,
-    insight: 'Bespoke purchase flows with strong personalization upside and clear seasonal demand.',
-  },
-];
-
-const STATIC_DEMO_OUTCOME_SUMMARY: DemoAnalyticsOutcome[] = [
-  {
-    id: 'drafts',
-    label: 'Drafts generated',
-    value: '188',
-    detail: 'Review-ready message drafts from priority lead context.',
-  },
-  {
-    id: 'replies',
-    label: 'Replies',
-    value: '9',
-    detail: 'Historical sample outcomes kept separate from disabled sends.',
-  },
-  {
-    id: 'sent',
-    label: 'Messages sent',
-    value: '81',
-    detail: 'Legacy sample records only; sending is disabled.',
-  },
-];
-
-const STATIC_DEMO_DISQUALIFICATION_REASONS: DemoAnalyticsDisqualificationReason[] = [
-  {
-    id: 'no-conversation-channel',
-    label: 'No customer-conversation channel',
-    count: 812,
-    detail: 'No reliable WhatsApp, Instagram, booking, chat, or contact path surfaced.',
-  },
-  {
-    id: 'weak-commercial-intent',
-    label: 'Weak commercial intent',
-    count: 681,
-    detail: 'Low evidence of transactions, appointment volume, catalog depth, or paid service flow.',
-  },
-  {
-    id: 'inactive-public-presence',
-    label: 'Inactive public presence',
-    count: 548,
-    detail: 'Stale website or social footprint with limited signs of current customer activity.',
-  },
-  {
-    id: 'insufficient-contact-surface',
-    label: 'Insufficient contact surface',
-    count: 417,
-    detail: 'Missing enough domain, social, phone, or location context for reliable review.',
-  },
-  {
-    id: 'outside-served-verticals',
-    label: 'Outside served verticals',
-    count: 356,
-    detail: 'Category appeared too informational, institutional, or low-commerce for Zbooni.',
-  },
-  {
-    id: 'duplicate-or-ambiguous',
-    label: 'Duplicate or ambiguous record',
-    count: 326,
-    detail: 'Branch, marketplace, or duplicate records that could not support clean account review.',
-  },
-];
 
 type CapabilityRow = {
   id: string;
@@ -273,63 +95,6 @@ function getMetricValue(snapshot: DemoOperationsDashboardSnapshot, id: string): 
 
 function getOutcomeValue(snapshot: DemoAnalyticsDashboardSnapshot, id: string): string | undefined {
   return snapshot.outcomeSummary.find((item) => item.id === id)?.value;
-}
-
-function normalizeDemoAnalyticsSnapshot(snapshot: DemoAnalyticsDashboardSnapshot): DemoAnalyticsDashboardSnapshot {
-  return {
-    ...snapshot,
-    metrics: STATIC_DEMO_ANALYTICS_METRICS,
-    leadFlow: STATIC_DEMO_LEAD_FLOW,
-    icpPerformance: STATIC_DEMO_ICP_PERFORMANCE,
-    outcomeSummary: STATIC_DEMO_OUTCOME_SUMMARY,
-    recommendations: EVIDENCE_BACKED_RECOMMENDATIONS.map((item) => ({ ...item })),
-    disqualificationReasons: STATIC_DEMO_DISQUALIFICATION_REASONS,
-  };
-}
-
-function normalizeDemoOperationsSnapshot(snapshot: DemoOperationsDashboardSnapshot): DemoOperationsDashboardSnapshot {
-  return {
-    ...snapshot,
-    metrics: snapshot.metrics.map((metric) => {
-      if (metric.id === 'source-inventory') {
-        return {
-          ...metric,
-          label: 'Deduped inventory',
-          value: '21,578',
-          unit: 'businesses',
-          detail: 'Deduplicated account universe available for ICP expansion.',
-        };
-      }
-      if (metric.id === 'discovered-leads') {
-        return {
-          ...metric,
-          label: 'Screened universe',
-          value: '21,578',
-          unit: 'businesses',
-          detail: 'Database businesses normalized into a stable screening population.',
-        };
-      }
-      if (metric.id === 'enriched-scored') {
-        return {
-          ...metric,
-          label: 'Scored profiles',
-          value: '18,438',
-          unit: 'profiles',
-          detail: 'Businesses with enough public context to receive a Zbooni-fit score.',
-        };
-      }
-      return metric;
-    }),
-    pipeline: snapshot.pipeline.map((stage) => {
-      if (stage.id === 'discover') {
-        return { ...stage, count: 21578, displayValue: '21,578' };
-      }
-      if (stage.id === 'enrich' || stage.id === 'score') {
-        return { ...stage, count: 18438, displayValue: '18,438' };
-      }
-      return stage;
-    }),
-  };
 }
 
 function polishDashboardCopy(value: string): string {
@@ -367,7 +132,7 @@ function buildHeadlineMetrics(
       id: 'qualified-rate',
       label: qualifiedRate?.label ?? 'Priority rate',
       value: qualifiedRate?.value ?? percentOf(qualifiedCount, leadCount),
-      detail: qualifiedRate?.detail ?? `${formatDemoCount(qualifiedCount)} high or medium-fit opportunities from ${formatDemoCount(leadCount)} screened businesses.`,
+      detail: qualifiedRate?.detail ?? `${formatDemoCount(qualifiedCount)} high-fit opportunities from ${formatDemoCount(leadCount)} screened leads.`,
       tone: 'teal',
     },
     {
@@ -379,9 +144,9 @@ function buildHeadlineMetrics(
     },
     {
       id: 'enrichment-coverage',
-      label: 'Enrichment coverage',
+      label: 'Scoring coverage',
       value: percentOf(enrichedCount, leadCount),
-      detail: `${formatDemoCount(enrichedCount)} profiles include contact, domain, and business-context signals.`,
+      detail: `All ${formatDemoCount(enrichedCount)} non-rejected leads have a latest fit-score prediction.`,
       tone: 'green',
     },
     {
@@ -389,7 +154,7 @@ function buildHeadlineMetrics(
       label: 'Review load',
       value: formatDemoCount(pendingCount),
       unit: 'drafts',
-      detail: `${percentOf(pendingCount, draftsCount)} of generated drafts are waiting for human review.`,
+      detail: `${DEMO_OPERATING_TOTALS.overdueReview} are older than the 24-hour review target; ${percentOf(pendingCount, draftsCount)} of two-month drafts remain open.`,
       tone: 'amber',
     },
   ];
@@ -399,13 +164,12 @@ function buildOutcomeSummary(
   analytics: DemoAnalyticsDashboardSnapshot,
   operations: DemoOperationsDashboardSnapshot,
 ): DemoAnalyticsOutcome[] {
-  const draftsCount = parseDisplayCount(getOutcomeValue(analytics, 'drafts'));
   const pendingCount = parseDisplayCount(getMetricValue(operations, 'pending-review'));
   const pendingReview = {
     id: 'pending-review',
     label: 'Pending review',
     value: formatDemoCount(pendingCount),
-    detail: `${percentOf(pendingCount, draftsCount)} of generated drafts are held for operator approval before any delivery step.`,
+    detail: `${DEMO_OPERATING_TOTALS.overdueReview} drafts are older than the 24-hour review target; every open draft remains human gated.`,
   };
 
   const draftItem = analytics.outcomeSummary.find((item) => item.id === 'drafts');
@@ -416,7 +180,7 @@ function buildOutcomeSummary(
         return {
           ...item,
           value: formatDemoCount(MESSAGE_TREND_TOTALS.replied),
-          detail: 'Sample replies from historical sent-message activity.',
+          detail: `Historical replies across ${DEMO_REPORTING_PERIOD}.`,
         };
       }
 
@@ -424,7 +188,7 @@ function buildOutcomeSummary(
         return {
           ...item,
           value: formatDemoCount(MESSAGE_TREND_TOTALS.sent),
-          detail: 'Sample sent-message activity; workspace sending is disabled.',
+          detail: `Historical messages across ${DEMO_REPORTING_PERIOD}; current demo delivery is disabled.`,
         };
       }
 
@@ -532,7 +296,7 @@ function LeadMixPieChart({ data }: { data: DemoAnalyticsDashboardSnapshot['leadF
       textClass: 'text-white/70',
       detail: 'Hard-filtered before score-band review',
     },
-  ];
+  ].filter((slice) => slice.value > 0);
   const total = slices.reduce((sum, slice) => sum + slice.value, 0);
   let cursor = 0;
   const gradient = slices
@@ -548,7 +312,7 @@ function LeadMixPieChart({ data }: { data: DemoAnalyticsDashboardSnapshot['leadF
     <div className="grid gap-5 lg:grid-cols-[minmax(280px,0.55fr)_1fr] lg:items-center">
       <div className="flex justify-center">
         <div
-          aria-label="Lead mix pie chart showing high, medium, low, and disqualified businesses"
+          aria-label="Lead mix pie chart showing the database score-band distribution"
           className="relative aspect-square w-full max-w-[340px] rounded-full shadow-2xl shadow-black/30"
           role="img"
           style={{ background: `conic-gradient(${gradient})` }}
@@ -556,13 +320,13 @@ function LeadMixPieChart({ data }: { data: DemoAnalyticsDashboardSnapshot['leadF
           <div className="absolute inset-[22%] flex flex-col items-center justify-center rounded-full border border-white/[0.1] bg-[#171821] text-center shadow-inner shadow-black/40">
             <p className="text-[11px] font-bold uppercase tracking-wider text-white/45">Screened</p>
             <p className="mt-1 text-3xl font-extrabold tracking-tight text-white">{formatDemoCount(total)}</p>
-            <p className="mt-1 text-xs font-medium text-white/55">businesses scored</p>
+            <p className="mt-1 text-xs font-medium text-white/55">database leads screened</p>
           </div>
         </div>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         {slices.map((slice) => {
-          const percent = total > 0 ? Math.round((slice.value / total) * 100) : 0;
+          const percent = total > 0 ? ((slice.value / total) * 100).toFixed(1) : '0.0';
           return (
             <div key={slice.id} className="rounded-lg border border-white/[0.07] bg-black/[0.12] p-4">
               <div className="flex items-start justify-between gap-3">
@@ -621,7 +385,7 @@ function IcpPerformance({ rows }: { rows: DemoAnalyticsIcpPerformance[] }) {
   const max = Math.max(...rows.map((row) => row.scored), 1);
 
   return (
-    <DemoCard className="h-full">
+    <DemoCard>
       <DemoSectionHeading
         icon={Target}
         title="ICP Performance"
@@ -681,7 +445,16 @@ function OutcomeSummary({
       <DemoSectionHeading
         icon={Zap}
         title="Outcome Context"
-        subtitle="Draft, review, and historical outcome counters."
+        subtitle="Draft, review, reply, and meeting outcomes from the same two-month cohort."
+        action={
+          <Link
+            href="/dashboard/inbox"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.1] bg-white/[0.06] px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-white/[0.1]"
+          >
+            Inbox
+            <ArrowUpRight className="h-3.5 w-3.5" />
+          </Link>
+        }
       />
       <div className="space-y-3">
         {outcomes.map((item) => (
@@ -699,17 +472,14 @@ function OutcomeSummary({
 }
 
 function Recommendations({ data }: { data: DemoAnalyticsDashboardSnapshot }) {
-  const recommendations = EVIDENCE_BACKED_RECOMMENDATIONS.map((fallback) => {
-    const item = data.recommendations.find((candidate) => candidate.id === fallback.id);
-    return item ? { ...item, title: fallback.title, detail: fallback.detail } : fallback;
-  });
+  const recommendations = data.recommendations;
 
   return (
     <DemoCard>
       <DemoSectionHeading
         icon={Sparkles}
-        title="Segment Recommendations"
-        subtitle="Evidence-backed decisions from the scored dataset."
+        title="Operator Actions"
+        subtitle="The next highest-leverage actions from the completed operating period."
       />
       <div className="space-y-3">
         {recommendations.map((item) => (
@@ -780,7 +550,7 @@ function DiscoveryRunEvidence({ snapshot }: { snapshot: DemoOperationsDashboardS
           </Link>
         }
       />
-      <div className="grid gap-3 lg:grid-cols-3">
+      <div className="grid gap-3 lg:grid-cols-2">
         {snapshot.recentRuns.map((run) => (
           <div key={run.id} className="rounded-lg border border-white/[0.07] bg-black/[0.12] p-4">
             <div className="flex items-start justify-between gap-3">
@@ -852,35 +622,61 @@ export function ConsolidatedDashboard() {
   const rawOperationsData = operations.data;
   if (!rawAnalyticsData || !rawOperationsData) return null;
 
-  const analyticsData = normalizeDemoAnalyticsSnapshot(rawAnalyticsData);
-  const operationsData = normalizeDemoOperationsSnapshot(rawOperationsData);
+  const analyticsData = rawAnalyticsData;
+  const operationsData = rawOperationsData;
 
   return (
-    <div className="space-y-5 2xl:space-y-6">
+    <div className="mx-auto w-full max-w-[1600px] space-y-5 2xl:space-y-6">
+      <div className="flex flex-col gap-2 rounded-xl border border-white/[0.08] bg-white/[0.025] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-zbooni-teal">Two-month operating view</p>
+          <p className="mt-1 text-sm text-white/65">{DEMO_REPORTING_PERIOD} · completed reporting period</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+          <span className="rounded-full border border-violet-300/20 bg-violet-300/[0.07] px-2.5 py-1 text-violet-200">
+            Historical outreach cohort
+          </span>
+          <span className="rounded-full border border-amber-300/20 bg-amber-300/[0.07] px-2.5 py-1 text-amber-200">
+            Current delivery locked
+          </span>
+        </div>
+      </div>
+
       <DemoMetricGrid metrics={buildHeadlineMetrics(analyticsData, operationsData)} />
 
-      <div className="grid gap-5 2xl:grid-cols-2">
+      <div className="grid gap-5 xl:grid-cols-2">
         <PipelineTimeSeriesChart
           chartId="discovery-qualification-trends"
-          defaultRange="6m"
+          defaultRange="all"
           lines={DISCOVERY_TREND_LINES}
           precomputedData={PIPELINE_TREND_BUCKETS}
-          title="Database Screening"
+          rangeOptions={[
+            { value: '1m', label: '1M' },
+            { value: 'all', label: '2M' },
+          ]}
+          subtitle="Monthly screened, high-priority, and rejected leads from the database-anchored cohort"
+          title="Screening and Qualification"
         />
         <PipelineTimeSeriesChart
+          badge="Historical · delivery locked"
           chartId="message-reply-trends"
           curveMode="stepAfter"
-          defaultRange="6m"
+          defaultRange="all"
           lines={MESSAGE_TREND_LINES}
           precomputedData={PIPELINE_TREND_BUCKETS}
+          rangeOptions={[
+            { value: '1m', label: '1M' },
+            { value: 'all', label: '2M' },
+          ]}
           summaryMode="latest"
-          title="Outreach"
+          subtitle="Cumulative historical messages and replies from the same cohort"
+          title="Historical Outreach"
         />
       </div>
 
       <LeadFlowPanel data={analyticsData} />
 
-      <div className="grid gap-5 2xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)]">
+      <div className="grid items-start gap-5 2xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)]">
         <IcpPerformance rows={analyticsData.icpPerformance} />
         <div className="space-y-5">
           <OutcomeSummary analytics={analyticsData} operations={operationsData} />
@@ -888,7 +684,7 @@ export function ConsolidatedDashboard() {
         </div>
       </div>
 
-      <div className="grid gap-5 2xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
         <WorkspaceCapabilities snapshot={operationsData} />
         <DiscoveryRunEvidence snapshot={operationsData} />
       </div>

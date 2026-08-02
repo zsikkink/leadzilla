@@ -1,12 +1,14 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 
 import { useAuth } from '../hooks/use-auth.js';
 import { useSidebarCollapse } from '../hooks/use-sidebar-collapse.js';
+import { getDemoPreviewPageKind } from '../lib/demo-preview-pages.js';
 import { cn } from '../lib/utils.js';
+import { DemoPreviewWorkspace } from './demo-preview-workspace.js';
 import { Header } from './header.js';
 import { Sidebar } from './sidebar.js';
 import {
@@ -26,10 +28,13 @@ interface AppShellProps {
 }
 
 export function AppShell({ children, contentClassName }: AppShellProps) {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, sessionMode } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
   const { collapsed, toggle, hydrated } = useSidebarCollapse();
   const [previewNoticeOpen, setPreviewNoticeOpen] = useState(false);
+  const isStaticPreview = sessionMode === 'preview';
+  const previewPage = isStaticPreview ? getDemoPreviewPageKind(pathname) : null;
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -43,6 +48,12 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
     }
 
     try {
+      if (isStaticPreview) {
+        window.sessionStorage.removeItem(LOGIN_PREVIEW_NOTICE_SESSION_KEY);
+        setPreviewNoticeOpen(false);
+        return;
+      }
+
       if (window.sessionStorage.getItem(LOGIN_PREVIEW_NOTICE_SESSION_KEY) === 'true') {
         window.sessionStorage.removeItem(LOGIN_PREVIEW_NOTICE_SESSION_KEY);
         setPreviewNoticeOpen(true);
@@ -50,7 +61,7 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
     } catch {
       // Ignore unavailable storage; the app should remain usable.
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, isStaticPreview]);
 
   const handlePreviewNoticeOpenChange = useCallback((open: boolean) => {
     if (open) {
@@ -88,8 +99,8 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
       {hydrated && <Sidebar collapsed={collapsed} onToggle={toggle} />}
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header />
-        <main id="main-content" className={cn('flex-1 overflow-auto p-6', contentClassName)}>
-          {children}
+        <main id="main-content" className={cn('flex-1 overflow-auto p-3 sm:p-4 lg:p-6', contentClassName)}>
+          {previewPage ? <DemoPreviewWorkspace page={previewPage} /> : children}
         </main>
       </div>
       <Dialog open={previewNoticeOpen} onOpenChange={handlePreviewNoticeOpenChange}>
@@ -102,11 +113,15 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
           <DialogHeader>
             <DialogTitle className="text-xl font-bold">This is a demo environment</DialogTitle>
             <DialogDescription className="leading-6">
-              Explore lead discovery, scoring, and message drafting.
+              {isStaticPreview
+                ? 'The recruiter workspace is running from bundled, read-only snapshots.'
+                : 'Explore lead discovery, scoring, and message drafting.'}
             </DialogDescription>
           </DialogHeader>
           <p className="text-sm leading-6 text-foreground">
-            Sending emails and SMS messages is disabled.
+            {isStaticPreview
+              ? 'Every navigation tab is available without live services. Changes are not saved, and outbound delivery remains disabled.'
+              : 'Sending emails, SMS messages, and WhatsApp messages is disabled.'}
           </p>
           <DialogFooter className="mt-6 justify-center sm:justify-center">
             <button
@@ -114,7 +129,7 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
               onClick={handlePreviewNoticeDismiss}
               className="inline-flex h-10 items-center justify-center rounded-lg border border-zbooni-teal/15 bg-zbooni-teal/[0.045] px-4 text-sm font-semibold text-zbooni-teal shadow-sm shadow-black/10 transition-colors hover:bg-zbooni-teal/[0.075] focus:outline-none focus:ring-2 focus:ring-zbooni-teal/25 focus:ring-offset-2 focus:ring-offset-background"
             >
-              Start exploring
+              {isStaticPreview ? 'View dashboard' : 'Start exploring'}
             </button>
           </DialogFooter>
         </DialogContent>

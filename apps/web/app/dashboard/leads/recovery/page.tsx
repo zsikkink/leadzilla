@@ -25,9 +25,14 @@ import { CustomSelect } from '@/components/custom-select.js';
 import { LeadsNav } from '@/components/leads-nav.js';
 import { useApiQuery } from '@/hooks/use-api-query.js';
 import { useAuth } from '@/hooks/use-auth.js';
-import { cn } from '@/lib/utils.js';
+import { withAppBasePath } from '@/lib/app-path.js';
 import { countryName } from '@/lib/countries.js';
 import { fetchAdminBusinessDetail } from '@/lib/discovery-admin.js';
+import {
+  toSafeApiErrorMessage,
+  toSafeDisplayErrorMessage,
+} from '@/lib/error-messages.js';
+import { cn } from '@/lib/utils.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -694,7 +699,12 @@ export default function ContactRecoveryPage() {
       recovery.refetch();
       router.replace('/dashboard/leads/recovery');
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : 'Failed to reject contact recovery item');
+      toast.info(
+        toSafeDisplayErrorMessage(
+          error,
+          'Couldn’t update this recovery item. Please try again.',
+        ),
+      );
     } finally {
       setRejectingId(null);
     }
@@ -715,20 +725,25 @@ export default function ContactRecoveryPage() {
       const headers: Record<string, string> = {};
       if (token) headers.authorization = `Bearer ${token}`;
       const res = await fetch(
-        `/api/admin/discovery-admin/recovery/${item.id}/approve`,
+        withAppBasePath(`/api/admin/discovery-admin/recovery/${item.id}/approve`),
         { method: 'POST', headers },
       );
 
       if (!res.ok) {
         const body = await res.json().catch(() => null) as { error?: string } | null;
-        throw new Error(body?.error ?? `Approve failed (${res.status})`);
+        throw new Error(toSafeApiErrorMessage(res.status, body?.error));
       }
 
       const result = await res.json() as { leadId: string; businessName: string };
       toast.success(`Lead created from ${result.businessName}`);
       recovery.refetch();
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : 'Failed to approve recovery item');
+      toast.info(
+        toSafeDisplayErrorMessage(
+          error,
+          'Couldn’t create this lead. Please try again.',
+        ),
+      );
     } finally {
       setApprovingId(null);
     }
@@ -782,8 +797,8 @@ export default function ContactRecoveryPage() {
       </div>
 
       {recovery.error ? (
-        <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {recovery.error}
+        <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-100">
+          Recovery insights are refreshing. Previously loaded items remain available.
         </div>
       ) : null}
 

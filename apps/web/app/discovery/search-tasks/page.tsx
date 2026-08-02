@@ -9,6 +9,7 @@ import {
   fetchAdminSearchTasks,
   queryFromSearchTaskFilters,
 } from '../../../src/lib/discovery-admin';
+import { toDiscoveryRunNotice, toSafeDisplayErrorMessage } from '../../../src/lib/error-messages.js';
 
 const DEFAULT_QUERY: AdminListSearchTasksQuery = {
   page: 1,
@@ -45,7 +46,12 @@ export default function SearchTasksPage() {
         const result = await fetchAdminSearchTasks(queryFromSearchTaskFilters(query));
         setData(result);
       } catch (loadError: unknown) {
-        setError(loadError instanceof Error ? loadError.message : 'Failed to load search tasks');
+        setError(
+          toSafeDisplayErrorMessage(
+            loadError,
+            'Search tasks are refreshing. Please try again in a moment.',
+          ),
+        );
       } finally {
         setLoading(false);
       }
@@ -165,8 +171,8 @@ export default function SearchTasksPage() {
       </div>
 
       {error ? (
-        <p style={{ color: '#b91c1c', marginTop: 10 }}>
-          <strong>Error:</strong> {error}
+        <p style={{ color: '#b7791f', marginTop: 10 }}>
+          <strong>Pipeline note:</strong> {error}
         </p>
       ) : null}
 
@@ -208,7 +214,7 @@ export default function SearchTasksPage() {
                   <td className="mono">{task.timeBucket}</td>
                   <td>{task.attempts}</td>
                   <td>{new Date(task.runAfter).toLocaleString()}</td>
-                  <td className="mono">{task.error ?? '-'}</td>
+                  <td className="mono">{toDiscoveryRunNotice(task.error) ?? '-'}</td>
                 </tr>
               ))
             ) : (

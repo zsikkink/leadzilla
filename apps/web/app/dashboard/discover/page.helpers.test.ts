@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDiscoveryRequest,
   getNextSelectedIcpId,
+  isPublicDemoSearchTaskLimit,
 } from './page.helpers.js';
 
 describe('discover page helpers', () => {
@@ -20,7 +21,7 @@ describe('discover page helpers', () => {
         cities: ['Dubai'],
         includeWebsiteAnalysis: true,
         includeSocialMediaAnalysis: false,
-        searchTaskLimit: 25,
+        searchTaskLimit: 5,
         requestedByUserId: 'user_1',
       }),
     ).toEqual({
@@ -29,9 +30,18 @@ describe('discover page helpers', () => {
       cities: ['Dubai'],
       includeWebsiteAnalysis: true,
       includeSocialMediaAnalysis: false,
-      limit: 25,
+      limit: 5,
       requestedByUserId: 'user_1',
     });
+  });
+
+  it('accepts only the fixed public demo task budget of five', () => {
+    expect(isPublicDemoSearchTaskLimit(5)).toBe(true);
+    expect(isPublicDemoSearchTaskLimit(1)).toBe(false);
+    expect(isPublicDemoSearchTaskLimit(4)).toBe(false);
+    expect(isPublicDemoSearchTaskLimit(0)).toBe(false);
+    expect(isPublicDemoSearchTaskLimit(6)).toBe(false);
+    expect(isPublicDemoSearchTaskLimit(1.5)).toBe(false);
   });
 
   it('refuses to build a request without ICPs and country set', () => {
@@ -42,7 +52,7 @@ describe('discover page helpers', () => {
         cities: [],
         includeWebsiteAnalysis: true,
         includeSocialMediaAnalysis: true,
-        searchTaskLimit: 25,
+        searchTaskLimit: 5,
       }),
     ).toBeNull();
 
@@ -53,7 +63,20 @@ describe('discover page helpers', () => {
         cities: [],
         includeWebsiteAnalysis: true,
         includeSocialMediaAnalysis: true,
-        searchTaskLimit: 25,
+        searchTaskLimit: 5,
+      }),
+    ).toBeNull();
+  });
+
+  it('refuses to build a request outside the fixed public demo task budget', () => {
+    expect(
+      buildDiscoveryRequest({
+        selectedIcpIds: ['icp_1'],
+        countries: ['AE'],
+        cities: ['Dubai'],
+        includeWebsiteAnalysis: true,
+        includeSocialMediaAnalysis: true,
+        searchTaskLimit: 4,
       }),
     ).toBeNull();
   });

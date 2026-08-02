@@ -121,6 +121,8 @@ const DiscoveryLimitsSchema = z.object({
   DISCOVERY_MAX_LEADS_PER_RUN: z.coerce.number().int().min(1).default(200),
 });
 
+const PUBLIC_DEMO_SEARCH_TASKS_PER_RUN = 5;
+
 let _limits: z.infer<typeof DiscoveryLimitsSchema> | undefined;
 
 function getDiscoveryLimits() {
@@ -255,8 +257,14 @@ export function registerDiscoveryRoutes(
 
     const limits = getDiscoveryLimits();
 
-    // Historical env name; now caps the operator's search-task budget per run.
-    const cappedLimit = Math.min(parsed.data.limit ?? limits.DISCOVERY_MAX_LEADS_PER_RUN, limits.DISCOVERY_MAX_LEADS_PER_RUN);
+    const requestedLimit = parsed.data.limit ?? PUBLIC_DEMO_SEARCH_TASKS_PER_RUN;
+    if (requestedLimit !== PUBLIC_DEMO_SEARCH_TASKS_PER_RUN) {
+      return sendValidationError(
+        reply,
+        request.id,
+        `Public demo discovery runs use a fixed budget of ${PUBLIC_DEMO_SEARCH_TASKS_PER_RUN} search tasks.`,
+      );
+    }
 
     // Check per-user concurrent runs (QUEUED or RUNNING)
     const concurrentCount = await prisma.jobExecution.count({
@@ -307,7 +315,7 @@ export function registerDiscoveryRoutes(
     try {
       const result = await service.createDiscoveryRun({
         ...parsed.data,
-        limit: cappedLimit,
+        limit: requestedLimit,
         requestedByUserId: userId,
       });
       return CreateDiscoveryRunResponseSchema.parse(result);

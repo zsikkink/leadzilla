@@ -62,6 +62,7 @@ import {
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
 import { countryName } from '../../../../src/lib/countries.js';
+import { toSafeDisplayErrorMessage } from '../../../../src/lib/error-messages.js';
 import { getTeamMemberTier, sortTeamMembers } from '../../../../src/lib/team-members.js';
 
 // ── Types ──────────────────────────────────────────────────
@@ -1282,7 +1283,12 @@ function _EditableTeamMembers({
       setEditingId(null);
       toast.success('Contact updated');
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save');
+      toast.info(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t save this contact update. Please try again.',
+        ),
+      );
     } finally {
       setSavingId(null);
     }
@@ -1304,7 +1310,12 @@ function _EditableTeamMembers({
       await reloadContacts();
       toast.success(`${memberName} removed`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete');
+      toast.info(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t remove this contact. Please try again.',
+        ),
+      );
     } finally {
       setSavingId(null);
     }
@@ -1318,7 +1329,12 @@ function _EditableTeamMembers({
       await reloadContacts();
       toast.success(`${memberName} set as primary contact`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update');
+      toast.info(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t set the primary contact. Please try again.',
+        ),
+      );
     } finally {
       setSavingId(null);
     }
@@ -1350,7 +1366,12 @@ function _EditableTeamMembers({
       setShowAddForm(false);
       toast.success(`${addName.trim()} added to team`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to add contact');
+      toast.info(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t add this contact. Please try again.',
+        ),
+      );
     } finally {
       setSavingId(null);
     }
@@ -1670,7 +1691,12 @@ export default function LeadDetailPage() {
       setEditingContactId(null);
       lead.refetch();
     } catch (err) {
-      setContactError(err instanceof Error ? err.message : 'Failed to save');
+      setContactError(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t save this contact update. Please try again.',
+        ),
+      );
     } finally {
       setContactSaving(false);
     }
@@ -1683,7 +1709,12 @@ export default function LeadDetailPage() {
       await apiClient.deleteBusinessContact(contactId);
       lead.refetch();
     } catch (err) {
-      setContactError(err instanceof Error ? err.message : 'Failed to delete');
+      setContactError(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t remove this contact. Please try again.',
+        ),
+      );
     } finally {
       setContactSaving(false);
     }
@@ -1696,7 +1727,12 @@ export default function LeadDetailPage() {
       await apiClient.setBusinessContactPrimary(contactId, businessId);
       lead.refetch();
     } catch (err) {
-      setContactError(err instanceof Error ? err.message : 'Failed to set primary');
+      setContactError(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t set the primary contact. Please try again.',
+        ),
+      );
     } finally {
       setContactSaving(false);
     }
@@ -1720,7 +1756,12 @@ export default function LeadDetailPage() {
       setShowAddMemberForm(false);
       lead.refetch();
     } catch (err) {
-      setContactError(err instanceof Error ? err.message : 'Failed to add member');
+      setContactError(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t add this team member. Please try again.',
+        ),
+      );
     } finally {
       setContactSaving(false);
     }
@@ -1745,8 +1786,8 @@ export default function LeadDetailPage() {
         source: 'BACKUP_CONTACT_ROTATION',
       });
       setBackupSuccess(`New lead created for ${contact.fullName}. It will re-enter qualification using the source business context.`);
-    } catch (err) {
-      setBackupSuccess(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } catch {
+      setBackupSuccess('Couldn’t create the backup contact lead. Please try again.');
     } finally {
       setIsCreatingBackup(false);
     }
@@ -1928,14 +1969,33 @@ export default function LeadDetailPage() {
 
       refreshMessagingData();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Failed to generate outreach draft');
+      toast.info(
+        toSafeDisplayErrorMessage(
+          err,
+          'Couldn’t start outreach draft generation. Please try again.',
+        ),
+      );
     } finally {
       setIsGeneratingDraft(false);
     }
   }, [apiClient, draftIcpProfileId, draftScorePredictionId, l, refreshMessagingData, waitForDraftCompletion]);
 
   if (lead.error) {
-    return <p className="text-sm text-destructive">{lead.error}</p>;
+    return (
+      <div className="rounded-2xl border border-amber-500/25 bg-card p-6 text-sm shadow-sm">
+        <p className="font-semibold text-foreground">This lead profile is refreshing.</p>
+        <p className="mt-1 text-muted-foreground">
+          The latest business and contact details will appear when the refresh completes.
+        </p>
+        <button
+          type="button"
+          onClick={() => void lead.refetch()}
+          className="mt-4 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground"
+        >
+          Refresh
+        </button>
+      </div>
+    );
   }
 
   if (lead.isLoading || !l) {
@@ -2060,8 +2120,12 @@ export default function LeadDetailPage() {
 
         {l.error ? (
           <div className="mt-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Error</p>
-            <p className="mt-0.5 font-medium text-destructive">{l.error}</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+              Enrichment note
+            </p>
+            <p className="mt-0.5 font-medium text-amber-200">
+              Some enrichment details were unavailable.
+            </p>
           </div>
         ) : null}
       </div>
@@ -2422,7 +2486,7 @@ export default function LeadDetailPage() {
               ) : null}
             </h2>
             <p className="mt-1 text-sm text-muted-foreground/60">
-              Generate, edit, re-draft, approve, and send this lead&apos;s outreach from the lead detail page.
+              Generate, edit, re-draft, and approve this lead&apos;s outreach for review. Outbound delivery is disabled.
             </p>
           </div>
           <button
@@ -2448,8 +2512,8 @@ export default function LeadDetailPage() {
         ) : null}
 
         {messageDrafts.error ? (
-          <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-            Failed to load drafts: {messageDrafts.error}
+          <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-100">
+            Outreach drafts are refreshing. Previously loaded drafts remain available.
           </div>
         ) : null}
 
@@ -2464,7 +2528,7 @@ export default function LeadDetailPage() {
           <div className="rounded-2xl border border-border/50 bg-card p-6 shadow-sm">
             <p className="text-sm font-medium text-foreground">No outreach draft yet.</p>
             <p className="mt-1 text-sm text-muted-foreground/60">
-              Generate the first draft here, then review, edit, approve, and send it from this page.
+              Generate the first draft here, then review, edit, and approve it for review only.
             </p>
           </div>
         ) : null}
@@ -2518,7 +2582,7 @@ export default function LeadDetailPage() {
               ) : null}
 
               {backupSuccess ? (
-                <p className={`mt-2 text-xs ${backupSuccess.startsWith('Failed') ? 'text-red-400' : 'text-zbooni-green'}`}>
+                <p className={`mt-2 text-xs ${backupSuccess.startsWith('New lead created') ? 'text-zbooni-green' : 'text-amber-300'}`}>
                   {backupSuccess}
                 </p>
               ) : (
@@ -2597,7 +2661,12 @@ export default function LeadDetailPage() {
                 ) : null}
               </div>
               {send.failureReason ? (
-                <p className="mt-1 text-xs text-destructive">{send.failureReason}</p>
+                <p className="mt-1 text-xs text-amber-300">
+                  {toSafeDisplayErrorMessage(
+                    send.failureReason,
+                    'Delivery was not completed in this demo.',
+                  )}
+                </p>
               ) : null}
             </div>
           ))}
