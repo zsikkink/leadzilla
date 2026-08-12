@@ -40,13 +40,12 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
       return;
     }
 
-    try {
-      if (isStaticPreview) {
-        window.sessionStorage.removeItem(LOGIN_PREVIEW_NOTICE_SESSION_KEY);
-        setPreviewNoticeOpen(false);
-        return;
-      }
+    if (isStaticPreview) {
+      setPreviewNoticeOpen(true);
+      return;
+    }
 
+    try {
       if (window.sessionStorage.getItem(LOGIN_PREVIEW_NOTICE_SESSION_KEY) === 'true') {
         window.sessionStorage.removeItem(LOGIN_PREVIEW_NOTICE_SESSION_KEY);
         setPreviewNoticeOpen(true);
@@ -101,24 +100,26 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
         >
           <DialogHeader>
             <DialogTitle className="text-xl font-bold">This is a demo environment</DialogTitle>
-            <DialogDescription className="leading-6">
+            <DialogDescription
+              className={cn('leading-6', isStaticPreview && 'text-foreground')}
+            >
               {isStaticPreview
-                ? 'The recruiter workspace is running from bundled, read-only snapshots.'
+                ? 'Every navigation tab is available without live services. Changes are not saved, and outbound delivery remains disabled.'
                 : 'Explore lead discovery, scoring, and message drafting.'}
             </DialogDescription>
           </DialogHeader>
-          <p className="text-sm leading-6 text-foreground">
-            {isStaticPreview
-              ? 'Every navigation tab is available without live services. Changes are not saved, and outbound delivery remains disabled.'
-              : 'Sending emails, SMS messages, and WhatsApp messages is disabled.'}
-          </p>
+          {!isStaticPreview && (
+            <p className="text-sm leading-6 text-foreground">
+              Sending emails, SMS messages, and WhatsApp messages is disabled.
+            </p>
+          )}
           <DialogFooter className="mt-6 justify-center sm:justify-center">
             <button
               type="button"
               onClick={handlePreviewNoticeDismiss}
               className="inline-flex h-10 items-center justify-center rounded-lg border border-zbooni-teal/15 bg-zbooni-teal/[0.045] px-4 text-sm font-semibold text-zbooni-teal shadow-sm shadow-black/10 transition-colors hover:bg-zbooni-teal/[0.075] focus:outline-none focus:ring-2 focus:ring-zbooni-teal/25 focus:ring-offset-2 focus:ring-offset-background"
             >
-              {isStaticPreview ? 'View dashboard' : 'Start exploring'}
+              {isStaticPreview ? 'View Demo' : 'Start exploring'}
             </button>
           </DialogFooter>
         </DialogContent>
