@@ -4,6 +4,8 @@ function normalizeErrorFragment(value: string): string {
 
 export const LIVE_DATA_REFRESH_MESSAGE =
   'Live data is refreshing. Please try again in a moment.';
+export const LIVE_ACCESS_ENDED_MESSAGE =
+  'Live access ended. Refresh to continue in the read-only demo.';
 
 const INTERNAL_ERROR_PATTERN =
   /\b(?:api|database|deno|edge function|fetch|foreign key|gateway|html|http|index|internal server|json|network|openai|pg|postgres|postgrest|prisma|provider|relation|request failed|schema|serpapi|sql|stack|supabase|table|timeout|timed out|unique constraint|violates)\b|(?:code|status)\s*[:=]?\s*\d{3,5}|(?:failed to fetch|load failed|duplicate key)/i;
@@ -88,10 +90,10 @@ export function toSafeDisplayErrorMessage(
   }
 
   if (/invalid login credentials/i.test(normalized)) {
-    return 'The demo credentials were not accepted. Please try again.';
+    return LIVE_ACCESS_ENDED_MESSAGE;
   }
   if (/session expired|unauthorized|invalid token|missing or invalid authorization/i.test(normalized)) {
-    return 'Your demo session expired. Please sign in again.';
+    return LIVE_ACCESS_ENDED_MESSAGE;
   }
   if (/outbound.*disabled|sending.*disabled|delivery.*disabled/i.test(normalized)) {
     return 'Outbound delivery is disabled in this demo. Drafts remain available for review.';
@@ -120,7 +122,7 @@ export function toSafeApiErrorMessage(
   error: unknown,
 ): string {
   if (status === 401) {
-    return 'Your demo session expired. Please sign in again.';
+    return LIVE_ACCESS_ENDED_MESSAGE;
   }
   if (status === 403) {
     return toSafeDisplayErrorMessage(

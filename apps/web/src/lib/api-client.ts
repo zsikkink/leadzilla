@@ -69,6 +69,7 @@ import {
   DEMO_OPERATIONS_DASHBOARD_SNAPSHOT,
 } from './demo-dashboard-snapshots.js';
 import {
+  LIVE_ACCESS_ENDED_MESSAGE,
   LIVE_DATA_REFRESH_MESSAGE,
   toSafeApiErrorMessage,
   toSafeDisplayErrorMessage,
@@ -162,7 +163,7 @@ export class ApiClient {
       }
 
       if (response.status === 401) {
-        throw new ApiError(401, 'Session expired — please log in again');
+        throw new ApiError(401, LIVE_ACCESS_ENDED_MESSAGE);
       }
 
       if (!response.ok) {
@@ -202,7 +203,7 @@ export class ApiClient {
 
     if (!token) {
       queueMicrotask(() => {
-        handlers.onError?.(new ApiError(401, 'Session expired — please log in again'));
+        handlers.onError?.(new ApiError(401, LIVE_ACCESS_ENDED_MESSAGE));
       });
       return () => controller.abort();
     }

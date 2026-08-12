@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { ApiClient, ApiError } from './api-client.js';
-import { LIVE_DATA_REFRESH_MESSAGE } from './error-messages.js';
+import { LIVE_ACCESS_ENDED_MESSAGE, LIVE_DATA_REFRESH_MESSAGE } from './error-messages.js';
 
 describe('ApiClient', () => {
   const baseUrl = 'http://localhost:5050';
@@ -68,7 +68,7 @@ describe('ApiClient', () => {
     );
 
     await expect(client.listLeads({ page: 1, pageSize: 20, includeQualityMetrics: false })).rejects.toThrow(
-      'Session expired',
+      LIVE_ACCESS_ENDED_MESSAGE,
     );
   });
 

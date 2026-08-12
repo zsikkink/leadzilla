@@ -111,12 +111,12 @@ To verify just the API against remote Supabase before starting the full stack:
 pnpm --filter @lead-flood/api dev
 ```
 
-## 5) Log In
+## 5) Open the Recruiter Demo
 
-1. Go to http://localhost:3000
-2. For the Leadzilla demo, sign in with the visible demo credentials from the login page (`demo@example.com` / `password`) when that account exists in the target Supabase project.
-3. For non-demo local work, sign in with your Supabase Auth account (the team lead creates this for you in the Supabase dashboard).
-4. To access admin/discovery features, your user ID must be in the `app_admins` table — the team lead handles this.
+1. Go to `http://localhost:3000/leadzilla`.
+2. The app redirects directly to the dashboard in a bundled, tokenless, read-only preview. No login is required.
+3. Old `/leadzilla/login` and `/leadzilla/forgot-password` links also redirect to the dashboard.
+4. An already-valid non-demo Supabase operator session may restore the private live surface; admin access still requires membership in `app_admins`.
 
 ## 6) Verify Everything Works
 
@@ -132,10 +132,11 @@ All four should pass with zero errors.
 ## Architecture Overview
 
 ```
-Frontend (Next.js :3000)  →  API (Fastify :5050)  →  Worker (pg-boss queues)
-         ↓                         ↓                         ↓
-    Supabase Auth           Supabase Postgres          Discovery pipeline
-    (login/session)         (all app data)             (SerpAPI/Google Places → scoring → drafting)
+Public Next.js demo  →  Bundled read-only recruiter snapshots
+Private live session  →  API (Fastify :5050)  →  Worker (pg-boss queues)
+          ↓                      ↓                         ↓
+   Supabase session       Supabase Postgres          Discovery pipeline
+   restoration only      (all live app data)        (SerpAPI/Google Places → scoring → drafting)
 ```
 
 - **API** handles REST endpoints, auth verification, and enqueues jobs via pg-boss
@@ -151,7 +152,7 @@ For a deep dive into each pipeline stage, read `lead-flood-system-walkthrough.md
 |---------|-----|
 | `Unable to reach API` on web | API hasn't started yet — wait for "Server listening" in terminal |
 | `MaxClientsInSessionMode` crash | Missing `?connection_limit=3` on DATABASE_URL |
-| Blank page after login | Check `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` |
+| Public dashboard does not open | Confirm the URL includes the `/leadzilla` base path and restart `pnpm dev` |
 | `spawn sh ENOENT` from pnpm | Your PATH is missing `/bin`. Run: `export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"` |
 | Discovery features hidden | Your user ID needs to be in `app_admins` table |
 | Worker crashes on start | Check DATABASE_URL is set in `apps/worker/.env.local` |

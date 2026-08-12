@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   collapseRepeatedErrorMessage,
   isGenericDatabaseErrorMessage,
+  LIVE_ACCESS_ENDED_MESSAGE,
   LIVE_DATA_REFRESH_MESSAGE,
   toDiscoveryRunNotice,
   toSafeApiErrorMessage,
@@ -63,10 +64,10 @@ describe('error message helpers', () => {
       'Choose one or more active ICPs before starting discovery',
     );
     expect(toSafeDisplayErrorMessage('Invalid login credentials')).toBe(
-      'The demo credentials were not accepted. Please try again.',
+      LIVE_ACCESS_ENDED_MESSAGE,
     );
     expect(toSafeDisplayErrorMessage('Session expired — please log in again')).toBe(
-      'Your demo session expired. Please sign in again.',
+      LIVE_ACCESS_ENDED_MESSAGE,
     );
     expect(
       toSafeDisplayErrorMessage('Company size fields must be positive whole numbers.'),

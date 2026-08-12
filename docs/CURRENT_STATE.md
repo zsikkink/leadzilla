@@ -38,6 +38,7 @@ Confirmed current implementation facts:
 - The Inbox now owns draft review and conversation-style messaging. `/dashboard/messages` redirects to `/dashboard/inbox` while preserving query parameters.
 - The web API request timeout defaults to 5 seconds (`NEXT_PUBLIC_API_TIMEOUT_MS=5000`) so stalled demo API calls fail quickly instead of making the UI feel frozen.
 - Recruiter-facing request failures and persisted job/provider/database error fields are mapped to concise operational notices; raw backend details remain server-side, while public business contact data is unchanged.
+- The resume-linked public entry redirects directly to a bundled, tokenless, read-only workspace. The former login and forgot-password routes redirect to the dashboard, and the shared demo identity cannot upgrade into a live bearer-token session.
 
 For demo work, keep outbound provider credentials unset unless the product scope explicitly changes. The current demo contract is draft review only: no email or direct-message delivery.
 
@@ -45,8 +46,8 @@ Recruiter-facing UI may call the blocked direct-message channel SMS. That is int
 
 ## 2. Current architecture truth
 
-- Frontend runtime: `apps/web` is a Next.js app targeting Vercel. Supabase browser auth/session is still used client-side. Discovery-admin leads/search-task reads now go through the Next admin proxy, but some other operational reads still go browser-direct elsewhere in the web app.
-- Recruiter demo API runtime: the public Vercel deployment points `NEXT_PUBLIC_API_BASE_URL` and `API_BASE_URL` at the Supabase Edge Function API. That Edge API supports read routes plus bounded SerpAPI discovery, server-side Hunter domain enrichment, scoring, and OpenAI draft-generation jobs.
+- Frontend runtime: `apps/web` is a Next.js app targeting Vercel. The public recruiter surface uses bundled snapshots with a tokenless preview identity. Supabase browser session restoration remains only for an already-valid non-demo operator session. Discovery-admin leads/search-task reads now go through the Next admin proxy, but some other operational reads still go browser-direct on the private live surface.
+- Recruiter demo API runtime: the Vercel deployment points `NEXT_PUBLIC_API_BASE_URL` and `API_BASE_URL` at the Supabase Edge Function API. That Edge API supports read routes plus bounded SerpAPI discovery, server-side Hunter domain enrichment, scoring, and OpenAI draft-generation jobs for valid private live sessions; the public tokenless preview does not call it.
 - Historical full-platform API runtime: `apps/api` remains the protected Fastify operational boundary for the full service path. It verifies Supabase JWTs, owns `/ready`, owner-scopes normal discovery reads, and enforces discovery-admin access with `x-admin-key` plus server-side `app_admins` membership.
 - Worker runtime: `apps/worker` remains the server-only background execution path for the full service. It is not part of the public recruiter demo runtime; worker-backed and outbound actions stay disabled in the demo.
 - Database/auth: Supabase Postgres + Auth.

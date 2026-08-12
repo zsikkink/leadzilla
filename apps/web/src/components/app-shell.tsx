@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 
 import { useAuth } from '../hooks/use-auth.js';
@@ -29,18 +29,11 @@ interface AppShellProps {
 
 export function AppShell({ children, contentClassName }: AppShellProps) {
   const { isAuthenticated, isLoading, sessionMode } = useAuth();
-  const router = useRouter();
   const pathname = usePathname();
   const { collapsed, toggle, hydrated } = useSidebarCollapse();
   const [previewNoticeOpen, setPreviewNoticeOpen] = useState(false);
-  const isStaticPreview = sessionMode === 'preview';
+  const isStaticPreview = sessionMode !== 'live';
   const previewPage = isStaticPreview ? getDemoPreviewPageKind(pathname) : null;
-
-  useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      router.replace('/login');
-    }
-  }, [isAuthenticated, isLoading, router]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -82,10 +75,6 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
         </div>
       </div>
     );
-  }
-
-  if (!isAuthenticated) {
-    return null;
   }
 
   return (

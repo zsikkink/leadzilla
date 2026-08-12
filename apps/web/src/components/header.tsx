@@ -1,6 +1,6 @@
 'use client';
 
-import { LogOut } from 'lucide-react';
+import { LogOut, ShieldCheck } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 
 import { useAuth } from '../hooks/use-auth.js';
@@ -23,7 +23,7 @@ function getPageTitle(pathname: string): string {
 }
 
 export function Header() {
-  const { user, logout } = useAuth();
+  const { user, logout, sessionMode } = useAuth();
   const pathname = usePathname();
   const pageTitle = getPageTitle(pathname);
 
@@ -35,7 +35,13 @@ export function Header() {
         </div>
 
         <div className="flex items-center gap-3">
-          {user ? (
+          {sessionMode === 'preview' ? (
+            <div className="flex items-center gap-2 rounded-full border border-zbooni-green/20 bg-zbooni-green/[0.07] px-3 py-1.5 text-zbooni-green shadow-sm shadow-black/10">
+              <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="hidden text-xs font-bold sm:inline">Read-only portfolio demo</span>
+              <span className="text-xs font-bold sm:hidden">Demo</span>
+            </div>
+          ) : user ? (
             <div className="flex items-center gap-2">
               <div className="hidden items-center gap-2 sm:flex">
                 <span className="text-sm text-foreground">
@@ -44,15 +50,17 @@ export function Header() {
               </div>
             </div>
           ) : null}
-          <button
-            type="button"
-            onClick={logout}
-            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
-            aria-label="Sign out"
-            title="Sign out"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
+          {sessionMode === 'live' ? (
+            <button
+              type="button"
+              onClick={logout}
+              className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+              aria-label="Sign out"
+              title="Sign out"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          ) : null}
         </div>
       </div>
     </header>

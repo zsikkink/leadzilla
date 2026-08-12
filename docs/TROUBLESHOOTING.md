@@ -27,15 +27,11 @@ DATABASE_URL=postgresql://...pooler.supabase.com:5432/postgres?connection_limit=
 - `SUPABASE_JWT_ISSUER=https://<project-ref>.supabase.co/auth/v1`, or
 - `SUPABASE_PROJECT_REF=<project-ref>` (issuer is derived automatically)
 
-### Web login page shows nothing / blank screen
+### Public dashboard does not open
 
-**Cause:** Missing Supabase client config.
+**Cause:** The `/leadzilla` application base path was omitted, or the local Next.js process has stale route output.
 
-**Fix:** In `apps/web/.env.local`, ensure both are set:
-```
-NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable-key>
-```
+**Fix:** Open `http://localhost:3000/leadzilla` and restart `pnpm dev` if needed. The recruiter preview is bundled and does not require Supabase client configuration or a login.
 
 ### `spawn sh ENOENT` from pnpm scripts
 

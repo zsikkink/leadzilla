@@ -19,6 +19,8 @@ The UI may describe the blocked direct-message channel as SMS because the demo a
 
 The active recruiter-facing operator app is intentionally compact:
 
+The resume-linked experience opens directly into a bundled, tokenless, read-only workspace. It has no sign-in form and makes the complete recruiter navigation available without granting live API or provider access. An already-valid non-demo Supabase operator session can still restore the private live surface.
+
 - **Dashboard** consolidates the former analytics/overview surfaces into one executive view with a lead-flow Sankey, lead quality, ICP performance, quality trend, outreach outcomes, and discovery runs.
 - **Discover** runs one bounded discovery/enrichment/scoring job. The demo UI exposes the workflow as Set Scope -> Search -> Enrich -> Score and locks search-task volume to the safe demo limit.
 - **Leads** is the main lead review surface.
@@ -95,23 +97,25 @@ pnpm dev:local-stack
 
 ## Local URLs
 
-- Web: `http://localhost:3000`
-- Login: `http://localhost:3000/login` (Supabase Auth)
-- Operator discovery page: `http://localhost:3000/dashboard/discover`
-- Legacy/debug discovery console: `http://localhost:3000/discovery`
+- Public demo entry: `http://localhost:3000/leadzilla`
+- Dashboard: `http://localhost:3000/leadzilla/dashboard`
+- Legacy `/leadzilla/login` and `/leadzilla/forgot-password` links redirect to the dashboard
+- Recruiter discovery showcase: `http://localhost:3000/leadzilla/dashboard/discover`
+- Legacy/debug discovery console: `http://localhost:3000/leadzilla/discovery`
 - API health when running `pnpm dev:local-stack`: `http://localhost:5050/health`
 - API ready when running `pnpm dev:local-stack`: `http://localhost:5050/ready`
 
 ## Deployment Topology
 
 - Web app: Vercel
-- Recruiter demo API: Supabase Edge Function `api` for read routes plus bounded discovery, enrichment, scoring, and OpenAI draft generation
+- Public recruiter UI: bundled read-only snapshots with no bearer token or live provider calls
+- Private live-session API: Supabase Edge Function `api` for read routes plus bounded discovery, enrichment, scoring, and OpenAI draft generation
 - Worker: not part of the public demo runtime; worker-backed and outbound actions remain disabled
 - Database/Auth: Supabase
 
 The historical Fastify API and worker services remain in the repo for the full
-platform path, but the public recruiter demo is configured to call the Supabase
-Edge API entrypoint directly.
+platform path. The public recruiter view stays tokenless; only an already-valid
+private operator session can call the Supabase Edge API entrypoint.
 
 ## Demo Pipeline Target
 

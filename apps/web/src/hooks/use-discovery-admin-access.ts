@@ -99,7 +99,7 @@ export function useDiscoveryAdminAccess(): DiscoveryAdminAccessState {
           error instanceof DiscoveryAdminAccessError && error.status === 403
             ? 'Admin access is required for this surface.'
             : error instanceof DiscoveryAdminAccessError && error.status === 401
-              ? 'Sign in is required before using this surface.'
+              ? 'This live-only surface is unavailable in the read-only demo.'
               : toSafeDisplayErrorMessage(
                   error,
                   'Admin access is being verified. Please try again in a moment.',

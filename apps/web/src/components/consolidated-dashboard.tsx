@@ -511,7 +511,7 @@ export function ConsolidatedDashboard() {
       <div className="grid gap-5 xl:grid-cols-2">
         <PipelineTimeSeriesChart
           chartId="discovery-qualification-trends"
-          defaultRange="all"
+          defaultRange="1m"
           lines={DISCOVERY_TREND_LINES}
           precomputedData={PIPELINE_TREND_BUCKETS}
           rangeOptions={DASHBOARD_RANGE_OPTIONS}
@@ -520,7 +520,7 @@ export function ConsolidatedDashboard() {
         />
         <PipelineTimeSeriesChart
           chartId="message-reply-trends"
-          defaultRange="all"
+          defaultRange="1m"
           lines={MESSAGE_TREND_LINES}
           precomputedData={PIPELINE_TREND_BUCKETS}
           rangeOptions={DASHBOARD_RANGE_OPTIONS}
