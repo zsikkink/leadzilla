@@ -3990,6 +3990,13 @@ async function handleListLeads(url: URL): Promise<Response> {
   const sortBy = url.searchParams.get("sortBy") ?? "created_desc";
   const scoreSort = sortBy === "score_desc" || sortBy === "score_asc";
   const icpProfileId = url.searchParams.get("icpProfileId");
+  const from = url.searchParams.get("from");
+  const to = url.searchParams.get("to");
+  const search = url.searchParams.get("search");
+  const scoreBand = url.searchParams.get("scoreBand");
+  const minBlendedScore = url.searchParams.get("minBlendedScore");
+  const status = url.searchParams.get("status");
+  const useCachedRanking = scoreSort && !icpProfileId;
 
   let leadIdFilter: Set<string> | null = null;
   if (icpProfileId) {
@@ -4013,13 +4020,9 @@ async function handleListLeads(url: URL): Promise<Response> {
   };
 
   if (!includeRejected) params.status = "neq.rejected";
-  const status = url.searchParams.get("status");
   if (status) params.status = `eq.${status}`;
-  const from = url.searchParams.get("from");
   if (from) params.createdAt = `gte.${from}`;
-  const to = url.searchParams.get("to");
   if (to) params.createdAt = `lte.${to}`;
-  const search = url.searchParams.get("search");
   if (search) {
     const pattern = ilikePattern(search);
     params.or =
@@ -4034,7 +4037,39 @@ async function handleListLeads(url: URL): Promise<Response> {
 
   let preloadedScores: Map<string, Row> | null = null;
   let result: RestResult<Row[]>;
-  if (scoreSort) {
+  if (useCachedRanking) {
+    const rankingParams: Record<string, string | number> = {
+      select: "response_json",
+      order: sortBy === "score_asc"
+        ? "display_score.asc.nullslast,created_at.desc,lead_id.desc"
+        : "display_score.desc.nullslast,created_at.desc,lead_id.desc",
+      offset: (page - 1) * pageSize,
+      limit: pageSize,
+    };
+    if (!includeRejected) rankingParams.status = "neq.rejected";
+    if (status) rankingParams.status = `eq.${status}`;
+    if (from) rankingParams.created_at = `gte.${from}`;
+    if (to) rankingParams.created_at = `lte.${to}`;
+    if (search) rankingParams.search_text = `ilike.${ilikePattern(search)}`;
+    if (scoreBand) rankingParams.score_band = `eq.${scoreBand}`;
+    if (minBlendedScore) {
+      rankingParams.display_score = `gte.${Number(minBlendedScore)}`;
+    }
+
+    const rankings = await listRows(
+      "leadzilla_demo_lead_rankings",
+      rankingParams,
+    );
+    return jsonResponse({
+      items: rankings.data
+        .map((ranking) => asObject(ranking.response_json))
+        .filter((lead): lead is JsonObject => lead !== null),
+      qualityMetrics: null,
+      page,
+      pageSize,
+      total: rankings.total ?? rankings.data.length,
+    });
+  } else if (scoreSort) {
     const [allLeads, allScoreRows] = await Promise.all([
       listAllRows("Lead", params),
       listAllRows("LeadScorePrediction", {
@@ -4055,10 +4090,8 @@ async function handleListLeads(url: URL): Promise<Response> {
     result = await listRows("Lead", params);
   }
   let leads = result.data;
-  const scoreBand = url.searchParams.get("scoreBand");
-  const minBlendedScore = url.searchParams.get("minBlendedScore");
 
-  if (scoreBand || minBlendedScore || scoreSort) {
+  if (!useCachedRanking && (scoreBand || minBlendedScore || scoreSort)) {
     const candidateIds = leads.map((lead) => asString(lead.id)).filter(Boolean);
     const scores = preloadedScores ?? await latestScoresByLeadId(candidateIds);
     const businesses = scoreSort
