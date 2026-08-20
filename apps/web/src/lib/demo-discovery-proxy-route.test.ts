@@ -15,10 +15,12 @@ describe('public demo discovery proxy route', () => {
     else process.env.LEADZILLA_DEMO_GATEWAY_SECRET = originalGatewaySecret;
   });
 
-  it('rejects paths outside the exact discovery allowlist', async () => {
+  it('rejects delivery mutations outside the exact demo allowlist', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch');
-    const request = new NextRequest('https://web.example.com/leadzilla/api/demo/v1/messaging/sends');
-    const response = await GET(request, {
+    const request = new NextRequest('https://web.example.com/leadzilla/api/demo/v1/messaging/sends', {
+      method: 'POST',
+    });
+    const response = await POST(request, {
       params: Promise.resolve({ path: ['v1', 'messaging', 'sends'] }),
     });
 
@@ -132,6 +134,28 @@ describe('public demo discovery proxy route', () => {
     expect(response.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledWith(
       'https://api.example.com/v1/demo/messaging/drafts?leadId=lead_1',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('forwards read-only message history', async () => {
+    process.env.API_BASE_URL = 'https://api.example.com';
+    process.env.LEADZILLA_DEMO_GATEWAY_SECRET = 'server-only-demo-key';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      Response.json({ items: [], page: 1, pageSize: 20, total: 0 }),
+    );
+    const request = new NextRequest(
+      'https://web.example.com/leadzilla/api/demo/v1/messaging/sends?leadId=lead_1',
+      { headers: { origin: 'https://web.example.com' } },
+    );
+
+    const response = await GET(request, {
+      params: Promise.resolve({ path: ['v1', 'messaging', 'sends'] }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.example.com/v1/demo/messaging/sends?leadId=lead_1',
       expect.objectContaining({ method: 'GET' }),
     );
   });

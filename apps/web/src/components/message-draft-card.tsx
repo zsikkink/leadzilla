@@ -139,7 +139,6 @@ function VariantEditor({
   variant,
   isPending,
   actionInProgress,
-  onApprove,
   onRegenerate,
   regenerateDisabledReason,
   apiClient,
@@ -148,7 +147,6 @@ function VariantEditor({
   variant: MessageVariantResponse;
   isPending: boolean;
   actionInProgress: string | null;
-  onApprove: (variantId: string) => void;
   onRegenerate?: ((feedback: string) => Promise<void> | void) | undefined;
   regenerateDisabledReason?: string | null | undefined;
   apiClient: ApiClient;
@@ -308,7 +306,7 @@ function VariantEditor({
                 htmlFor={`redraft-feedback-${variant.id}`}
                 className="mb-1 block text-[11px] font-semibold text-muted-foreground/70"
               >
-                What should change in the next draft?
+                What would you like to change about the message?
               </label>
               <textarea
                 id={`redraft-feedback-${variant.id}`}
@@ -362,9 +360,9 @@ function VariantEditor({
           {isPending ? (
             <button
               type="button"
-              disabled={!!actionInProgress}
-              onClick={() => onApprove(variant.id)}
-              className="inline-flex items-center gap-1 rounded-lg bg-zbooni-green/20 px-3 py-1.5 text-xs font-semibold text-zbooni-green transition-colors hover:bg-zbooni-green/30 disabled:opacity-50"
+              disabled
+              aria-disabled="true"
+              className="inline-flex cursor-not-allowed items-center gap-1 rounded-lg bg-zbooni-green/10 px-3 py-1.5 text-xs font-semibold text-zbooni-green/40"
             >
               <Check className="h-3 w-3" /> Approve Draft
             </button>
@@ -384,35 +382,12 @@ export function MessageDraftCard({
   onAction,
   onQueuedRegenerate,
 }: MessageDraftCardProps) {
-  const { apiClient, user } = useAuth();
+  const { apiClient } = useAuth();
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
 
-  const userId = user?.id ?? 'unknown';
   const primaryChannel = draft.variants[0]?.channel ?? 'EMAIL';
-
-  const handleApprove = async (variantId?: string | undefined) => {
-    setActionInProgress('approve');
-    setError(null);
-    try {
-      await apiClient.approveDraft(draft.id, {
-        approvedByUserId: userId,
-        selectedVariantId: variantId,
-      });
-      toast.success('Draft approved. No message was sent.');
-      onAction();
-    } catch (err: unknown) {
-      setError(
-        toSafeDisplayErrorMessage(
-          err,
-          'Couldn’t approve this draft. Please try again.',
-        ),
-      );
-    } finally {
-      setActionInProgress(null);
-    }
-  };
 
   const handleRegenerate = async (feedback: string) => {
     if (draft.followUpNumber !== 0) {
@@ -538,9 +513,6 @@ export function MessageDraftCard({
       {/* Expanded content */}
       {expanded ? (
         <div className="border-t border-border/30 p-5 pt-4">
-          <div className="mb-4 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2 text-xs text-amber-100/90">
-            Draft-only demo: approval records review, but outbound email and WhatsApp delivery are disabled.
-          </div>
           {initialSendBadge?.detail ? (
             <div className="mb-4 rounded-xl border border-border/40 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
               {initialSendBadge.detail}
@@ -553,7 +525,6 @@ export function MessageDraftCard({
                 variant={variant}
                 isPending={isPending}
                 actionInProgress={actionInProgress}
-                onApprove={handleApprove}
                 onRegenerate={isInitialDraft ? handleRegenerate : undefined}
                 regenerateDisabledReason={regenerateDisabledReason}
                 apiClient={apiClient}
