@@ -427,6 +427,12 @@ const SERPAPI_DISCOVERY_COUNTRY_CITIES: CountryCitiesMap = {
   TN: [
     "Tunis", "Sfax", "Sousse", "Kairouan",
   ],
+  US: [
+    "New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "Philadelphia",
+    "San Antonio", "San Diego", "Dallas", "Austin", "San Francisco", "Seattle",
+    "Denver", "Boston", "Washington", "Miami", "Atlanta", "Charlotte", "Nashville",
+    "Portland",
+  ],
 };
 
 // Retain the public export name for existing callers, but make the stored default

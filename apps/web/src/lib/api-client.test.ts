@@ -222,6 +222,21 @@ describe('ApiClient', () => {
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 120000);
   });
 
+  it('requests the session-scoped demo run performance route', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ run: { runId: 'run_1' }, tasks: [] }), { status: 200 }),
+    );
+
+    await client.getDemoDiscoveryRunPerformance('run_1');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5050/v1/discovery/runs/run_1/performance',
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: 'Bearer test-token' }),
+      }),
+    );
+  });
+
   it('does not expose raw database errors returned by the API', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
       new Response(

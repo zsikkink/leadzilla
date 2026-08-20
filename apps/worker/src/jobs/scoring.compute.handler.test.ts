@@ -190,6 +190,7 @@ describe('handleScoringComputeJob primary business conversion anchoring', () => 
       logger,
       makeJob({
         runId: 'run_1',
+        correlationId: 'discovery_run_1',
         mode: 'BY_LEAD_IDS',
         leadIds: ['lead_1'],
         icpProfileId: 'icp_1',
@@ -221,11 +222,15 @@ describe('handleScoringComputeJob primary business conversion anchoring', () => 
       scoreBand: 'HIGH',
       apolloHasEmail: true,
       apolloHasDirectPhone: false,
-      correlationId: expect.any(String),
+      correlationId: 'discovery_run_1',
     });
     expect(dbMock.prisma.leadRejection.deleteMany).toHaveBeenCalledWith({
       where: { leadId: 'lead_1' },
     });
+    expect(trackerMock.tryFinalizeDiscoveryRun).toHaveBeenCalledWith(
+      'discovery_run_1',
+      logger,
+    );
   });
 
   it('does not enqueue provider enrichment from a deterministic fallback score', async () => {

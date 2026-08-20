@@ -1,17 +1,32 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DEFAULT_DISCOVERY_COUNTRY_CODES,
   buildDiscoveryRequest,
+  getDefaultSelectedIcpIds,
   getNextSelectedIcpId,
   isPublicDemoSearchTaskLimit,
   shouldShowDiscoveryRun,
 } from './page.helpers.js';
 
 describe('discover page helpers', () => {
+  it('defaults recruiter demo targeting to the United States only', () => {
+    expect(DEFAULT_DISCOVERY_COUNTRY_CODES).toEqual(['US']);
+  });
+
   it('toggles ICP selection for multi-select', () => {
     expect(getNextSelectedIcpId([], 'icp_1')).toEqual(['icp_1']);
     expect(getNextSelectedIcpId(['icp_1'], 'icp_2')).toEqual(['icp_1', 'icp_2']);
     expect(getNextSelectedIcpId(['icp_1', 'icp_2'], 'icp_2')).toEqual(['icp_1']);
+  });
+
+  it('selects every available ICP by default', () => {
+    expect(getDefaultSelectedIcpIds([
+      { id: 'icp_1' },
+      { id: 'icp_2' },
+      { id: 'icp_3' },
+      { id: 'icp_4' },
+    ])).toEqual(['icp_1', 'icp_2', 'icp_3', 'icp_4']);
   });
 
   it('builds a multi-ICP discovery request payload', () => {
@@ -45,15 +60,23 @@ describe('discover page helpers', () => {
     expect(isPublicDemoSearchTaskLimit(1.5)).toBe(false);
   });
 
-  it('shows active runs and completed runs with processed output', () => {
+  it('keeps every bounded public run visible through terminal status', () => {
     expect(shouldShowDiscoveryRun('QUEUED', 0, 5)).toBe(true);
     expect(shouldShowDiscoveryRun('RUNNING', 0, 5)).toBe(true);
     expect(shouldShowDiscoveryRun('SUCCEEDED', 10, 5)).toBe(true);
-    expect(shouldShowDiscoveryRun('SUCCEEDED', 10, 5, true)).toBe(false);
-    expect(shouldShowDiscoveryRun('SUCCEEDED', 0, 5)).toBe(false);
+    expect(shouldShowDiscoveryRun('SUCCEEDED', 10, 5, true)).toBe(true);
+    expect(shouldShowDiscoveryRun('SUCCEEDED', 0, 5)).toBe(true);
     expect(shouldShowDiscoveryRun('SUCCEEDED', 100, 25)).toBe(false);
-    expect(shouldShowDiscoveryRun('PARTIAL', 8, 5)).toBe(false);
-    expect(shouldShowDiscoveryRun('FAILED', 0, 5)).toBe(false);
+    expect(shouldShowDiscoveryRun('PARTIAL', 8, 5)).toBe(true);
+    expect(shouldShowDiscoveryRun('FAILED', 0, 5)).toBe(true);
+  });
+
+  it('keeps grouped public runs visible when each individual run is within budget', () => {
+    const groupedRunLimits = [5, 5];
+
+    expect(
+      shouldShowDiscoveryRun('SUCCEEDED', 20, Math.max(...groupedRunLimits)),
+    ).toBe(true);
   });
 
   it('refuses to build a request without ICPs and country set', () => {

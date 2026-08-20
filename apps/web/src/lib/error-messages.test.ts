@@ -5,6 +5,9 @@ import {
   isGenericDatabaseErrorMessage,
   LIVE_ACCESS_ENDED_MESSAGE,
   LIVE_DATA_REFRESH_MESSAGE,
+  PUBLIC_DEMO_BUSY_MESSAGE,
+  PUBLIC_DEMO_GLOBAL_LIMIT_MESSAGE,
+  PUBLIC_DEMO_SESSION_LIMIT_MESSAGE,
   toDiscoveryRunNotice,
   toSafeApiErrorMessage,
   toSafeDisplayErrorMessage,
@@ -101,6 +104,18 @@ describe('error message helpers', () => {
     );
     expect(toSafeApiErrorMessage(400, 'Choose at least one country')).toBe(
       'Choose at least one country',
+    );
+    expect(toSafeApiErrorMessage(429, PUBLIC_DEMO_SESSION_LIMIT_MESSAGE)).toBe(
+      PUBLIC_DEMO_SESSION_LIMIT_MESSAGE,
+    );
+    expect(toSafeApiErrorMessage(429, PUBLIC_DEMO_GLOBAL_LIMIT_MESSAGE)).toBe(
+      PUBLIC_DEMO_GLOBAL_LIMIT_MESSAGE,
+    );
+    expect(toSafeApiErrorMessage(429, PUBLIC_DEMO_BUSY_MESSAGE)).toBe(
+      PUBLIC_DEMO_BUSY_MESSAGE,
+    );
+    expect(toSafeApiErrorMessage(429, 'rate limit exceeded for session abc123')).toBe(
+      'The demo is busy right now. Please try again in a moment.',
     );
   });
 

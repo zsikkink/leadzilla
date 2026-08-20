@@ -569,7 +569,57 @@ function isValidDecisionMakerName(name: string, businessName?: string | undefine
 
 // ── Email regex ────────────────────────────────────────────────────────────
 
-const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+const EMAIL_LOCAL_CHARACTER = /^[a-zA-Z0-9._%+-]$/;
+const EMAIL_DOMAIN_CHARACTER = /^[a-zA-Z0-9.-]$/;
+const EMAIL_CANDIDATE = /^[a-zA-Z0-9._%+-]{1,64}@[a-zA-Z0-9.-]{1,253}\.[a-zA-Z]{2,63}$/;
+
+/**
+ * Locate the comparatively rare `@` characters first, then inspect only an
+ * RFC-sized window around each candidate. This keeps extraction linear for
+ * multi-megabyte minified script payloads instead of asking a global regex to
+ * retry from every character in the document.
+ */
+function extractEmailMatches(input: string): string[] {
+  const matches: string[] = [];
+  let atIndex = input.indexOf('@');
+
+  while (atIndex !== -1) {
+    let start = atIndex;
+    while (
+      start > 0 &&
+      atIndex - start < 64 &&
+      EMAIL_LOCAL_CHARACTER.test(input[start - 1]!)
+    ) {
+      start -= 1;
+    }
+
+    let end = atIndex + 1;
+    while (
+      end < input.length &&
+      end - atIndex <= 253 &&
+      EMAIL_DOMAIN_CHARACTER.test(input[end]!)
+    ) {
+      end += 1;
+    }
+
+    const truncatedLocalPart = start > 0 && EMAIL_LOCAL_CHARACTER.test(input[start - 1]!);
+    const truncatedDomain = end < input.length && EMAIL_DOMAIN_CHARACTER.test(input[end]!);
+    if (!truncatedLocalPart && !truncatedDomain) {
+      while (end > atIndex + 1 && (input[end - 1] === '.' || input[end - 1] === '-')) {
+        end -= 1;
+      }
+
+      const candidate = input.slice(start, end);
+      if (EMAIL_CANDIDATE.test(candidate)) {
+        matches.push(candidate);
+      }
+    }
+
+    atIndex = input.indexOf('@', atIndex + 1);
+  }
+
+  return matches;
+}
 
 // ── Phone regexes ──────────────────────────────────────────────────────────
 
@@ -909,7 +959,7 @@ function extractEmails($: cheerio.CheerioAPI, pageUrl: string): Array<{ email: s
 
   // 2. Regex across page text
   const text = $.text();
-  const textMatches = text.match(EMAIL_REGEX) ?? [];
+  const textMatches = extractEmailMatches(text);
   for (const rawEmail of textMatches) {
     const email = rawEmail.toLowerCase();
     if (!seen.has(email)) {
@@ -921,7 +971,7 @@ function extractEmails($: cheerio.CheerioAPI, pageUrl: string): Array<{ email: s
 
   // 3. Regex across raw HTML (catches emails in attributes, comments)
   const html = $.html();
-  const htmlMatches = html.match(EMAIL_REGEX) ?? [];
+  const htmlMatches = extractEmailMatches(html);
   for (const rawEmail of htmlMatches) {
     const email = rawEmail.toLowerCase();
     if (!seen.has(email)) {

@@ -6,6 +6,12 @@ export const LIVE_DATA_REFRESH_MESSAGE =
   'Live data is refreshing. Please try again in a moment.';
 export const LIVE_ACCESS_ENDED_MESSAGE =
   'Live access ended. Refresh to continue in the read-only demo.';
+export const PUBLIC_DEMO_SESSION_LIMIT_MESSAGE =
+  'This browser session has reached today’s discovery limit. Try again tomorrow.';
+export const PUBLIC_DEMO_GLOBAL_LIMIT_MESSAGE =
+  'Today’s live demo discovery limit has been reached. Try again tomorrow.';
+export const PUBLIC_DEMO_BUSY_MESSAGE =
+  'The live demo is busy. Try again in a moment.';
 
 const INTERNAL_ERROR_PATTERN =
   /\b(?:api|database|deno|edge function|fetch|foreign key|gateway|html|http|index|internal server|json|network|openai|pg|postgres|postgrest|prisma|provider|relation|request failed|schema|serpapi|sql|stack|supabase|table|timeout|timed out|unique constraint|violates)\b|(?:code|status)\s*[:=]?\s*\d{3,5}|(?:failed to fetch|load failed|duplicate key)/i;
@@ -15,6 +21,9 @@ const SAFE_USER_ACTION_MESSAGES = new Set([
   'choose one or more active icps before starting discovery',
   'company size fields must be positive whole numbers.',
   'select at least one country.',
+  PUBLIC_DEMO_SESSION_LIMIT_MESSAGE.toLowerCase(),
+  PUBLIC_DEMO_GLOBAL_LIMIT_MESSAGE.toLowerCase(),
+  PUBLIC_DEMO_BUSY_MESSAGE.toLowerCase(),
 ]);
 
 function errorText(error: unknown): string | null {
@@ -137,7 +146,10 @@ export function toSafeApiErrorMessage(
     return 'This item changed while you were working. Refresh and try again.';
   }
   if (status === 429) {
-    return 'The demo is busy right now. Please try again in a moment.';
+    return toSafeDisplayErrorMessage(
+      error,
+      'The demo is busy right now. Please try again in a moment.',
+    );
   }
   if (status >= 500) {
     return LIVE_DATA_REFRESH_MESSAGE;

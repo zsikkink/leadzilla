@@ -389,7 +389,7 @@ export async function handleScoringComputeJob(
             { jobId: job.id, leadId: targetLeadId },
             'Skipped lead status update to preserve downstream lifecycle state',
           );
-          await tryFinalizeDiscoveryRun(runId, logger);
+          await tryFinalizeDiscoveryRun(effectiveCorrelationId, logger);
           continue;
         }
 
@@ -490,7 +490,7 @@ export async function handleScoringComputeJob(
         // Always check if discovery run can finalize or update progress
         // (LOW scores are terminal; HIGH/MEDIUM may still be in-flight but
         // tryFinalizeDiscoveryRun handles that correctly)
-        await tryFinalizeDiscoveryRun(runId, logger);
+        await tryFinalizeDiscoveryRun(effectiveCorrelationId, logger);
       }
     }
 

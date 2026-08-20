@@ -265,6 +265,29 @@ describe('WebsiteScraperAdapter', () => {
       );
     });
 
+    it('extracts emails without stalling on multi-megabyte minified script tokens', async () => {
+      const minifiedToken = 'a'.repeat(2_000_000);
+      const mockFetch = createMockFetch(richHtml(`
+        <script>${minifiedToken}</script>
+        <p>${LONG_TEXT}</p>
+        <p>Contact recruiter@example.com for details.</p>
+      `));
+      const adapter = new WebsiteScraperAdapter({
+        fetchImpl: mockFetch,
+        enablePlaywright: false,
+        maxPages: 1,
+      });
+
+      const result = await adapter.scrapeWebsite('example.com');
+      expect(result.status).toBe('success');
+      if (result.status !== 'success') throw new Error('Expected success');
+      expect(result.data.contactInfo.emails).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ email: 'recruiter@example.com' }),
+        ]),
+      );
+    }, 3_000);
+
     it('extracts local-format phone numbers from page text', async () => {
       const mockFetch = createMockFetch(richHtml(`
         <p>${LONG_TEXT}</p>

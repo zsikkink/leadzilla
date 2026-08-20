@@ -13,6 +13,7 @@ import {
   Settings,
   Target,
   Users,
+  X,
 } from 'lucide-react';
 
 import { withAppBasePath } from '../lib/app-path.js';
@@ -31,18 +32,21 @@ const DASHBOARD_NAV_ITEMS = [
 interface SidebarProps {
   collapsed: boolean;
   onToggle: () => void;
+  mobile?: boolean | undefined;
+  onNavigate?: (() => void) | undefined;
 }
 
-export function Sidebar({ collapsed, onToggle }: SidebarProps) {
+export function Sidebar({ collapsed, onToggle, mobile = false, onNavigate }: SidebarProps) {
   const pathname = usePathname();
+  const isCollapsed = mobile ? false : collapsed;
 
   return (
     <aside
       className={cn(
         'flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar',
-        'sticky top-0 h-screen',
+        mobile ? 'h-full w-[min(86vw,300px)] shadow-2xl shadow-black/50' : 'sticky top-0 h-screen',
         'transition-[width] duration-250 ease-[cubic-bezier(0.4,0,0.2,1)]',
-        collapsed ? 'w-[68px]' : 'w-[260px]',
+        !mobile && (isCollapsed ? 'w-[68px]' : 'w-[260px]'),
       )}
     >
       {/* Brand + collapse toggle */}
@@ -52,7 +56,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           aria-label="Leadzilla"
           className={cn(
             'flex items-center gap-3 overflow-hidden',
-            collapsed ? 'w-full justify-center px-0' : 'min-w-0 flex-1 justify-center px-5',
+            isCollapsed ? 'w-full justify-center px-0' : 'min-w-0 flex-1 justify-center px-5',
           )}
         >
           <Image
@@ -62,10 +66,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             height={48}
             className={cn(
               'h-12 w-12 shrink-0 object-contain',
-              !collapsed && 'hidden',
+              !isCollapsed && 'hidden',
             )}
           />
-          {!collapsed && (
+          {!isCollapsed && (
             <Image
               src={withAppBasePath('/brand/leadzilla-wordmark.svg')}
               alt=""
@@ -75,26 +79,27 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             />
           )}
         </div>
-        {!collapsed && (
+        {!isCollapsed && (
           <button
             type="button"
-            onClick={onToggle}
+            onClick={mobile ? onNavigate : onToggle}
+            autoFocus={mobile}
             className={cn(
               'mr-3 flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
               'text-muted-foreground/60 transition-colors duration-150',
               'hover:bg-sidebar-accent hover:text-sidebar-foreground',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
             )}
-            aria-label="Collapse sidebar"
-            title="Collapse sidebar"
+            aria-label={mobile ? 'Close navigation' : 'Collapse sidebar'}
+            title={mobile ? 'Close navigation' : 'Collapse sidebar'}
           >
-            <ChevronsLeft className="h-4 w-4" />
+            {mobile ? <X className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
           </button>
         )}
       </div>
 
       {/* Expand button when collapsed — sits below the brand area */}
-      {collapsed && (
+      {isCollapsed && (
         <div className="flex justify-center border-b border-sidebar-border py-2">
           <button
             type="button"
@@ -114,7 +119,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       )}
 
       {/* Navigation */}
-      <nav className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden', collapsed ? 'p-2' : 'p-3')}>
+      <nav className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden', isCollapsed ? 'p-2' : 'p-3')}>
         <div className="flex flex-col gap-1">
           {DASHBOARD_NAV_ITEMS.map(({ href, label, icon: Icon }) => {
             const isDiscoverDetailRoute =
@@ -133,10 +138,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 key={href}
                 href={href}
                 prefetch={false}
+                {...(onNavigate ? { onClick: onNavigate } : {})}
                 title={label}
                 className={cn(
                   'group flex items-center rounded-xl text-[13px] font-medium transition-all duration-150',
-                  collapsed
+                  isCollapsed
                     ? 'justify-center px-0 py-2.5'
                     : 'justify-start gap-3 px-3 py-2.5',
                   isActive
@@ -153,12 +159,12 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 <span
                   className={cn(
                     'truncate transition-[opacity,max-width] duration-250 ease-[cubic-bezier(0.4,0,0.2,1)]',
-                    collapsed ? 'max-w-0 overflow-hidden opacity-0' : 'max-w-[180px] opacity-100',
+                    isCollapsed ? 'max-w-0 overflow-hidden opacity-0' : 'max-w-[180px] opacity-100',
                   )}
                 >
                   {label}
                 </span>
-                {isActive && !collapsed ? (
+                {isActive && !isCollapsed ? (
                   <div className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-zbooni-green" aria-hidden="true" />
                 ) : null}
               </Link>

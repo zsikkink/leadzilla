@@ -5,6 +5,7 @@ import type {
 } from '@lead-flood/contracts';
 
 export const PUBLIC_DEMO_SEARCH_TASKS = 5;
+export const DEFAULT_DISCOVERY_COUNTRY_CODES = ['US'] as const satisfies readonly DiscoveryCountryCodeContract[];
 
 export function isPublicDemoSearchTaskLimit(value: number): boolean {
   return Number.isInteger(value) && value === PUBLIC_DEMO_SEARCH_TASKS;
@@ -12,18 +13,18 @@ export function isPublicDemoSearchTaskLimit(value: number): boolean {
 
 export function shouldShowDiscoveryRun(
   status: PipelineRunStatus,
-  processedItems: number,
+  _processedItems: number,
   taskLimit: number,
-  hasNotice = false,
+  _hasNotice = false,
 ): boolean {
-  if (status === 'QUEUED' || status === 'RUNNING') {
-    return true;
-  }
-
-  return status === 'SUCCEEDED'
-    && processedItems > 0
-    && taskLimit <= PUBLIC_DEMO_SEARCH_TASKS
-    && !hasNotice;
+  return [
+    'QUEUED',
+    'RUNNING',
+    'SUCCEEDED',
+    'FAILED',
+    'PARTIAL',
+    'CANCELLED',
+  ].includes(status) && isPublicDemoSearchTaskLimit(taskLimit);
 }
 
 export function getNextSelectedIcpId(
@@ -35,6 +36,12 @@ export function getNextSelectedIcpId(
   }
 
   return [...currentSelectedIcpIds, clickedIcpId];
+}
+
+export function getDefaultSelectedIcpIds(
+  icps: readonly { id: string }[],
+): string[] {
+  return icps.map((icp) => icp.id);
 }
 
 export function buildDiscoveryRequest(input: {

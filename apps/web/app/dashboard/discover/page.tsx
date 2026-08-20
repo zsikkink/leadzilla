@@ -19,7 +19,13 @@ import {
   Zap,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import { useApiQuery } from '../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../src/hooks/use-auth.js';
@@ -33,9 +39,15 @@ import {
   toSafeDisplayErrorMessage,
   uniqueDiscoveryRunNotices,
 } from '../../../src/lib/error-messages.js';
+import {
+  DEMO_DISCOVERY_ICP_ITEMS,
+  DEMO_DISCOVERY_RUNS,
+} from '../../../src/lib/demo-discovery-runs.js';
 import { cn } from '../../../src/lib/utils.js';
 import {
   buildDiscoveryRequest,
+  DEFAULT_DISCOVERY_COUNTRY_CODES,
+  getDefaultSelectedIcpIds,
   getNextSelectedIcpId,
   PUBLIC_DEMO_SEARCH_TASKS,
   shouldShowDiscoveryRun,
@@ -43,11 +55,17 @@ import {
 
 const SEARCH_TASK_OPTIONS = ['5', '10', '25', '50', '100', '250', '500', '1000'] as const;
 const DEMO_SEARCH_TASK_LIMIT = String(PUBLIC_DEMO_SEARCH_TASKS);
-const DEFAULT_DISCOVERY_COUNTRY_CODES = ['AE', 'SA', 'JO', 'EG'] as const satisfies readonly DiscoveryCountryCodeContract[];
 const DEFAULT_DISCOVERY_COUNTRY_ORDER = new Map<DiscoveryCountryCodeContract, number>(
   DEFAULT_DISCOVERY_COUNTRY_CODES.map((country, index) => [country, index]),
 );
 type CitySelectionKey = `${DiscoveryCountryCodeContract}:${string}`;
+
+function formatElapsedDuration(durationMs: number): string {
+  const seconds = Math.max(0, Math.round(durationMs / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${seconds % 60}s`;
+}
 
 function citySelectionKey(
   country: DiscoveryCountryCodeContract,
@@ -188,17 +206,6 @@ function getCitySelectionKeysForCountries(
   return keys;
 }
 
-function areAllSelectedCountryCitiesSelected(
-  countryCities: Record<string, readonly string[] | undefined>,
-  selectedCountries: readonly DiscoveryCountryCodeContract[],
-  selectedCityKeys: ReadonlySet<CitySelectionKey>,
-): boolean {
-  return selectedCountries.every((country) => {
-    const cities = countryCities[country] ?? [];
-    return cities.length > 0 && cities.every((city) => selectedCityKeys.has(citySelectionKey(country, city)));
-  });
-}
-
 function getOrderedSelectedCities(
   countryCities: Record<string, readonly string[] | undefined>,
   selectedCountries: readonly DiscoveryCountryCodeContract[],
@@ -276,6 +283,7 @@ function PillOption({
   return (
     <button
       type="button"
+      aria-pressed={selected}
       disabled={disabled}
       onClick={onClick}
       className={cn(
@@ -301,6 +309,10 @@ function IcpOption({
   selected: boolean;
   onSelect: (id: string) => void;
 }) {
+  const companySize = icp.minCompanySize !== null && icp.maxCompanySize !== null
+    ? `${icp.minCompanySize.toLocaleString()}–${icp.maxCompanySize.toLocaleString()} employees`
+    : null;
+
   return (
     <button
       type="button"
@@ -321,10 +333,24 @@ function IcpOption({
           </span>
         </div>
         {icp.description ? (
-          <p className="mt-0.5 text-xs text-muted-foreground/70 line-clamp-1">{icp.description}</p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground/70 line-clamp-2">{icp.description}</p>
+        ) : null}
+        {companySize || icp.targetCountries[0] ? (
+          <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/55">
+            {companySize ? (
+              <span className="rounded-md border border-border/30 bg-background/30 px-1.5 py-0.5">
+                {companySize}
+              </span>
+            ) : null}
+            {icp.targetCountries[0] ? (
+              <span className="rounded-md border border-border/30 bg-background/30 px-1.5 py-0.5">
+                {countryName(icp.targetCountries[0])}
+              </span>
+            ) : null}
+          </div>
         ) : null}
         {icp.targetIndustries.length > 0 ? (
-          <div className="mt-1.5 flex flex-wrap gap-1">
+          <div className="mt-2 flex flex-wrap gap-1">
             {icp.targetIndustries.slice(0, 3).map((ind) => (
               <span key={ind} className="rounded bg-zbooni-dark/60 px-1.5 py-0.5 text-[10px] text-muted-foreground/60">
                 {ind}
@@ -353,6 +379,7 @@ interface RunBatch {
     totalItems: number;
     processedItems: number;
     failedItems: number;
+    converted?: number | undefined;
     startedAt: string | null;
     finishedAt: string | null;
     createdAt: string;
@@ -364,6 +391,7 @@ interface RunBatch {
   totalItems: number;
   totalProcessed: number;
   totalFailed: number;
+  totalConverted: number;
   overallStatus: PipelineRunStatus;
   createdAt: string;
   startedAt: string | null;
@@ -430,6 +458,7 @@ function buildBatch(
     totalItems: runs.reduce((sum, r) => sum + r.totalItems, 0),
     totalProcessed: runs.reduce((sum, r) => sum + r.processedItems, 0),
     totalFailed: runs.reduce((sum, r) => sum + r.failedItems, 0),
+    totalConverted: runs.reduce((sum, r) => sum + (r.converted ?? 0), 0),
     overallStatus,
     createdAt: runs[0]!.createdAt,
     startedAt,
@@ -455,7 +484,12 @@ function parseSearchTaskLimit(value: string): number | null {
 // ── Main page ──────────────────────────────────────
 
 export default function DiscoverPage() {
-  const { apiClient, user } = useAuth();
+  const { sessionMode } = useAuth();
+  return <DiscoverPageContent key={sessionMode} />;
+}
+
+function DiscoverPageContent() {
+  const { apiClient, sessionMode, user } = useAuth();
 
   const [selectedIcpIds, setSelectedIcpIds] = useState<string[]>([]);
   const [selectedCountryCodes, setSelectedCountryCodes] = useState<DiscoveryCountryCodeContract[]>([]);
@@ -481,6 +515,7 @@ export default function DiscoverPage() {
 
   const pipelineSettings = useApiQuery(
     useCallback(() => apiClient.listPipelineSettings(), [apiClient]),
+    [apiClient],
   );
 
   const pipelineCountryCities = useMemo(() => {
@@ -523,7 +558,7 @@ export default function DiscoverPage() {
       () => apiClient.listDiscoveryRuns({ page: 1, pageSize: 20 }),
       [apiClient, runsRefreshKey],
     ),
-    [runsRefreshKey],
+    [apiClient, runsRefreshKey],
   );
 
   // Poll for runs when any are QUEUED or RUNNING
@@ -533,7 +568,7 @@ export default function DiscoverPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    if (!hasActiveRuns) {
+    if (!hasActiveRuns && !isSubmitting) {
       if (pollRef.current) {
         clearInterval(pollRef.current);
         pollRef.current = null;
@@ -543,7 +578,7 @@ export default function DiscoverPage() {
 
     pollRef.current = setInterval(() => {
       setRunsRefreshKey((k) => k + 1);
-    }, 3000);
+    }, 1000);
 
     return () => {
       if (pollRef.current) {
@@ -551,12 +586,22 @@ export default function DiscoverPage() {
         pollRef.current = null;
       }
     };
-  }, [hasActiveRuns]);
+  }, [hasActiveRuns, isSubmitting]);
 
   // Load ICPs
   const icps = useApiQuery(
     useCallback(() => apiClient.listIcps({ page: 1, pageSize: 50, isActive: true }), [apiClient]),
+    [apiClient],
   );
+
+  useEffect(() => {
+    initializedDefaultIcpSelectionRef.current = false;
+    initializedDefaultCountrySelectionRef.current = false;
+    setSelectedIcpIds([]);
+    setSelectedCountryCodes([]);
+    setSelectedCityKeys(new Set());
+    setSubmitError(null);
+  }, [sessionMode]);
 
   useEffect(() => {
     if (initializedDefaultIcpSelectionRef.current || !icps.data) {
@@ -564,24 +609,34 @@ export default function DiscoverPage() {
     }
 
     initializedDefaultIcpSelectionRef.current = true;
-    setSelectedIcpIds(icps.data.items.map((item) => item.id));
+    setSelectedIcpIds(getDefaultSelectedIcpIds(icps.data.items));
   }, [icps.data]);
 
   // Group discovery runs into batches (runs within 5s = same batch)
   const runBatches = useMemo(
-    () => groupRunsIntoBatches(discoveryRuns.data?.runs ?? [], icps.data?.items),
-    [discoveryRuns.data, icps.data],
+    () => groupRunsIntoBatches(
+      sessionMode === 'preview'
+        ? [...(discoveryRuns.data?.runs ?? []), ...DEMO_DISCOVERY_RUNS]
+        : (discoveryRuns.data?.runs ?? []),
+      sessionMode === 'preview'
+        ? [...(icps.data?.items ?? []), ...DEMO_DISCOVERY_ICP_ITEMS]
+        : icps.data?.items,
+    ),
+    [discoveryRuns.data, icps.data, sessionMode],
+  );
+  const filteredRunBatches = useMemo(
+    () => runBatches
+      .filter((batch) => sessionMode !== 'preview' || shouldShowDiscoveryRun(
+          batch.overallStatus,
+          batch.totalProcessed,
+          Math.max(...batch.runs.map((run) => run.limit)),
+          batch.errorMessages.length > 0,
+        )),
+    [runBatches, sessionMode],
   );
   const visibleRunBatches = useMemo(
-    () => runBatches
-      .filter((batch) => shouldShowDiscoveryRun(
-        batch.overallStatus,
-        batch.totalProcessed,
-        batch.totalTaskLimit,
-        batch.errorMessages.length > 0,
-      ))
-      .slice(0, 6),
-    [runBatches],
+    () => filteredRunBatches.slice(0, sessionMode === 'preview' ? 12 : 6),
+    [filteredRunBatches, sessionMode],
   );
 
   const displayedCountryCodes = useMemo<DiscoveryCountryCodeContract[]>(
@@ -631,13 +686,7 @@ export default function DiscoverPage() {
     [countryCities, selectedCityKeys, selectedCountryCodes],
   );
 
-  const selectedCitiesForRequest = useMemo(
-    () =>
-      areAllSelectedCountryCitiesSelected(countryCities, selectedCountryCodes, selectedCityKeys)
-        ? []
-        : selectedCityList,
-    [countryCities, selectedCityKeys, selectedCityList, selectedCountryCodes],
-  );
+  const selectedCitiesForRequest = selectedCityList;
 
   const missingCityCountries = useMemo(
     () => selectedCountryCodes.filter((country) => (countryCities[country] ?? []).length === 0),
@@ -858,14 +907,6 @@ export default function DiscoverPage() {
 
   const parsedSearchTaskLimit = parseSearchTaskLimit(searchTaskLimit);
   const isPresetSearchTaskLimit = SEARCH_TASK_OPTIONS.some((option) => option === searchTaskLimit);
-
-  useEffect(() => {
-    if (searchTaskLimit !== DEMO_SEARCH_TASK_LIMIT) {
-      setSearchTaskLimit(DEMO_SEARCH_TASK_LIMIT);
-      setShowSearchTaskLimitError(false);
-    }
-  }, [searchTaskLimit]);
-
   const handleStartDiscovery = async () => {
     if (selectedIcpIds.length === 0) {
       setShowTargetingControls(true);
@@ -916,6 +957,10 @@ export default function DiscoverPage() {
 
     setIsSubmitting(true);
     setSubmitError(null);
+    setRunsRefreshKey((key) => key + 1);
+    globalThis.requestAnimationFrame(() => {
+      document.getElementById('discovery-runs')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
 
     try {
       await apiClient.createDiscoveryRun(request);
@@ -1112,10 +1157,6 @@ export default function DiscoverPage() {
                 className="h-10 w-24 cursor-not-allowed rounded-xl border border-border/40 bg-background px-3 py-2 text-center text-sm font-mono text-foreground opacity-40 placeholder:text-muted-foreground/60 focus:border-zbooni-teal/50 focus:outline-none"
               />
             </div>
-            <p className="mt-2 text-xs text-muted-foreground/70">
-              Public demo runs use a fixed budget of five provider search tasks.
-            </p>
-
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
                 type="button"
@@ -1129,7 +1170,7 @@ export default function DiscoverPage() {
                   <Play className="h-4 w-4" />
                 )}
                 {isSubmitting
-                  ? 'Creating...'
+                  ? 'Running discovery...'
                   : 'Create Run'}
               </button>
 
@@ -1151,7 +1192,7 @@ export default function DiscoverPage() {
             ) : null}
 
             {submitError ? (
-              <div className="mt-3 flex items-center gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+              <div role="alert" className="mt-3 flex items-center gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
                 <AlertCircle className="h-4 w-4 shrink-0 text-amber-300" />
                 {submitError}
               </div>
@@ -1373,9 +1414,6 @@ export default function DiscoverPage() {
               <Zap className="h-4 w-4 text-zbooni-green" />
               Recent Discovery Runs
             </h2>
-            <p className="mt-0.5 text-xs text-muted-foreground/50">
-              Active jobs and the latest completed runs with processed results.
-            </p>
           </div>
           <button
             type="button"
@@ -1387,14 +1425,48 @@ export default function DiscoverPage() {
           </button>
         </div>
 
-        {discoveryRuns.isLoading && !discoveryRuns.data ? (
+        {discoveryRuns.isLoading && !discoveryRuns.data && sessionMode !== 'preview' ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
             Loading runs...
           </div>
         ) : null}
 
-        {visibleRunBatches.length === 0 && discoveryRuns.data ? (
+        {discoveryRuns.error ? (
+          <div className="mb-3 flex items-center gap-3 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            <AlertCircle className="h-4 w-4 shrink-0 text-amber-300" />
+            <span className="flex-1">Run status is refreshing. The active job is still safe to leave running.</span>
+            <button
+              type="button"
+              onClick={discoveryRuns.refetch}
+              className="rounded-md bg-amber-500/20 px-2.5 py-1 text-xs font-semibold transition-colors hover:bg-amber-500/30"
+            >
+              Retry
+            </button>
+          </div>
+        ) : null}
+
+        {isSubmitting && !hasActiveRuns ? (
+          <div
+            aria-live="polite"
+            className="mb-3 rounded-xl border border-zbooni-teal/30 bg-zbooni-teal/10 p-4"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-5 w-5 animate-spin text-zbooni-teal" />
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Live discovery is running</p>
+                  <p className="text-xs text-muted-foreground">The job will update here as search tasks finish.</p>
+                </div>
+              </div>
+              <span className="rounded-full bg-zbooni-teal/15 px-2.5 py-1 text-[10px] font-bold tracking-wider text-zbooni-teal">
+                RUNNING
+              </span>
+            </div>
+          </div>
+        ) : null}
+
+        {visibleRunBatches.length === 0 && discoveryRuns.data && !isSubmitting ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="mb-3 flex h-16 w-16 items-center justify-center rounded-2xl bg-zbooni-dark/60">
               <Search className="h-7 w-7 text-muted-foreground/40" />
@@ -1407,8 +1479,9 @@ export default function DiscoverPage() {
         ) : null}
 
         {visibleRunBatches.length > 0 ? (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {visibleRunBatches.map((batch) => {
+          <>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {visibleRunBatches.map((batch) => {
               const statusColors: Record<string, string> = {
                 QUEUED: 'bg-gray-500/15 text-gray-400',
                 RUNNING: 'bg-zbooni-teal/15 text-zbooni-teal',
@@ -1426,7 +1499,9 @@ export default function DiscoverPage() {
               const isTerminal = batch.overallStatus === 'SUCCEEDED' || batch.overallStatus === 'FAILED' || batch.overallStatus === 'PARTIAL';
               const duration = batch.startedAt
                 ? batch.finishedAt
-                  ? `${Math.round((new Date(batch.finishedAt).getTime() - new Date(batch.startedAt).getTime()) / 1000)}s`
+                  ? formatElapsedDuration(
+                      new Date(batch.finishedAt).getTime() - new Date(batch.startedAt).getTime(),
+                    )
                   : isTerminal
                     ? 'Completed'
                     : 'Running...'
@@ -1440,11 +1515,11 @@ export default function DiscoverPage() {
 
               const primaryRunId = batch.runs[0]?.runId;
 
-              return (
+                return (
                 <Link
                   key={batch.batchKey}
                   href={primaryRunId ? `/dashboard/jobs/${primaryRunId}` : '#'}
-                  className="block rounded-xl border border-border/30 bg-zbooni-dark/20 p-4 transition-colors hover:border-border/50 hover:bg-zbooni-dark/30"
+                  className="block rounded-xl border border-border/30 bg-zbooni-dark/20 p-4 transition-all hover:-translate-y-0.5 hover:border-zbooni-teal/35 hover:bg-zbooni-dark/30 hover:shadow-lg hover:shadow-black/15"
                 >
                   {/* Header: status + time */}
                   <div className="mb-3 flex items-center justify-between">
@@ -1511,6 +1586,11 @@ export default function DiscoverPage() {
                     <span>
                       Processed: <strong className="text-foreground">{batch.totalProcessed}</strong>
                     </span>
+                    {batch.totalConverted > 0 ? (
+                      <span>
+                        Leads created: <strong className="text-zbooni-green">{batch.totalConverted}</strong>
+                      </span>
+                    ) : null}
                     {batch.totalFailed > 0 ? (
                       <span>
                         Not completed: <strong className="text-amber-300">{batch.totalFailed}</strong>
@@ -1531,9 +1611,10 @@ export default function DiscoverPage() {
                     </p>
                   ) : null}
                 </Link>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          </>
         ) : null}
       </div>
 

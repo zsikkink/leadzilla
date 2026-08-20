@@ -1,6 +1,6 @@
 'use client';
 
-import { LogOut, ShieldCheck } from 'lucide-react';
+import { LogOut, Menu, ShieldCheck } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 
 import { useAuth } from '../hooks/use-auth.js';
@@ -22,23 +22,40 @@ function getPageTitle(pathname: string): string {
   return 'Dashboard';
 }
 
-export function Header() {
+interface HeaderProps {
+  onOpenNavigation?: (() => void) | undefined;
+}
+
+export function Header({ onOpenNavigation }: HeaderProps) {
   const { user, logout, sessionMode } = useAuth();
   const pathname = usePathname();
   const pageTitle = getPageTitle(pathname);
+  const previewBadge = pathname === '/dashboard/discover' || pathname.startsWith('/dashboard/jobs/')
+    ? 'Live bounded discovery'
+    : pathname === '/dashboard/icps' || pathname.startsWith('/dashboard/icps/')
+      ? 'Editable sales playbook demo'
+      : 'Read-only portfolio demo';
 
   return (
     <header className="sticky top-0 z-30 border-b border-border/50 bg-background/80 backdrop-blur-xl">
       <div className="flex h-16 items-center justify-between px-4 lg:px-6">
-        <div className="flex items-center gap-3">
-          <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl">{pageTitle}</h1>
+        <div className="flex min-w-0 items-center gap-3">
+          <button
+            type="button"
+            onClick={onOpenNavigation}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-card text-muted-foreground transition-colors hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 md:hidden"
+            aria-label="Open navigation"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          <h1 className="truncate text-xl font-extrabold tracking-tight sm:text-3xl lg:text-4xl">{pageTitle}</h1>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="ml-3 flex shrink-0 items-center gap-3">
           {sessionMode === 'preview' ? (
             <div className="flex items-center gap-2 rounded-full border border-zbooni-green/20 bg-zbooni-green/[0.07] px-3 py-1.5 text-zbooni-green shadow-sm shadow-black/10">
               <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
-              <span className="hidden text-xs font-bold sm:inline">Read-only portfolio demo</span>
+              <span className="hidden text-xs font-bold sm:inline">{previewBadge}</span>
               <span className="text-xs font-bold sm:hidden">Demo</span>
             </div>
           ) : user ? (

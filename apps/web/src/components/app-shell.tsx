@@ -21,6 +21,7 @@ import {
 } from './ui/dialog.js';
 
 const LOGIN_PREVIEW_NOTICE_SESSION_KEY = 'leadzilla:show-login-preview-notice';
+const PREVIEW_NOTICE_DISMISSED_SESSION_KEY = 'leadzilla:preview-notice-dismissed';
 
 interface AppShellProps {
   children: ReactNode;
@@ -32,8 +33,15 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
   const pathname = usePathname();
   const { collapsed, toggle, hydrated } = useSidebarCollapse();
   const [previewNoticeOpen, setPreviewNoticeOpen] = useState(false);
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const isStaticPreview = sessionMode !== 'live';
-  const previewPage = isStaticPreview ? getDemoPreviewPageKind(pathname) : null;
+  const isPublicDiscoverySurface = isStaticPreview && (
+    pathname === '/dashboard/discover'
+    || /^\/dashboard\/jobs\/[^/]+$/.test(pathname)
+  );
+  const previewPage = isStaticPreview && !isPublicDiscoverySurface
+    ? getDemoPreviewPageKind(pathname)
+    : null;
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -41,7 +49,13 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
     }
 
     if (isStaticPreview) {
-      setPreviewNoticeOpen(true);
+      try {
+        setPreviewNoticeOpen(
+          window.sessionStorage.getItem(PREVIEW_NOTICE_DISMISSED_SESSION_KEY) !== 'true',
+        );
+      } catch {
+        setPreviewNoticeOpen(true);
+      }
       return;
     }
 
@@ -55,6 +69,27 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
     }
   }, [isAuthenticated, isStaticPreview]);
 
+  useEffect(() => {
+    setMobileNavigationOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!mobileNavigationOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileNavigationOpen(false);
+    };
+
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [mobileNavigationOpen]);
+
   const handlePreviewNoticeOpenChange = useCallback((open: boolean) => {
     if (open) {
       setPreviewNoticeOpen(true);
@@ -62,8 +97,15 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
   }, []);
 
   const handlePreviewNoticeDismiss = useCallback(() => {
+    if (isStaticPreview) {
+      try {
+        window.sessionStorage.setItem(PREVIEW_NOTICE_DISMISSED_SESSION_KEY, 'true');
+      } catch {
+        // The current acknowledgement still applies when storage is unavailable.
+      }
+    }
     setPreviewNoticeOpen(false);
-  }, []);
+  }, [isStaticPreview]);
 
   if (isLoading) {
     return (
@@ -84,9 +126,31 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
       >
         Skip to main content
       </a>
-      {hydrated && <Sidebar collapsed={collapsed} onToggle={toggle} />}
+      {hydrated ? (
+        <div className="hidden md:block">
+          <Sidebar collapsed={collapsed} onToggle={toggle} />
+        </div>
+      ) : null}
+      {hydrated && mobileNavigationOpen ? (
+        <div className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/65 backdrop-blur-sm"
+            onClick={() => setMobileNavigationOpen(false)}
+            aria-label="Close navigation"
+          />
+          <div className="relative h-full w-fit">
+            <Sidebar
+              collapsed={false}
+              mobile
+              onToggle={() => setMobileNavigationOpen(false)}
+              onNavigate={() => setMobileNavigationOpen(false)}
+            />
+          </div>
+        </div>
+      ) : null}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <Header />
+        <Header onOpenNavigation={() => setMobileNavigationOpen(true)} />
         <main id="main-content" className={cn('flex-1 overflow-auto p-3 sm:p-4 lg:p-6', contentClassName)}>
           {previewPage ? <DemoPreviewWorkspace page={previewPage} /> : children}
         </main>
@@ -104,7 +168,7 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
               className={cn('leading-6', isStaticPreview && 'text-foreground')}
             >
               {isStaticPreview
-                ? 'Every navigation tab is available without live services. Changes are not saved, and outbound delivery remains disabled.'
+                ? 'Live discovery jobs use a fixed five-search-task budget. Other views use read-only demo data, and outbound delivery remains disabled.'
                 : 'Explore lead discovery, scoring, and message drafting.'}
             </DialogDescription>
           </DialogHeader>

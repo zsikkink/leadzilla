@@ -99,7 +99,6 @@ describe('CuratedCountryCitiesByCode', () => {
   });
 
   it('does not keep broad defaults for countries without SerpAPI discovery coverage', () => {
-    expect(CuratedCountryCitiesByCode.US).toBeUndefined();
     expect(CuratedCountryCitiesByCode.DE).toBeUndefined();
   });
 
@@ -128,6 +127,28 @@ describe('SerpApiSupportedCountryCitiesByCode', () => {
     expect(SerpApiSupportedCountryCitiesByCode.SA).toEqual(
       expect.arrayContaining(['Riyadh', 'Diriyah']),
     );
+    expect(SerpApiSupportedCountryCitiesByCode.US).toEqual([
+      'New York',
+      'Los Angeles',
+      'Chicago',
+      'Houston',
+      'Phoenix',
+      'Philadelphia',
+      'San Antonio',
+      'San Diego',
+      'Dallas',
+      'Austin',
+      'San Francisco',
+      'Seattle',
+      'Denver',
+      'Boston',
+      'Washington',
+      'Miami',
+      'Atlanta',
+      'Charlotte',
+      'Nashville',
+      'Portland',
+    ]);
   });
 
   it('filters configured launch-country cities against the SerpAPI-safe list', () => {

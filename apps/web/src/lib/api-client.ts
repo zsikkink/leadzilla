@@ -64,6 +64,7 @@ import type {
   DemoAnalyticsDashboardSnapshot,
   DemoOperationsDashboardSnapshot,
 } from './demo-dashboard-types.js';
+import type { DemoDiscoveryRunPerformance } from './demo-discovery-runs.js';
 import {
   DEMO_ANALYTICS_DASHBOARD_SNAPSHOT,
   DEMO_OPERATIONS_DASHBOARD_SNAPSHOT,
@@ -588,6 +589,7 @@ export class ApiClient {
       '/v1/discovery/runs',
       {
         method: 'POST',
+        headers: { 'idempotency-key': crypto.randomUUID() },
         body: JSON.stringify(data),
       },
       DISCOVERY_RUN_REQUEST_TIMEOUT_MS,
@@ -612,6 +614,10 @@ export class ApiClient {
   listDiscoveryRuns(query?: ListDiscoveryRunsQuery): Promise<ListDiscoveryRunsResponse> {
     const qs = query ? `?${toSearchParams(query as Record<string, unknown>)}` : '';
     return this.request(`/v1/discovery/runs${qs}`);
+  }
+
+  getDemoDiscoveryRunPerformance(runId: string): Promise<DemoDiscoveryRunPerformance> {
+    return this.request(`/v1/discovery/runs/${encodeURIComponent(runId)}/performance`);
   }
 
   getDiscoveryRunDetails(runId: string): Promise<{

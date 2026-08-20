@@ -53,6 +53,9 @@ export type LeadFlowSankeyData = {
   screenedLabel?: string | undefined;
   duplicateLabel?: string | undefined;
   disqualifiedLabel?: string | undefined;
+  highLabel?: string | undefined;
+  mediumLabel?: string | undefined;
+  lowLabel?: string | undefined;
 };
 
 const CHART_HEIGHT = 326;
@@ -137,6 +140,9 @@ function getNodes(data: LeadFlowSankeyData): LeadFlowNodeExtra[] {
     evaluated: data.screenedLabel,
     duplicates: data.duplicateLabel,
     'not-qualified': data.disqualifiedLabel,
+    high: data.highLabel,
+    medium: data.mediumLabel,
+    low: data.lowLabel,
   };
 
   return NODES.map((node) => ({

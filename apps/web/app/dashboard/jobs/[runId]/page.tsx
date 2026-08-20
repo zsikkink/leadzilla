@@ -27,6 +27,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApiQuery } from '../../../../src/hooks/use-api-query.js';
 import { useAuth } from '../../../../src/hooks/use-auth.js';
 import { LeadFlowSankey, type LeadFlowSankeyData } from '../../../../src/components/lead-flow-sankey.js';
+import { PublicDemoRunPerformance } from '../../../../src/components/public-demo-run-performance.js';
 import { countryName } from '../../../../src/lib/countries.js';
 import {
   toDiscoveryRunNotice,
@@ -625,10 +626,18 @@ function formatProviderName(provider: string): string {
 
 // ── Main page ────────────────────────────────────────────────────────────
 export default function DiscoveryRunDetailPage() {
-  const { apiClient } = useAuth();
-  const router = useRouter();
+  const { sessionMode } = useAuth();
   const params = useParams();
   const runId = params.runId as string;
+
+  return sessionMode === 'preview'
+    ? <PublicDemoRunPerformance runId={runId} />
+    : <LiveDiscoveryRunDetailPage runId={runId} />;
+}
+
+function LiveDiscoveryRunDetailPage({ runId }: { runId: string }) {
+  const { apiClient } = useAuth();
+  const router = useRouter();
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [errorsExpanded, setErrorsExpanded] = useState(false);
   const [cancelPending, setCancelPending] = useState(false);

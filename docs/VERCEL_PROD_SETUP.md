@@ -31,6 +31,7 @@ Set for both Preview and Production (with environment-specific values):
 - `API_BASE_URL`
 - `NEXT_PUBLIC_SITE_URL` (`https://zacksikkink.com/leadzilla` in Production)
 - `ADMIN_API_KEY` (server-only; used by `apps/web` route handlers for `/api/admin/*`)
+- `LEADZILLA_DEMO_GATEWAY_SECRET` (server-only; shared only with the Supabase Edge Function and independent from `ADMIN_API_KEY`)
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 
@@ -51,6 +52,7 @@ Set on the Supabase Edge Function project:
 - `SERPAPI_API_KEY`
 - `OPENAI_API_KEY`
 - `OPENAI_DRAFT_MODEL` (optional; defaults to the current frontier draft model)
+- `LEADZILLA_DEMO_GATEWAY_SECRET`
 - `LEADZILLA_CORS_ORIGINS`
 
 `LEADZILLA_CORS_ORIGINS` must include comma-separated origin values only:

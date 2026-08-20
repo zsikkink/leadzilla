@@ -108,14 +108,15 @@ pnpm dev:local-stack
 ## Deployment Topology
 
 - Web app: Vercel
-- Public recruiter UI: bundled read-only snapshots with no bearer token or live provider calls
+- Public recruiter UI: bundled read-only snapshots plus a live, bounded Discover page with no bearer token
 - Private live-session API: Supabase Edge Function `api` for read routes plus bounded discovery, enrichment, scoring, and OpenAI draft generation
-- Worker: not part of the public demo runtime; worker-backed and outbound actions remain disabled
+- Worker: executes the bounded live Discover pipeline; messaging, outbound, and other worker-backed demo actions remain disabled
 - Database/Auth: Supabase
 
 The historical Fastify API and worker services remain in the repo for the full
-platform path. The public recruiter view stays tokenless; only an already-valid
-private operator session can call the Supabase Edge API entrypoint.
+platform path. The public recruiter view stays tokenless. Its same-origin server
+proxy can call only the dedicated discovery capability routes; all normal Edge
+API, admin, messaging, and outbound routes remain authenticated or disabled.
 
 ## Demo Pipeline Target
 
@@ -137,6 +138,8 @@ Required worker env for discovery:
 Public demo Edge Function env:
 
 - `SERPAPI_API_KEY` enables bounded recruiter-demo discovery.
+- `LEADZILLA_DEMO_GATEWAY_SECRET` authenticates the same-origin web proxy to the dedicated public discovery capability. It must be independent from `ADMIN_API_KEY`.
+- Public discovery uses a fixed five-search-task budget per run, with 25 reserved search tasks per browser session per UTC day, 2 concurrent runs, and 50 reserved search tasks globally per UTC day.
 - `HUNTER_API_KEY` enables real, server-side Hunter domain enrichment from the Leads page.
 - `LEADZILLA_HUNTER_DAILY_LIMIT` caps recruiter-demo Hunter lookups (default `2`, maximum `10`).
 - `LEADZILLA_HUNTER_MONTHLY_LIMIT` preserves free-plan capacity across the month (default `40`, maximum `50`).

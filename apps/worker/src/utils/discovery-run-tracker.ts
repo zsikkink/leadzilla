@@ -442,6 +442,9 @@ export async function tryFinalizeDiscoveryRun(
   });
   const businessesById = new Map(businesses.map((business) => [business.id, business]));
   const pipelineBusinessIds = businesses.map((business) => business.id);
+  const reconciledNewBusinesses = businesses.filter(
+    (business) => business.discoveryRunId === possibleRunId,
+  ).length;
   const totalBusinesses = Math.max(
     pipelineBusinessIds.length,
     toNonNegativeCount(result.totalFound),
@@ -869,7 +872,10 @@ export async function tryFinalizeDiscoveryRun(
 
     await finalizeRun(
       possibleRunId,
-      result,
+      {
+        ...result,
+        newBusinesses: reconciledNewBusinesses,
+      },
       status,
       completedLeads,
       messageDraftedLeads,
@@ -891,7 +897,7 @@ export async function tryFinalizeDiscoveryRun(
     }
   } else if (terminalCount > 0) {
     // Not ready to finalize, but update progress so the frontend shows accurate lead count
-    const newBiz = toNonNegativeCount(result.newBusinesses);
+    const newBiz = reconciledNewBusinesses;
     const alreadyKnownBiz = Math.max(0, totalBusinesses - newBiz);
 
     await prisma.jobExecution.update({
@@ -1024,6 +1030,11 @@ export async function checkLeadTargetReached(
     ? execution.payload as Record<string, unknown>
     : null;
   if (!payload) return false;
+
+  // Public demo `limit` is explicitly the bounded SerpAPI search-task budget,
+  // not a lead target. Let every discovered business finish the production
+  // prequalify -> scrape/convert -> features -> scoring pipeline.
+  if (payload.publicDemo === true) return false;
 
   const targetLeads = typeof payload.limit === 'number' ? payload.limit : null;
   if (targetLeads === null || targetLeads <= 0) return false;

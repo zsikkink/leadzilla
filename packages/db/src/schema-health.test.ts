@@ -94,6 +94,7 @@ describe('checkPipelineSchemaHealth', () => {
         { table_name: 'contact_recovery_items' },
         { table_name: 'job_requests' },
         { table_name: 'job_runs' },
+        { table_name: 'public_demo_discovery_admissions' },
         { table_name: 'search_tasks' },
       ],
       [
@@ -127,6 +128,7 @@ describe('checkPipelineSchemaHealth', () => {
         { table_name: 'contact_recovery_items' },
         { table_name: 'job_requests' },
         { table_name: 'job_runs' },
+        { table_name: 'public_demo_discovery_admissions' },
         { table_name: 'search_tasks' },
       ],
       [
@@ -159,6 +161,7 @@ describe('checkPipelineSchemaHealth', () => {
         { table_name: 'contact_recovery_items' },
         { table_name: 'job_requests' },
         { table_name: 'job_runs' },
+        { table_name: 'public_demo_discovery_admissions' },
         { table_name: 'search_tasks' },
       ],
       [
@@ -203,6 +206,7 @@ describe('checkPipelineSchemaHealth', () => {
         { table_name: 'contact_recovery_items' },
         { table_name: 'job_requests' },
         { table_name: 'job_runs' },
+        { table_name: 'public_demo_discovery_admissions' },
         { table_name: 'search_tasks' },
       ],
       [
@@ -246,6 +250,7 @@ describe('checkPipelineSchemaHealth', () => {
         { table_name: 'contact_recovery_items' },
         { table_name: 'job_requests' },
         { table_name: 'job_runs' },
+        { table_name: 'public_demo_discovery_admissions' },
         { table_name: 'search_tasks' },
       ],
       [
@@ -287,6 +292,7 @@ describe('checkPipelineSchemaHealth', () => {
         { table_name: 'contact_recovery_items' },
         { table_name: 'job_requests' },
         { table_name: 'job_runs' },
+        { table_name: 'public_demo_discovery_admissions' },
         { table_name: 'search_tasks' },
       ],
       [

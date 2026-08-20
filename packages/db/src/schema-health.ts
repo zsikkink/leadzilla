@@ -8,6 +8,7 @@ const REQUIRED_TABLES_BY_SCOPE = {
     'contact_recovery_items',
     'job_requests',
     'job_runs',
+    'public_demo_discovery_admissions',
     'search_tasks',
   ],
   worker: [
@@ -93,6 +94,7 @@ const INTERNAL_TABLES_REQUIRING_BROWSER_ROLE_REVOKES = [
   'lead_rejections',
   'manager_recommendation_records',
   'pipeline_settings',
+  'public_demo_discovery_admissions',
   'search_tasks',
   'sources',
   'job_requests',

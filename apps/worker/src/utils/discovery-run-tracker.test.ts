@@ -23,6 +23,7 @@ const prismaMock = {
     findMany: vi.fn(),
   },
   lead: {
+    count: vi.fn(),
     findMany: vi.fn(),
     deleteMany: vi.fn(),
   },
@@ -101,6 +102,29 @@ describe('tryFinalizeDiscoveryRun', () => {
     prismaMock.lead.deleteMany.mockResolvedValue({ count: 0 });
   });
 
+  it('does not treat the public demo search-task budget as a lead target', async () => {
+    prismaMock.jobExecution.findUnique.mockResolvedValue({
+      id: 'run_1',
+      type: 'discovery.run',
+      status: 'running',
+      payload: {
+        publicDemo: true,
+        limit: 5,
+      },
+      result: {},
+    });
+
+    const { checkLeadTargetReached } = await import('./discovery-run-tracker.js');
+
+    await expect(checkLeadTargetReached('run_1', {
+      info: vi.fn(),
+      warn: vi.fn(),
+    })).resolves.toBe(false);
+
+    expect(prismaMock.lead.count).not.toHaveBeenCalled();
+    expect(prismaMock.jobExecution.update).not.toHaveBeenCalled();
+  });
+
   it('does not finalize while qualified businesses are still waiting for conversion', async () => {
     const { tryFinalizeDiscoveryRun } = await import('./discovery-run-tracker.js');
 
@@ -168,6 +192,45 @@ describe('tryFinalizeDiscoveryRun', () => {
     });
 
     expect(prismaMock.jobExecution.updateMany).toHaveBeenCalled();
+  });
+
+  it('reconciles same-run businesses instead of labeling cross-task dedupe as already known', async () => {
+    prismaMock.jobExecution.findUnique.mockResolvedValue({
+      id: 'run_1',
+      type: 'discovery.run',
+      status: 'running',
+      payload: { icpProfileId: 'icp_1' },
+      result: {
+        searchTasksComplete: true,
+        searchTasksCompletedAt: new Date().toISOString(),
+        newBusinesses: 0,
+        totalFound: 1,
+      },
+    });
+    prismaMock.business.findMany.mockResolvedValue([
+      {
+        id: 'biz_1',
+        discoveryRunId: 'run_1',
+        preQualified: false,
+        disqualificationReason: 'NO_WEBSITE_DOMAIN',
+      },
+    ]);
+    prismaMock.$queryRawUnsafe.mockResolvedValue([]);
+    prismaMock.jobExecution.updateMany.mockResolvedValue({ count: 1 });
+
+    const { tryFinalizeDiscoveryRun } = await import('./discovery-run-tracker.js');
+    await tryFinalizeDiscoveryRun('run_1', { info: vi.fn(), warn: vi.fn() });
+
+    expect(prismaMock.jobExecution.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          result: expect.objectContaining({
+            newFound: 1,
+            alreadyKnown: 0,
+          }),
+        }),
+      }),
+    );
   });
 
   it('finalizes existing observed businesses as disqualified after current-run prequalify fails', async () => {

@@ -18,6 +18,7 @@ import {
   shouldUsePublicPreviewSession,
 } from './demo-preview.js';
 import { getWebEnv } from './env.js';
+import { withAppBasePath } from './app-path.js';
 import { getSupabaseBrowserClient } from './supabase-client.js';
 
 export interface AuthUser {
@@ -289,8 +290,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const apiClient = useMemo(() => {
     const env = getWebEnv();
-    return new ApiClient(env.NEXT_PUBLIC_API_BASE_URL, () => token, env.NEXT_PUBLIC_API_TIMEOUT_MS);
-  }, [token]);
+    const apiBaseUrl = sessionMode === 'preview'
+      ? withAppBasePath('/api/demo')
+      : env.NEXT_PUBLIC_API_BASE_URL;
+    return new ApiClient(apiBaseUrl, () => token, env.NEXT_PUBLIC_API_TIMEOUT_MS);
+  }, [sessionMode, token]);
 
   const logout = useCallback(() => {
     sessionRevisionRef.current += 1;

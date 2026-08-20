@@ -14,6 +14,15 @@ describe('bundled demo dashboard snapshots', () => {
     expect(DEMO_ANALYTICS_DASHBOARD_SNAPSHOT.icpPerformance.length).toBeGreaterThan(0);
   });
 
+  it('uses four distinct ICP markets instead of four software variants', () => {
+    expect(DEMO_ANALYTICS_DASHBOARD_SNAPSHOT.icpPerformance.map((icp) => icp.name)).toEqual([
+      'Boutique Hotels & Vacation Rentals',
+      'Commercial Solar & Roofing Contractors',
+      'B2B SaaS & Developer Platforms',
+      'Multi-Location Dental Groups',
+    ]);
+  });
+
   it('keeps outbound delivery explicitly disabled', () => {
     const outbound = DEMO_OPERATIONS_DASHBOARD_SNAPSHOT.systemHealth.find(
       (item) => item.id === 'outbound-delivery',

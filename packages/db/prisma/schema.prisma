@@ -1099,3 +1099,17 @@ model ManagerRecommendationRecord {
   @@index([analysisRunId])
   @@map("manager_recommendation_records")
 }
+
+model PublicDemoDiscoveryAdmission {
+  sessionHash    String   @map("session_hash")
+  idempotencyKey String   @db.Uuid @map("idempotency_key")
+  runId          String   @unique @map("run_id")
+  taskBudget     Int      @map("task_budget")
+  state          String   @default("reserved")
+  createdAt      DateTime @default(now()) @db.Timestamptz(6) @map("created_at")
+  updatedAt      DateTime @default(now()) @db.Timestamptz(6) @map("updated_at")
+  expiresAt      DateTime @db.Timestamptz(6) @map("expires_at")
+
+  @@id([sessionHash, idempotencyKey])
+  @@map("public_demo_discovery_admissions")
+}
