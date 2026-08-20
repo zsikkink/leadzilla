@@ -18,7 +18,7 @@ export function getDemoPreviewPageKind(pathname: string): DemoPreviewPageKind | 
     return null;
   }
   if (pathname === '/dashboard/prompts') {
-    return 'prompts';
+    return null;
   }
   if (pathname === '/dashboard/inbox' || pathname.startsWith('/dashboard/messages')) {
     return 'inbox';

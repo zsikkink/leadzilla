@@ -11,7 +11,6 @@ describe('demo preview page routing', () => {
   it.each([
     ['/dashboard/discover', 'discover'],
     ['/dashboard/jobs/run-1', 'discover'],
-    ['/dashboard/prompts', 'prompts'],
     ['/dashboard/inbox', 'inbox'],
     ['/dashboard/messages', 'inbox'],
     ['/dashboard/icps', 'icps'],
@@ -24,6 +23,10 @@ describe('demo preview page routing', () => {
   it('leaves lead routes on the real database-backed pages', () => {
     expect(getDemoPreviewPageKind('/dashboard/leads')).toBeNull();
     expect(getDemoPreviewPageKind('/dashboard/leads/lead-1')).toBeNull();
+  });
+
+  it('leaves Prompt Center on the editable prompt page', () => {
+    expect(getDemoPreviewPageKind('/dashboard/prompts')).toBeNull();
   });
 
   it('exposes the bundled settings snapshot only on the exact Settings route', () => {
