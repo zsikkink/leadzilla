@@ -7589,6 +7589,13 @@ async function routePublicDemoRequest(request: Request): Promise<Response> {
     throw new HttpError(404, "Not found");
   }
 
+  if (
+    parts[2] === "messaging" && parts[3] === "drafts" &&
+    parts.length === 4 && method === "GET"
+  ) {
+    return handleListDrafts(url);
+  }
+
   if (parts[2] !== "discovery") {
     throw new HttpError(404, "Not found");
   }

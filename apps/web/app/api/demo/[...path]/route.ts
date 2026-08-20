@@ -12,6 +12,7 @@ const ALLOWED_ROUTES = new Map([
   ['GET v1/icps', 'v1/demo/discovery/icps'],
   ['GET v1/settings/pipeline', 'v1/demo/discovery/settings'],
   ['GET v1/leads', 'v1/demo/leads'],
+  ['GET v1/messaging/drafts', 'v1/demo/messaging/drafts'],
   ['GET v1/discovery/runs', 'v1/demo/discovery/runs'],
   ['POST v1/discovery/runs', 'v1/demo/discovery/runs'],
 ]);

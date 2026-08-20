@@ -89,6 +89,7 @@ interface ScoreInfo {
 interface BusinessDiscoveryScoreInfo {
   score: number;
   scoreBand: LeadScoreBand | null;
+  label: 'Rule-Based Fit Score' | 'Business Discovery Score';
 }
 
 interface BusinessScrapeData {
@@ -323,7 +324,16 @@ function getSendRecency(send: MessageSendResponse): number {
 function extractBusinessDiscoveryScore(
   lead: GetLeadResponse | null,
   businessProfile: Record<string, unknown> | null,
+  latestScore: ScoreInfo | null,
 ): BusinessDiscoveryScoreInfo | null {
+  if (latestScore?.deterministicScore !== undefined) {
+    return {
+      score: latestScore.deterministicScore,
+      scoreBand: latestScore.scoreBand ?? null,
+      label: 'Rule-Based Fit Score',
+    };
+  }
+
   const score = lead?.businessDeterministicScore
     ?? readOptionalNumber(businessProfile?.deterministicScore)
     ?? readOptionalNumber(businessProfile?.deterministic_score);
@@ -338,7 +348,7 @@ function extractBusinessDiscoveryScore(
     ? rawBand
     : null;
 
-  return { score, scoreBand };
+  return { score, scoreBand, label: 'Business Discovery Score' };
 }
 
 function getLeadScoreLabel(scoreInfo: ScoreInfo): string {
@@ -1904,7 +1914,9 @@ export default function LeadDetailPage() {
   const enrichmentFields = l ? extractEnrichmentFields(l.enrichmentData) : [];
   const latestScorePrediction = latestLeadScore.data?.prediction ?? null;
   const scoreInfo = l ? extractScoreInfo(l.enrichmentData, latestScorePrediction) : null;
-  const businessDiscoveryScore = l ? extractBusinessDiscoveryScore(l, businessProfileRecord) : null;
+  const businessDiscoveryScore = l
+    ? extractBusinessDiscoveryScore(l, businessProfileRecord, scoreInfo)
+    : null;
   const draftIcpProfileId = l?.latestIcpProfileId ?? latestScorePrediction?.icpProfileId ?? null;
   const draftScorePredictionId = latestScorePrediction?.id ?? null;
   const sortedMessageDrafts = useMemo<MessageDraftResponse[]>(() => {
@@ -2079,7 +2091,7 @@ export default function LeadDetailPage() {
           {businessDiscoveryScore ? (
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                Business Discovery Score
+                {businessDiscoveryScore.label}
               </p>
               <div className="mt-1 flex items-center gap-2">
                 {businessDiscoveryScore.scoreBand ? (
