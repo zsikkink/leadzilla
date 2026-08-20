@@ -157,19 +157,26 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
       </div>
       <Dialog open={previewNoticeOpen} onOpenChange={handlePreviewNoticeOpenChange}>
         <DialogContent
-          className="border-white/[0.08] bg-card/95 text-foreground shadow-[0_24px_80px_rgba(0,0,0,0.45)] sm:max-w-[430px]"
+          className="border-white/[0.08] bg-card text-foreground shadow-[0_24px_80px_rgba(0,0,0,0.45)] sm:max-w-[430px]"
           onEscapeKeyDown={(event) => event.preventDefault()}
           onPointerDownOutside={(event) => event.preventDefault()}
           showCloseButton={false}
         >
           <DialogHeader>
-            <DialogTitle className="text-xl font-bold">This is a demo environment</DialogTitle>
+            <DialogTitle className="text-xl font-bold">Welcome to the Zbooni demo</DialogTitle>
             <DialogDescription
               className={cn('leading-6', isStaticPreview && 'text-foreground')}
             >
-              {isStaticPreview
-                ? 'Live discovery jobs use a fixed five-search-task budget. Other views use read-only demo data, and outbound delivery remains disabled.'
-                : 'Explore lead discovery, scoring, and message drafting.'}
+              {isStaticPreview ? (
+                <>
+                  <span className="block">
+                    I built this AI sales platform for Zbooni and deployed the original system to their production environment.
+                  </span>
+                  <span className="mt-4 block">
+                    Lead discovery and AI scoring are enabled, with limited usage. Outbound sending is disabled.
+                  </span>
+                </>
+              ) : 'Explore lead discovery, scoring, and message drafting.'}
             </DialogDescription>
           </DialogHeader>
           {!isStaticPreview && (
@@ -183,7 +190,7 @@ export function AppShell({ children, contentClassName }: AppShellProps) {
               onClick={handlePreviewNoticeDismiss}
               className="inline-flex h-10 items-center justify-center rounded-lg border border-zbooni-teal/15 bg-zbooni-teal/[0.045] px-4 text-sm font-semibold text-zbooni-teal shadow-sm shadow-black/10 transition-colors hover:bg-zbooni-teal/[0.075] focus:outline-none focus:ring-2 focus:ring-zbooni-teal/25 focus:ring-offset-2 focus:ring-offset-background"
             >
-              {isStaticPreview ? 'View Demo' : 'Start exploring'}
+              {isStaticPreview ? 'Start Exploring' : 'Start exploring'}
             </button>
           </DialogFooter>
         </DialogContent>

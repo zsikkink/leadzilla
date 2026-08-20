@@ -2,7 +2,7 @@
 
 import type { LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -23,6 +23,8 @@ import {
   ShieldCheck,
   Sparkles,
   Target,
+  TrendingUp,
+  UserPlus,
   Users,
   X,
 } from 'lucide-react';
@@ -161,43 +163,197 @@ function DiscoverPreview() {
 }
 
 function LeadsPreview() {
+  const pathname = usePathname();
+  const leadId = pathname.match(/^\/dashboard\/leads\/([^/]+)$/)?.[1];
+  const selectedLead = leadId ? DEMO_LEADS.find((lead) => lead.id === leadId) : undefined;
+  const [searchQuery, setSearchQuery] = useState('');
+  const [enrichedLeadIds, setEnrichedLeadIds] = useState<ReadonlySet<string>>(() => new Set());
+
+  const visibleLeads = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return DEMO_LEADS;
+    return DEMO_LEADS.filter((lead) => (
+      `${lead.contactName} ${lead.company} ${lead.role} ${lead.segment}`.toLowerCase().includes(query)
+    ));
+  }, [searchQuery]);
+
+  const enrichLead = (leadIdToEnrich: string) => {
+    setEnrichedLeadIds((current) => new Set(current).add(leadIdToEnrich));
+  };
+
+  if (leadId && selectedLead) {
+    const scoreFactors = [
+      { label: 'ICP alignment', value: Math.min(98, selectedLead.score + 4), detail: `${selectedLead.segment} matches a proven high-conversion segment.` },
+      { label: 'Decision-maker fit', value: Math.min(96, selectedLead.score + 1), detail: `${selectedLead.contactName} holds a role with direct influence over the buying process.` },
+      { label: 'Reachability', value: Math.max(72, selectedLead.score - 5), detail: `Verified contact paths are available through ${selectedLead.channels.toLowerCase()}.` },
+      { label: 'Commercial intent', value: Math.max(70, selectedLead.score - 8), detail: 'Public business signals indicate active investment in customer acquisition and operations.' },
+    ] as const;
+
+    return (
+      <div className="space-y-5">
+        <Link href="/dashboard/leads" className="inline-flex items-center gap-2 text-sm font-semibold text-muted-foreground transition-colors hover:text-white">
+          <ArrowLeft className="h-4 w-4" /> Back to leads
+        </Link>
+
+        <div className="flex flex-col gap-4 rounded-xl border border-border/60 bg-card p-5 shadow-sm sm:flex-row sm:items-start sm:justify-between sm:p-6">
+          <div className="flex items-start gap-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-zbooni-teal/10 text-zbooni-teal">
+              <Users className="h-6 w-6" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-2xl font-extrabold tracking-tight text-white">{selectedLead.contactName}</h2>
+                <span className="rounded-full bg-zbooni-green/15 px-2.5 py-1 text-[11px] font-bold text-zbooni-green">Qualified</span>
+              </div>
+              <p className="mt-1 text-sm text-white/65">{selectedLead.role} at {selectedLead.company}</p>
+              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-white/50">
+                <span className="inline-flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5" />{selectedLead.location}</span>
+                <span className="inline-flex items-center gap-1.5"><Mail className="h-3.5 w-3.5" />{selectedLead.email}</span>
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => enrichLead(selectedLead.id)}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-zbooni-teal px-4 text-sm font-bold text-black transition-colors hover:bg-zbooni-teal/90"
+          >
+            {enrichedLeadIds.has(selectedLead.id) ? <CheckCircle2 className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
+            {enrichedLeadIds.has(selectedLead.id) ? 'Enriched' : 'Enrich lead'}
+          </button>
+        </div>
+
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+          <DemoCard>
+            <DemoSectionHeading icon={Sparkles} title="AI score and reasoning" subtitle="Evidence-backed qualification for operator review." />
+            <div className="flex flex-col gap-5 rounded-xl border border-zbooni-green/20 bg-zbooni-green/[0.045] p-5 sm:flex-row sm:items-center">
+              <div className="flex h-24 w-24 shrink-0 flex-col items-center justify-center rounded-full border-4 border-zbooni-green/35 bg-black/20">
+                <span className="text-3xl font-black text-white">{selectedLead.score}</span>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-zbooni-green">High fit</span>
+              </div>
+              <div>
+                <p className="text-base font-bold text-white">Strong match for immediate review</p>
+                <p className="mt-2 text-sm leading-6 text-white/65">
+                  {selectedLead.company} combines a strong ICP match, an identifiable decision maker, and credible contact paths. The account is well suited to a consultative sales motion.
+                </p>
+              </div>
+            </div>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              {scoreFactors.map((factor) => (
+                <div key={factor.label} className="rounded-lg border border-white/[0.08] bg-black/[0.12] p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-bold text-white">{factor.label}</p>
+                    <span className="text-sm font-extrabold text-zbooni-green">{factor.value}</span>
+                  </div>
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
+                    <div className="h-full rounded-full bg-zbooni-green" style={{ width: `${factor.value}%` }} />
+                  </div>
+                  <p className="mt-3 text-xs leading-5 text-white/55">{factor.detail}</p>
+                </div>
+              ))}
+            </div>
+          </DemoCard>
+
+          <div className="space-y-5">
+            <DemoCard>
+              <DemoSectionHeading icon={Building2} title="Business profile" subtitle="Enriched account context." />
+              <dl className="space-y-4 text-sm">
+                {[
+                  ['Company', selectedLead.company],
+                  ['Segment', selectedLead.segment],
+                  ['Location', selectedLead.location],
+                  ['Contact channels', selectedLead.channels],
+                  ['Lead status', selectedLead.status],
+                ].map(([label, value]) => (
+                  <div key={label} className="flex items-start justify-between gap-4 border-b border-white/[0.06] pb-3 last:border-0 last:pb-0">
+                    <dt className="text-white/45">{label}</dt>
+                    <dd className="text-right font-semibold text-white/80">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </DemoCard>
+            <DemoCard>
+              <DemoSectionHeading icon={TrendingUp} title="Recommended next step" subtitle="AI-assisted, human-controlled workflow." />
+              <p className="text-sm leading-6 text-white/65">
+                Review the cited fit signals, confirm the decision-maker details, then create a personalized draft for human approval. Outbound delivery remains disabled.
+              </p>
+            </DemoCard>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
-      <PreviewBanner label="lead portfolio" />
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <PreviewMetric icon={Users} label="Priority leads" value={DEMO_OPERATING_TOTALS.priority.toLocaleString('en-US')} detail="High-fit opportunities." />
-        <PreviewMetric icon={Building2} label="High fit" value={DEMO_OPERATING_TOTALS.highFit.toLocaleString('en-US')} detail="Best accounts for immediate review." />
-        <PreviewMetric icon={Globe2} label="Scored" value={DEMO_OPERATING_TOTALS.scored.toLocaleString('en-US')} detail="Profiles with enough business context for scoring." />
-        <PreviewMetric icon={Mail} label="Drafts generated" value={DEMO_OPERATING_TOTALS.drafts.toLocaleString('en-US')} detail="Historical drafts held behind human review." />
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-sm font-bold text-white">Active leads</p>
+          <p className="mt-1 text-xs text-white/50">Review, enrich, and inspect AI qualification evidence.</p>
+        </div>
+        <div className="relative w-full sm:w-80">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/35" />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search leads or companies"
+            className="h-10 w-full rounded-lg border border-white/[0.1] bg-white/[0.045] pl-9 pr-3 text-sm text-white outline-none transition-colors placeholder:text-white/30 focus:border-zbooni-teal/50"
+          />
+        </div>
       </div>
       <DemoCard>
-        <DemoSectionHeading icon={BriefcaseBusiness} title="Priority Lead Review" subtitle="Representative enriched accounts from the scored portfolio." />
+        <DemoSectionHeading icon={BriefcaseBusiness} title="Lead pipeline" subtitle={`${visibleLeads.length} qualified leads ready for review.`} />
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px] text-left">
+          <table className="w-full min-w-[900px] text-left">
             <thead>
               <tr className="border-b border-white/[0.08] text-[10px] font-bold uppercase tracking-wider text-white/45">
-                <th className="pb-3 pr-4">Business</th>
-                <th className="pb-3 pr-4">Segment</th>
-                <th className="pb-3 pr-4">Location</th>
-                <th className="pb-3 pr-4">Channels</th>
-                <th className="pb-3 text-right">Score</th>
+                <th className="pb-3 pr-4">Name</th>
+                <th className="pb-3 pr-4">Company</th>
+                <th className="pb-3 pr-4">Position</th>
+                <th className="pb-3 pr-4">Status</th>
+                <th className="pb-3 pr-4 text-right">Score</th>
+                <th className="pb-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {DEMO_LEADS.map((lead) => (
-                <tr key={lead.company} className="border-b border-white/[0.055] last:border-0">
+              {visibleLeads.map((lead) => (
+                <tr key={lead.id} className="group border-b border-white/[0.055] last:border-0 hover:bg-white/[0.025]">
                   <td className="py-4 pr-4">
-                    <p className="text-sm font-bold text-white">{lead.company}</p>
-                    <p className="mt-1 text-xs text-zbooni-green">{lead.status}</p>
+                    <Link href={`/dashboard/leads/${lead.id}`} className="block">
+                      <p className="text-sm font-bold text-white transition-colors group-hover:text-zbooni-teal">{lead.contactName}</p>
+                      <p className="mt-1 text-xs text-white/45">{lead.email}</p>
+                    </Link>
                   </td>
-                  <td className="py-4 pr-4 text-xs text-white/70">{lead.segment}</td>
-                  <td className="py-4 pr-4 text-xs text-white/70">{lead.location}</td>
-                  <td className="py-4 pr-4 text-xs text-white/70">{lead.channels}</td>
-                  <td className="py-4 text-right text-lg font-extrabold text-white">{lead.score}</td>
+                  <td className="py-4 pr-4 text-xs font-semibold text-white/75">{lead.company}</td>
+                  <td className="py-4 pr-4 text-xs text-white/60">{lead.role}</td>
+                  <td className="py-4 pr-4"><span className="rounded-full bg-zbooni-green/15 px-2.5 py-1 text-[11px] font-bold text-zbooni-green">Qualified</span></td>
+                  <td className="py-4 pr-4 text-right"><span className="inline-flex min-w-10 justify-center rounded-full border border-zbooni-green/20 bg-zbooni-green/[0.07] px-2.5 py-1 text-sm font-extrabold text-white">{lead.score}</span></td>
+                  <td className="py-4 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => enrichLead(lead.id)}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-white/[0.1] bg-white/[0.04] px-2.5 text-xs font-bold text-white/65 transition-colors hover:border-zbooni-teal/30 hover:text-zbooni-teal"
+                      >
+                        {enrichedLeadIds.has(lead.id) ? <CheckCircle2 className="h-3.5 w-3.5" /> : <UserPlus className="h-3.5 w-3.5" />}
+                        {enrichedLeadIds.has(lead.id) ? 'Enriched' : 'Enrich'}
+                      </button>
+                      <Link href={`/dashboard/leads/${lead.id}`} className="inline-flex h-8 items-center rounded-md px-2.5 text-xs font-bold text-zbooni-teal hover:bg-zbooni-teal/10">
+                        View <ArrowUpRight className="ml-1 h-3.5 w-3.5" />
+                      </Link>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+          {visibleLeads.length === 0 ? (
+            <div className="py-14 text-center">
+              <Search className="mx-auto h-5 w-5 text-white/25" />
+              <p className="mt-3 text-sm font-semibold text-white/65">No matching leads</p>
+              <p className="mt-1 text-xs text-white/40">Try a company, contact, role, or segment.</p>
+            </div>
+          ) : null}
         </div>
       </DemoCard>
     </div>

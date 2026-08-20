@@ -1,6 +1,6 @@
 'use client';
 
-import { LogOut, Menu, ShieldCheck } from 'lucide-react';
+import { LogOut, Menu } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 
 import { useAuth } from '../hooks/use-auth.js';
@@ -30,11 +30,6 @@ export function Header({ onOpenNavigation }: HeaderProps) {
   const { user, logout, sessionMode } = useAuth();
   const pathname = usePathname();
   const pageTitle = getPageTitle(pathname);
-  const previewBadge = pathname === '/dashboard/discover' || pathname.startsWith('/dashboard/jobs/')
-    ? 'Live bounded discovery'
-    : pathname === '/dashboard/icps' || pathname.startsWith('/dashboard/icps/')
-      ? 'Editable sales playbook demo'
-      : 'Read-only portfolio demo';
 
   return (
     <header className="sticky top-0 z-30 border-b border-border/50 bg-background/80 backdrop-blur-xl">
@@ -51,23 +46,17 @@ export function Header({ onOpenNavigation }: HeaderProps) {
           <h1 className="truncate text-xl font-extrabold tracking-tight sm:text-3xl lg:text-4xl">{pageTitle}</h1>
         </div>
 
-        <div className="ml-3 flex shrink-0 items-center gap-3">
-          {sessionMode === 'preview' ? (
-            <div className="flex items-center gap-2 rounded-full border border-zbooni-green/20 bg-zbooni-green/[0.07] px-3 py-1.5 text-zbooni-green shadow-sm shadow-black/10">
-              <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
-              <span className="hidden text-xs font-bold sm:inline">{previewBadge}</span>
-              <span className="text-xs font-bold sm:hidden">Demo</span>
-            </div>
-          ) : user ? (
-            <div className="flex items-center gap-2">
-              <div className="hidden items-center gap-2 sm:flex">
-                <span className="text-sm text-foreground">
-                  {user.firstName}
-                </span>
+        {sessionMode === 'live' ? (
+          <div className="ml-3 flex shrink-0 items-center gap-3">
+            {user ? (
+              <div className="flex items-center gap-2">
+                <div className="hidden items-center gap-2 sm:flex">
+                  <span className="text-sm text-foreground">
+                    {user.firstName}
+                  </span>
+                </div>
               </div>
-            </div>
-          ) : null}
-          {sessionMode === 'live' ? (
+            ) : null}
             <button
               type="button"
               onClick={logout}
@@ -77,8 +66,8 @@ export function Header({ onOpenNavigation }: HeaderProps) {
             >
               <LogOut className="h-4 w-4" />
             </button>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
       </div>
     </header>
   );
