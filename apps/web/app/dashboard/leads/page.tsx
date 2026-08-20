@@ -684,12 +684,11 @@ export default function LeadsPage() {
                           onClick={() => router.push(`/dashboard/leads/${lead.id}`)}
                         >
                           <p className="max-w-64 font-medium leading-5">{contactName}</p>
-                          <p className={cn(
-                            'mt-0.5 text-[11px]',
-                            emailLabel ? 'text-muted-foreground/60' : 'text-zbooni-teal/70',
-                          )}>
-                            {emailLabel ?? 'Decision-maker research underway'}
-                          </p>
+                          {emailLabel ? (
+                            <p className="mt-0.5 text-[11px] text-muted-foreground/60">
+                              {emailLabel}
+                            </p>
+                          ) : null}
                           <div className="mt-2 sm:hidden">
                             <LeadStatusBadge status={lead.status} />
                           </div>
@@ -706,7 +705,7 @@ export default function LeadsPage() {
                           {position ? (
                             <span className="text-xs text-muted-foreground">{position}</span>
                           ) : (
-                            <span className="text-xs text-muted-foreground/45">Role research underway</span>
+                            <span className="text-xs text-muted-foreground/30">&mdash;</span>
                           )}
                         </td>
                         <td className="hidden px-4 py-3 sm:table-cell">
