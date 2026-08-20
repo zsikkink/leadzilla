@@ -1,6 +1,6 @@
 'use client';
 
-import type { LeadDisplayScoreSource, LeadListSortBy, LeadScoreBand, LeadStatus } from '@lead-flood/contracts';
+import type { LeadListSortBy, LeadScoreBand, LeadStatus } from '@lead-flood/contracts';
 import { AlertTriangle, Loader2, MessageSquare, RefreshCw, Undo2, UserPlus, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -58,13 +58,6 @@ const PAGE_SIZE_OPTIONS = [
   { value: '40', label: '40 per page' },
   { value: '50', label: '50 per page' },
 ];
-
-const SCORE_SOURCE_LABELS: Record<LeadDisplayScoreSource, string> = {
-  AI_SCORE: 'AI',
-  LEGACY_SCORE: 'Legacy',
-  BUSINESS_SCORE: 'Business',
-  NONE: '',
-};
 
 function buildInboxDraftHref(leadId: string, draftId?: string | null, pollDraft = false): string {
   const params = new URLSearchParams({ leadId });
@@ -670,9 +663,6 @@ export default function LeadsPage() {
                     const fallbackScore = lead.latestBlendedScore ?? extractLegacyScore(enrichmentRaw);
                     const displayScore = lead.displayScore ?? fallbackScore;
                     const displayScoreBand = lead.displayScoreBand ?? lead.latestScoreBand;
-                    const scoreSourceLabel = lead.displayScoreSource
-                      ? SCORE_SOURCE_LABELS[lead.displayScoreSource]
-                      : null;
                     // Use API-provided fields first, then fall back to enrichment extraction
                     const companyName = lead.businessName ?? extractCompanyName(enrichmentRaw);
                     const position = lead.decisionMakerTitle ?? extractPosition(enrichmentRaw);
@@ -722,9 +712,9 @@ export default function LeadsPage() {
                         <td className="hidden px-4 py-3 sm:table-cell">
                           <LeadStatusBadge status={lead.status} />
                         </td>
-                        <td className="px-2 py-3 text-right sm:px-4">
+                        <td className="px-2 py-3 text-center sm:px-4">
                           {displayScore !== null ? (
-                            <div className="flex flex-col items-end gap-1">
+                            <div className="flex flex-col items-center gap-1">
                               <span
                                 className={cn(
                                   'font-mono text-sm font-bold tabular-nums',
@@ -737,14 +727,9 @@ export default function LeadsPage() {
                               >
                                 {(displayScore * 100).toFixed(0)}
                               </span>
-                              <div className="hidden items-center justify-end gap-1.5 sm:flex">
+                              <div className="hidden items-center justify-center sm:flex">
                                 {displayScoreBand ? (
                                   <ScoreBandBadge band={displayScoreBand} />
-                                ) : null}
-                                {scoreSourceLabel ? (
-                                  <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/40">
-                                    {scoreSourceLabel}
-                                  </span>
                                 ) : null}
                               </div>
                             </div>
