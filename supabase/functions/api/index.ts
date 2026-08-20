@@ -5828,6 +5828,60 @@ async function reconcileStalePublicDemoRuns(
   }
 }
 
+async function reconcileTerminalPublicDemoAdmissions(): Promise<void> {
+  const activeAdmissions = await listRows("public_demo_discovery_admissions", {
+    select: "run_id,state",
+    state: "in.(reserved,running)",
+    order: "created_at.asc",
+    limit: 100,
+  });
+  const runIds = activeAdmissions.data
+    .map((row) => asString(row.run_id))
+    .filter(Boolean);
+  if (runIds.length === 0) {
+    return;
+  }
+
+  const executions = await listRows("JobExecution", {
+    select: "id,status",
+    id: pgIn(runIds),
+    type: "eq.discovery.run",
+    limit: runIds.length,
+  });
+  const completedRunIds = executions.data
+    .filter((row) => asString(row.status).toLowerCase() === "completed")
+    .map((row) => asString(row.id))
+    .filter(Boolean);
+  const failedRunIds = executions.data
+    .filter((row) =>
+      ["failed", "cancelled"].includes(asString(row.status).toLowerCase())
+    )
+    .map((row) => asString(row.id))
+    .filter(Boolean);
+  const finishedAt = new Date().toISOString();
+
+  await Promise.all([
+    completedRunIds.length > 0
+      ? updateRows<Row>("public_demo_discovery_admissions", {
+        run_id: pgIn(completedRunIds),
+      }, {
+        state: "completed",
+        updated_at: finishedAt,
+        expires_at: finishedAt,
+      })
+      : Promise.resolve([]),
+    failedRunIds.length > 0
+      ? updateRows<Row>("public_demo_discovery_admissions", {
+        run_id: pgIn(failedRunIds),
+      }, {
+        state: "failed",
+        updated_at: finishedAt,
+        expires_at: finishedAt,
+      })
+      : Promise.resolve([]),
+  ]);
+}
+
 function publicDemoQuotaError(reason: EdgePublicDemoQuotaOutcome): HttpError {
   if (reason === "session_daily_limit") {
     return new HttpError(
@@ -5935,6 +5989,7 @@ async function handleCreateDiscoveryRun(
     if (!publicDemoContext.idempotencyKey) {
       throw new HttpError(400, "A valid idempotency key is required.");
     }
+    await reconcileTerminalPublicDemoAdmissions();
     const taskBudget = input.limit ?? EDGE_DISCOVERY_DEFAULT_SEARCH_TASKS;
     const shardBudgets = distributeEdgeDiscoveryTaskBudget(
       taskBudget,
