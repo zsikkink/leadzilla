@@ -1921,9 +1921,12 @@ export default function LeadDetailPage() {
   const draftScorePredictionId = latestScorePrediction?.id ?? null;
   const sortedMessageDrafts = useMemo<MessageDraftResponse[]>(() => {
     if (!messageDrafts.data?.items) return [];
-    return [...messageDrafts.data.items].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-    );
+    return messageDrafts.data.items
+      .filter((draft) => !(
+        draft.approvalStatus === 'REJECTED'
+        && draft.rejectedReason === 'Superseded by regenerated draft'
+      ))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [messageDrafts.data?.items]);
   const initialSendByDraftId = useMemo<Record<string, MessageSendResponse>>(() => {
     const result: Record<string, MessageSendResponse> = {};
@@ -2493,7 +2496,7 @@ export default function LeadDetailPage() {
               Outreach Draft
               {messageDrafts.data ? (
                 <span className="ml-1 rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">
-                  {messageDrafts.data.total}
+                  {sortedMessageDrafts.length}
                 </span>
               ) : null}
             </h2>

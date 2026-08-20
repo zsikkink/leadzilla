@@ -2888,9 +2888,24 @@ async function existingInitialSendForDraft(
 }
 
 function genericEmailAddress(email: string): boolean {
-  const local = email.split("@")[0]?.toLowerCase() ?? "";
+  const normalized = email.trim().toLowerCase();
+  if (
+    normalized.endsWith("@lead-flood.invalid") ||
+    normalized.endsWith(".invalid") ||
+    normalized.startsWith("no-email+")
+  ) {
+    return true;
+  }
+  const local = normalized.split("@")[0] ?? "";
   return ["hello", "info", "contact", "sales", "team", "admin", "support"]
     .includes(local);
+}
+
+function customerFacingIcpText(value: string | null): string | null {
+  if (!value) return null;
+  return /\b(?:archived|demo|reporting continuity|historical data)\b/i.test(value)
+    ? null
+    : value;
 }
 
 function leadDisplayName(lead: Row): string {
@@ -3047,14 +3062,17 @@ function openAiDraftDeveloperPrompt(input: {
     "Leadzilla helps businesses turn SMS, social, and direct customer conversations into paid, structured, trackable workflows.",
     channelInstruction,
     "Use only the provided lead, ICP, score, enrichment, discovery, and business evidence. Never fabricate facts.",
+    "Never mention demos, archived profiles, reporting continuity, internal metadata, data retention, scoring, enrichment, or lead research in customer-facing copy.",
     "The message should feel like a thoughtful operator actually reviewed the business, not like a mail merge.",
+    'Use natural business language. Avoid awkward constructions such as "guest operation", "visible operation", or "sits as its own destination".',
     "Reference one concrete observed detail when evidence supports it. If the evidence is thin, keep the claim conservative.",
     "Pitch exactly one relevant Leadzilla capability and connect it to the prospect's likely workflow.",
     "First-touch CTAs must be low-friction. Do not ask for a call unless operator re-draft feedback explicitly asks for that.",
     "Tone: professional, concise, warm, specific, calm, no emojis, no exclamation points, no hype, no buzzwords.",
     'Avoid phrases like "hope this finds you well", "I wanted to reach out", "game-changer", "unlock", and "revolutionize".',
     'Email bodies should be 70-140 words. SMS-style bodies should be 50-110 words. Body text must end exactly with "Best,\\nLeadzilla Team".',
-    "For email, write a calm 2-6 word buyer-readable question as the subject. For SMS-style direct messages, subject must be null.",
+    "For email, write a natural 2-6 word buyer-readable question tied to a concrete business outcome. Never use the words workflow, platform, solution, demo, or Leadzilla in the subject. For SMS-style direct messages, subject must be null.",
+    "When the recipient type is GENERIC_CONTACT, do not address the message to a person or imply that a specific decision-maker was identified.",
     "Return only the requested JSON shape.",
     input.behaviorPrompt
       ? `Configured behavior guidance:\n${input.behaviorPrompt}`
@@ -3092,11 +3110,12 @@ function openAiDraftUserPrompt(input: {
   const recipientType = genericEmailAddress(email)
     ? "GENERIC_CONTACT"
     : "DECISION_MAKER";
-  const icpDescription = asNullableString(input.icp.description) ??
-    "No ICP description available";
+  const icpDescription = customerFacingIcpText(
+    asNullableString(input.icp.description),
+  );
   const icpMetadata = icpMetadataStrings(input.icp);
-  const icpHook = icpMetadata.hook ??
-    icpMetadata.angle ??
+  const icpHook = customerFacingIcpText(icpMetadata.hook) ??
+    customerFacingIcpText(icpMetadata.angle) ??
     (firstSentence(icpDescription)
       ? `Hook: ${firstSentence(icpDescription)}`
       : null);
@@ -3129,10 +3148,14 @@ function openAiDraftUserPrompt(input: {
         ].filter(Boolean).join(", ")
       }`
       : null,
-    `ICP segment: ${asString(input.icp.name, "ICP")}`,
-    `ICP description: ${icpDescription}`,
+    customerFacingIcpText(asString(input.icp.name))
+      ? `ICP segment: ${customerFacingIcpText(asString(input.icp.name))}`
+      : null,
+    icpDescription ? `ICP description: ${icpDescription}` : null,
     icpHook ? `Required sales hook: ${icpHook}` : null,
-    icpMetadata.angle ? `ICP angle: ${icpMetadata.angle}` : null,
+    customerFacingIcpText(icpMetadata.angle)
+      ? `ICP angle: ${customerFacingIcpText(icpMetadata.angle)}`
+      : null,
     featuresToPitch.length > 0
       ? `Possible Leadzilla features to pitch:\n${
         featuresToPitch.map((feature, index) => `${index + 1}. ${feature}`)
@@ -3145,8 +3168,8 @@ function openAiDraftUserPrompt(input: {
     input.globalMessagingInstructions
       ? `Global messaging instructions:\n${input.globalMessagingInstructions}`
       : null,
-    icpMetadata.messagingInstructions
-      ? `ICP messaging instructions:\n${icpMetadata.messagingInstructions}`
+    customerFacingIcpText(icpMetadata.messagingInstructions)
+      ? `ICP messaging instructions:\n${customerFacingIcpText(icpMetadata.messagingInstructions)}`
       : null,
     input.request.redraftFeedback
       ? `Operator re-draft feedback:\n${input.request.redraftFeedback}`
@@ -3177,10 +3200,10 @@ function openAiDraftUserPrompt(input: {
     businessCountryCode: asNullableString(business?.countryCode),
     scoreBand: asString(input.score.scoreBand, "MEDIUM"),
     blendedScore: asNumber(input.score.blendedScore),
-    icpName: asString(input.icp.name, "ICP"),
+    icpName: customerFacingIcpText(asString(input.icp.name)),
     icpDescription,
     icpHook,
-    icpAngle: icpMetadata.angle,
+    icpAngle: customerFacingIcpText(icpMetadata.angle),
     featuresToPitch,
     businessIntelligence,
     promptVersion: input.request.promptVersion,
@@ -3205,6 +3228,16 @@ function assertUsableDraftContent(content: OpenAiDraftContent): void {
     throw new HttpError(
       502,
       "OpenAI returned invalid structured output instead of a usable message.",
+    );
+  }
+  const customerFacingCopy = `${content.subject ?? ""}\n${body}`;
+  if (
+    /\b(?:historical demo|reporting continuity|archived demo|data retained)\b/i
+      .test(customerFacingCopy)
+  ) {
+    throw new HttpError(
+      502,
+      "OpenAI returned internal demo metadata instead of usable outreach copy.",
     );
   }
 }
