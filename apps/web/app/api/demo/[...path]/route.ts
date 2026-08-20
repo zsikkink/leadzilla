@@ -5,11 +5,13 @@ const DEMO_SESSION_HEADER = 'x-leadzilla-demo-session';
 const DEMO_GATEWAY_HEADER = 'x-leadzilla-demo-gateway';
 const MAX_REQUEST_BODY_BYTES = 16_384;
 const UPSTREAM_TIMEOUT_MS = 8_000;
+const LEAD_READ_UPSTREAM_TIMEOUT_MS = 20_000;
 const DISCOVERY_RUN_UPSTREAM_TIMEOUT_MS = 110_000;
 
 const ALLOWED_ROUTES = new Map([
   ['GET v1/icps', 'v1/demo/discovery/icps'],
   ['GET v1/settings/pipeline', 'v1/demo/discovery/settings'],
+  ['GET v1/leads', 'v1/demo/leads'],
   ['GET v1/discovery/runs', 'v1/demo/discovery/runs'],
   ['POST v1/discovery/runs', 'v1/demo/discovery/runs'],
 ]);
@@ -18,6 +20,42 @@ function resolveUpstreamPath(method: string, path: string[]): string | null {
   const exactPath = ALLOWED_ROUTES.get(`${method} ${path.join('/')}`);
   if (exactPath) {
     return exactPath;
+  }
+
+  const leadId = path[2];
+  if (
+    path[0] === 'v1'
+    && path[1] === 'leads'
+    && leadId
+    && /^[a-zA-Z0-9_-]{1,100}$/.test(leadId)
+  ) {
+    if (method === 'GET' && path.length === 3) {
+      return `v1/demo/leads/${encodeURIComponent(leadId)}`;
+    }
+    if (method === 'POST' && path.length === 4 && path[3] === 'enrich') {
+      return `v1/demo/leads/${encodeURIComponent(leadId)}/enrich`;
+    }
+  }
+
+  const scoredLeadId = path[3];
+  if (
+    method === 'GET'
+    && path.length === 5
+    && path[0] === 'v1'
+    && path[1] === 'scoring'
+    && path[2] === 'leads'
+    && scoredLeadId
+    && /^[a-zA-Z0-9_-]{1,100}$/.test(scoredLeadId)
+  ) {
+    if (path[4] === 'latest') {
+      return `v1/demo/leads/${encodeURIComponent(scoredLeadId)}/latest-score`;
+    }
+    if (path[4] === 'latest-feature-snapshot') {
+      return `v1/demo/leads/${encodeURIComponent(scoredLeadId)}/latest-feature-snapshot`;
+    }
+    if (path[4] === 'latest-deterministic') {
+      return `v1/demo/leads/${encodeURIComponent(scoredLeadId)}/latest-deterministic`;
+    }
   }
 
   const runId = path[3];
@@ -219,9 +257,11 @@ async function proxyDemoRequest(
       headers,
       ...(body ? { body } : {}),
       redirect: 'manual',
-      signal: AbortSignal.timeout(
-        request.method === 'POST' ? DISCOVERY_RUN_UPSTREAM_TIMEOUT_MS : UPSTREAM_TIMEOUT_MS,
-      ),
+      signal: AbortSignal.timeout(request.method === 'POST'
+        ? DISCOVERY_RUN_UPSTREAM_TIMEOUT_MS
+        : upstreamPath.startsWith('v1/demo/leads')
+          ? LEAD_READ_UPSTREAM_TIMEOUT_MS
+          : UPSTREAM_TIMEOUT_MS),
     });
     const responseHeaders = new Headers({
       'cache-control': 'no-store',

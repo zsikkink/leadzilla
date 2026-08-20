@@ -49,6 +49,71 @@ describe('public demo discovery proxy route', () => {
     expect(response.headers.get('set-cookie')).toContain('SameSite=Lax');
   });
 
+  it('forwards only the real lead list, detail, and enrichment routes', async () => {
+    process.env.API_BASE_URL = 'https://api.example.com';
+    process.env.LEADZILLA_DEMO_GATEWAY_SECRET = 'server-only-demo-key';
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValue(Response.json({ items: [], page: 1, pageSize: 20, total: 0 }));
+
+    const listRequest = new NextRequest(
+      'https://web.example.com/leadzilla/api/demo/v1/leads?page=1&pageSize=20&sortBy=score_desc',
+      { headers: { origin: 'https://web.example.com' } },
+    );
+    await GET(listRequest, { params: Promise.resolve({ path: ['v1', 'leads'] }) });
+
+    const detailRequest = new NextRequest(
+      'https://web.example.com/leadzilla/api/demo/v1/leads/lead_1',
+      { headers: { origin: 'https://web.example.com' } },
+    );
+    await GET(detailRequest, { params: Promise.resolve({ path: ['v1', 'leads', 'lead_1'] }) });
+
+    const enrichRequest = new NextRequest(
+      'https://web.example.com/leadzilla/api/demo/v1/leads/lead_1/enrich',
+      { method: 'POST', headers: { origin: 'https://web.example.com' } },
+    );
+    await POST(enrichRequest, {
+      params: Promise.resolve({ path: ['v1', 'leads', 'lead_1', 'enrich'] }),
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://api.example.com/v1/demo/leads?page=1&pageSize=20&sortBy=score_desc',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://api.example.com/v1/demo/leads/lead_1',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      'https://api.example.com/v1/demo/leads/lead_1/enrich',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('forwards the three read-only scoring views for a real lead', async () => {
+    process.env.API_BASE_URL = 'https://api.example.com';
+    process.env.LEADZILLA_DEMO_GATEWAY_SECRET = 'server-only-demo-key';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ prediction: null }));
+
+    for (const suffix of ['latest', 'latest-feature-snapshot', 'latest-deterministic']) {
+      const request = new NextRequest(
+        `https://web.example.com/leadzilla/api/demo/v1/scoring/leads/lead_1/${suffix}`,
+        { headers: { origin: 'https://web.example.com' } },
+      );
+      await GET(request, {
+        params: Promise.resolve({ path: ['v1', 'scoring', 'leads', 'lead_1', suffix] }),
+      });
+    }
+
+    expect(fetchMock.mock.calls.map(([target]) => target)).toEqual([
+      'https://api.example.com/v1/demo/leads/lead_1/latest-score',
+      'https://api.example.com/v1/demo/leads/lead_1/latest-feature-snapshot',
+      'https://api.example.com/v1/demo/leads/lead_1/latest-deterministic',
+    ]);
+  });
+
   it('uses the incoming host when Next is configured with a different local hostname', async () => {
     process.env.API_BASE_URL = 'https://api.example.com';
     process.env.LEADZILLA_DEMO_GATEWAY_SECRET = 'server-only-demo-key';

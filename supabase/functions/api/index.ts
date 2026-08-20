@@ -4032,18 +4032,42 @@ async function handleListLeads(url: URL): Promise<Response> {
     params.order = "createdAt.desc,id.desc";
   }
 
-  let result = await listRows("Lead", params);
+  let preloadedScores: Map<string, Row> | null = null;
+  let result: RestResult<Row[]>;
+  if (scoreSort) {
+    const [allLeads, allScoreRows] = await Promise.all([
+      listAllRows("Lead", params),
+      listAllRows("LeadScorePrediction", {
+        select:
+          "id,leadId,icpProfileId,deterministicScore,logisticScore,blendedScore,scoreBand,reasonsJson,ruleEvaluationJson,predictedAt,createdAt",
+        order: "predictedAt.desc,createdAt.desc,id.desc",
+      }),
+    ]);
+    preloadedScores = new Map<string, Row>();
+    for (const score of allScoreRows) {
+      const leadId = asNullableString(score.leadId);
+      if (leadId && !preloadedScores.has(leadId)) {
+        preloadedScores.set(leadId, score);
+      }
+    }
+    result = { data: allLeads, total: allLeads.length };
+  } else {
+    result = await listRows("Lead", params);
+  }
   let leads = result.data;
   const scoreBand = url.searchParams.get("scoreBand");
   const minBlendedScore = url.searchParams.get("minBlendedScore");
 
   if (scoreBand || minBlendedScore || scoreSort) {
     const candidateIds = leads.map((lead) => asString(lead.id)).filter(Boolean);
-    const scores = await latestScoresByLeadId(candidateIds);
-    const businessIds = leads
-      .map((lead) => asNullableString(lead.businessId))
-      .filter((id): id is string => id !== null);
-    const businesses = await businessesById(businessIds);
+    const scores = preloadedScores ?? await latestScoresByLeadId(candidateIds);
+    const businesses = scoreSort
+      ? new Map<string, Row>()
+      : await businessesById(
+        leads
+          .map((lead) => asNullableString(lead.businessId))
+          .filter((id): id is string => id !== null),
+      );
 
     leads = leads.filter((lead) => {
       const score = scores.get(asString(lead.id));
@@ -7489,16 +7513,52 @@ async function routePublicDemoRequest(request: Request): Promise<Response> {
   const method = request.method.toUpperCase();
 
   if (
-    parts.length < 4 ||
+    parts.length < 3 ||
     parts.length > 6 ||
     parts[0] !== "v1" ||
-    parts[1] !== "demo" ||
-    parts[2] !== "discovery"
+    parts[1] !== "demo"
   ) {
     throw new HttpError(404, "Not found");
   }
 
   const context = await readPublicDemoContext(request);
+  if (parts[2] === "leads") {
+    if (method === "GET" && parts.length === 3) {
+      return handleListLeads(url);
+    }
+    if (method === "GET" && parts.length === 4 && parts[3]) {
+      return handleGetLead(parts[3]);
+    }
+    if (
+      method === "GET" && parts.length === 5 && parts[3] &&
+      parts[4] === "latest-score"
+    ) {
+      return handleLatestLeadScore(parts[3], url);
+    }
+    if (
+      method === "GET" && parts.length === 5 && parts[3] &&
+      parts[4] === "latest-feature-snapshot"
+    ) {
+      return handleLatestLeadFeatureSnapshot(parts[3], url);
+    }
+    if (
+      method === "GET" && parts.length === 5 && parts[3] &&
+      parts[4] === "latest-deterministic"
+    ) {
+      return handleLatestLeadDeterministicScore(parts[3], url);
+    }
+    if (
+      method === "POST" && parts.length === 5 && parts[3] &&
+      parts[4] === "enrich"
+    ) {
+      return handleEnrichLead(parts[3]);
+    }
+    throw new HttpError(404, "Not found");
+  }
+
+  if (parts[2] !== "discovery") {
+    throw new HttpError(404, "Not found");
+  }
   if (method === "GET" && parts.length === 4 && parts[3] === "icps") {
     return handlePublicDemoDiscoveryIcps(url);
   }
@@ -7748,7 +7808,7 @@ Deno.serve(async (request) => {
 
   try {
     const routePath = extractRoutePath(new URL(request.url).pathname);
-    const response = routePath.startsWith("/v1/demo/discovery/")
+    const response = routePath.startsWith("/v1/demo/")
       ? await routePublicDemoRequest(request)
       : await routeRequest(request, await authenticate(request));
     return withCors(response, corsHeaders);
