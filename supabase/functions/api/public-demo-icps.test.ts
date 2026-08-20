@@ -17,8 +17,8 @@ Deno.test('public demo exposes four visibly distinct ICP markets', () => {
 
 Deno.test('public demo ICP presentation resolves from durable source names', () => {
   const presentation = getPublicDemoIcpPresentation('Enterprise Workflow & Data Platforms');
-  if (presentation?.name !== 'Multi-Location Dental Groups') {
-    throw new Error('Expected the durable enterprise source profile to map to the dental demo market');
+  if (presentation?.name !== 'Enterprise Workflow & Data Platforms') {
+    throw new Error('Expected the public presentation to preserve the durable scoring profile');
   }
   if (getPublicDemoIcpPresentation('Unknown profile') !== null) {
     throw new Error('Expected unknown profiles to remain unmapped');
