@@ -136,6 +136,47 @@ describe('public demo discovery proxy route', () => {
     );
   });
 
+  it('forwards validated draft generation without exposing delivery', async () => {
+    process.env.API_BASE_URL = 'https://api.example.com';
+    process.env.LEADZILLA_DEMO_GATEWAY_SECRET = 'server-only-demo-key';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      Response.json({ status: 'CREATED', draftId: 'draft_1', variantIds: ['variant_1'] }),
+    );
+    const request = new NextRequest(
+      'https://web.example.com/leadzilla/api/demo/v1/messaging/drafts/generate',
+      {
+        method: 'POST',
+        headers: { origin: 'https://web.example.com' },
+        body: JSON.stringify({
+          leadId: 'lead_1',
+          icpProfileId: 'icp_1',
+          scorePredictionId: 'score_1',
+          promptVersion: 'v2',
+        }),
+      },
+    );
+
+    const response = await POST(request, {
+      params: Promise.resolve({ path: ['v1', 'messaging', 'drafts', 'generate'] }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.example.com/v1/demo/messaging/drafts/generate',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          leadId: 'lead_1',
+          icpProfileId: 'icp_1',
+          scorePredictionId: 'score_1',
+          promptVersion: 'v2',
+          channel: 'EMAIL',
+          forceRegenerate: false,
+        }),
+      }),
+    );
+  });
+
   it('uses the incoming host when Next is configured with a different local hostname', async () => {
     process.env.API_BASE_URL = 'https://api.example.com';
     process.env.LEADZILLA_DEMO_GATEWAY_SECRET = 'server-only-demo-key';

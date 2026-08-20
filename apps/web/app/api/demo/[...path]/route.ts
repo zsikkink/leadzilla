@@ -13,6 +13,7 @@ const ALLOWED_ROUTES = new Map([
   ['GET v1/settings/pipeline', 'v1/demo/discovery/settings'],
   ['GET v1/leads', 'v1/demo/leads'],
   ['GET v1/messaging/drafts', 'v1/demo/messaging/drafts'],
+  ['POST v1/messaging/drafts/generate', 'v1/demo/messaging/drafts/generate'],
   ['GET v1/discovery/runs', 'v1/demo/discovery/runs'],
   ['POST v1/discovery/runs', 'v1/demo/discovery/runs'],
 ]);
@@ -200,7 +201,41 @@ function normalizedCreateBody(value: unknown): Record<string, unknown> {
   };
 }
 
-async function requestBody(request: NextRequest): Promise<string | undefined> {
+function normalizedGenerateDraftBody(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new DemoProxyRouteError('Invalid draft generation payload', 400);
+  }
+
+  const body = value as Record<string, unknown>;
+  const validId = (entry: unknown): entry is string => (
+    typeof entry === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(entry)
+  );
+  if (!validId(body.leadId) || !validId(body.icpProfileId)) {
+    throw new DemoProxyRouteError('Draft generation requires a valid lead and ICP profile.', 400);
+  }
+  if (body.scorePredictionId !== undefined && !validId(body.scorePredictionId)) {
+    throw new DemoProxyRouteError('Invalid score prediction identifier.', 400);
+  }
+
+  return {
+    leadId: body.leadId,
+    icpProfileId: body.icpProfileId,
+    ...(body.scorePredictionId ? { scorePredictionId: body.scorePredictionId } : {}),
+    promptVersion: typeof body.promptVersion === 'string'
+      ? body.promptVersion.slice(0, 50)
+      : 'v2',
+    channel: body.channel === 'WHATSAPP' ? 'WHATSAPP' : 'EMAIL',
+    forceRegenerate: body.forceRegenerate === true,
+    ...(typeof body.redraftFeedback === 'string' && body.redraftFeedback.trim()
+      ? { redraftFeedback: body.redraftFeedback.trim().slice(0, 2_000) }
+      : {}),
+  };
+}
+
+async function requestBody(
+  request: NextRequest,
+  upstreamPath: string,
+): Promise<string | undefined> {
   const buffer = await request.arrayBuffer();
   if (buffer.byteLength === 0) {
     return undefined;
@@ -210,7 +245,12 @@ async function requestBody(request: NextRequest): Promise<string | undefined> {
   }
 
   try {
-    return JSON.stringify(normalizedCreateBody(JSON.parse(new TextDecoder().decode(buffer))));
+    const parsed = JSON.parse(new TextDecoder().decode(buffer));
+    return JSON.stringify(
+      upstreamPath === 'v1/demo/messaging/drafts/generate'
+        ? normalizedGenerateDraftBody(parsed)
+        : normalizedCreateBody(parsed),
+    );
   } catch (error: unknown) {
     if (error instanceof DemoProxyRouteError) {
       throw error;
@@ -241,7 +281,9 @@ async function proxyDemoRequest(
       [DEMO_GATEWAY_HEADER]: demoGatewaySecret(),
       [DEMO_SESSION_HEADER]: sessionId,
     });
-    const body = request.method === 'POST' ? await requestBody(request) : undefined;
+    const body = request.method === 'POST'
+      ? await requestBody(request, upstreamPath)
+      : undefined;
     if (body) {
       headers.set('content-type', 'application/json');
       const requestedIdempotencyKey = request.headers.get('idempotency-key');

@@ -7595,6 +7595,12 @@ async function routePublicDemoRequest(request: Request): Promise<Response> {
   ) {
     return handleListDrafts(url);
   }
+  if (
+    parts[2] === "messaging" && parts[3] === "drafts" &&
+    parts[4] === "generate" && parts.length === 5 && method === "POST"
+  ) {
+    return handleGenerateDraft(request);
+  }
 
   if (parts[2] !== "discovery") {
     throw new HttpError(404, "Not found");
