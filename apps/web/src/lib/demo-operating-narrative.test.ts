@@ -6,6 +6,8 @@ import {
   DEMO_INBOX_CONVERSATIONS,
   DEMO_INBOX_DRAFTS,
   DEMO_INBOX_LEADS,
+  DEMO_LEAD_PORTFOLIO,
+  DEMO_LEAD_PORTFOLIO_TOTAL,
   DEMO_DASHBOARD_TREND_BUCKETS,
   DEMO_LEADS,
   DEMO_OPERATING_MONTHS,
@@ -179,6 +181,13 @@ describe('two-month recruiter operating narrative', () => {
     expect(followUps).toBeGreaterThanOrEqual(2);
     expect(DEMO_INBOX_DRAFTS.length).toBeGreaterThanOrEqual(3);
     expect(DEMO_INBOX_DRAFTS.every((draft) => leadIds.has(draft.leadId))).toBe(true);
+  });
+
+  it('materializes the full sanitized lead portfolio for instant pagination', () => {
+    expect(DEMO_LEAD_PORTFOLIO).toHaveLength(DEMO_LEAD_PORTFOLIO_TOTAL);
+    expect(DEMO_LEAD_PORTFOLIO_TOTAL).toBe(DEMO_DATABASE_SNAPSHOT.scoredLeads);
+    expect(new Set(DEMO_LEAD_PORTFOLIO.map((lead) => lead.id)).size).toBe(DEMO_LEAD_PORTFOLIO_TOTAL);
+    expect(DEMO_LEAD_PORTFOLIO.every((lead) => lead.email.endsWith('.example'))).toBe(true);
   });
 
   it('contains no provider-delivery or scheduling fields in the public message fixture', () => {

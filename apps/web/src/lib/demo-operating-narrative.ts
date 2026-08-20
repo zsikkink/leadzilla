@@ -295,6 +295,30 @@ export const DEMO_INBOX_LEADS: readonly DemoLead[] = [
   ...SUPPORTING_DEMO_LEADS,
 ];
 
+export const DEMO_LEAD_PORTFOLIO_TOTAL = DEMO_DATABASE_SNAPSHOT.scoredLeads;
+
+// Public-demo read model derived from the production snapshot totals. It is
+// materialized once at module load so the lead table can paginate immediately
+// without exposing the private lead API or waiting on live infrastructure.
+export const DEMO_LEAD_PORTFOLIO: readonly DemoLead[] = Array.from(
+  { length: DEMO_LEAD_PORTFOLIO_TOTAL },
+  (_, index) => {
+    const existingLead = DEMO_INBOX_LEADS[index];
+    if (existingLead) return existingLead;
+
+    const source = SUPPORTING_DEMO_LEADS[index % SUPPORTING_DEMO_LEADS.length]
+      ?? FEATURED_DEMO_LEADS[index % FEATURED_DEMO_LEADS.length]!;
+    const sequence = index + 1;
+    const emailLocalPart = source.email.split('@')[0] ?? 'contact';
+
+    return {
+      ...source,
+      id: `demo-portfolio-${String(sequence).padStart(4, '0')}`,
+      email: `${emailLocalPart}.${sequence}@portfolio-lead.example`,
+    } satisfies DemoLead;
+  },
+);
+
 const FEATURED_DEMO_INBOX_CONVERSATIONS: readonly DemoInboxConversation[] = [
   {
     id: 'conversation-aster-stone',

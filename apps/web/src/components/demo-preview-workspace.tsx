@@ -7,7 +7,6 @@ import {
   ArrowLeft,
   ArrowUpRight,
   Bot,
-  BriefcaseBusiness,
   Building2,
   CheckCircle2,
   Database,
@@ -36,7 +35,10 @@ import {
   DEMO_ICP_PLAYBOOKS,
   type DemoIcpPlaybook,
 } from '../lib/demo-icp-playbooks.js';
-import { DEMO_LEADS, DEMO_OPERATING_TOTALS } from '../lib/demo-operating-narrative.js';
+import {
+  DEMO_LEAD_PORTFOLIO,
+  DEMO_OPERATING_TOTALS,
+} from '../lib/demo-operating-narrative.js';
 import { cn } from '../lib/utils.js';
 import { DemoInboxShowcase } from './demo-inbox-showcase.js';
 import { DemoSettingsShowcase } from './demo-settings-showcase.js';
@@ -165,17 +167,33 @@ function DiscoverPreview() {
 function LeadsPreview() {
   const pathname = usePathname();
   const leadId = pathname.match(/^\/dashboard\/leads\/([^/]+)$/)?.[1];
-  const selectedLead = leadId ? DEMO_LEADS.find((lead) => lead.id === leadId) : undefined;
+  const selectedLead = leadId ? DEMO_LEAD_PORTFOLIO.find((lead) => lead.id === leadId) : undefined;
   const [searchQuery, setSearchQuery] = useState('');
+  const [scoreFilter, setScoreFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('score_desc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   const [enrichedLeadIds, setEnrichedLeadIds] = useState<ReadonlySet<string>>(() => new Set());
 
-  const visibleLeads = useMemo(() => {
+  const filteredLeads = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    if (!query) return DEMO_LEADS;
-    return DEMO_LEADS.filter((lead) => (
-      `${lead.contactName} ${lead.company} ${lead.role} ${lead.segment}`.toLowerCase().includes(query)
-    ));
-  }, [searchQuery]);
+    return DEMO_LEAD_PORTFOLIO
+      .filter((lead) => {
+        const matchesQuery = !query || `${lead.contactName} ${lead.company} ${lead.role} ${lead.segment}`.toLowerCase().includes(query);
+        const matchesScore = scoreFilter === 'all'
+          || (scoreFilter === 'high' && lead.score >= 85)
+          || (scoreFilter === 'priority' && lead.score < 85);
+        return matchesQuery && matchesScore;
+      })
+      .sort((first, second) => {
+        if (sortBy === 'score_asc') return first.score - second.score;
+        if (sortBy === 'name_asc') return first.contactName.localeCompare(second.contactName);
+        return second.score - first.score;
+      });
+  }, [scoreFilter, searchQuery, sortBy]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredLeads.length / pageSize));
+  const visibleLeads = filteredLeads.slice((page - 1) * pageSize, page * pageSize);
 
   const enrichLead = (leadIdToEnrich: string) => {
     setEnrichedLeadIds((current) => new Set(current).add(leadIdToEnrich));
@@ -284,26 +302,53 @@ function LeadsPreview() {
   }
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-sm font-bold text-white">Active leads</p>
-          <p className="mt-1 text-xs text-white/50">Review, enrich, and inspect AI qualification evidence.</p>
-        </div>
-        <div className="relative w-full sm:w-80">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/35" />
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+        <select
+          value={scoreFilter}
+          onChange={(event) => { setScoreFilter(event.target.value); setPage(1); }}
+          aria-label="Score filter"
+          className="h-9 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-xs text-foreground outline-none focus:border-zbooni-teal/50"
+        >
+          <option value="all">All scores</option>
+          <option value="high">High fit</option>
+          <option value="priority">Priority</option>
+        </select>
+        <div className="relative col-span-2 sm:order-none sm:w-52">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/35" />
           <input
             type="search"
             value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search leads or companies"
-            className="h-10 w-full rounded-lg border border-white/[0.1] bg-white/[0.045] pl-9 pr-3 text-sm text-white outline-none transition-colors placeholder:text-white/30 focus:border-zbooni-teal/50"
+            onChange={(event) => { setSearchQuery(event.target.value); setPage(1); }}
+            placeholder="Search leads..."
+            className="h-9 w-full rounded-lg border border-border/40 bg-zbooni-dark/30 pl-8 pr-3 text-xs text-foreground outline-none placeholder:text-muted-foreground/40 focus:border-zbooni-teal/50"
           />
         </div>
+        <div className="col-span-2 grid grid-cols-2 gap-2 sm:ml-auto sm:flex">
+          <select
+            value={sortBy}
+            onChange={(event) => { setSortBy(event.target.value); setPage(1); }}
+            aria-label="Sort leads"
+            className="h-9 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-xs text-foreground outline-none focus:border-zbooni-teal/50"
+          >
+            <option value="score_desc">Highest score</option>
+            <option value="score_asc">Lowest score</option>
+            <option value="name_asc">Name A–Z</option>
+          </select>
+          <select
+            value={pageSize}
+            onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }}
+            aria-label="Leads per page"
+            className="h-9 rounded-lg border border-border/40 bg-zbooni-dark/30 px-3 text-xs text-foreground outline-none focus:border-zbooni-teal/50"
+          >
+            <option value={20}>20 per page</option>
+            <option value={50}>50 per page</option>
+            <option value={100}>100 per page</option>
+          </select>
+        </div>
       </div>
-      <DemoCard>
-        <DemoSectionHeading icon={BriefcaseBusiness} title="Lead pipeline" subtitle={`${visibleLeads.length} qualified leads ready for review.`} />
-        <div className="overflow-x-auto">
+
+      <div className="overflow-x-auto">
           <table className="w-full min-w-[900px] text-left">
             <thead>
               <tr className="border-b border-white/[0.08] text-[10px] font-bold uppercase tracking-wider text-white/45">
@@ -354,8 +399,32 @@ function LeadsPreview() {
               <p className="mt-1 text-xs text-white/40">Try a company, contact, role, or segment.</p>
             </div>
           ) : null}
+      </div>
+
+      <div className="flex flex-col gap-2 border-t border-border/50 pt-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-xs text-muted-foreground">
+          Showing {filteredLeads.length === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, filteredLeads.length)} of {filteredLeads.length.toLocaleString('en-US')}
+        </p>
+        <div className="flex items-center justify-end gap-1.5">
+          <button
+            type="button"
+            disabled={page <= 1}
+            onClick={() => setPage((current) => Math.max(1, current - 1))}
+            className="inline-flex h-9 items-center justify-center rounded-lg border border-border/50 px-3 text-xs font-semibold transition-colors hover:bg-accent disabled:opacity-30"
+          >
+            Previous
+          </button>
+          <span className="inline-flex h-9 items-center px-2 text-xs text-muted-foreground">Page {page} of {totalPages}</span>
+          <button
+            type="button"
+            disabled={page >= totalPages}
+            onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+            className="inline-flex h-9 items-center justify-center rounded-lg border border-border/50 px-3 text-xs font-semibold transition-colors hover:bg-accent disabled:opacity-30"
+          >
+            Next
+          </button>
         </div>
-      </DemoCard>
+      </div>
     </div>
   );
 }
