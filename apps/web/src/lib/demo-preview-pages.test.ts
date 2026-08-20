@@ -11,8 +11,6 @@ describe('demo preview page routing', () => {
   it.each([
     ['/dashboard/discover', 'discover'],
     ['/dashboard/jobs/run-1', 'discover'],
-    ['/dashboard/leads', 'leads'],
-    ['/dashboard/leads/lead-1', 'leads'],
     ['/dashboard/prompts', 'prompts'],
     ['/dashboard/inbox', 'inbox'],
     ['/dashboard/messages', 'inbox'],
@@ -21,6 +19,11 @@ describe('demo preview page routing', () => {
     ['/discovery', 'settings'],
   ] as const)('maps %s to the %s bundled page', (pathname, expected) => {
     expect(getDemoPreviewPageKind(pathname)).toBe(expected);
+  });
+
+  it('leaves lead routes on the real database-backed pages', () => {
+    expect(getDemoPreviewPageKind('/dashboard/leads')).toBeNull();
+    expect(getDemoPreviewPageKind('/dashboard/leads/lead-1')).toBeNull();
   });
 
   it('exposes the bundled settings snapshot only on the exact Settings route', () => {
