@@ -343,7 +343,6 @@ export default function PromptCenterPage() {
   const [aiBehaviorPrompt, setAiBehaviorPrompt] = useState('');
   const [scoringSystemPrompt, setScoringSystemPrompt] = useState('');
   const [isLoadingSettings, setIsLoadingSettings] = useState(true);
-  const [settingsLoadError, setSettingsLoadError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const loadedRef = useRef(false);
@@ -351,8 +350,6 @@ export default function PromptCenterPage() {
 
   const loadSettings = useCallback(async () => {
     setIsLoadingSettings(true);
-    setSettingsLoadError(null);
-
     try {
       const { items } = await apiClient.listPipelineSettings();
       const nextModel = String(items.find((item) => item.key === 'messagingModel')?.value ?? '');
@@ -405,9 +402,6 @@ export default function PromptCenterPage() {
       setAiBehaviorPrompt(fallbackSettings.messagingBehaviorPrompt);
       setScoringSystemPrompt(fallbackSettings.scoringSystemPrompt);
       loadedSettingsRef.current = fallbackSettings;
-      setSettingsLoadError(
-        'Live prompt settings are refreshing. Curated defaults are loaded for this session.',
-      );
       setHasChanges(false);
     } finally {
       setIsLoadingSettings(false);
@@ -472,13 +466,6 @@ export default function PromptCenterPage() {
 
   return (
     <div className="space-y-6">
-      {settingsLoadError ? (
-        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-          <p className="font-semibold text-amber-200">Using curated prompt defaults</p>
-          <p className="mt-1 text-amber-100/80">{settingsLoadError}</p>
-        </div>
-      ) : null}
-
       {isLoadingSettings ? (
         <div className="flex items-center gap-2 rounded-2xl border border-border/50 bg-card p-5 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
