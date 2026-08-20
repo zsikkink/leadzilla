@@ -30,7 +30,7 @@ import {
   Undo2,
 } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { MessageDraftCard } from '../../../src/components/message-draft-card.js';
@@ -996,7 +996,7 @@ function LiveInboxPage() {
   );
 }
 
-export default function InboxPage() {
+function InboxPageContent() {
   const { user } = useAuth();
   const searchParams = useSearchParams();
   const hasExplicitLiveTarget = Boolean(
@@ -1011,4 +1011,12 @@ export default function InboxPage() {
   }
 
   return <LiveInboxPage />;
+}
+
+export default function InboxPage() {
+  return (
+    <Suspense fallback={<div className="min-h-[40vh]" aria-label="Loading inbox" />}>
+      <InboxPageContent />
+    </Suspense>
+  );
 }

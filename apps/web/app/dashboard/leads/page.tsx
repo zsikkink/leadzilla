@@ -3,7 +3,7 @@
 import type { LeadListSortBy, LeadScoreBand, LeadStatus } from '@lead-flood/contracts';
 import { AlertTriangle, Loader2, MessageSquare, RefreshCw, Undo2, UserPlus, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { ConfirmModal, useConfirmModal } from '../../../src/components/confirm-modal.js';
@@ -233,7 +233,7 @@ function persistLeadsTableState(state: LeadsTableState): void {
   }
 }
 
-export default function LeadsPage() {
+function LeadsPageContent() {
   const { apiClient, token, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -1085,5 +1085,13 @@ export default function LeadsPage() {
         dontAskKey="confirm-regenerate-message-draft"
       />
     </div>
+  );
+}
+
+export default function LeadsPage() {
+  return (
+    <Suspense fallback={<div className="min-h-[40vh]" aria-label="Loading leads" />}>
+      <LeadsPageContent />
+    </Suspense>
   );
 }
